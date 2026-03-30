@@ -369,3 +369,36 @@ Open
 Must not be changed
 	•	frozen CRM pipeline, planning_mode set, call_verification_status set, customer_linkage rules
 	•	Inquiry / CRM axis as office-facing process truth only
+
+⸻
+
+Entry 010
+
+Date: Slice B / B1 acceptance snapshot
+Scope: Slice B / B1 minimal Core domain scaffold
+Status: accepted
+
+Completed
+	•	minimal Core-owned Order model introduced
+	•	minimal Core-owned OrderVersion model introduced
+	•	OrderRepository and in-memory baseline introduced
+	•	controlled convert_inquiry_to_order(...) path implemented
+	•	unit tests for B1 baseline added
+
+Accepted
+	•	first Core-owned operational truth baseline established
+	•	inquiry-to-order conversion under Core ownership established
+	•	initial OrderVersion created in the same controlled path
+	•	no kitchen/release/effective/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B1
+	•	no kitchen acceptance mechanics yet
+	•	no effective operational switching yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no kitchen print logic in B1
+	•	no READY_TO_SEND semantics in B1
+	•	no effective switching in B1
+	•	Slice A boundaries must remain intact
