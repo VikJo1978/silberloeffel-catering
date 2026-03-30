@@ -1,4 +1,4 @@
-"""Unit tests — Slice B7/B8 progression blocked-state and composed progression view (derived)."""
+"""Unit tests — Slice B7/B8/B9 progression blocked-state, view, and office eligibility (derived)."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from catering_system.domain.inquiry import (
     Inquiry,
     PLANNING_MODES,
 )
+from catering_system.domain.order_progression_decision import OrderProgressionDecision
 from catering_system.domain.order_progression_view import OrderProgressionView
 from catering_system.domain.progression_blockers import (
     REASON_CANDIDATE_ORDER_VERSION_MISSING,
@@ -171,12 +172,58 @@ def test_order_progression_view_unknown_order_returns_none() -> None:
     )
 
 
+def test_progression_decision_eligible_when_candidate_ok_and_not_blocked() -> None:
+    repo = InMemoryOrderRepository()
+    prog = ProgressionService(repo)
+    osvc = OrderService(repo)
+    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
+    d = prog.evaluate_order_progression_decision(order.order_id)
+    assert isinstance(d, OrderProgressionDecision)
+    assert d.eligible_for_progression_review is True
+    assert d.reasons == ()
+    assert d.candidate_order_version_id == v1.order_version_id
+
+
+def test_progression_decision_not_eligible_when_candidate_missing() -> None:
+    repo = InMemoryOrderRepository()
+    prog = ProgressionService(repo)
+    osvc = OrderService(repo)
+    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    d = prog.evaluate_order_progression_decision(order.order_id)
+    assert d.eligible_for_progression_review is False
+    assert REASON_CANDIDATE_ORDER_VERSION_MISSING in d.reasons
+    assert d.candidate_order_version_id is None
+
+
+def test_progression_decision_not_eligible_when_candidate_not_resolvable() -> None:
+    repo = InMemoryOrderRepository()
+    prog = ProgressionService(repo)
+    osvc = OrderService(repo)
+    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
+    del repo._versions[v1.order_version_id]
+    d = prog.evaluate_order_progression_decision(order.order_id)
+    assert d.eligible_for_progression_review is False
+    assert REASON_CANDIDATE_ORDER_VERSION_NOT_RESOLVABLE in d.reasons
+
+
+def test_progression_decision_not_eligible_when_order_unknown() -> None:
+    missing = "00000000-0000-0000-0000-000000000000"
+    d = ProgressionService(InMemoryOrderRepository()).evaluate_order_progression_decision(missing)
+    assert d.order_id == missing
+    assert d.eligible_for_progression_review is False
+    assert REASON_ORDER_NOT_FOUND in d.reasons
+    assert d.candidate_order_version_id is None
+
+
 def test_progression_modules_have_no_kitchen_or_release_surface() -> None:
+    import catering_system.domain.order_progression_decision as opd_mod
     import catering_system.domain.order_progression_view as opv_mod
     import catering_system.domain.progression_blockers as pb_mod
     import catering_system.services.progression_service as ps_mod
 
-    for mod in (pb_mod, ps_mod, opv_mod):
+    for mod in (pb_mod, ps_mod, opv_mod, opd_mod):
         lowered = _module_source_lower(mod)
         assert "kitchen" not in lowered
         assert "ready_to_send" not in lowered

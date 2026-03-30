@@ -595,3 +595,34 @@ Must not be changed
 	•	no kitchen print logic in B7
 	•	no READY_TO_SEND semantics in B7
 	•	Slice A boundaries and earlier Slice B boundaries must remain intact
+
+⸻
+
+Entry 017
+
+Date: Slice B / B8 acceptance snapshot
+Scope: Slice B / B8 composed order progression view
+Status: accepted
+
+Completed
+	•	narrow composed read model for order progression introduced
+	•	progression view now combines latest historical version, candidate version, and derived blocked-state
+	•	unit tests for progression-view composition added
+
+Accepted
+	•	progression visibility is available through one explicit composed read model
+	•	latest historical version remains distinct from candidate version
+	•	blocked/reasons remain derived from existing rules only
+	•	no kitchen/release/effective/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B8
+	•	no effective operational switching yet
+	•	no kitchen acceptance mechanics yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no effective switching in B8
+	•	no kitchen print logic in B8
+	•	no READY_TO_SEND semantics in B8
+	•	Slice A boundaries and earlier Slice B boundaries must remain intact

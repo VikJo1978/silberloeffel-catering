@@ -1,8 +1,9 @@
-"""Progression blocked-state (B7) and composed progression read (B8) — Core/office-side derived only."""
+"""Progression blocked-state (B7), composed view (B8), office decision (B9) — Core/office-side derived only."""
 
 from __future__ import annotations
 
 from catering_system.domain.order import OrderVersion
+from catering_system.domain.order_progression_decision import OrderProgressionDecision
 from catering_system.domain.order_progression_view import OrderProgressionView
 from catering_system.domain.progression_blockers import (
     REASON_CANDIDATE_ORDER_VERSION_MISSING,
@@ -16,7 +17,7 @@ from catering_system.repositories.order_repository import OrderRepository
 
 
 class ProgressionService:
-    """Derives progression facts and composed views from inquiry/order data; no release-side logic."""
+    """Derives progression facts, views, and eligibility from inquiry/order data; no release-side logic."""
 
     def __init__(self, order_repository: OrderRepository) -> None:
         self._order_repository = order_repository
@@ -65,4 +66,18 @@ class ProgressionService:
             candidate_order_version=candidate,
             blocked=ev.blocked,
             reasons=ev.reasons,
+        )
+
+    def evaluate_order_progression_decision(self, order_id: str) -> OrderProgressionDecision:
+        """B9: office-side eligibility — derived from candidate presence/resolution and B7 blocked evaluation."""
+        ev = self.evaluate_candidate_version_progression(order_id)
+        order = self._order_repository.get_order(order_id)
+        cid = order.candidate_order_version_id if order is not None else None
+        eligible = not ev.blocked
+        reasons: tuple[str, ...] = ev.reasons if ev.blocked else ()
+        return OrderProgressionDecision(
+            order_id=order_id,
+            eligible_for_progression_review=eligible,
+            reasons=reasons,
+            candidate_order_version_id=cid,
         )
