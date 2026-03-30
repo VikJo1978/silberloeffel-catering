@@ -2,7 +2,8 @@
 
 B3 does not add activation or selection fields. Do not add any field like:
 is_active, is_effective, active_version_id, effective_version_id, selected_version_id.
-If such semantics are needed later, they belong to a later Slice B package, not B3.
+B6 adds optional candidate_order_version_id only — office-side progression hint, not effective truth.
+If further release semantics are needed later, they belong to a later Slice B package, not B6.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ class Order:
     source_inquiry_id: str
     created_at: datetime
     updated_at: datetime
+    candidate_order_version_id: str | None = None
 
 
 @dataclass

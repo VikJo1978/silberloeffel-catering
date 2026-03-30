@@ -530,3 +530,36 @@ Must not be changed
 	•	no READY_TO_SEND semantics in B5
 	•	no effective switching in B5
 	•	Slice A boundaries and earlier Slice B boundaries must remain intact
+
+⸻
+
+Entry 015
+
+Date: Slice B / B6 acceptance snapshot
+Scope: Slice B / B6 office/Core-side candidate order version
+Status: accepted
+
+Completed
+	•	narrow candidate order-version marker introduced
+	•	service path to set and read candidate order version implemented
+	•	candidate validation against order/version ownership implemented
+	•	unit tests for candidate-version behavior added
+
+Accepted
+	•	office/Core-side candidate version can be set explicitly
+	•	candidate version remains distinct from latest historical version
+	•	candidate version does not imply effective/active operational truth
+	•	full immutable version history remains preserved
+	•	no kitchen/release/effective/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B6
+	•	no effective operational switching yet
+	•	no kitchen acceptance mechanics yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no effective switching in B6
+	•	no kitchen print logic in B6
+	•	no READY_TO_SEND semantics in B6
+	•	Slice A boundaries and earlier Slice B boundaries must remain intact

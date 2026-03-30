@@ -1,4 +1,4 @@
-"""Unit tests — Slice B1/B2/B3/B5 Order, OrderVersion, conversion gate, version history, reads."""
+"""Unit tests — Slice B1/B2/B3/B5/B6 Order, OrderVersion, conversion, history, candidate reads."""
 
 from __future__ import annotations
 
@@ -30,6 +30,8 @@ _B3_FORBIDDEN_FIELD_NAMES = frozenset(
         "active_version_id",
         "effective_version_id",
         "selected_version_id",
+        "release_ready",
+        "ready_to_send",
     }
 )
 
@@ -178,6 +180,70 @@ def test_get_latest_order_version_returns_none_when_no_versions() -> None:
     assert svc.list_order_versions(missing_id) == []
 
 
+def test_set_and_get_candidate_order_version_office_side_only() -> None:
+    repo = InMemoryOrderRepository()
+    svc = OrderService(repo)
+    order, v1 = svc.convert_inquiry_to_order(_sample_inquiry())
+    assert repo.get_order(order.order_id) is not None
+    assert repo.get_order(order.order_id).candidate_order_version_id is None
+    assert svc.get_candidate_order_version(order.order_id) is None
+    updated = svc.set_candidate_order_version(order.order_id, v1.order_version_id)
+    assert updated.candidate_order_version_id == v1.order_version_id
+    cand = svc.get_candidate_order_version(order.order_id)
+    assert cand is not None
+    assert cand.order_version_id == v1.order_version_id
+
+
+def test_changing_candidate_preserves_full_version_history() -> None:
+    svc = OrderService(InMemoryOrderRepository())
+    order, v1 = svc.convert_inquiry_to_order(_sample_inquiry())
+    v2 = svc.create_relevant_order_change_version(
+        order,
+        event_date=date(2026, 11, 2),
+        time_window_text="abends",
+        location_text="Berlin",
+        guest_count_estimate=30,
+        planning_mode=PLANNING_MODES[1],
+    )
+    svc.set_candidate_order_version(order.order_id, v1.order_version_id)
+    svc.set_candidate_order_version(order.order_id, v2.order_version_id)
+    hist = svc.list_order_versions(order.order_id)
+    assert len(hist) == 2
+    assert {hist[0].order_version_id, hist[1].order_version_id} == {
+        v1.order_version_id,
+        v2.order_version_id,
+    }
+    assert svc.get_candidate_order_version(order.order_id).order_version_id == v2.order_version_id
+
+
+def test_candidate_can_differ_from_latest_historical_version() -> None:
+    """B6: candidate is not latest-in-history; not effective operational selection."""
+    svc = OrderService(InMemoryOrderRepository())
+    order, v1 = svc.convert_inquiry_to_order(_sample_inquiry())
+    v2 = svc.create_relevant_order_change_version(
+        order,
+        event_date=date(2026, 11, 2),
+        time_window_text="abends",
+        location_text="Berlin",
+        guest_count_estimate=30,
+        planning_mode=PLANNING_MODES[1],
+    )
+    svc.set_candidate_order_version(order.order_id, v1.order_version_id)
+    latest = svc.get_latest_order_version(order.order_id)
+    cand = svc.get_candidate_order_version(order.order_id)
+    assert latest is not None and cand is not None
+    assert latest.order_version_id == v2.order_version_id
+    assert cand.order_version_id == v1.order_version_id
+    assert latest.version_number > cand.version_number
+
+
+def test_set_candidate_rejects_foreign_version_id() -> None:
+    svc = OrderService(InMemoryOrderRepository())
+    order, _ = svc.convert_inquiry_to_order(_sample_inquiry())
+    with pytest.raises(ValueError, match="not a version of order"):
+        svc.set_candidate_order_version(order.order_id, "00000000-0000-0000-0000-000000000001")
+
+
 def _assert_dataclasses_have_no_b3_forbidden_fields() -> None:
     for cls in (Order, OrderVersion):
         names = {f.name for f in fields(cls)}
@@ -185,7 +251,7 @@ def _assert_dataclasses_have_no_b3_forbidden_fields() -> None:
 
 
 def test_order_domain_has_no_kitchen_or_release_surface() -> None:
-    """B1/B2/B3: no print / READY_TO_SEND / activation fields on Order types."""
+    """B1/B2/B3/B6: no print / release-kitchen surface / forbidden activation fields on Order types."""
     import catering_system.domain.order as order_mod
 
     lowered = _module_source_lower(order_mod)
