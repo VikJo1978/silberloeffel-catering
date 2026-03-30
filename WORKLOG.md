@@ -434,3 +434,35 @@ Must not be changed
 	•	no kitchen print logic in B2
 	•	no READY_TO_SEND semantics in B2
 	•	Slice A boundaries must remain intact
+
+⸻
+
+Entry 012
+
+Date: Slice B / B3 acceptance snapshot
+Scope: Slice B / B3 controlled version-history read path
+Status: accepted
+
+Completed
+	•	explicit Core read path for full order-version history confirmed
+	•	explicit Core read path for latest historical OrderVersion confirmed
+	•	guardrails added to prevent premature active/effective semantics
+	•	B3 tests added and passing
+
+Accepted
+	•	latest historical version can be read explicitly by version_number
+	•	full immutable version history remains available
+	•	latest-in-history is not treated as effective/active operational version
+	•	no kitchen/release/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B3
+	•	no effective-switch mechanics yet
+	•	no kitchen acceptance mechanics yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no active/effective semantics in B3
+	•	no kitchen print logic in B3
+	•	no READY_TO_SEND semantics in B3
+	•	Slice A boundaries must remain intact

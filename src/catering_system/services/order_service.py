@@ -1,4 +1,9 @@
-"""Core order service — inquiry conversion (B1) and version history (B2)."""
+"""Core order service — inquiry conversion (B1), version history (B2), explicit reads (B3).
+
+B3 does not add activation or selection fields on Order / OrderVersion. Do not add any field like:
+is_active, is_effective, active_version_id, effective_version_id, selected_version_id.
+If such semantics are needed later, they belong to a later Slice B package, not B3.
+"""
 
 from __future__ import annotations
 
@@ -19,7 +24,7 @@ def _utc_now() -> datetime:
 
 
 class OrderService:
-    """Core-owned Order lifecycle: initial conversion (B1), successor versions (B2)."""
+    """Core-owned Order lifecycle: conversion (B1), successor versions (B2), history reads (B3)."""
 
     def __init__(self, order_repository: OrderRepository) -> None:
         self._order_repository = order_repository
@@ -94,3 +99,17 @@ class OrderService:
             version.version_number,
         )
         return version
+
+    def list_order_versions(self, order_id: str) -> list[OrderVersion]:
+        """Return all versions for an order, ordered by version_number (append-only history)."""
+        return self._order_repository.list_order_versions(order_id)
+
+    def get_latest_order_version(self, order_id: str) -> OrderVersion | None:
+        """Latest by highest version_number in stored history only; not operational activation (deferred).
+
+        Returns None when there are no versions (e.g. unknown order_id); does not infer an active row.
+        """
+        rows = self._order_repository.list_order_versions(order_id)
+        if not rows:
+            return None
+        return rows[-1]

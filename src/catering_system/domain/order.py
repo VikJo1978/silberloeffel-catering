@@ -1,4 +1,9 @@
-"""Order / OrderVersion — Slice B1/B2 Core operational truth baseline (minimal)."""
+"""Order / OrderVersion — Slice B1/B2 Core operational truth baseline (minimal).
+
+B3 does not add activation or selection fields. Do not add any field like:
+is_active, is_effective, active_version_id, effective_version_id, selected_version_id.
+If such semantics are needed later, they belong to a later Slice B package, not B3.
+"""
 
 from __future__ import annotations
 

@@ -1,8 +1,9 @@
-"""Unit tests — Slice B1/B2 Order, OrderVersion, conversion, version history."""
+"""Unit tests — Slice B1/B2/B3 Order, OrderVersion, conversion, version history, reads."""
 
 from __future__ import annotations
 
 import sys
+from dataclasses import fields
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -16,8 +17,19 @@ from catering_system.domain.inquiry import (
     Inquiry,
     PLANNING_MODES,
 )
+from catering_system.domain.order import Order, OrderVersion
 from catering_system.repositories.in_memory_order_repository import InMemoryOrderRepository
 from catering_system.services.order_service import OrderService
+
+_B3_FORBIDDEN_FIELD_NAMES = frozenset(
+    {
+        "is_active",
+        "is_effective",
+        "active_version_id",
+        "effective_version_id",
+        "selected_version_id",
+    }
+)
 
 
 def _module_source_lower(module: object) -> str:
@@ -92,8 +104,50 @@ def test_create_relevant_order_change_version_second_preserves_first() -> None:
     assert updated_order.updated_at >= order.updated_at
 
 
+def test_list_order_versions_and_get_latest_match_history_not_activation() -> None:
+    """Full history via service; latest is max(version_number); history not collapsed to one active row."""
+    repo = InMemoryOrderRepository()
+    svc = OrderService(repo)
+    order, v1 = svc.convert_inquiry_to_order(_sample_inquiry())
+    v2 = svc.create_relevant_order_change_version(
+        order,
+        event_date=date(2026, 12, 3),
+        time_window_text="spät",
+        location_text="München",
+        guest_count_estimate=50,
+        planning_mode=PLANNING_MODES[0],
+    )
+    from_repo = repo.list_order_versions(order.order_id)
+    full = svc.list_order_versions(order.order_id)
+    assert full == from_repo
+    assert len(full) == 2
+    assert full[0].version_number == 1
+    assert full[1].version_number == 2
+    nums = [v.version_number for v in full]
+    assert nums == sorted(nums)
+    latest = svc.get_latest_order_version(order.order_id)
+    assert latest is not None
+    assert latest.order_version_id == v2.order_version_id
+    assert latest.version_number == max(nums)
+    assert latest.version_number == max(v1.version_number, v2.version_number)
+
+
+def test_get_latest_order_version_returns_none_when_no_versions() -> None:
+    """Explicit None when no versions; no synthetic active/effective version."""
+    svc = OrderService(InMemoryOrderRepository())
+    missing_id = "00000000-0000-0000-0000-000000000000"
+    assert svc.get_latest_order_version(missing_id) is None
+    assert svc.list_order_versions(missing_id) == []
+
+
+def _assert_dataclasses_have_no_b3_forbidden_fields() -> None:
+    for cls in (Order, OrderVersion):
+        names = {f.name for f in fields(cls)}
+        assert names.isdisjoint(_B3_FORBIDDEN_FIELD_NAMES)
+
+
 def test_order_domain_has_no_kitchen_or_release_surface() -> None:
-    """B1/B2 gate: no print / READY_TO_SEND / operational-switch fields on Order types."""
+    """B1/B2/B3: no print / READY_TO_SEND / activation fields on Order types."""
     import catering_system.domain.order as order_mod
 
     lowered = _module_source_lower(order_mod)
@@ -101,7 +155,7 @@ def test_order_domain_has_no_kitchen_or_release_surface() -> None:
     assert "kitchen" not in lowered
     assert "wochen" not in lowered
     assert "kiosk" not in lowered
-    assert "effective" not in lowered
+    _assert_dataclasses_have_no_b3_forbidden_fields()
 
 
 def test_order_service_has_no_kitchen_or_release_surface() -> None:
@@ -111,3 +165,6 @@ def test_order_service_has_no_kitchen_or_release_surface() -> None:
     assert "ready_to_send" not in lowered
     assert "kitchen" not in lowered
     assert "print" not in lowered
+    for name in _B3_FORBIDDEN_FIELD_NAMES:
+        assert not hasattr(OrderService, name)
+    _assert_dataclasses_have_no_b3_forbidden_fields()
