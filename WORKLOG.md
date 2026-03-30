@@ -688,3 +688,34 @@ Must not be changed
 	•	no kitchen print logic in B10
 	•	no READY_TO_SEND semantics in B10
 	•	Slice A boundaries and earlier Slice B boundaries must remain intact
+
+⸻
+
+Entry 020
+
+Date: Slice B / B11 acceptance snapshot
+Scope: Slice B / B11 derived progression review summary
+Status: accepted
+
+Completed
+	•	narrow derived progression review summary model introduced
+	•	review summary now composes existing checkpoint facts into one compact read-only summary
+	•	unit tests for review summary scenarios added
+
+Accepted
+	•	office/Core-side progression review visibility is available through one compact derived summary
+	•	summary remains fully derived from existing facts only
+	•	no new persisted progression truth axis introduced
+	•	no kitchen/release/effective/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B11
+	•	no effective operational switching yet
+	•	no kitchen acceptance mechanics yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no effective switching in B11
+	•	no kitchen print logic in B11
+	•	no READY_TO_SEND semantics in B11
+	•	Slice A boundaries and earlier Slice B boundaries must remain intact

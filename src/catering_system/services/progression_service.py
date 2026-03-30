@@ -1,9 +1,10 @@
-"""Progression blocked-state (B7), view (B8), decision (B9), checkpoint (B10) — Core/office-side derived only."""
+"""Progression blocked-state (B7), view (B8), decision (B9), checkpoint (B10), review summary (B11) — derived only."""
 
 from __future__ import annotations
 
 from catering_system.domain.order import OrderVersion
 from catering_system.domain.order_progression_checkpoint import OrderProgressionCheckpoint
+from catering_system.domain.order_progression_review_summary import OrderProgressionReviewSummary
 from catering_system.domain.order_progression_decision import OrderProgressionDecision
 from catering_system.domain.order_progression_view import OrderProgressionView
 from catering_system.domain.progression_blockers import (
@@ -18,7 +19,7 @@ from catering_system.repositories.order_repository import OrderRepository
 
 
 class ProgressionService:
-    """Derives progression facts, views, eligibility, and checkpoints from inquiry/order data; no release-side logic."""
+    """Derives progression facts, views, eligibility, checkpoints, and review summaries; no release-side logic."""
 
     def __init__(self, order_repository: OrderRepository) -> None:
         self._order_repository = order_repository
@@ -101,4 +102,19 @@ class ProgressionService:
             blocked=view.blocked,
             reasons=view.reasons,
             eligible_for_progression_review=decision.eligible_for_progression_review,
+        )
+
+    def get_order_progression_review_summary(self, order_id: str) -> OrderProgressionReviewSummary | None:
+        """B11: compact inspection summary from B10 checkpoint only; None if order unknown."""
+        cp = self.get_order_progression_checkpoint(order_id)
+        if cp is None:
+            return None
+        return OrderProgressionReviewSummary(
+            order_id=cp.order_id,
+            latest_order_version_id=cp.latest_order_version_id,
+            candidate_order_version_id=cp.candidate_order_version_id,
+            blocked=cp.blocked,
+            eligible_for_progression_review=cp.eligible_for_progression_review,
+            reason_count=len(cp.reasons),
+            reasons=cp.reasons,
         )
