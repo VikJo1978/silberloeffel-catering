@@ -563,3 +563,35 @@ Must not be changed
 	•	no kitchen print logic in B6
 	•	no READY_TO_SEND semantics in B6
 	•	Slice A boundaries and earlier Slice B boundaries must remain intact
+
+⸻
+
+Entry 016
+
+Date: Slice B / B7 acceptance snapshot
+Scope: Slice B / B7 derived progression blocked-state evaluation
+Status: accepted
+
+Completed
+	•	narrow progression blocked-state evaluation introduced
+	•	inquiry-to-order blocked evaluation made explicit
+	•	candidate-version progression blocked evaluation made explicit
+	•	unit tests for B7 progression scenarios added
+
+Accepted
+	•	blocked-state is derived from existing facts and rules, not stored as a new truth axis
+	•	inquiry-to-order progression is explicitly blocked when inquiry verification gate is unsatisfied
+	•	candidate-based progression is explicitly blocked when candidate version is missing or not resolvable
+	•	no kitchen/release/effective/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B7
+	•	no effective operational switching yet
+	•	no kitchen acceptance mechanics yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no effective switching in B7
+	•	no kitchen print logic in B7
+	•	no READY_TO_SEND semantics in B7
+	•	Slice A boundaries and earlier Slice B boundaries must remain intact
