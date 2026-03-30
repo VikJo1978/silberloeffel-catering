@@ -120,3 +120,10 @@ class Inquiry:
     planning_mode: PlanningMode
     call_verification_required: bool
     call_verification_status: CallVerificationStatus
+
+
+def inquiry_allows_order_conversion(inquiry: Inquiry) -> bool:
+    """B5: Core gate — conversion allowed when verification not required or already verified."""
+    if not inquiry.call_verification_required:
+        return True
+    return inquiry.call_verification_status == "verified"

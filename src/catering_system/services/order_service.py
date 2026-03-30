@@ -12,7 +12,7 @@ import uuid
 from dataclasses import replace
 from datetime import date, datetime, timezone
 
-from catering_system.domain.inquiry import Inquiry, validate_planning_mode
+from catering_system.domain.inquiry import Inquiry, inquiry_allows_order_conversion, validate_planning_mode
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.repositories.order_repository import OrderRepository
 
@@ -24,13 +24,23 @@ def _utc_now() -> datetime:
 
 
 class OrderService:
-    """Core-owned Order lifecycle: conversion (B1), successor versions (B2), history reads (B3)."""
+    """Core-owned Order lifecycle: conversion (B1/B5), successor versions (B2), history reads (B3)."""
 
     def __init__(self, order_repository: OrderRepository) -> None:
         self._order_repository = order_repository
 
     def convert_inquiry_to_order(self, inquiry: Inquiry) -> tuple[Order, OrderVersion]:
-        """ConvertInquiryToOrder — Core ownership; does not mutate or delete the Inquiry."""
+        """ConvertInquiryToOrder — Core ownership; does not mutate or delete the Inquiry.
+
+        B5: blocked when call verification is required and not verified (pending / failed / blocked).
+        """
+        if not inquiry_allows_order_conversion(inquiry):
+            raise ValueError(
+                "inquiry_to_order conversion blocked: call verification required and not verified "
+                f"(inquiry_id={inquiry.inquiry_id!r}, "
+                f"call_verification_required={inquiry.call_verification_required!r}, "
+                f"call_verification_status={inquiry.call_verification_status!r})"
+            )
         now = _utc_now()
         order_id = str(uuid.uuid4())
         order = Order(

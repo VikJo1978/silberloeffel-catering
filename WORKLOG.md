@@ -466,3 +466,67 @@ Must not be changed
 	•	no kitchen print logic in B3
 	•	no READY_TO_SEND semantics in B3
 	•	Slice A boundaries must remain intact
+
+⸻
+
+Entry 013
+
+Date: Slice B / B4 acceptance snapshot
+Scope: Slice B / B4 customer linkage and call verification gate
+Status: accepted
+
+Completed
+	•	narrow customer verification domain/value layer introduced
+	•	customer verification service introduced
+	•	controlled classification of client state as known / new / suspicious implemented
+	•	inquiry-side call verification decision application implemented
+	•	unit tests for B4 scenarios added
+
+Accepted
+	•	customer linkage / contact-match decision logic established in a narrow Core/office-side layer
+	•	new and suspicious clients require office call verification
+	•	known clients are distinguished from new/suspicious without introducing broader CRM operational truth
+	•	no kitchen/release/effective/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B4
+	•	no kitchen acceptance mechanics yet
+	•	no effective operational switching yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no kitchen print logic in B4
+	•	no READY_TO_SEND semantics in B4
+	•	no effective switching in B4
+	•	Slice A boundaries and earlier Slice B boundaries must remain intact
+
+⸻
+
+Entry 014
+
+Date: Slice B / B5 acceptance snapshot
+Scope: Slice B / B5 inquiry-to-order verification gate
+Status: accepted
+
+Completed
+	•	narrow inquiry-to-order conversion gate introduced
+	•	conversion now depends on inquiry-side verification state
+	•	unit tests for allowed and blocked conversion paths added
+
+Accepted
+	•	inquiry-to-order conversion is allowed when verification is not required
+	•	inquiry-to-order conversion is allowed when verification is required and verified
+	•	inquiry-to-order conversion is blocked when verification is required and not verified
+	•	no kitchen/release/effective/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B5
+	•	no kitchen acceptance mechanics yet
+	•	no effective operational switching yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no kitchen print logic in B5
+	•	no READY_TO_SEND semantics in B5
+	•	no effective switching in B5
+	•	Slice A boundaries and earlier Slice B boundaries must remain intact

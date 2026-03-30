@@ -1,11 +1,13 @@
-"""Unit tests — Slice B1/B2/B3 Order, OrderVersion, conversion, version history, reads."""
+"""Unit tests — Slice B1/B2/B3/B5 Order, OrderVersion, conversion gate, version history, reads."""
 
 from __future__ import annotations
 
 import sys
-from dataclasses import fields
+from dataclasses import fields, replace
 from datetime import date, datetime, timezone
 from pathlib import Path
+
+import pytest
 
 _SRC = Path(__file__).resolve().parents[2] / "src"
 if str(_SRC) not in sys.path:
@@ -53,6 +55,42 @@ def _sample_inquiry() -> Inquiry:
         call_verification_required=False,
         call_verification_status=CALL_VERIFICATION_STATUSES[0],
     )
+
+
+def test_convert_inquiry_to_order_blocked_when_verification_required_not_verified() -> None:
+    svc = OrderService(InMemoryOrderRepository())
+    for status in ("pending", "failed", "blocked"):
+        inquiry = replace(
+            _sample_inquiry(),
+            call_verification_required=True,
+            call_verification_status=status,  # type: ignore[arg-type]
+        )
+        with pytest.raises(ValueError, match="inquiry_to_order conversion blocked"):
+            svc.convert_inquiry_to_order(inquiry)
+
+
+def test_convert_inquiry_to_order_blocked_when_required_but_not_verified_status() -> None:
+    """required=True with not_required status is inconsistent — still blocked (not verified)."""
+    svc = OrderService(InMemoryOrderRepository())
+    inquiry = replace(
+        _sample_inquiry(),
+        call_verification_required=True,
+        call_verification_status="not_required",
+    )
+    with pytest.raises(ValueError, match="inquiry_to_order conversion blocked"):
+        svc.convert_inquiry_to_order(inquiry)
+
+
+def test_convert_inquiry_to_order_allowed_when_verification_required_and_verified() -> None:
+    svc = OrderService(InMemoryOrderRepository())
+    inquiry = replace(
+        _sample_inquiry(),
+        call_verification_required=True,
+        call_verification_status="verified",
+    )
+    order, ver = svc.convert_inquiry_to_order(inquiry)
+    assert order.source_inquiry_id == inquiry.inquiry_id
+    assert ver.version_number == 1
 
 
 def test_convert_inquiry_to_order_creates_order_and_initial_version() -> None:
