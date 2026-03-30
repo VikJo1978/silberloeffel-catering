@@ -1,9 +1,10 @@
-"""Progression blocked-state (B7), view (B8), decision (B9), checkpoint (B10), review summary (B11), consistency (B12), bundle (B13) — derived only."""
+"""Progression blocked-state (B7), view (B8), decision (B9), checkpoint (B10), review summary (B11), consistency (B12), bundle (B13), export (B14) — derived only."""
 
 from __future__ import annotations
 
 from catering_system.domain.order import OrderVersion
 from catering_system.domain.order_progression_bundle import OrderProgressionBundle
+from catering_system.domain.order_progression_export import OrderProgressionExport
 from catering_system.domain.order_progression_checkpoint import OrderProgressionCheckpoint
 from catering_system.domain.order_progression_consistency_check import (
     OrderProgressionConsistencyCheck,
@@ -24,7 +25,7 @@ from catering_system.repositories.order_repository import OrderRepository
 
 
 class ProgressionService:
-    """Derives progression facts, views, eligibility, checkpoints, summaries, consistency, and bundled snapshots; no release-side logic."""
+    """Derives progression reads, bundle, and flat export DTO; no release-side logic."""
 
     def __init__(self, order_repository: OrderRepository) -> None:
         self._order_repository = order_repository
@@ -153,3 +154,10 @@ class ProgressionService:
             review_summary=sm,
             consistency_check=cc,
         )
+
+    def get_order_progression_export(self, order_id: str) -> OrderProgressionExport | None:
+        """B14: flat export from B13 bundle only; None if order unknown."""
+        b = self.get_order_progression_bundle(order_id)
+        if b is None:
+            return None
+        return OrderProgressionExport.from_bundle(b)
