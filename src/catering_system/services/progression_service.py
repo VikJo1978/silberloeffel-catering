@@ -1,8 +1,9 @@
-"""Progression blocked-state (B7), view (B8), decision (B9), checkpoint (B10), review summary (B11), consistency (B12) — derived only."""
+"""Progression blocked-state (B7), view (B8), decision (B9), checkpoint (B10), review summary (B11), consistency (B12), bundle (B13) — derived only."""
 
 from __future__ import annotations
 
 from catering_system.domain.order import OrderVersion
+from catering_system.domain.order_progression_bundle import OrderProgressionBundle
 from catering_system.domain.order_progression_checkpoint import OrderProgressionCheckpoint
 from catering_system.domain.order_progression_consistency_check import (
     OrderProgressionConsistencyCheck,
@@ -23,7 +24,7 @@ from catering_system.repositories.order_repository import OrderRepository
 
 
 class ProgressionService:
-    """Derives progression facts, views, eligibility, checkpoints, review summaries, and layer consistency; no release-side logic."""
+    """Derives progression facts, views, eligibility, checkpoints, summaries, consistency, and bundled snapshots; no release-side logic."""
 
     def __init__(self, order_repository: OrderRepository) -> None:
         self._order_repository = order_repository
@@ -133,3 +134,22 @@ class ProgressionService:
         sm = self.get_order_progression_review_summary(order_id)
         assert cp is not None and sm is not None
         return evaluate_order_progression_consistency(order_id, view, decision, cp, sm)
+
+    def get_order_progression_bundle(self, order_id: str) -> OrderProgressionBundle | None:
+        """B13: one read-only bundle of B8 view, B9 decision, B10 checkpoint, B11 summary, B12 consistency; None if order unknown."""
+        view = self.get_order_progression_view(order_id)
+        if view is None:
+            return None
+        decision = self.evaluate_order_progression_decision(order_id)
+        cp = self.get_order_progression_checkpoint(order_id)
+        sm = self.get_order_progression_review_summary(order_id)
+        cc = self.get_order_progression_consistency_check(order_id)
+        assert cp is not None and sm is not None and cc is not None
+        return OrderProgressionBundle(
+            order_id=order_id,
+            view=view,
+            decision=decision,
+            checkpoint=cp,
+            review_summary=sm,
+            consistency_check=cc,
+        )

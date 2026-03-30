@@ -1,4 +1,4 @@
-"""Unit tests — Slice B7–B12 progression derived reads, checkpoint, review summary, consistency (derived)."""
+"""Unit tests — Slice B7–B13 progression derived reads, bundle (derived)."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from catering_system.domain.inquiry import (
     Inquiry,
     PLANNING_MODES,
 )
+from catering_system.domain.order_progression_bundle import OrderProgressionBundle
 from catering_system.domain.order_progression_checkpoint import OrderProgressionCheckpoint
 from catering_system.domain.order_progression_consistency_check import (
     OrderProgressionConsistencyCheck,
@@ -347,6 +348,48 @@ def test_consistency_check_unknown_order_returns_none() -> None:
     )
 
 
+def test_bundle_unknown_order_returns_none() -> None:
+    assert (
+        ProgressionService(InMemoryOrderRepository()).get_order_progression_bundle(
+            "00000000-0000-0000-0000-000000000000"
+        )
+        is None
+    )
+
+
+def test_bundle_matches_individual_derived_getters() -> None:
+    repo = InMemoryOrderRepository()
+    prog = ProgressionService(repo)
+    osvc = OrderService(repo)
+    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    v2 = osvc.create_relevant_order_change_version(
+        order,
+        event_date=date(2026, 11, 2),
+        time_window_text="abends",
+        location_text="Berlin",
+        guest_count_estimate=30,
+        planning_mode=PLANNING_MODES[1],
+    )
+    osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
+    oid = order.order_id
+    b = prog.get_order_progression_bundle(oid)
+    view = prog.get_order_progression_view(oid)
+    decision = prog.evaluate_order_progression_decision(oid)
+    cp = prog.get_order_progression_checkpoint(oid)
+    sm = prog.get_order_progression_review_summary(oid)
+    cc = prog.get_order_progression_consistency_check(oid)
+    assert b is not None and view is not None and cp is not None and sm is not None and cc is not None
+    assert isinstance(b, OrderProgressionBundle)
+    assert b.order_id == oid
+    assert b.view == view
+    assert b.decision == decision
+    assert b.checkpoint == cp
+    assert b.review_summary == sm
+    assert b.consistency_check == cc
+    assert b.view.latest_order_version is not None
+    assert b.view.latest_order_version.order_version_id == v2.order_version_id
+
+
 def test_evaluate_order_progression_consistency_detects_mismatch() -> None:
     oid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     view = OrderProgressionView(
@@ -385,6 +428,7 @@ def test_evaluate_order_progression_consistency_detects_mismatch() -> None:
 
 
 def test_progression_modules_have_no_kitchen_or_release_surface() -> None:
+    import catering_system.domain.order_progression_bundle as opb_mod
     import catering_system.domain.order_progression_checkpoint as opc_mod
     import catering_system.domain.order_progression_consistency_check as opcc_mod
     import catering_system.domain.order_progression_decision as opd_mod
@@ -393,7 +437,7 @@ def test_progression_modules_have_no_kitchen_or_release_surface() -> None:
     import catering_system.domain.progression_blockers as pb_mod
     import catering_system.services.progression_service as ps_mod
 
-    for mod in (pb_mod, ps_mod, opv_mod, opd_mod, opc_mod, oprs_mod, opcc_mod):
+    for mod in (pb_mod, ps_mod, opv_mod, opd_mod, opc_mod, oprs_mod, opcc_mod, opb_mod):
         lowered = _module_source_lower(mod)
         assert "kitchen" not in lowered
         assert "ready_to_send" not in lowered

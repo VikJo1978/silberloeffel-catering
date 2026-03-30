@@ -719,3 +719,65 @@ Must not be changed
 	•	no kitchen print logic in B11
 	•	no READY_TO_SEND semantics in B11
 	•	Slice A boundaries and earlier Slice B boundaries must remain intact
+
+⸻
+
+Entry 021
+
+Date: Slice B / B12 acceptance snapshot
+Scope: Slice B / B12 derived progression consistency check
+Status: accepted
+
+Completed
+	•	narrow derived progression consistency-check model introduced
+	•	consistency evaluation across existing progression read layers implemented
+	•	unit tests for consistency scenarios added
+
+Accepted
+	•	consistency is evaluated only from existing derived progression layers
+	•	no new persisted progression truth axis introduced
+	•	consistency check remains distinct from release/effective/kitchen semantics
+	•	no kitchen/release/effective/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B12
+	•	no effective operational switching yet
+	•	no kitchen acceptance mechanics yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no effective switching in B12
+	•	no kitchen print logic in B12
+	•	no READY_TO_SEND semantics in B12
+	•	Slice A boundaries and earlier Slice B boundaries must remain intact
+
+⸻
+
+Entry 022
+
+Date: Slice B / B13 acceptance snapshot
+Scope: Slice B / B13 derived progression bundle
+Status: accepted
+
+Completed
+	•	narrow derived progression bundle model introduced
+	•	bundle now groups existing progression view, decision, checkpoint, review summary, and consistency check
+	•	unit tests for bundle scenarios added
+
+Accepted
+	•	progression bundle is composed only from existing derived progression artifacts
+	•	no new persisted progression truth axis introduced
+	•	bundle remains distinct from release/effective/kitchen semantics
+	•	no kitchen/release/effective/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B13
+	•	no effective operational switching yet
+	•	no kitchen acceptance mechanics yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no effective switching in B13
+	•	no kitchen print logic in B13
+	•	no READY_TO_SEND semantics in B13
+	•	Slice A boundaries and earlier Slice B boundaries must remain intact
