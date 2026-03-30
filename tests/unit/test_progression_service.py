@@ -1,4 +1,4 @@
-"""Unit tests — Slice B7/B8/B9 progression blocked-state, view, and office eligibility (derived)."""
+"""Unit tests — Slice B7–B10 progression derived reads, view, decision, checkpoint (derived)."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from catering_system.domain.inquiry import (
     Inquiry,
     PLANNING_MODES,
 )
+from catering_system.domain.order_progression_checkpoint import OrderProgressionCheckpoint
 from catering_system.domain.order_progression_decision import OrderProgressionDecision
 from catering_system.domain.order_progression_view import OrderProgressionView
 from catering_system.domain.progression_blockers import (
@@ -217,13 +218,64 @@ def test_progression_decision_not_eligible_when_order_unknown() -> None:
     assert d.candidate_order_version_id is None
 
 
+def test_checkpoint_composes_view_and_decision() -> None:
+    repo = InMemoryOrderRepository()
+    prog = ProgressionService(repo)
+    osvc = OrderService(repo)
+    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    v2 = osvc.create_relevant_order_change_version(
+        order,
+        event_date=date(2026, 11, 2),
+        time_window_text="abends",
+        location_text="Berlin",
+        guest_count_estimate=30,
+        planning_mode=PLANNING_MODES[1],
+    )
+    osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
+    cp = prog.get_order_progression_checkpoint(order.order_id)
+    view = prog.get_order_progression_view(order.order_id)
+    dec = prog.evaluate_order_progression_decision(order.order_id)
+    assert cp is not None and view is not None
+    assert isinstance(cp, OrderProgressionCheckpoint)
+    assert cp.order_id == order.order_id
+    assert cp.latest_order_version_id == v2.order_version_id
+    assert cp.candidate_order_version_id == v1.order_version_id
+    assert cp.blocked == view.blocked
+    assert cp.reasons == view.reasons
+    assert cp.eligible_for_progression_review == dec.eligible_for_progression_review
+
+
+def test_checkpoint_when_candidate_absent() -> None:
+    repo = InMemoryOrderRepository()
+    prog = ProgressionService(repo)
+    osvc = OrderService(repo)
+    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    cp = prog.get_order_progression_checkpoint(order.order_id)
+    assert cp is not None
+    assert cp.latest_order_version_id == v1.order_version_id
+    assert cp.candidate_order_version_id is None
+    assert cp.blocked is True
+    assert REASON_CANDIDATE_ORDER_VERSION_MISSING in cp.reasons
+    assert cp.eligible_for_progression_review is False
+
+
+def test_checkpoint_unknown_order_returns_none() -> None:
+    assert (
+        ProgressionService(InMemoryOrderRepository()).get_order_progression_checkpoint(
+            "00000000-0000-0000-0000-000000000000"
+        )
+        is None
+    )
+
+
 def test_progression_modules_have_no_kitchen_or_release_surface() -> None:
+    import catering_system.domain.order_progression_checkpoint as opc_mod
     import catering_system.domain.order_progression_decision as opd_mod
     import catering_system.domain.order_progression_view as opv_mod
     import catering_system.domain.progression_blockers as pb_mod
     import catering_system.services.progression_service as ps_mod
 
-    for mod in (pb_mod, ps_mod, opv_mod, opd_mod):
+    for mod in (pb_mod, ps_mod, opv_mod, opd_mod, opc_mod):
         lowered = _module_source_lower(mod)
         assert "kitchen" not in lowered
         assert "ready_to_send" not in lowered

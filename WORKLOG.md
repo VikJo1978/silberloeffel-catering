@@ -626,3 +626,65 @@ Must not be changed
 	•	no kitchen print logic in B8
 	•	no READY_TO_SEND semantics in B8
 	•	Slice A boundaries and earlier Slice B boundaries must remain intact
+
+⸻
+
+Entry 018
+
+Date: Slice B / B9 acceptance snapshot
+Scope: Slice B / B9 derived progression decision
+Status: accepted
+
+Completed
+	•	narrow derived progression decision model introduced
+	•	explicit office/Core-side progression decision evaluation implemented
+	•	unit tests for progression decision scenarios added
+
+Accepted
+	•	progression eligibility is derived from existing blocked-state and candidate facts only
+	•	no new persisted progression truth axis introduced
+	•	progression decision remains distinct from release/effective/kitchen semantics
+	•	no kitchen/release/effective/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B9
+	•	no effective operational switching yet
+	•	no kitchen acceptance mechanics yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no effective switching in B9
+	•	no kitchen print logic in B9
+	•	no READY_TO_SEND semantics in B9
+	•	Slice A boundaries and earlier Slice B boundaries must remain intact
+
+⸻
+
+Entry 019
+
+Date: Slice B / B10 acceptance snapshot
+Scope: Slice B / B10 derived progression checkpoint snapshot
+Status: accepted
+
+Completed
+	•	narrow derived progression checkpoint model introduced
+	•	checkpoint now composes progression view and progression decision into one read-only snapshot
+	•	unit tests for checkpoint composition added
+
+Accepted
+	•	current office/Core-side progression state can be read through one explicit derived checkpoint snapshot
+	•	checkpoint remains read-only and derived from existing facts only
+	•	no new persisted progression truth axis introduced
+	•	no kitchen/release/effective/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B10
+	•	no effective operational switching yet
+	•	no kitchen acceptance mechanics yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no effective switching in B10
+	•	no kitchen print logic in B10
+	•	no READY_TO_SEND semantics in B10
+	•	Slice A boundaries and earlier Slice B boundaries must remain intact

@@ -1,8 +1,9 @@
-"""Progression blocked-state (B7), composed view (B8), office decision (B9) — Core/office-side derived only."""
+"""Progression blocked-state (B7), view (B8), decision (B9), checkpoint (B10) — Core/office-side derived only."""
 
 from __future__ import annotations
 
 from catering_system.domain.order import OrderVersion
+from catering_system.domain.order_progression_checkpoint import OrderProgressionCheckpoint
 from catering_system.domain.order_progression_decision import OrderProgressionDecision
 from catering_system.domain.order_progression_view import OrderProgressionView
 from catering_system.domain.progression_blockers import (
@@ -17,7 +18,7 @@ from catering_system.repositories.order_repository import OrderRepository
 
 
 class ProgressionService:
-    """Derives progression facts, views, and eligibility from inquiry/order data; no release-side logic."""
+    """Derives progression facts, views, eligibility, and checkpoints from inquiry/order data; no release-side logic."""
 
     def __init__(self, order_repository: OrderRepository) -> None:
         self._order_repository = order_repository
@@ -80,4 +81,24 @@ class ProgressionService:
             eligible_for_progression_review=eligible,
             reasons=reasons,
             candidate_order_version_id=cid,
+        )
+
+    def get_order_progression_checkpoint(self, order_id: str) -> OrderProgressionCheckpoint | None:
+        """B10: on-demand snapshot from B8 view + B9 decision only; None if order unknown."""
+        view = self.get_order_progression_view(order_id)
+        if view is None:
+            return None
+        decision = self.evaluate_order_progression_decision(order_id)
+        latest_id = (
+            view.latest_order_version.order_version_id
+            if view.latest_order_version is not None
+            else None
+        )
+        return OrderProgressionCheckpoint(
+            order_id=order_id,
+            latest_order_version_id=latest_id,
+            candidate_order_version_id=decision.candidate_order_version_id,
+            blocked=view.blocked,
+            reasons=view.reasons,
+            eligible_for_progression_review=decision.eligible_for_progression_review,
         )
