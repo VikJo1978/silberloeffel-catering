@@ -1,4 +1,4 @@
-"""Unit tests — Slice B7 progression blocked-state (derived)."""
+"""Unit tests — Slice B7/B8 progression blocked-state and composed progression view (derived)."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from catering_system.domain.inquiry import (
     Inquiry,
     PLANNING_MODES,
 )
+from catering_system.domain.order_progression_view import OrderProgressionView
 from catering_system.domain.progression_blockers import (
     REASON_CANDIDATE_ORDER_VERSION_MISSING,
     REASON_CANDIDATE_ORDER_VERSION_NOT_RESOLVABLE,
@@ -119,11 +120,63 @@ def test_candidate_progression_blocked_when_candidate_id_not_resolvable() -> Non
     assert REASON_CANDIDATE_ORDER_VERSION_NOT_RESOLVABLE in ev.reasons
 
 
+def test_order_progression_view_composes_latest_candidate_and_blocked() -> None:
+    repo = InMemoryOrderRepository()
+    prog = ProgressionService(repo)
+    osvc = OrderService(repo)
+    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    v2 = osvc.create_relevant_order_change_version(
+        order,
+        event_date=date(2026, 11, 2),
+        time_window_text="abends",
+        location_text="Berlin",
+        guest_count_estimate=30,
+        planning_mode=PLANNING_MODES[1],
+    )
+    osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
+    view = prog.get_order_progression_view(order.order_id)
+    assert view is not None
+    assert isinstance(view, OrderProgressionView)
+    assert view.order_id == order.order_id
+    assert view.latest_order_version is not None
+    assert view.latest_order_version.order_version_id == v2.order_version_id
+    assert view.candidate_order_version is not None
+    assert view.candidate_order_version.order_version_id == v1.order_version_id
+    ev = prog.evaluate_candidate_version_progression(order.order_id)
+    assert view.blocked == ev.blocked
+    assert view.reasons == ev.reasons
+    assert view.blocked is False
+
+
+def test_order_progression_view_when_candidate_absent() -> None:
+    repo = InMemoryOrderRepository()
+    prog = ProgressionService(repo)
+    osvc = OrderService(repo)
+    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    view = prog.get_order_progression_view(order.order_id)
+    assert view is not None
+    assert view.latest_order_version is not None
+    assert view.latest_order_version.order_version_id == v1.order_version_id
+    assert view.candidate_order_version is None
+    assert view.blocked is True
+    assert REASON_CANDIDATE_ORDER_VERSION_MISSING in view.reasons
+
+
+def test_order_progression_view_unknown_order_returns_none() -> None:
+    assert (
+        ProgressionService(InMemoryOrderRepository()).get_order_progression_view(
+            "00000000-0000-0000-0000-000000000000"
+        )
+        is None
+    )
+
+
 def test_progression_modules_have_no_kitchen_or_release_surface() -> None:
+    import catering_system.domain.order_progression_view as opv_mod
     import catering_system.domain.progression_blockers as pb_mod
     import catering_system.services.progression_service as ps_mod
 
-    for mod in (pb_mod, ps_mod):
+    for mod in (pb_mod, ps_mod, opv_mod):
         lowered = _module_source_lower(mod)
         assert "kitchen" not in lowered
         assert "ready_to_send" not in lowered
