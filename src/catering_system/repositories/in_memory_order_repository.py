@@ -1,4 +1,4 @@
-"""In-memory order repository — B1 baseline."""
+"""In-memory order repository — B1/B2 baseline."""
 
 from __future__ import annotations
 
@@ -26,3 +26,7 @@ class InMemoryOrderRepository:
 
     def get_order_version(self, order_version_id: str) -> OrderVersion | None:
         return self._versions.get(order_version_id)
+
+    def list_order_versions(self, order_id: str) -> list[OrderVersion]:
+        rows = [v for v in self._versions.values() if v.order_id == order_id]
+        return sorted(rows, key=lambda v: v.version_number)

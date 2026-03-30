@@ -1,4 +1,4 @@
-"""Unit tests — Slice B1 Order / OrderVersion / convert_inquiry_to_order."""
+"""Unit tests — Slice B1/B2 Order, OrderVersion, conversion, version history."""
 
 from __future__ import annotations
 
@@ -64,8 +64,36 @@ def test_convert_inquiry_to_order_creates_order_and_initial_version() -> None:
     assert stored.version_number == 1
 
 
+def test_create_relevant_order_change_version_second_preserves_first() -> None:
+    repo = InMemoryOrderRepository()
+    svc = OrderService(repo)
+    order, v1 = svc.convert_inquiry_to_order(_sample_inquiry())
+    v2 = svc.create_relevant_order_change_version(
+        order,
+        event_date=date(2026, 11, 2),
+        time_window_text="abends",
+        location_text="Berlin",
+        guest_count_estimate=30,
+        planning_mode=PLANNING_MODES[1],
+    )
+    assert v2.version_number == 2
+    assert v2.order_id == order.order_id
+    hist = repo.list_order_versions(order.order_id)
+    assert len(hist) == 2
+    assert hist[0].order_version_id == v1.order_version_id
+    assert hist[0].version_number == 1
+    assert hist[1].order_version_id == v2.order_version_id
+    assert hist[1].time_window_text == "abends"
+    reloaded = repo.get_order_version(v1.order_version_id)
+    assert reloaded is not None
+    assert reloaded.event_date == v1.event_date
+    updated_order = repo.get_order(order.order_id)
+    assert updated_order is not None
+    assert updated_order.updated_at >= order.updated_at
+
+
 def test_order_domain_has_no_kitchen_or_release_surface() -> None:
-    """B1 gate: no print / READY_TO_SEND / effective-switch fields on Order types."""
+    """B1/B2 gate: no print / READY_TO_SEND / operational-switch fields on Order types."""
     import catering_system.domain.order as order_mod
 
     lowered = _module_source_lower(order_mod)

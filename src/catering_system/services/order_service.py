@@ -1,12 +1,13 @@
-"""Core order service — inquiry-to-order conversion (B1 only)."""
+"""Core order service — inquiry conversion (B1) and version history (B2)."""
 
 from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime, timezone
+from dataclasses import replace
+from datetime import date, datetime, timezone
 
-from catering_system.domain.inquiry import Inquiry
+from catering_system.domain.inquiry import Inquiry, validate_planning_mode
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.repositories.order_repository import OrderRepository
 
@@ -18,7 +19,7 @@ def _utc_now() -> datetime:
 
 
 class OrderService:
-    """Creates Core-owned Order + initial OrderVersion from an Inquiry (B1 scope)."""
+    """Core-owned Order lifecycle: initial conversion (B1), successor versions (B2)."""
 
     def __init__(self, order_repository: OrderRepository) -> None:
         self._order_repository = order_repository
@@ -53,3 +54,43 @@ class OrderService:
             version.version_number,
         )
         return order, version
+
+    def create_relevant_order_change_version(
+        self,
+        order: Order,
+        *,
+        event_date: date,
+        time_window_text: str,
+        location_text: str,
+        guest_count_estimate: int | None,
+        planning_mode: str,
+    ) -> OrderVersion:
+        """Append a new OrderVersion; increments version_number; does not select any version as active."""
+        current = self._order_repository.get_order(order.order_id)
+        if current is None:
+            raise ValueError(f"no order with id {order.order_id!r}")
+        existing = self._order_repository.list_order_versions(order.order_id)
+        next_num = max((v.version_number for v in existing), default=0) + 1
+        now = _utc_now()
+        pm = validate_planning_mode(planning_mode)
+        version = OrderVersion(
+            order_version_id=str(uuid.uuid4()),
+            order_id=order.order_id,
+            version_number=next_num,
+            created_at=now,
+            event_date=event_date,
+            time_window_text=time_window_text,
+            location_text=location_text,
+            guest_count_estimate=guest_count_estimate,
+            planning_mode=pm,
+        )
+        self._order_repository.save_order_version(version)
+        self._order_repository.update_order(
+            replace(current, updated_at=now),
+        )
+        _log.info(
+            "create_relevant_order_change_version order_id=%s version=%s",
+            order.order_id,
+            version.version_number,
+        )
+        return version

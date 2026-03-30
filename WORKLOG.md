@@ -402,3 +402,35 @@ Must not be changed
 	•	no READY_TO_SEND semantics in B1
 	•	no effective switching in B1
 	•	Slice A boundaries must remain intact
+
+⸻
+
+Entry 011
+
+Date: Slice B / B2 acceptance snapshot
+Scope: Slice B / B2 controlled order-version history
+Status: accepted
+
+Completed
+	•	repository support for listing order versions added
+	•	controlled creation of follow-up OrderVersion implemented
+	•	immutable order-version history preserved
+	•	unit tests for B2 version-history behavior added
+
+Accepted
+	•	second and later OrderVersion records can be created under Core ownership
+	•	version_number increments correctly
+	•	prior versions remain preserved
+	•	no effective-switch / kitchen / release / READY_TO_SEND / Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B2
+	•	no active/effective version mechanics yet
+	•	no kitchen acceptance mechanics yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no effective switching in B2
+	•	no kitchen print logic in B2
+	•	no READY_TO_SEND semantics in B2
+	•	Slice A boundaries must remain intact
