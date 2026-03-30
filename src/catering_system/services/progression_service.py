@@ -1,9 +1,13 @@
-"""Progression blocked-state (B7), view (B8), decision (B9), checkpoint (B10), review summary (B11) — derived only."""
+"""Progression blocked-state (B7), view (B8), decision (B9), checkpoint (B10), review summary (B11), consistency (B12) — derived only."""
 
 from __future__ import annotations
 
 from catering_system.domain.order import OrderVersion
 from catering_system.domain.order_progression_checkpoint import OrderProgressionCheckpoint
+from catering_system.domain.order_progression_consistency_check import (
+    OrderProgressionConsistencyCheck,
+    evaluate_order_progression_consistency,
+)
 from catering_system.domain.order_progression_review_summary import OrderProgressionReviewSummary
 from catering_system.domain.order_progression_decision import OrderProgressionDecision
 from catering_system.domain.order_progression_view import OrderProgressionView
@@ -19,7 +23,7 @@ from catering_system.repositories.order_repository import OrderRepository
 
 
 class ProgressionService:
-    """Derives progression facts, views, eligibility, checkpoints, and review summaries; no release-side logic."""
+    """Derives progression facts, views, eligibility, checkpoints, review summaries, and layer consistency; no release-side logic."""
 
     def __init__(self, order_repository: OrderRepository) -> None:
         self._order_repository = order_repository
@@ -118,3 +122,14 @@ class ProgressionService:
             reason_count=len(cp.reasons),
             reasons=cp.reasons,
         )
+
+    def get_order_progression_consistency_check(self, order_id: str) -> OrderProgressionConsistencyCheck | None:
+        """B12: agreement across B8 view, B9 decision, B10 checkpoint, B11 summary; None if order unknown."""
+        view = self.get_order_progression_view(order_id)
+        if view is None:
+            return None
+        decision = self.evaluate_order_progression_decision(order_id)
+        cp = self.get_order_progression_checkpoint(order_id)
+        sm = self.get_order_progression_review_summary(order_id)
+        assert cp is not None and sm is not None
+        return evaluate_order_progression_consistency(order_id, view, decision, cp, sm)
