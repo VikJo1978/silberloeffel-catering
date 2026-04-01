@@ -1099,33 +1099,34 @@ Must not be changed
 
 Entry 033
 
-Date: 2026-03-30 — Slice B / B24 acceptance snapshot
-Scope: Slice B / B24 derived progression reason fingerprint
+Date: 2026-04-01 — Slice B / B24–B25 acceptance snapshot
+Scope: Slice B / B24 derived progression reason fingerprint; Slice B / B25 derived progression readiness flags
 Status: accepted
 
 Completed
 	•	added derived progression reason fingerprint projection from B14 export only
-	•	introduced read-only derived artifact for progression reason fingerprint
-	•	added service getter deriving from B14 export only
-	•	extended unit coverage for unknown order, eligible/no-reasons case, blocked case, and synthetic derivation shape
-	•	preserved frozen Slice B boundaries
-
-Accepted
-	•	B24 remains derived-only and read-only
-	•	no kitchen, release, READY_TO_SEND, Wochenübersicht, or effective semantics introduced
-	•	unknown order returns None
+	•	added derived progression readiness flags projection from B14 export only
+	•	introduced read-only derived artifacts for progression reason fingerprint and readiness flags
+	•	added service getters deriving from B14 export only
+	•	extended unit coverage for unknown order behavior, eligible cases, blocked candidate-missing cases, and synthetic derivation shapes
 	•	full unit suite passes
 
+Accepted
+	•	B24 and B25 remain derived-only and read-only
+	•	both projections derive strictly from B14 export only
+	•	unknown order returns None
+	•	no kitchen, release, READY_TO_SEND, Wochenübersicht, or operational-side semantics introduced
+
 Open
-	•	remaining Slice B scope beyond B24
+	•	remaining Slice B scope beyond B25
 	•	no effective operational switching yet
 	•	no kitchen acceptance mechanics yet
 
 Must not be changed
-	•	B14 export remains the source for this projection
-	•	no persistence or operational truth may be introduced through this artifact
+	•	B14 export remains the only source for both projections
+	•	no persistence, release logic, or new operational truth may be introduced through these artifacts
 	•	no hidden move into later Slice B packages
-	•	no effective switching in B24
-	•	no kitchen print logic in B24
-	•	no READY_TO_SEND semantics in B24
+	•	no effective switching in B24 or B25
+	•	no kitchen print logic in B24 or B25
+	•	no READY_TO_SEND semantics in B24 or B25
 	•	Slice A boundaries and earlier Slice B boundaries must remain intact
