@@ -1,4 +1,4 @@
-"""Unit tests — Slice B7–B14 progression derived reads, bundle, export (derived)."""
+"""Unit tests — Slice B7–B15 progression derived reads, export, text summary (derived)."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from catering_system.domain.inquiry import (
 )
 from catering_system.domain.order_progression_bundle import OrderProgressionBundle
 from catering_system.domain.order_progression_export import OrderProgressionExport
+from catering_system.domain.order_progression_text_summary import format_order_progression_export_text
 from catering_system.domain.order_progression_checkpoint import OrderProgressionCheckpoint
 from catering_system.domain.order_progression_consistency_check import (
     OrderProgressionConsistencyCheck,
@@ -431,6 +432,54 @@ def test_export_flattened_from_bundle_checkpoint_and_consistency() -> None:
     assert ex.consistent == b.consistency_check.consistent
 
 
+def test_text_summary_unknown_order_returns_none() -> None:
+    assert (
+        ProgressionService(InMemoryOrderRepository()).get_order_progression_text_summary(
+            "00000000-0000-0000-0000-000000000000"
+        )
+        is None
+    )
+
+
+def test_text_summary_deterministic_from_export() -> None:
+    repo = InMemoryOrderRepository()
+    prog = ProgressionService(repo)
+    osvc = OrderService(repo)
+    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
+    oid = order.order_id
+    ex = prog.get_order_progression_export(oid)
+    txt = prog.get_order_progression_text_summary(oid)
+    assert ex is not None and txt is not None
+    assert txt == format_order_progression_export_text(ex)
+    assert oid in txt
+    assert "consistent: true" in txt
+
+
+def test_format_order_progression_export_text_fixed_shape() -> None:
+    ex = OrderProgressionExport(
+        order_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        latest_order_version_id=None,
+        candidate_order_version_id=None,
+        blocked=True,
+        eligible_for_progression_review=False,
+        consistent=True,
+        reason_count=1,
+        reasons=("r-a",),
+    )
+    s = format_order_progression_export_text(ex)
+    assert s == (
+        "order_id: bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb\n"
+        "latest_order_version_id: none\n"
+        "candidate_order_version_id: none\n"
+        "blocked: true\n"
+        "eligible_for_progression_review: false\n"
+        "consistent: true\n"
+        "reason_count: 1\n"
+        "reason[0]: r-a\n"
+    )
+
+
 def test_evaluate_order_progression_consistency_detects_mismatch() -> None:
     oid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     view = OrderProgressionView(
@@ -471,6 +520,7 @@ def test_evaluate_order_progression_consistency_detects_mismatch() -> None:
 def test_progression_modules_have_no_kitchen_or_release_surface() -> None:
     import catering_system.domain.order_progression_bundle as opb_mod
     import catering_system.domain.order_progression_export as ope_mod
+    import catering_system.domain.order_progression_text_summary as opts_mod
     import catering_system.domain.order_progression_checkpoint as opc_mod
     import catering_system.domain.order_progression_consistency_check as opcc_mod
     import catering_system.domain.order_progression_decision as opd_mod
@@ -479,7 +529,7 @@ def test_progression_modules_have_no_kitchen_or_release_surface() -> None:
     import catering_system.domain.progression_blockers as pb_mod
     import catering_system.services.progression_service as ps_mod
 
-    for mod in (pb_mod, ps_mod, opv_mod, opd_mod, opc_mod, oprs_mod, opcc_mod, opb_mod, ope_mod):
+    for mod in (pb_mod, ps_mod, opv_mod, opd_mod, opc_mod, oprs_mod, opcc_mod, opb_mod, ope_mod, opts_mod):
         lowered = _module_source_lower(mod)
         assert "kitchen" not in lowered
         assert "ready_to_send" not in lowered

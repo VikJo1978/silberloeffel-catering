@@ -781,3 +781,65 @@ Must not be changed
 	•	no kitchen print logic in B13
 	•	no READY_TO_SEND semantics in B13
 	•	Slice A boundaries and earlier Slice B boundaries must remain intact
+
+⸻
+
+Entry 023
+
+Date: Slice B / B14 acceptance snapshot
+Scope: Slice B / B14 derived progression export DTO
+Status: accepted
+
+Completed
+	•	narrow derived progression export model introduced
+	•	export now flattens the existing progression bundle into a simple serializable shape
+	•	unit tests for export scenarios added
+
+Accepted
+	•	export is derived only from existing progression artifacts
+	•	no new persisted progression truth axis introduced
+	•	export remains distinct from release/effective/kitchen semantics
+	•	no kitchen/release/effective/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B14
+	•	no effective operational switching yet
+	•	no kitchen acceptance mechanics yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no effective switching in B14
+	•	no kitchen print logic in B14
+	•	no READY_TO_SEND semantics in B14
+	•	Slice A boundaries and earlier Slice B boundaries must remain intact
+
+⸻
+
+Entry 024
+
+Date: Slice B / B15 acceptance snapshot
+Scope: Slice B / B15 derived progression text summary
+Status: accepted
+
+Completed
+	•	narrow derived progression text-summary formatter introduced
+	•	text summary now converts the existing progression export DTO into a deterministic human-readable string
+	•	unit tests for text summary scenarios added
+
+Accepted
+	•	text summary is derived only from the existing flat progression export DTO
+	•	no new persisted progression truth axis introduced
+	•	text summary remains distinct from release/effective/kitchen semantics
+	•	no kitchen/release/effective/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B15
+	•	no effective operational switching yet
+	•	no kitchen acceptance mechanics yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no effective switching in B15
+	•	no kitchen print logic in B15
+	•	no READY_TO_SEND semantics in B15
+	•	Slice A boundaries and earlier Slice B boundaries must remain intact
