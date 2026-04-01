@@ -967,3 +967,34 @@ Must not be changed
 	•	no kitchen print logic in B19
 	•	no READY_TO_SEND semantics in B19
 	•	Slice A boundaries and earlier Slice B boundaries must remain intact
+
+⸻
+
+Entry 029
+
+Date: Slice B / B20 acceptance snapshot
+Scope: Slice B / B20 derived progression badges
+Status: accepted
+
+Completed
+	•	narrow derived progression badges projection introduced
+	•	badges now derive a deterministic minimal badge tuple from the existing progression export DTO
+	•	unit tests for badges scenarios added
+
+Accepted
+	•	badges projection is derived only from the existing B14 export DTO
+	•	no new persisted progression truth axis introduced
+	•	badges projection remains distinct from release/effective/kitchen semantics
+	•	no kitchen/release/effective/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B20
+	•	no effective operational switching yet
+	•	no kitchen acceptance mechanics yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no effective switching in B20
+	•	no kitchen print logic in B20
+	•	no READY_TO_SEND semantics in B20
+	•	Slice A boundaries and earlier Slice B boundaries must remain intact

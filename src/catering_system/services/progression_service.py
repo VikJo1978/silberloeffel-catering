@@ -1,4 +1,4 @@
-"""Progression blocked-state (B7), view (B8), decision (B9), checkpoint (B10), review summary (B11), consistency (B12), bundle (B13), export (B14), text summary (B15), debug dict (B16), JSON debug (B17), reason codes (B18), status label (B19) — derived only."""
+"""Progression blocked-state (B7), view (B8), decision (B9), checkpoint (B10), review summary (B11), consistency (B12), bundle (B13), export (B14), text summary (B15), debug dict (B16), JSON debug (B17), reason codes (B18), status label (B19), badges (B20) — derived only."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from catering_system.domain.order_progression_debug_dict import order_progressio
 from catering_system.domain.order_progression_json_debug import order_progression_debug_dict_to_json
 from catering_system.domain.order_progression_export import OrderProgressionExport
 from catering_system.domain.order_progression_reason_codes import OrderProgressionReasonCodes
+from catering_system.domain.order_progression_badges import OrderProgressionBadges
 from catering_system.domain.order_progression_status_label import OrderProgressionStatusLabel
 from catering_system.domain.order_progression_text_summary import format_order_progression_export_text
 from catering_system.domain.order_progression_checkpoint import OrderProgressionCheckpoint
@@ -30,7 +31,7 @@ from catering_system.repositories.order_repository import OrderRepository
 
 
 class ProgressionService:
-    """Derives progression reads, bundle, export DTO, text summary, debug dict, JSON debug, reason codes, and status label; no release-side logic."""
+    """Derives progression reads, bundle, export DTO, text summary, debug dict, JSON debug, reason codes, status label, and badges; no release-side logic."""
 
     def __init__(self, order_repository: OrderRepository) -> None:
         self._order_repository = order_repository
@@ -201,3 +202,10 @@ class ProgressionService:
         if ex is None:
             return None
         return OrderProgressionStatusLabel.from_export(ex)
+
+    def get_order_progression_badges(self, order_id: str) -> OrderProgressionBadges | None:
+        """B20: order_id + derived badge tuple from B14 export only; None if order unknown."""
+        ex = self.get_order_progression_export(order_id)
+        if ex is None:
+            return None
+        return OrderProgressionBadges.from_export(ex)

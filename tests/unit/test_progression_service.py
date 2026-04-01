@@ -1,4 +1,4 @@
-"""Unit tests — Slice B7–B19 progression derived reads, export, status label (derived)."""
+"""Unit tests — Slice B7–B20 progression derived reads, export, status label, badges (derived)."""
 
 from __future__ import annotations
 
@@ -22,6 +22,10 @@ from catering_system.domain.order_progression_bundle import OrderProgressionBund
 from catering_system.domain.order_progression_debug_dict import order_progression_export_to_dict
 from catering_system.domain.order_progression_json_debug import order_progression_debug_dict_to_json
 from catering_system.domain.order_progression_export import OrderProgressionExport
+from catering_system.domain.order_progression_badges import (
+    OrderProgressionBadges,
+    derive_order_progression_badges,
+)
 from catering_system.domain.order_progression_reason_codes import OrderProgressionReasonCodes
 from catering_system.domain.order_progression_status_label import (
     OrderProgressionStatusLabel,
@@ -622,6 +626,63 @@ def test_status_label_blocked_when_candidate_missing() -> None:
     assert sl.status_label == "blocked"
 
 
+def test_badges_unknown_order_returns_none() -> None:
+    assert (
+        ProgressionService(InMemoryOrderRepository()).get_order_progression_badges(
+            "00000000-0000-0000-0000-000000000000"
+        )
+        is None
+    )
+
+
+def test_badges_matches_export_derived_tuple() -> None:
+    repo = InMemoryOrderRepository()
+    prog = ProgressionService(repo)
+    osvc = OrderService(repo)
+    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
+    oid = order.order_id
+    ex = prog.get_order_progression_export(oid)
+    bg = prog.get_order_progression_badges(oid)
+    assert ex is not None and bg is not None
+    assert isinstance(bg, OrderProgressionBadges)
+    assert bg.order_id == oid
+    assert bg.badges == derive_order_progression_badges(ex)
+    assert bg == OrderProgressionBadges.from_export(ex)
+
+
+def test_badges_blocked_candidate_missing_has_reasons_present() -> None:
+    repo = InMemoryOrderRepository()
+    prog = ProgressionService(repo)
+    osvc = OrderService(repo)
+    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    bg = prog.get_order_progression_badges(order.order_id)
+    assert bg is not None
+    assert bg.badges == (
+        "blocked",
+        "consistent",
+        "reasons_present",
+    )
+
+
+def test_derive_order_progression_badges_fixed_order_and_flags() -> None:
+    ex = OrderProgressionExport(
+        order_id="eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+        latest_order_version_id=None,
+        candidate_order_version_id=None,
+        blocked=True,
+        eligible_for_progression_review=False,
+        consistent=False,
+        reason_count=2,
+        reasons=("a", "b"),
+    )
+    assert derive_order_progression_badges(ex) == (
+        "blocked",
+        "inconsistent",
+        "reasons_present",
+    )
+
+
 def test_derive_order_progression_status_label_inconsistent_first() -> None:
     ex = OrderProgressionExport(
         order_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
@@ -674,6 +735,7 @@ def test_evaluate_order_progression_consistency_detects_mismatch() -> None:
 
 
 def test_progression_modules_have_no_kitchen_or_release_surface() -> None:
+    import catering_system.domain.order_progression_badges as opbadges_mod
     import catering_system.domain.order_progression_bundle as opb_mod
     import catering_system.domain.order_progression_debug_dict as opdd_mod
     import catering_system.domain.order_progression_json_debug as opjd_mod
@@ -689,7 +751,23 @@ def test_progression_modules_have_no_kitchen_or_release_surface() -> None:
     import catering_system.domain.progression_blockers as pb_mod
     import catering_system.services.progression_service as ps_mod
 
-    for mod in (pb_mod, ps_mod, opv_mod, opd_mod, opc_mod, oprs_mod, opcc_mod, opb_mod, ope_mod, opts_mod, opdd_mod, opjd_mod, oprc_mod, opsl_mod):
+    for mod in (
+        pb_mod,
+        ps_mod,
+        opv_mod,
+        opd_mod,
+        opc_mod,
+        oprs_mod,
+        opcc_mod,
+        opb_mod,
+        ope_mod,
+        opts_mod,
+        opdd_mod,
+        opjd_mod,
+        oprc_mod,
+        opsl_mod,
+        opbadges_mod,
+    ):
         lowered = _module_source_lower(mod)
         assert "kitchen" not in lowered
         assert "ready_to_send" not in lowered
