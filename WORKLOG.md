@@ -1029,3 +1029,34 @@ Must not be changed
 	•	no kitchen print logic in B21
 	•	no READY_TO_SEND semantics in B21
 	•	Slice A boundaries and earlier Slice B boundaries must remain intact
+
+⸻
+
+Entry 031
+
+Date: Slice B / B22 acceptance snapshot
+Scope: Slice B / B22 derived progression state signature
+Status: accepted
+
+Completed
+	•	narrow derived progression state-signature projection introduced
+	•	state signature now derives one deterministic compact signature string from the existing progression export DTO
+	•	unit tests for signature scenarios added
+
+Accepted
+	•	state signature projection is derived only from the existing B14 export DTO
+	•	no new persisted progression truth axis introduced
+	•	state signature remains distinct from release/effective/kitchen semantics
+	•	no kitchen/release/effective/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B22
+	•	no effective operational switching yet
+	•	no kitchen acceptance mechanics yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no effective switching in B22
+	•	no kitchen print logic in B22
+	•	no READY_TO_SEND semantics in B22
+	•	Slice A boundaries and earlier Slice B boundaries must remain intact

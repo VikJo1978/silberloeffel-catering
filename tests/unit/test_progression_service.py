@@ -1,4 +1,4 @@
-"""Unit tests — Slice B7–B21 progression derived reads, export, status label, badges, severity (derived)."""
+"""Unit tests — Slice B7–B22 progression derived reads, export, status label, badges, severity, state signature (derived)."""
 
 from __future__ import annotations
 
@@ -30,6 +30,10 @@ from catering_system.domain.order_progression_reason_codes import OrderProgressi
 from catering_system.domain.order_progression_severity import (
     OrderProgressionSeverity,
     derive_order_progression_severity,
+)
+from catering_system.domain.order_progression_state_signature import (
+    OrderProgressionStateSignature,
+    derive_order_progression_state_signature,
 )
 from catering_system.domain.order_progression_status_label import (
     OrderProgressionStatusLabel,
@@ -801,6 +805,68 @@ def test_derive_order_progression_severity_priority() -> None:
     )
 
 
+def test_state_signature_unknown_order_returns_none() -> None:
+    assert (
+        ProgressionService(InMemoryOrderRepository()).get_order_progression_state_signature(
+            "00000000-0000-0000-0000-000000000000"
+        )
+        is None
+    )
+
+
+def test_state_signature_matches_export_derived_string() -> None:
+    repo = InMemoryOrderRepository()
+    prog = ProgressionService(repo)
+    osvc = OrderService(repo)
+    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
+    oid = order.order_id
+    ex = prog.get_order_progression_export(oid)
+    sig = prog.get_order_progression_state_signature(oid)
+    assert ex is not None and sig is not None
+    assert isinstance(sig, OrderProgressionStateSignature)
+    assert sig.order_id == oid
+    assert sig.state_signature == derive_order_progression_state_signature(ex)
+    assert sig == OrderProgressionStateSignature.from_export(ex)
+
+
+def test_state_signature_eligible_and_blocked_missing_shapes() -> None:
+    repo = InMemoryOrderRepository()
+    prog = ProgressionService(repo)
+    osvc = OrderService(repo)
+    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
+    sig_ok = prog.get_order_progression_state_signature(order.order_id)
+    order2, _v1b = osvc.convert_inquiry_to_order(_sample_inquiry())
+    sig_blocked = prog.get_order_progression_state_signature(order2.order_id)
+    assert sig_ok is not None and sig_blocked is not None
+    assert (
+        sig_ok.state_signature
+        == "blocked=false|eligible_for_progression_review=true|consistent=true|reason_count=0"
+    )
+    assert (
+        sig_blocked.state_signature
+        == "blocked=true|eligible_for_progression_review=false|consistent=true|reason_count=1"
+    )
+
+
+def test_derive_order_progression_state_signature_fixed_field_order() -> None:
+    ex = OrderProgressionExport(
+        order_id="33333333-3333-3333-3333-333333333333",
+        latest_order_version_id=None,
+        candidate_order_version_id=None,
+        blocked=False,
+        eligible_for_progression_review=False,
+        consistent=False,
+        reason_count=3,
+        reasons=("a", "b", "c"),
+    )
+    assert (
+        derive_order_progression_state_signature(ex)
+        == "blocked=false|eligible_for_progression_review=false|consistent=false|reason_count=3"
+    )
+
+
 def test_derive_order_progression_status_label_inconsistent_first() -> None:
     ex = OrderProgressionExport(
         order_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
@@ -856,6 +922,7 @@ def test_progression_modules_have_no_kitchen_or_release_surface() -> None:
     import catering_system.domain.order_progression_badges as opbadges_mod
     import catering_system.domain.order_progression_bundle as opb_mod
     import catering_system.domain.order_progression_severity as opsv_mod
+    import catering_system.domain.order_progression_state_signature as opss_mod
     import catering_system.domain.order_progression_debug_dict as opdd_mod
     import catering_system.domain.order_progression_json_debug as opjd_mod
     import catering_system.domain.order_progression_export as ope_mod
@@ -887,6 +954,7 @@ def test_progression_modules_have_no_kitchen_or_release_surface() -> None:
         opsl_mod,
         opbadges_mod,
         opsv_mod,
+        opss_mod,
     ):
         lowered = _module_source_lower(mod)
         assert "kitchen" not in lowered
