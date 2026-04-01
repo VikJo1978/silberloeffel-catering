@@ -843,3 +843,65 @@ Must not be changed
 	•	no kitchen print logic in B15
 	•	no READY_TO_SEND semantics in B15
 	•	Slice A boundaries and earlier Slice B boundaries must remain intact
+
+⸻
+
+Entry 025
+
+Date: Slice B / B16 acceptance snapshot
+Scope: Slice B / B16 derived progression debug dict
+Status: accepted
+
+Completed
+	•	narrow derived progression debug-dict mapper introduced
+	•	debug dict now converts the existing progression export DTO into a plain built-in mapping shape
+	•	unit tests for debug-dict scenarios added
+
+Accepted
+	•	debug dict is derived only from the existing flat progression export DTO
+	•	no new persisted progression truth axis introduced
+	•	debug dict remains distinct from release/effective/kitchen semantics
+	•	no kitchen/release/effective/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B16
+	•	no effective operational switching yet
+	•	no kitchen acceptance mechanics yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no effective switching in B16
+	•	no kitchen print logic in B16
+	•	no READY_TO_SEND semantics in B16
+	•	Slice A boundaries and earlier Slice B boundaries must remain intact
+
+⸻
+
+Entry 026
+
+Date: Slice B / B17 acceptance snapshot
+Scope: Slice B / B17 derived progression JSON debug
+Status: accepted
+
+Completed
+	•	narrow derived progression JSON-debug helper introduced
+	•	JSON debug now converts the existing progression debug dict into a deterministic JSON string
+	•	unit tests for JSON-debug scenarios added
+
+Accepted
+	•	JSON debug is derived only from the existing B16 debug dict
+	•	no new persisted progression truth axis introduced
+	•	JSON debug remains distinct from release/effective/kitchen semantics
+	•	no kitchen/release/effective/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B17
+	•	no effective operational switching yet
+	•	no kitchen acceptance mechanics yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no effective switching in B17
+	•	no kitchen print logic in B17
+	•	no READY_TO_SEND semantics in B17
+	•	Slice A boundaries and earlier Slice B boundaries must remain intact

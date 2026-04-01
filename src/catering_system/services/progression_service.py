@@ -1,10 +1,11 @@
-"""Progression blocked-state (B7), view (B8), decision (B9), checkpoint (B10), review summary (B11), consistency (B12), bundle (B13), export (B14), text summary (B15), debug dict (B16) — derived only."""
+"""Progression blocked-state (B7), view (B8), decision (B9), checkpoint (B10), review summary (B11), consistency (B12), bundle (B13), export (B14), text summary (B15), debug dict (B16), JSON debug (B17) — derived only."""
 
 from __future__ import annotations
 
 from catering_system.domain.order import OrderVersion
 from catering_system.domain.order_progression_bundle import OrderProgressionBundle
 from catering_system.domain.order_progression_debug_dict import order_progression_export_to_dict
+from catering_system.domain.order_progression_json_debug import order_progression_debug_dict_to_json
 from catering_system.domain.order_progression_export import OrderProgressionExport
 from catering_system.domain.order_progression_text_summary import format_order_progression_export_text
 from catering_system.domain.order_progression_checkpoint import OrderProgressionCheckpoint
@@ -27,7 +28,7 @@ from catering_system.repositories.order_repository import OrderRepository
 
 
 class ProgressionService:
-    """Derives progression reads, bundle, export DTO, text summary, and debug dict; no release-side logic."""
+    """Derives progression reads, bundle, export DTO, text summary, debug dict, and JSON debug; no release-side logic."""
 
     def __init__(self, order_repository: OrderRepository) -> None:
         self._order_repository = order_repository
@@ -177,3 +178,10 @@ class ProgressionService:
         if ex is None:
             return None
         return order_progression_export_to_dict(ex)
+
+    def get_order_progression_json_debug(self, order_id: str) -> str | None:
+        """B17: deterministic JSON from B16 debug dict only; None if order unknown."""
+        d = self.get_order_progression_debug_dict(order_id)
+        if d is None:
+            return None
+        return order_progression_debug_dict_to_json(d)

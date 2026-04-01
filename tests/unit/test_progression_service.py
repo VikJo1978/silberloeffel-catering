@@ -1,7 +1,8 @@
-"""Unit tests — Slice B7–B16 progression derived reads, export, text summary, debug dict (derived)."""
+"""Unit tests — Slice B7–B17 progression derived reads, export, text summary, debug dict, JSON (derived)."""
 
 from __future__ import annotations
 
+import json
 import sys
 from dataclasses import replace
 from datetime import date, datetime, timezone
@@ -19,6 +20,7 @@ from catering_system.domain.inquiry import (
 )
 from catering_system.domain.order_progression_bundle import OrderProgressionBundle
 from catering_system.domain.order_progression_debug_dict import order_progression_export_to_dict
+from catering_system.domain.order_progression_json_debug import order_progression_debug_dict_to_json
 from catering_system.domain.order_progression_export import OrderProgressionExport
 from catering_system.domain.order_progression_text_summary import format_order_progression_export_text
 from catering_system.domain.order_progression_checkpoint import OrderProgressionCheckpoint
@@ -512,6 +514,48 @@ def test_debug_dict_matches_export_builtin_types() -> None:
     assert isinstance(d["reasons"], list)
 
 
+def test_json_debug_unknown_order_returns_none() -> None:
+    assert (
+        ProgressionService(InMemoryOrderRepository()).get_order_progression_json_debug(
+            "00000000-0000-0000-0000-000000000000"
+        )
+        is None
+    )
+
+
+def test_json_debug_round_trips_debug_dict() -> None:
+    repo = InMemoryOrderRepository()
+    prog = ProgressionService(repo)
+    osvc = OrderService(repo)
+    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
+    oid = order.order_id
+    d = prog.get_order_progression_debug_dict(oid)
+    js = prog.get_order_progression_json_debug(oid)
+    assert d is not None and js is not None
+    assert json.loads(js) == d
+    assert js == order_progression_debug_dict_to_json(d)
+
+
+def test_order_progression_debug_dict_to_json_deterministic() -> None:
+    d: dict[str, object] = {
+        "blocked": True,
+        "candidate_order_version_id": None,
+        "consistent": False,
+        "eligible_for_progression_review": False,
+        "latest_order_version_id": None,
+        "order_id": "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        "reason_count": 1,
+        "reasons": ["x"],
+    }
+    assert order_progression_debug_dict_to_json(d) == (
+        '{"blocked":true,"candidate_order_version_id":null,'
+        '"consistent":false,"eligible_for_progression_review":false,'
+        '"latest_order_version_id":null,"order_id":"cccccccc-cccc-cccc-cccc-cccccccccccc",'
+        '"reason_count":1,"reasons":["x"]}'
+    )
+
+
 def test_evaluate_order_progression_consistency_detects_mismatch() -> None:
     oid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     view = OrderProgressionView(
@@ -552,6 +596,7 @@ def test_evaluate_order_progression_consistency_detects_mismatch() -> None:
 def test_progression_modules_have_no_kitchen_or_release_surface() -> None:
     import catering_system.domain.order_progression_bundle as opb_mod
     import catering_system.domain.order_progression_debug_dict as opdd_mod
+    import catering_system.domain.order_progression_json_debug as opjd_mod
     import catering_system.domain.order_progression_export as ope_mod
     import catering_system.domain.order_progression_text_summary as opts_mod
     import catering_system.domain.order_progression_checkpoint as opc_mod
@@ -562,7 +607,7 @@ def test_progression_modules_have_no_kitchen_or_release_surface() -> None:
     import catering_system.domain.progression_blockers as pb_mod
     import catering_system.services.progression_service as ps_mod
 
-    for mod in (pb_mod, ps_mod, opv_mod, opd_mod, opc_mod, oprs_mod, opcc_mod, opb_mod, ope_mod, opts_mod, opdd_mod):
+    for mod in (pb_mod, ps_mod, opv_mod, opd_mod, opc_mod, oprs_mod, opcc_mod, opb_mod, ope_mod, opts_mod, opdd_mod, opjd_mod):
         lowered = _module_source_lower(mod)
         assert "kitchen" not in lowered
         assert "ready_to_send" not in lowered
