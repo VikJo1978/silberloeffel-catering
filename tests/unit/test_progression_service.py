@@ -1,4 +1,4 @@
-"""Unit tests — Slice B7–B17 progression derived reads, export, text summary, debug dict, JSON (derived)."""
+"""Unit tests — Slice B7–B18 progression derived reads, export, reason codes (derived)."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from catering_system.domain.order_progression_bundle import OrderProgressionBund
 from catering_system.domain.order_progression_debug_dict import order_progression_export_to_dict
 from catering_system.domain.order_progression_json_debug import order_progression_debug_dict_to_json
 from catering_system.domain.order_progression_export import OrderProgressionExport
+from catering_system.domain.order_progression_reason_codes import OrderProgressionReasonCodes
 from catering_system.domain.order_progression_text_summary import format_order_progression_export_text
 from catering_system.domain.order_progression_checkpoint import OrderProgressionCheckpoint
 from catering_system.domain.order_progression_consistency_check import (
@@ -556,6 +557,32 @@ def test_order_progression_debug_dict_to_json_deterministic() -> None:
     )
 
 
+def test_reason_codes_unknown_order_returns_none() -> None:
+    assert (
+        ProgressionService(InMemoryOrderRepository()).get_order_progression_reason_codes(
+            "00000000-0000-0000-0000-000000000000"
+        )
+        is None
+    )
+
+
+def test_reason_codes_matches_export_order_and_count() -> None:
+    repo = InMemoryOrderRepository()
+    prog = ProgressionService(repo)
+    osvc = OrderService(repo)
+    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
+    oid = order.order_id
+    ex = prog.get_order_progression_export(oid)
+    rc = prog.get_order_progression_reason_codes(oid)
+    assert ex is not None and rc is not None
+    assert isinstance(rc, OrderProgressionReasonCodes)
+    assert rc == OrderProgressionReasonCodes.from_export(ex)
+    assert rc.order_id == ex.order_id
+    assert rc.reason_count == ex.reason_count
+    assert rc.reasons == ex.reasons
+
+
 def test_evaluate_order_progression_consistency_detects_mismatch() -> None:
     oid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     view = OrderProgressionView(
@@ -598,6 +625,7 @@ def test_progression_modules_have_no_kitchen_or_release_surface() -> None:
     import catering_system.domain.order_progression_debug_dict as opdd_mod
     import catering_system.domain.order_progression_json_debug as opjd_mod
     import catering_system.domain.order_progression_export as ope_mod
+    import catering_system.domain.order_progression_reason_codes as oprc_mod
     import catering_system.domain.order_progression_text_summary as opts_mod
     import catering_system.domain.order_progression_checkpoint as opc_mod
     import catering_system.domain.order_progression_consistency_check as opcc_mod
@@ -607,7 +635,7 @@ def test_progression_modules_have_no_kitchen_or_release_surface() -> None:
     import catering_system.domain.progression_blockers as pb_mod
     import catering_system.services.progression_service as ps_mod
 
-    for mod in (pb_mod, ps_mod, opv_mod, opd_mod, opc_mod, oprs_mod, opcc_mod, opb_mod, ope_mod, opts_mod, opdd_mod, opjd_mod):
+    for mod in (pb_mod, ps_mod, opv_mod, opd_mod, opc_mod, oprs_mod, opcc_mod, opb_mod, ope_mod, opts_mod, opdd_mod, opjd_mod, oprc_mod):
         lowered = _module_source_lower(mod)
         assert "kitchen" not in lowered
         assert "ready_to_send" not in lowered
