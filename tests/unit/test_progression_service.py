@@ -1,4 +1,4 @@
-"""Unit tests — Slice B7–B20 progression derived reads, export, status label, badges (derived)."""
+"""Unit tests — Slice B7–B21 progression derived reads, export, status label, badges, severity (derived)."""
 
 from __future__ import annotations
 
@@ -27,6 +27,10 @@ from catering_system.domain.order_progression_badges import (
     derive_order_progression_badges,
 )
 from catering_system.domain.order_progression_reason_codes import OrderProgressionReasonCodes
+from catering_system.domain.order_progression_severity import (
+    OrderProgressionSeverity,
+    derive_order_progression_severity,
+)
 from catering_system.domain.order_progression_status_label import (
     OrderProgressionStatusLabel,
     derive_order_progression_status_label,
@@ -683,6 +687,120 @@ def test_derive_order_progression_badges_fixed_order_and_flags() -> None:
     )
 
 
+def test_severity_unknown_order_returns_none() -> None:
+    assert (
+        ProgressionService(InMemoryOrderRepository()).get_order_progression_severity(
+            "00000000-0000-0000-0000-000000000000"
+        )
+        is None
+    )
+
+
+def test_severity_matches_export_derived_string() -> None:
+    repo = InMemoryOrderRepository()
+    prog = ProgressionService(repo)
+    osvc = OrderService(repo)
+    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
+    oid = order.order_id
+    ex = prog.get_order_progression_export(oid)
+    sv = prog.get_order_progression_severity(oid)
+    assert ex is not None and sv is not None
+    assert isinstance(sv, OrderProgressionSeverity)
+    assert sv.order_id == oid
+    assert sv.severity == derive_order_progression_severity(ex)
+    assert sv == OrderProgressionSeverity.from_export(ex)
+    assert sv.severity == "normal"
+
+
+def test_severity_blocked_candidate_missing_is_high() -> None:
+    repo = InMemoryOrderRepository()
+    prog = ProgressionService(repo)
+    osvc = OrderService(repo)
+    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    sv = prog.get_order_progression_severity(order.order_id)
+    assert sv is not None
+    assert sv.severity == "high"
+
+
+def test_derive_order_progression_severity_priority() -> None:
+    assert (
+        derive_order_progression_severity(
+            OrderProgressionExport(
+                order_id="ffffffff-ffff-ffff-ffff-ffffffffffff",
+                latest_order_version_id=None,
+                candidate_order_version_id=None,
+                blocked=True,
+                eligible_for_progression_review=False,
+                consistent=False,
+                reason_count=1,
+                reasons=("x",),
+            )
+        )
+        == "critical"
+    )
+    assert (
+        derive_order_progression_severity(
+            OrderProgressionExport(
+                order_id="77777777-7777-7777-7777-777777777777",
+                latest_order_version_id=None,
+                candidate_order_version_id=None,
+                blocked=True,
+                eligible_for_progression_review=False,
+                consistent=True,
+                reason_count=1,
+                reasons=("y",),
+            )
+        )
+        == "high"
+    )
+    assert (
+        derive_order_progression_severity(
+            OrderProgressionExport(
+                order_id="66666666-6666-6666-6666-666666666666",
+                latest_order_version_id=None,
+                candidate_order_version_id=None,
+                blocked=False,
+                eligible_for_progression_review=False,
+                consistent=True,
+                reason_count=1,
+                reasons=("z",),
+            )
+        )
+        == "elevated"
+    )
+    assert (
+        derive_order_progression_severity(
+            OrderProgressionExport(
+                order_id="55555555-5555-5555-5555-555555555555",
+                latest_order_version_id=None,
+                candidate_order_version_id=None,
+                blocked=False,
+                eligible_for_progression_review=True,
+                consistent=True,
+                reason_count=0,
+                reasons=(),
+            )
+        )
+        == "normal"
+    )
+    assert (
+        derive_order_progression_severity(
+            OrderProgressionExport(
+                order_id="44444444-4444-4444-4444-444444444444",
+                latest_order_version_id=None,
+                candidate_order_version_id=None,
+                blocked=False,
+                eligible_for_progression_review=False,
+                consistent=True,
+                reason_count=0,
+                reasons=(),
+            )
+        )
+        == "low"
+    )
+
+
 def test_derive_order_progression_status_label_inconsistent_first() -> None:
     ex = OrderProgressionExport(
         order_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
@@ -737,6 +855,7 @@ def test_evaluate_order_progression_consistency_detects_mismatch() -> None:
 def test_progression_modules_have_no_kitchen_or_release_surface() -> None:
     import catering_system.domain.order_progression_badges as opbadges_mod
     import catering_system.domain.order_progression_bundle as opb_mod
+    import catering_system.domain.order_progression_severity as opsv_mod
     import catering_system.domain.order_progression_debug_dict as opdd_mod
     import catering_system.domain.order_progression_json_debug as opjd_mod
     import catering_system.domain.order_progression_export as ope_mod
@@ -767,6 +886,7 @@ def test_progression_modules_have_no_kitchen_or_release_surface() -> None:
         oprc_mod,
         opsl_mod,
         opbadges_mod,
+        opsv_mod,
     ):
         lowered = _module_source_lower(mod)
         assert "kitchen" not in lowered

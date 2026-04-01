@@ -998,3 +998,34 @@ Must not be changed
 	•	no kitchen print logic in B20
 	•	no READY_TO_SEND semantics in B20
 	•	Slice A boundaries and earlier Slice B boundaries must remain intact
+
+⸻
+
+Entry 030
+
+Date: Slice B / B21 acceptance snapshot
+Scope: Slice B / B21 derived progression severity
+Status: accepted
+
+Completed
+	•	narrow derived progression severity projection introduced
+	•	severity now derives a deterministic minimal severity level from the existing progression export DTO
+	•	unit tests for severity scenarios added
+
+Accepted
+	•	severity projection is derived only from the existing B14 export DTO
+	•	no new persisted progression truth axis introduced
+	•	severity projection remains distinct from release/effective/kitchen semantics
+	•	no kitchen/release/effective/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B21
+	•	no effective operational switching yet
+	•	no kitchen acceptance mechanics yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no effective switching in B21
+	•	no kitchen print logic in B21
+	•	no READY_TO_SEND semantics in B21
+	•	Slice A boundaries and earlier Slice B boundaries must remain intact
