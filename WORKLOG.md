@@ -905,3 +905,65 @@ Must not be changed
 	•	no kitchen print logic in B17
 	•	no READY_TO_SEND semantics in B17
 	•	Slice A boundaries and earlier Slice B boundaries must remain intact
+
+⸻
+
+Entry 027
+
+Date: Slice B / B18 acceptance snapshot
+Scope: Slice B / B18 derived progression reason codes
+Status: accepted
+
+Completed
+	•	narrow derived progression reason-codes projection introduced
+	•	reason-codes view now extracts only order_id, reason_count, and reasons from the existing progression export DTO
+	•	unit tests for reason-codes scenarios added
+
+Accepted
+	•	reason-codes projection is derived only from the existing B14 export DTO
+	•	no new persisted progression truth axis introduced
+	•	reason-codes projection remains distinct from release/effective/kitchen semantics
+	•	no kitchen/release/effective/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B18
+	•	no effective operational switching yet
+	•	no kitchen acceptance mechanics yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no effective switching in B18
+	•	no kitchen print logic in B18
+	•	no READY_TO_SEND semantics in B18
+	•	Slice A boundaries and earlier Slice B boundaries must remain intact
+
+⸻
+
+Entry 028
+
+Date: Slice B / B19 acceptance snapshot
+Scope: Slice B / B19 derived progression status label
+Status: accepted
+
+Completed
+	•	narrow derived progression status-label projection introduced
+	•	status label now derives a single deterministic human-readable label from the existing progression export DTO
+	•	unit tests for status-label scenarios added
+
+Accepted
+	•	status-label projection is derived only from the existing B14 export DTO
+	•	no new persisted progression truth axis introduced
+	•	status-label projection remains distinct from release/effective/kitchen semantics
+	•	no kitchen/release/effective/READY_TO_SEND/Wochenübersicht behavior introduced
+
+Open
+	•	remaining Slice B scope beyond B19
+	•	no effective operational switching yet
+	•	no kitchen acceptance mechanics yet
+
+Must not be changed
+	•	no hidden move into later Slice B packages
+	•	no effective switching in B19
+	•	no kitchen print logic in B19
+	•	no READY_TO_SEND semantics in B19
+	•	Slice A boundaries and earlier Slice B boundaries must remain intact
