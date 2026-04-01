@@ -1130,3 +1130,40 @@ Must not be changed
 	•	no kitchen print logic in B24 or B25
 	•	no READY_TO_SEND semantics in B24 or B25
 	•	Slice A boundaries and earlier Slice B boundaries must remain intact
+
+⸻
+
+Entry 034
+
+Date: 2026-04-01 — Slice B / B26 acceptance snapshot
+Scope: Slice B / B26 derived progression reason presence
+Status: accepted
+
+Completed
+	•	implemented src/catering_system/domain/order_progression_reason_presence.py
+	•	added derived-only projection OrderProgressionReasonPresence (order_id, has_reasons) from OrderProgressionExport only via from_export(...)
+	•	added ProgressionService.get_order_progression_reason_presence(order_id) -> OrderProgressionReasonPresence | None
+	•	extended tests/unit/test_progression_service.py: unknown order returns None; eligible with candidate has has_reasons False; blocked candidate-missing has has_reasons True; synthetic from_export coverage; module-surface guard includes new module
+	•	verified full unit suite passes (135 passed; command: PYTHONPATH=src pytest tests/unit/ -v)
+
+Accepted
+	•	B26 remains strictly derived and read-only
+	•	B26 derives only from OrderProgressionExport (B14)
+	•	no new operational truth introduced
+	•	no persistence added
+	•	no kitchen/release/READY_TO_SEND/kiosk/Wochenübersicht logic introduced
+
+Open
+	•	remaining Slice B scope beyond B26
+	•	no effective operational switching yet
+	•	no kitchen acceptance mechanics yet
+
+Must not be changed
+	•	OrderProgressionExport remains the single source of truth for this projection
+	•	projection must remain a narrow boolean read model only
+	•	no branching into workflow semantics beyond export-derived fact exposure
+	•	no hidden move into later Slice B packages
+	•	no effective switching in B26
+	•	no kitchen print logic in B26
+	•	no READY_TO_SEND semantics in B26
+	•	Slice A boundaries and earlier Slice B boundaries must remain intact

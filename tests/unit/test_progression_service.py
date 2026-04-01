@@ -1,4 +1,4 @@
-"""Unit tests — Slice B7–B25 progression derived reads, export, status label, badges, severity, state signature, facts, reason fingerprint, readiness flags (derived)."""
+"""Unit tests — Slice B7–B26 progression derived reads, export, status label, badges, severity, state signature, facts, reason fingerprint, readiness flags, reason presence (derived)."""
 
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ from catering_system.domain.order_progression_reason_fingerprint import (
     OrderProgressionReasonFingerprint,
     derive_order_progression_reason_fingerprint,
 )
+from catering_system.domain.order_progression_reason_presence import OrderProgressionReasonPresence
 from catering_system.domain.order_progression_readiness_flags import OrderProgressionReadinessFlags
 from catering_system.domain.order_progression_severity import (
     OrderProgressionSeverity,
@@ -1061,6 +1062,71 @@ def test_order_progression_readiness_flags_from_export_synthetic() -> None:
     assert rf.is_eligible is False
 
 
+def test_reason_presence_unknown_order_returns_none() -> None:
+    assert (
+        ProgressionService(InMemoryOrderRepository()).get_order_progression_reason_presence(
+            "00000000-0000-0000-0000-000000000000"
+        )
+        is None
+    )
+
+
+def test_reason_presence_eligible_with_candidate_has_reasons_false() -> None:
+    repo = InMemoryOrderRepository()
+    prog = ProgressionService(repo)
+    osvc = OrderService(repo)
+    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
+    oid = order.order_id
+    ex = prog.get_order_progression_export(oid)
+    rp = prog.get_order_progression_reason_presence(oid)
+    assert ex is not None and rp is not None
+    assert isinstance(rp, OrderProgressionReasonPresence)
+    assert rp == OrderProgressionReasonPresence.from_export(ex)
+    assert rp.order_id == oid
+    assert rp.has_reasons is False
+
+
+def test_reason_presence_blocked_candidate_missing_has_reasons_true() -> None:
+    repo = InMemoryOrderRepository()
+    prog = ProgressionService(repo)
+    osvc = OrderService(repo)
+    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    ex = prog.get_order_progression_export(order.order_id)
+    rp = prog.get_order_progression_reason_presence(order.order_id)
+    assert ex is not None and rp is not None
+    assert rp.has_reasons is True
+
+
+def test_order_progression_reason_presence_from_export_synthetic() -> None:
+    ex_no = OrderProgressionExport(
+        order_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        latest_order_version_id=None,
+        candidate_order_version_id=None,
+        blocked=False,
+        eligible_for_progression_review=True,
+        consistent=True,
+        reason_count=0,
+        reasons=(),
+    )
+    rp_no = OrderProgressionReasonPresence.from_export(ex_no)
+    assert rp_no.order_id == ex_no.order_id
+    assert rp_no.has_reasons is False
+    ex_yes = OrderProgressionExport(
+        order_id="cccccccc-cccc-cccc-cccc-cccccccccccc",
+        latest_order_version_id=None,
+        candidate_order_version_id=None,
+        blocked=True,
+        eligible_for_progression_review=False,
+        consistent=True,
+        reason_count=1,
+        reasons=("r",),
+    )
+    rp_yes = OrderProgressionReasonPresence.from_export(ex_yes)
+    assert rp_yes.order_id == ex_yes.order_id
+    assert rp_yes.has_reasons is True
+
+
 def test_derive_order_progression_status_label_inconsistent_first() -> None:
     ex = OrderProgressionExport(
         order_id="dddddddd-dddd-dddd-dddd-dddddddddddd",
@@ -1123,6 +1189,7 @@ def test_progression_modules_have_no_kitchen_or_release_surface() -> None:
     import catering_system.domain.order_progression_facts as opfacts_mod
     import catering_system.domain.order_progression_reason_codes as oprc_mod
     import catering_system.domain.order_progression_reason_fingerprint as oprfp_mod
+    import catering_system.domain.order_progression_reason_presence as oprpres_mod
     import catering_system.domain.order_progression_readiness_flags as oprdflags_mod
     import catering_system.domain.order_progression_status_label as opsl_mod
     import catering_system.domain.order_progression_text_summary as opts_mod
@@ -1150,6 +1217,7 @@ def test_progression_modules_have_no_kitchen_or_release_surface() -> None:
         opjd_mod,
         oprc_mod,
         oprfp_mod,
+        oprpres_mod,
         oprdflags_mod,
         opsl_mod,
         opbadges_mod,

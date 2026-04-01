@@ -1,4 +1,4 @@
-"""Progression blocked-state (B7), view (B8), decision (B9), checkpoint (B10), review summary (B11), consistency (B12), bundle (B13), export (B14), text summary (B15), debug dict (B16), JSON debug (B17), reason codes (B18), status label (B19), badges (B20), severity (B21), state signature (B22), facts (B23), reason fingerprint (B24), readiness flags (B25) — derived only."""
+"""Progression blocked-state (B7), view (B8), decision (B9), checkpoint (B10), review summary (B11), consistency (B12), bundle (B13), export (B14), text summary (B15), debug dict (B16), JSON debug (B17), reason codes (B18), status label (B19), badges (B20), severity (B21), state signature (B22), facts (B23), reason fingerprint (B24), readiness flags (B25), reason presence (B26) — derived only."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from catering_system.domain.order_progression_export import OrderProgressionExpo
 from catering_system.domain.order_progression_facts import OrderProgressionFacts
 from catering_system.domain.order_progression_reason_codes import OrderProgressionReasonCodes
 from catering_system.domain.order_progression_reason_fingerprint import OrderProgressionReasonFingerprint
+from catering_system.domain.order_progression_reason_presence import OrderProgressionReasonPresence
 from catering_system.domain.order_progression_readiness_flags import OrderProgressionReadinessFlags
 from catering_system.domain.order_progression_badges import OrderProgressionBadges
 from catering_system.domain.order_progression_severity import OrderProgressionSeverity
@@ -36,7 +37,7 @@ from catering_system.repositories.order_repository import OrderRepository
 
 
 class ProgressionService:
-    """Derives progression reads, bundle, export DTO, text summary, debug dict, JSON debug, reason codes, reason fingerprint, readiness flags, status label, badges, severity, state signature, and facts; no release-side logic."""
+    """Derives progression reads, bundle, export DTO, text summary, debug dict, JSON debug, reason codes, reason fingerprint, reason presence, readiness flags, status label, badges, severity, state signature, and facts; no release-side logic."""
 
     def __init__(self, order_repository: OrderRepository) -> None:
         self._order_repository = order_repository
@@ -253,3 +254,12 @@ class ProgressionService:
         if ex is None:
             return None
         return OrderProgressionReadinessFlags.from_export(ex)
+
+    def get_order_progression_reason_presence(
+        self, order_id: str
+    ) -> OrderProgressionReasonPresence | None:
+        """B26: order_id + derived reason presence from B14 export only; None if order unknown."""
+        ex = self.get_order_progression_export(order_id)
+        if ex is None:
+            return None
+        return OrderProgressionReasonPresence.from_export(ex)
