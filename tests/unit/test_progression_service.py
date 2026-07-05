@@ -1,4 +1,4 @@
-"""Unit tests — Slice B7–B26 progression derived reads, export, status label, badges, severity, state signature, facts, reason fingerprint, readiness flags, reason presence (derived)."""
+"""Unit tests — Slice B7–B27 progression derived reads, export, status label, badges, severity, state signature, facts, reason fingerprint, readiness flags, reason presence (B26), composed derived review summary (B27)."""
 
 from __future__ import annotations
 

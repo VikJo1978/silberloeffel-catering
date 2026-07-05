@@ -1,8 +1,11 @@
-"""Progression blocked-state (B7), view (B8), decision (B9), checkpoint (B10), review summary (B11), consistency (B12), bundle (B13), export (B14), text summary (B15), debug dict (B16), JSON debug (B17), reason codes (B18), status label (B19), badges (B20), severity (B21), state signature (B22), facts (B23), reason fingerprint (B24), readiness flags (B25), reason presence (B26) — derived only."""
+"""Progression blocked-state (B7), view (B8), decision (B9), checkpoint (B10), review summary (B11), consistency (B12), bundle (B13), export (B14), text summary (B15), debug dict (B16), JSON debug (B17), reason codes (B18), status label (B19), badges (B20), severity (B21), state signature (B22), facts (B23), reason fingerprint (B24), readiness flags (B25), reason presence (B26), composed derived review summary (B27 narrow aggregation) — derived only."""
 
 from __future__ import annotations
 
 from catering_system.domain.order import OrderVersion
+from catering_system.domain.order_progression_composed_derived_review_summary import (
+    OrderProgressionComposedDerivedReviewSummary,
+)
 from catering_system.domain.order_progression_bundle import OrderProgressionBundle
 from catering_system.domain.order_progression_debug_dict import order_progression_export_to_dict
 from catering_system.domain.order_progression_json_debug import order_progression_debug_dict_to_json
@@ -263,3 +266,17 @@ class ProgressionService:
         if ex is None:
             return None
         return OrderProgressionReasonPresence.from_export(ex)
+
+    def get_order_progression_composed_derived_review_summary(
+        self, order_id: str
+    ) -> OrderProgressionComposedDerivedReviewSummary | None:
+        """B27: checkpoint + B21 severity + B24 fingerprint + B25 readiness + B23 facts count; None if order unknown."""
+        cp = self.get_order_progression_checkpoint(order_id)
+        if cp is None:
+            return None
+        sv = self.get_order_progression_severity(order_id)
+        rfp = self.get_order_progression_reason_fingerprint(order_id)
+        rf = self.get_order_progression_readiness_flags(order_id)
+        facts = self.get_order_progression_facts(order_id)
+        assert sv is not None and rfp is not None and rf is not None and facts is not None
+        return OrderProgressionComposedDerivedReviewSummary.compose(cp, sv, rfp, rf, facts)

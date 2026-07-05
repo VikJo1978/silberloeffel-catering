@@ -1167,3 +1167,63 @@ Must not be changed
 	•	no kitchen print logic in B26
 	•	no READY_TO_SEND semantics in B26
 	•	Slice A boundaries and earlier Slice B boundaries must remain intact
+
+⸻
+
+Entry 035
+
+Date: 2026-04-01 — Slice B / B27 narrow composed derived review summary
+Status: completed (narrow)
+
+Scope
+	•	add one narrow read-only composed derived review summary on top of already accepted progression-derived outputs
+	•	keep existing B11 review summary semantics unchanged
+	•	avoid naming collision by introducing a separate composed derived review summary object and getter
+
+Completed
+	•	added a new narrow read-only composed derived review summary DTO in the accepted progression read-model placement
+	•	added a dedicated progression service getter that composes:
+		◦	checkpoint-derived order_id
+		◦	checkpoint-derived latest_order_version_id
+		◦	checkpoint-derived candidate_order_version_id
+		◦	checkpoint-derived blocked
+		◦	B21 derived severity
+		◦	B24 derived reason fingerprint
+		◦	B25 derived readiness flags
+		◦	B23-derived facts_count
+	•	added a narrow dedicated unit test file for the composed derived review summary
+	•	verified narrow test coverage for:
+		◦	version references match checkpoint
+		◦	blocked matches checkpoint
+		◦	severity matches accepted derived severity
+		◦	reason_fingerprint matches accepted derived reason fingerprint
+		◦	readiness_flags match accepted derived readiness flags
+		◦	facts_count is derived strictly from the accepted B23 facts representation
+		◦	no mutation / no side effects
+	•	full unit suite passed after the change
+
+Accepted constraints preserved
+	•	read-side only
+	•	no new command semantics
+	•	no write behavior
+	•	no kitchen logic
+	•	no release logic
+	•	no new truth path
+	•	no progression semantic changes
+	•	no effect on effective switching
+	•	no effect on mandatory kitchen print
+	•	no effect on READY_TO_SEND
+
+Notes
+	•	existing B11 review summary was not broadened or repurposed
+	•	the composed derived review summary is a separate narrow aggregation step
+	•	facts_count is derived strictly from the already accepted B23 facts representation and must not be reinterpreted later
+	•	implemented counting rule (matches code): `facts_count` = number of `True` values among the four B23 boolean fields only — `has_reasons`, `is_blocked`, `is_consistent`, `is_eligible`
+
+Open
+	•	final acceptance depends on code review against the exact changed files and confirmation that the worklog wording matches the implemented counting rule exactly
+
+Must not be changed
+	•	B26 remains the accepted step for derived progression reason presence
+	•	this step must remain a narrow aggregation layer only
+	•	no hidden fallback logic or new business truth may be introduced into this summary
