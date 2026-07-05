@@ -1421,3 +1421,19 @@ Open
 Must not be changed
 	•	HubSpot token stays env-only and server-side
 	•	worker holds no business logic and is not operational truth (§8.3)
+
+⸻
+
+Entry 043
+
+Date: 2026-07-05 — post-review corrections to Entry 041/042 deliverables
+Scope: DEPLOYMENT.md kiosk launch command; worker guest_count coercion
+Status: accepted
+
+Completed
+	•	DEPLOYMENT.md kiosk command corrected: src/ layout requires PYTHONPATH=src (verified by running both forms: plain form fails with ModuleNotFoundError, PYTHONPATH=src form works); pip install -e . documented as network-dependent alternative
+	•	worker.js: digit-only string guest_count_estimate is now coerced to integer (minimal normalization per Slice A §8.2 — Wix form fields often arrive as strings); non-integer input still rejected with 422
+	•	status clarification recorded: HubSpot integration is transport/client layer only; office-side wiring that calls sync_inquiry_from_core remains open (Entry 042) — it must not be presented as a completed integration
+
+Must not be changed
+	•	worker coercion stays limited to digit-only strings; no broader payload rewriting

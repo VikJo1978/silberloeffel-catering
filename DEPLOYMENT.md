@@ -8,8 +8,13 @@ account, and the physical kitchen Lenovo.
 
 ```bash
 git clone <this-repo> && cd silberlöffelcatering
-python3 -m catering_system.ui.kiosk_server --db /var/lib/catering/core.db --port 8080
+PYTHONPATH=src python3 -m catering_system.ui.kiosk_server --db /var/lib/catering/core.db --port 8080
 ```
+
+The repo uses a `src/` layout, so `PYTHONPATH=src` is required when running from
+a clone (verified: without it the module is not found). Alternative if the
+Lenovo has network access for build tooling: `pip install -e .` once, then the
+plain `python3 -m ...` form works.
 
 - The SQLite file is the Core operational truth store; keep it on the Lenovo's
   local disk (Core-on-Lenovo is a frozen rule) and in the local backup routine.

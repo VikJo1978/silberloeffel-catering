@@ -37,6 +37,11 @@ function sanitize(raw) {
   if (typeof out.event_date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(out.event_date)) {
     return null; // event_date is required and must be ISO yyyy-mm-dd
   }
+  // Minimal normalization (§8.2): Wix form fields often arrive as strings —
+  // coerce digit-only strings to integers; reject anything else non-integer.
+  if (typeof out.guest_count_estimate === "string" && /^\d+$/.test(out.guest_count_estimate)) {
+    out.guest_count_estimate = Number(out.guest_count_estimate);
+  }
   if (out.guest_count_estimate !== undefined && !Number.isInteger(out.guest_count_estimate)) {
     return null;
   }
