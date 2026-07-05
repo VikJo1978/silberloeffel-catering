@@ -1610,3 +1610,27 @@ Open
 Must not be changed
 	•	no code changes during the observation window except real blockers — frictions are collected first, then turned into narrow accepted steps
 	•	all prior freeze boundaries remain
+
+⸻
+
+Entry 051
+
+Date: 2026-07-05 — configurator role accepted
+Scope: CONFIGURATOR_EXECUTION_PACK_V1
+Status: accepted, planning-only
+
+Meaning
+	•	fingerfood-app (separate repository) fixed as the office's Angebot-phase editing surface; implementation of any seam deferred
+	•	this step contains no code changes in this repository
+
+Fixed
+	•	configurator never writes into Core; office panel remains the only write surface
+	•	configurator drafts/exports are never operational truth
+	•	catalog and prices never land in Core
+	•	no third inquiry intake path via the configurator
+	•	known gap recorded: OrderVersion carries no dish composition; direction fixed (composition must eventually reach the Küchenzettel), mechanism deferred to its own accepted step after the observation window
+	•	full contents live in the pack file only — not duplicated here
+
+Must not be changed
+	•	no configurator→Core bridge without an accepted pack
+	•	the §3 mechanism must not be implemented during the observation window
