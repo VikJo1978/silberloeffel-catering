@@ -233,6 +233,30 @@ def test_cancelled_actions_rejected_serverside(panel: str) -> None:
     assert exc.value.code == 400
 
 
+def test_cancelled_print_sheet_shows_storniert_banner(panel: str) -> None:
+    iid = _create_inquiry(panel)
+    oid = _convert(panel, iid)
+    _status, body = _get(f"{panel}/order/{oid}")
+    vid = body.split("print?version=")[1].split('"')[0]
+    _post(f"{panel}/order/{oid}/cancel", {})
+    _status, sheet = _get(f"{panel}/order/{oid}/print?version={vid}")
+    assert "STORNIERT" in sheet  # kitchen must see the cancellation on the sheet
+
+
+def test_reconvert_possible_after_storno(panel: str) -> None:
+    """A cancelled order must not suppress the convert button (Storno semantics)."""
+    iid = _create_inquiry(panel)
+    oid = _convert(panel, iid)
+    _post(f"{panel}/order/{oid}/cancel", {})
+    _status, body = _get(f"{panel}/inquiry/{iid}")
+    assert "(storniert)" in body
+    assert "In Auftrag umwandeln" in body  # button back after Storno
+    oid2 = _convert(panel, iid)
+    assert oid2 != oid
+    _status, body = _get(f"{panel}/inquiry/{iid}")
+    assert "In Auftrag umwandeln" not in body  # active order suppresses it again
+
+
 def test_xss_escaped_in_views(panel: str) -> None:
     iid = _create_inquiry(panel, location_text='<script>alert("x")</script>')
     _status, body = _get(f"{panel}/inquiry/{iid}")

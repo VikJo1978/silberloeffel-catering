@@ -202,13 +202,19 @@ class OfficePanel:
         existing = [
             o for o in self._orders.list_orders() if o.source_inquiry_id == inquiry_id
         ]
+        # Presentation only: only a non-cancelled order suppresses the convert
+        # button — after Storno the office must be able to convert again.
+        active = [o for o in existing if o.cancelled_at is None]
+        convert = ""
         if existing:
             links = ", ".join(
-                f'<a href="/order/{_e(o.order_id)}">{_e(o.order_id[:8])}</a>' for o in existing
+                f'<a href="/order/{_e(o.order_id)}">{_e(o.order_id[:8])}</a>'
+                + (" (storniert)" if o.cancelled_at is not None else "")
+                for o in existing
             )
-            convert = f"<p>Auftrag vorhanden: {links}</p>"
-        else:
-            convert = (
+            convert += f"<p>Auftrag vorhanden: {links}</p>"
+        if not active:
+            convert += (
                 f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/convert">'
                 "<button>In Auftrag umwandeln</button></form>"
             )

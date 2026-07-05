@@ -39,7 +39,8 @@ PYTHONPATH=src python3 -m catering_system.ui.office_panel --db /var/lib/catering
 ## 1b. Core database backup (both servers run 24/7)
 
 Daily cron on the Lenovo — the SQLite file is the operational truth and is
-not re-derivable:
+not re-derivable. Create the target directory once (`mkdir -p
+/var/backups/catering`), then:
 
 ```cron
 15 3 * * * sqlite3 /var/lib/catering/core.db ".backup /var/backups/catering/core-$(date +\%u).db"
