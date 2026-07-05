@@ -14,6 +14,7 @@ from catering_system.domain.order import Order, OrderVersion
 
 # Reason vocabulary owned by the operational core gate only.
 READY_REASON_ORDER_NOT_FOUND = "ready_to_send_order_not_found"
+READY_REASON_ORDER_CANCELLED = "order_cancelled"
 READY_REASON_NO_EFFECTIVE_VERSION = "no_effective_version"
 READY_REASON_EFFECTIVE_VERSION_NOT_RESOLVABLE = "effective_version_not_resolvable"
 READY_REASON_KITCHEN_PRINT_NOT_CONFIRMED = "kitchen_print_not_confirmed"
@@ -40,6 +41,12 @@ def evaluate_ready_to_send_from_facts(
     if order is None:
         return ReadyToSendEvaluation(
             order_id="", ready=False, reasons=(READY_REASON_ORDER_NOT_FOUND,)
+        )
+    if order.cancelled_at is not None:
+        return ReadyToSendEvaluation(
+            order_id=order.order_id,
+            ready=False,
+            reasons=(READY_REASON_ORDER_CANCELLED,),
         )
     if order.effective_order_version_id is None:
         return ReadyToSendEvaluation(

@@ -1492,3 +1492,26 @@ Must not be changed
 	•	panel is LAN-only, never public, never anonymous
 	•	no panel-side storage beyond Core (no store-and-forward, no second truth)
 	•	implementation begins only as its own accepted step per pack §9
+
+⸻
+
+Entry 046
+
+Date: 2026-07-05 — order cancellation (Storno)
+Scope: STORNO_EXECUTION_PACK_V1
+Status: accepted
+
+Completed
+	•	Order.cancelled_at added (third and last operational field per amended §7 boundary)
+	•	cancel_order command: idempotent, not revocable, allowed at any stage; OrderCancelled event
+	•	guards: operational commands and order-side mutations refused on cancelled orders
+	•	READY_TO_SEND blocked with new operational-vocabulary reason order_cancelled
+	•	cancelled orders excluded from Wochenübersicht (kiosk inherits)
+	•	SQLite column + defensive in-place migration for pre-Storno databases
+	•	suite 188 passed
+
+Must not be changed
+	•	cancellation stays a timestamp fact, never a status enum
+	•	history/candidate/effective references stay untouched on cancel
+	•	no uncancel without its own pack
+	•	B7–B27 progression vocabulary not amended

@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS orders (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
     candidate_order_version_id TEXT,
-    effective_order_version_id TEXT
+    effective_order_version_id TEXT,
+    cancelled_at TEXT
 );
 CREATE TABLE IF NOT EXISTS order_versions (
     order_version_id TEXT PRIMARY KEY,
@@ -48,6 +49,10 @@ class SQLiteOrderRepository:
     def __init__(self, db_path: str | Path) -> None:
         self._conn = sqlite3.connect(str(db_path))
         self._conn.executescript(_SCHEMA)
+        # STORNO pack §4: defensive in-place migration for pre-Storno databases.
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(orders)").fetchall()}
+        if "cancelled_at" not in cols:
+            self._conn.execute("ALTER TABLE orders ADD COLUMN cancelled_at TEXT")
         self._conn.commit()
 
     def close(self) -> None:
@@ -55,7 +60,7 @@ class SQLiteOrderRepository:
 
     def save_order(self, order: Order) -> None:
         self._conn.execute(
-            "INSERT OR REPLACE INTO orders VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO orders VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 order.order_id,
                 order.source_inquiry_id,
@@ -63,6 +68,7 @@ class SQLiteOrderRepository:
                 order.updated_at.isoformat(),
                 order.candidate_order_version_id,
                 order.effective_order_version_id,
+                order.cancelled_at.isoformat() if order.cancelled_at is not None else None,
             ),
         )
         self._conn.commit()
@@ -80,6 +86,7 @@ class SQLiteOrderRepository:
             updated_at=_dt(row[3]),
             candidate_order_version_id=row[4],
             effective_order_version_id=row[5],
+            cancelled_at=_dt(row[6]) if row[6] is not None else None,
         )
 
     def update_order(self, order: Order) -> None:
@@ -97,6 +104,7 @@ class SQLiteOrderRepository:
                 updated_at=_dt(r[3]),
                 candidate_order_version_id=r[4],
                 effective_order_version_id=r[5],
+                cancelled_at=_dt(r[6]) if r[6] is not None else None,
             )
             for r in rows
         ]

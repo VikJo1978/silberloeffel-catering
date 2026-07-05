@@ -26,3 +26,10 @@ class OrderReadyToSend:
 class OrderReadyToSendBlocked:
     order_id: str
     reasons: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class OrderCancelled:
+    """STORNO_EXECUTION_PACK_V1 §2."""
+
+    order_id: str

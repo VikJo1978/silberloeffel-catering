@@ -85,6 +85,10 @@ class OrderService:
         current = self._order_repository.get_order(order.order_id)
         if current is None:
             raise ValueError(f"no order with id {order.order_id!r}")
+        if current.cancelled_at is not None:
+            raise ValueError(
+                f"order {order.order_id!r} is cancelled (Storno); no further versions (STORNO pack §3)"
+            )
         existing = self._order_repository.list_order_versions(order.order_id)
         next_num = max((v.version_number for v in existing), default=0) + 1
         now = _utc_now()
@@ -130,6 +134,10 @@ class OrderService:
         current = self._order_repository.get_order(order_id)
         if current is None:
             raise ValueError(f"no order with id {order_id!r}")
+        if current.cancelled_at is not None:
+            raise ValueError(
+                f"order {order_id!r} is cancelled (Storno); candidate changes refused (STORNO pack §3)"
+            )
         ver = self._order_repository.get_order_version(order_version_id)
         if ver is None or ver.order_id != order_id:
             raise ValueError(

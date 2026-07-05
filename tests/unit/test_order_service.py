@@ -270,6 +270,7 @@ def test_order_domain_has_no_kitchen_or_release_surface() -> None:
         "updated_at",
         "candidate_order_version_id",
         "effective_order_version_id",
+        "cancelled_at",
     }
     assert {f.name for f in fields(OrderVersion)} == {
         "order_version_id",

@@ -22,6 +22,8 @@ class WochenuebersichtService:
     def get_week_overview(self, iso_year: int, iso_week: int) -> Wochenuebersicht:
         entries: list[WochenuebersichtEntry] = []
         for order in self._order_repository.list_orders():
+            if order.cancelled_at is not None:
+                continue  # STORNO pack §3: the kitchen must not deliver a cancelled order
             eid = order.effective_order_version_id
             if eid is None:
                 continue

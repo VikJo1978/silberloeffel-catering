@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 
 from catering_system.domain.operational_core_events import (
     KitchenPrintConfirmed,
+    OrderCancelled,
     OrderReadyToSend,
     OrderReadyToSendBlocked,
     OrderVersionMadeEffective,
@@ -49,8 +50,11 @@ class OperationalCoreService:
             self._event_sink(event)
 
     def _owned_version(self, order_id: str, order_version_id: str) -> OrderVersion:
-        if self._order_repository.get_order(order_id) is None:
+        order = self._order_repository.get_order(order_id)
+        if order is None:
             raise ValueError(f"no order with id {order_id!r}")
+        if order.cancelled_at is not None:
+            raise ValueError(f"order {order_id!r} is cancelled (Storno); operational commands refused")
         ver = self._order_repository.get_order_version(order_version_id)
         if ver is None or ver.order_id != order_id:
             raise ValueError(
@@ -101,6 +105,23 @@ class OperationalCoreService:
             OrderVersionMadeEffective(order_id=order_id, order_version_id=order_version_id)
         )
         return updated
+
+    def cancel_order(self, order_id: str) -> Order:
+        """CancelOrder (STORNO pack §2): explicit fact, idempotent, not revocable.
+
+        History, candidate, and effective references stay untouched; their meaning
+        is neutralized by the derived reads (READY_TO_SEND, Wochenübersicht).
+        """
+        current = self._order_repository.get_order(order_id)
+        if current is None:
+            raise ValueError(f"no order with id {order_id!r}")
+        if current.cancelled_at is not None:
+            return current
+        cancelled = replace(current, cancelled_at=_utc_now(), updated_at=_utc_now())
+        self._order_repository.update_order(cancelled)
+        _log.info("cancel_order order_id=%s", order_id)
+        self._emit(OrderCancelled(order_id=order_id))
+        return cancelled
 
     def evaluate_ready_to_send(self, order_id: str) -> ReadyToSendEvaluation:
         """Pure read (pack §6.1): computes the §10 gate; mutates nothing, emits nothing."""

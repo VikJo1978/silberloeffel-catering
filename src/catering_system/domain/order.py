@@ -2,8 +2,9 @@
 
 B3 adds no activation or selection fields; B6 adds optional candidate_order_version_id
 only (office-side progression hint, not effective truth).
-OPERATIONAL_CORE_EXECUTION_PACK_V1 (§7) adds exactly two operational fields:
-kitchen_print_confirmed_at on OrderVersion and effective_order_version_id on Order.
+OPERATIONAL_CORE_EXECUTION_PACK_V1 (§7) adds kitchen_print_confirmed_at on
+OrderVersion and effective_order_version_id on Order; STORNO_EXECUTION_PACK_V1
+adds cancelled_at on Order. These three are the only operational fields.
 Do not add any further status/selection field (is_active, is_effective,
 selected_version_id, release_ready flags, ...) outside an accepted execution pack.
 """
@@ -26,6 +27,7 @@ class Order:
     updated_at: datetime
     candidate_order_version_id: str | None = None
     effective_order_version_id: str | None = None
+    cancelled_at: datetime | None = None
 
 
 @dataclass(frozen=True)
