@@ -1318,3 +1318,26 @@ Open
 
 Must not be changed
 	•	repository Protocols stay the single seam; services never see SQL
+
+⸻
+
+Entry 039
+
+Date: 2026-07-05 — removal of B16/B17 leaf formatters
+Scope: derived-read cleanup per audit
+Status: accepted
+
+Completed
+	•	removed B16 (order_progression_debug_dict) and B17 (order_progression_json_debug) with their service getters and tests
+	•	both were pure serializations of the B14 export with no consumer; removing them changes no other contract
+	•	full suite passes (159)
+
+Accepted
+	•	B16/B17 are no longer part of the accepted surface; Entry 025/026 remain as history
+	•	B12 consistency check deliberately kept: it is load-bearing (B13 bundle → B14 export → B23 facts.is_consistent → B27 facts_count); its removal would change accepted contracts and needs its own narrow step if ever desired
+
+Open
+	•	none for this step
+
+Must not be changed
+	•	no re-introduction of leaf formatter slices without a consumer and an accepted pack
