@@ -1367,3 +1367,29 @@ Open
 Must not be changed
 	•	derived-only role of Wochenübersicht
 	•	no candidate/latest-historical leakage into the overview
+
+⸻
+
+Entry 041
+
+Date: 2026-07-05 — kitchen kiosk read-only UI
+Scope: KIOSK_EXECUTION_PACK_V1
+Status: accepted
+
+Completed
+	•	pack written and accepted (read-only MVP role per Entry 001 preserved)
+	•	ui/kiosk_server.py: stdlib-only HTTP server; GET-only (405 for POST/PUT/DELETE/PATCH, 404 for unknown paths); renders Wochenübersicht for current ISO week, ?year=&week= selects another; auto-refresh every 60s; order-originating text HTML-escaped
+	•	pure render function separated from the handler (testable without sockets)
+	•	runnable entrypoint: python -m catering_system.ui.kiosk_server --db <sqlite> --port <p>
+	•	tests: render content, empty week, HTML-injection escaping, live-socket GET/405/404, malformed params fallback, no-write-surface guard; suite 174 passed
+
+Accepted
+	•	first UI surface in the project; consumes WochenuebersichtService only
+	•	kiosk writes nothing, ever — enforced by handler shape and guard test
+
+Open
+	•	HubSpot wiring / secure intake worker / deployment (next pack)
+
+Must not be changed
+	•	kiosk stays read-only; no mutating endpoint may be added to it
+	•	no frontend build tooling / JS frameworks in the kiosk MVP
