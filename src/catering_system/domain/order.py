@@ -1,9 +1,11 @@
 """Order / OrderVersion — Slice B1/B2 Core operational truth baseline (minimal).
 
-B3 does not add activation or selection fields. Do not add any field like:
-is_active, is_effective, active_version_id, effective_version_id, selected_version_id.
-B6 adds optional candidate_order_version_id only — office-side progression hint, not effective truth.
-If further release semantics are needed later, they belong to a later Slice B package, not B6.
+B3 adds no activation or selection fields; B6 adds optional candidate_order_version_id
+only (office-side progression hint, not effective truth).
+OPERATIONAL_CORE_EXECUTION_PACK_V1 (§7) adds exactly two operational fields:
+kitchen_print_confirmed_at on OrderVersion and effective_order_version_id on Order.
+Do not add any further status/selection field (is_active, is_effective,
+selected_version_id, release_ready flags, ...) outside an accepted execution pack.
 """
 
 from __future__ import annotations
@@ -23,6 +25,7 @@ class Order:
     created_at: datetime
     updated_at: datetime
     candidate_order_version_id: str | None = None
+    effective_order_version_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -38,3 +41,4 @@ class OrderVersion:
     location_text: str
     guest_count_estimate: int | None
     planning_mode: PlanningMode
+    kitchen_print_confirmed_at: datetime | None = None

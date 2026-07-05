@@ -1261,3 +1261,36 @@ Must not be changed
 	•	no rewriting of pushed git history to fix the f6bcab4 mislabel
 	•	frozen Order/OrderVersion must not be reverted to mutable
 	•	B7–B27 read-side contracts remain intact per OPERATIONAL_CORE_EXECUTION_PACK_V1 §13
+
+⸻
+
+Entry 037
+
+Date: 2026-07-05 — operational core implementation
+Scope: OPERATIONAL_CORE_EXECUTION_PACK_V1 §14 steps 1–5
+Status: accepted
+
+Completed
+	•	OrderVersion.kitchen_print_confirmed_at and Order.effective_order_version_id added (exactly the two §7 fields, no others)
+	•	OperationalCoreService: confirm_kitchen_print (idempotent, ownership-checked, not revocable per §8.4), make_order_version_effective (gated on confirmed print per §9), evaluate_ready_to_send (pure read), request_ready_to_send (event-only command per §6.1)
+	•	domain/ready_to_send.py: gate rule owned directly by this layer with its own reason vocabulary (ready_to_send_order_not_found, no_effective_version, effective_version_not_resolvable, kitchen_print_not_confirmed) — independent of the B7–B27 progression vocabulary per §10
+	•	domain/operational_core_events.py: KitchenPrintConfirmed, OrderVersionMadeEffective, OrderReadyToSend, OrderReadyToSendBlocked
+	•	B3-era guard test in test_order_service.py amended to the §7 boundary: it now asserts the exact field sets of Order/OrderVersion (stricter than before) instead of forbidding the word "kitchen" outright
+	•	17 new unit tests covering all §15 required scenarios; full suite passes (157)
+
+Accepted
+	•	kitchen print gate cannot be bypassed: effective switch raises without prior confirmation
+	•	exactly one effective version per order; switch never touches candidate or history
+	•	make_order_version_effective may target any owned, print-confirmed version, not only the candidate (§9)
+	•	READY_TO_SEND stays derived, never stored; RequestReadyToSend changes no order truth in either branch
+	•	no dependency of the gate on B7–B27 (§12 respected)
+
+Open
+	•	SQLite persistence behind the existing repository Protocols (in-memory confirmations do not survive restart)
+	•	B16/B17 removal
+	•	§8.2 assumption stands: print confirmation is a domain fact; physical printer pipeline, if required, needs its own pack
+
+Must not be changed
+	•	the two §7 fields remain the only operational fields; no further status axis
+	•	gate rule and reason vocabulary stay owned by the operational layer
+	•	confirmation stays idempotent and non-revocable within this layer

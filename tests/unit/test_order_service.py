@@ -251,15 +251,38 @@ def _assert_dataclasses_have_no_b3_forbidden_fields() -> None:
 
 
 def test_order_domain_has_no_kitchen_or_release_surface() -> None:
-    """B1/B2/B3/B6: no print / release-kitchen surface / forbidden activation fields on Order types."""
+    """B1/B2/B3/B6 guard, amended by OPERATIONAL_CORE_EXECUTION_PACK_V1 §7:
+    exactly kitchen_print_confirmed_at (OrderVersion) and effective_order_version_id
+    (Order) are allowed; no other activation/release/kiosk surface on Order types."""
     import catering_system.domain.order as order_mod
 
     lowered = _module_source_lower(order_mod)
     assert "ready_to_send" not in lowered
-    assert "kitchen" not in lowered
     assert "wochen" not in lowered
     assert "kiosk" not in lowered
+    # "kitchen" may appear only as the §7 field name
+    assert lowered.count("kitchen") == lowered.count("kitchen_print_confirmed_at")
     _assert_dataclasses_have_no_b3_forbidden_fields()
+    assert {f.name for f in fields(Order)} == {
+        "order_id",
+        "source_inquiry_id",
+        "created_at",
+        "updated_at",
+        "candidate_order_version_id",
+        "effective_order_version_id",
+    }
+    assert {f.name for f in fields(OrderVersion)} == {
+        "order_version_id",
+        "order_id",
+        "version_number",
+        "created_at",
+        "event_date",
+        "time_window_text",
+        "location_text",
+        "guest_count_estimate",
+        "planning_mode",
+        "kitchen_print_confirmed_at",
+    }
 
 
 def test_order_service_has_no_kitchen_or_release_surface() -> None:
