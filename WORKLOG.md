@@ -1461,3 +1461,34 @@ Must not be changed
 	•	no email-parser bridge from the AI assistant
 	•	Stage 1 assistant remains email-to-office only
 	•	"website" inquiry_source and notes_text enter the code only when actual site work starts, each as its own accepted implementation step
+
+⸻
+
+Entry 045
+
+Date: 2026-07-05 — office panel execution pack accepted
+Scope: OFFICE_PANEL_EXECUTION_PACK_V1
+Status: accepted, planning-only
+
+Meaning
+	•	office panel boundaries accepted; implementation deferred
+	•	this step is planning-only and contains no code changes
+
+Fixed
+	•	office panel = primary office write surface (7 of 9 daily office actions are Core actions)
+	•	EspoCRM (self-hosted, office server) = secondary CRM / communication layer; own CRM permanently out of scope
+	•	no CRM→Core bridge in any form
+	•	panel writes only into Core on the kitchen Lenovo
+	•	kitchen operations must not depend on office-server availability
+	•	progression reasons (B7 vocabulary) and operational gate reasons (READY_TO_SEND vocabulary) remain separate vocabularies, never merged (per OPERATIONAL_CORE §10)
+	•	Espo sync, if added later, stays optional and non-authoritative (Core→CRM push only)
+
+Completed
+	•	OFFICE_PANEL_EXECUTION_PACK_V1 written, reviewed in external review rounds, and accepted
+	•	full contents live in the pack file only — not duplicated here
+
+Must not be changed
+	•	panel adds no new domain semantics; every action maps onto an existing accepted service call
+	•	panel is LAN-only, never public, never anonymous
+	•	no panel-side storage beyond Core (no store-and-forward, no second truth)
+	•	implementation begins only as its own accepted step per pack §9
