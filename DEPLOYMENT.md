@@ -36,7 +36,31 @@ PYTHONPATH=src python3 -m catering_system.ui.office_panel --db /var/lib/catering
 - Office staff log in from office browsers as user `office`.
 - Same database file as the kiosk; the kiosk stays read-only on its own port.
 
-## 1b. Core database backup (both servers run 24/7)
+## 1b. Autostart via systemd (after the smoke test passed)
+
+Unit templates live in `infra/systemd/`. On the Lenovo:
+
+```bash
+# 1. Password file (pick a real password — replace the bring-up test one):
+sudo mkdir -p /etc/catering
+sudo sh -c 'echo "OFFICE_PANEL_PASSWORD=<strong-password>" > /etc/catering/office-panel.env'
+sudo chmod 600 /etc/catering/office-panel.env
+
+# 2. Adjust User= and the /opt/catering paths in both unit files to the real
+#    repo path and login user, then:
+sudo cp infra/systemd/catering-kiosk.service infra/systemd/catering-office-panel.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now catering-kiosk catering-office-panel
+
+# 3. Check:
+systemctl status catering-kiosk catering-office-panel
+```
+
+Both services restart on failure and start on boot (both servers run 24/7).
+Changing the panel password later: edit the env file, then
+`sudo systemctl restart catering-office-panel`.
+
+## 1c. Core database backup (both servers run 24/7)
 
 Daily cron on the Lenovo — the SQLite file is the operational truth and is
 not re-derivable. Create the target directory once (`mkdir -p

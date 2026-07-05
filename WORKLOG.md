@@ -1562,3 +1562,26 @@ Completed
 Must not be changed
 	•	UI servers stay single-threaded until an accepted step introduces per-request/thread-local connections
 	•	no other behavior touched
+
+⸻
+
+Entry 049
+
+Date: 2026-07-05 — Lenovo bring-up smoke test passed; autostart artifacts
+Scope: bring-up progress (DEPLOYMENT.md §1–1b), systemd units
+Status: bring-up partially complete
+
+Completed
+	•	first live end-to-end smoke test on the kitchen Lenovo passed: office panel and kiosk reachable over Tailscale; inquiry created → converted → kitchen print confirmed → version wirksam → READY_TO_SEND bereit → effective order visible in the Wochenübersicht in the correct ISO week
+	•	systemd unit templates added (infra/systemd/): kiosk and office panel, restart-on-failure, boot autostart; panel password moved to /etc/catering/office-panel.env (chmod 600), never in the unit file
+	•	DEPLOYMENT.md §1b: install steps for autostart and password rotation
+
+Open (owner's manual steps on the Lenovo)
+	•	replace the bring-up test password with a real one (env file per §1b)
+	•	install and enable both systemd units
+	•	set up the §1c backup cron
+	•	later: EspoCRM on the office server, worker deploy, public site
+
+Must not be changed
+	•	panel password lives only in the root-owned env file
+	•	single-threaded UI servers (Entry 048) remain until an accepted step says otherwise

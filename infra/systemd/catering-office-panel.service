@@ -1,0 +1,20 @@
+# Office panel (LAN-only write surface) — install per DEPLOYMENT.md §1b.
+# The password lives ONLY in /etc/catering/office-panel.env (chmod 600), never here.
+# Replace /opt/catering with the actual repo path and 'catering' with the actual user.
+
+[Unit]
+Description=Catering office panel (write surface, LAN-only)
+After=network.target
+
+[Service]
+Type=simple
+User=catering
+WorkingDirectory=/opt/catering
+Environment=PYTHONPATH=/opt/catering/src
+EnvironmentFile=/etc/catering/office-panel.env
+ExecStart=/usr/bin/python3 -m catering_system.ui.office_panel --db /var/lib/catering/core.db --port 8081
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
