@@ -176,51 +176,53 @@ Must not be changed
 
 ⸻
 
-4. Current active position
+4. Current active position (updated 2026-07-05; see Entry 036)
 
 Current phase
-	•	architecture accepted
-	•	execution packs accepted
-	•	implementation execution not yet confirmed in this log
+	•	Slice A accepted and closed (Entries 005–009, SLICE_A_CLOSEOUT.md)
+	•	Slice B read-side line B1–B27 accepted (Entries 010–035)
+	•	OPERATIONAL_CORE_EXECUTION_PACK_V1 accepted as the next execution target
 
 Current next step
-	•	begin real implementation with SLICE_A_EXECUTION_PACK_V1
+	•	implement OPERATIONAL_CORE_EXECUTION_PACK_V1 §14 (kitchen print gate, effective switch, READY_TO_SEND)
 
 Current main risk
-	•	implementation drift
-	•	scope expansion during coding
-	•	weakening frozen rules through convenience shortcuts
+	•	further derived-read micro-slicing instead of operational semantics (see pack §12 stop-rule)
+	•	operational layer without persistence (in-memory only loses confirmations on restart)
 
 ⸻
 
 5. Next log entry rule
 
-The next real implementation entry should only be added when one of the following happens:
-	•	Slice A implementation starts
-	•	Slice A implementation is partially completed
-	•	Slice A implementation is accepted
+The next entry should only be added when one of the following happens:
+	•	an OPERATIONAL_CORE_EXECUTION_PACK_V1 step starts, partially completes, or is accepted
 	•	a concrete blocker appears
-	•	actual codebase state is reconciled against frozen documents
+	•	actual codebase state is reconciled against accepted documents
 
 ⸻
 
 6. Minimal continuation rule
 
 Any new person/session continuing from this log should:
-	1.	read README_START_HERE.md
-	2.	read CURRENT_STATUS.md
-	3.	read NEXT_STEP.md
-	4.	read the relevant slice execution pack
-	5.	update this log only with explicit, truthful status changes
+	1.	read this WORKLOG.md top to bottom (sections 4 and 7 are the live position)
+	2.	read SLICE_A_EXECUTION_PACK_V1.md and SLICE_A_CLOSEOUT.md for the intake layer
+	3.	read OPERATIONAL_CORE_EXECUTION_PACK_V1.md for the current execution target
+	4.	update this log only with explicit, truthful status changes
+
+Note: README_START_HERE.md, CURRENT_STATUS.md, NEXT_STEP.md, and the ten
+architecture documents named in Entries 001–003 (STATE_MODEL_V2 etc.) do not
+exist in this repository or its git history. They are binding as labels only;
+where their content is needed, repo evidence and accepted WORKLOG entries win
+(see OPERATIONAL_CORE_EXECUTION_PACK_V1 §2 precedence rule).
 
 ⸻
 
-7. Current summary
+7. Current summary (updated 2026-07-05)
 
-Frozen architecture: accepted
-Execution packs: accepted
-Implementation started: not yet confirmed here
-Immediate next step: implement Slice A
+Slice A (intake): accepted and closed
+Slice B read-side (B1–B27): accepted
+Operational core (kitchen print / effective switch / READY_TO_SEND): pack accepted, implementation next
+Persistence: in-memory only; SQLite adapter planned alongside operational core
 Main discipline: no redesign, no scope drift, no weakening of frozen rules
 
 Entry 005
@@ -1227,3 +1229,35 @@ Must not be changed
 	•	B26 remains the accepted step for derived progression reason presence
 	•	this step must remain a narrow aggregation layer only
 	•	no hidden fallback logic or new business truth may be introduced into this summary
+⸻
+
+Entry 036
+
+Date: 2026-07-05 — repository reconciliation and audit closeout
+Scope: audit findings, history correction, tooling baseline, OPERATIONAL_CORE_EXECUTION_PACK_V1 acceptance
+Status: accepted
+
+Completed
+	•	full code audit of Slice A + B1–B27 line (all 140 unit tests passing)
+	•	B27 accepted after review: composed derived review summary committed with an honest message
+	•	history correction recorded: commit f6bcab4 is titled "Slice B27 accepted: derived progression eligibility label" but actually contains B26 (reason presence); the real B27 was committed separately after this reconciliation. History is not rewritten (already pushed); this entry is the durable correction.
+	•	documentation reconciliation: README_START_HERE.md, CURRENT_STATUS.md, NEXT_STEP.md, and the ten architecture documents named in Entries 001–003 confirmed absent from the repository and its entire git history; continuation rule (section 6) updated accordingly
+	•	living sections 4/5/7 updated from stale "Slice A not started" state to actual position
+	•	Order and OrderVersion made frozen dataclasses — "immutable version history" (B2/B3) is now enforced by code, not convention; no behavior or test changes required
+	•	pyproject.toml added (pytest config, pythonpath=src); per-test sys.path hack removed
+	•	OPERATIONAL_CORE_EXECUTION_PACK_V1.md written, reviewed in two external review rounds, and accepted as the next execution target (its §2 precedence rule: repo evidence + accepted WORKLOG entries win over never-seen canonical documents)
+
+Accepted
+	•	B27 composed derived review summary (closes the "Open" item of Entry 035)
+	•	frozen Order/OrderVersion as enforcement of the already-accepted immutability rule
+	•	OPERATIONAL_CORE_EXECUTION_PACK_V1 as freeze-candidate execution target, with its two open [ASSUMPTION] items (§1 slice naming, §8.2 print-as-domain-fact) resolved by proceeding as written
+
+Open
+	•	OPERATIONAL_CORE_EXECUTION_PACK_V1 §14 implementation
+	•	SQLite persistence behind the existing repository Protocols
+	•	removal of leaf debug formatters B16/B17 (accepted as low-value; B12 consistency check stays for now — it is load-bearing: its output feeds B13 bundle → B14 export → B23 facts.is_consistent → B27 facts_count, so removing it would change accepted contracts and needs its own narrow step)
+
+Must not be changed
+	•	no rewriting of pushed git history to fix the f6bcab4 mislabel
+	•	frozen Order/OrderVersion must not be reverted to mutable
+	•	B7–B27 read-side contracts remain intact per OPERATIONAL_CORE_EXECUTION_PACK_V1 §13

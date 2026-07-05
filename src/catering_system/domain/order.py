@@ -14,7 +14,7 @@ from datetime import date, datetime
 from catering_system.domain.inquiry import PlanningMode
 
 
-@dataclass
+@dataclass(frozen=True)
 class Order:
     """Core-owned order aggregate root. Operational truth lives here, not in CRM."""
 
@@ -25,7 +25,7 @@ class Order:
     candidate_order_version_id: str | None = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class OrderVersion:
     """Immutable version snapshot under Core (B1: initial v1; B2: further versions, no activation)."""
 
