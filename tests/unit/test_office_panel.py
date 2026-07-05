@@ -264,6 +264,39 @@ def test_xss_escaped_in_views(panel: str) -> None:
     assert "&lt;script&gt;" in body
 
 
+def test_panel_serves_sqlite_like_on_lenovo(tmp_path) -> None:
+    """Regression (bring-up bug): sqlite repos + server built in the serving thread,
+    full write flow over HTTP must not hit sqlite3 cross-thread errors."""
+    import queue
+
+    from catering_system.repositories.sqlite_inquiry_repository import SQLiteInquiryRepository
+    from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepository
+
+    db = tmp_path / "core.db"
+    ready: queue.Queue = queue.Queue()
+
+    def run() -> None:  # mirrors main()
+        server = create_office_panel_server(
+            SQLiteInquiryRepository(db), SQLiteOrderRepository(db), _PASSWORD,
+            host="127.0.0.1", port=0,
+        )
+        ready.put(server)
+        server.serve_forever()
+
+    threading.Thread(target=run, daemon=True).start()
+    server = ready.get(timeout=5)
+    host, port = server.server_address[:2]
+    base = f"http://{host}:{port}"
+    try:
+        iid = _create_inquiry(base)  # POST → sqlite write over HTTP
+        oid = _convert(base, iid)
+        status, body = _get(f"{base}/order/{oid}")
+        assert status == 200 and "v1" in body
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_unknown_paths_404(panel: str) -> None:
     for path in ("/admin", "/inquiry/does-not-exist", "/order/does-not-exist"):
         with pytest.raises(urllib.error.HTTPError) as exc:

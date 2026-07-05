@@ -117,6 +117,43 @@ def test_malformed_week_params_fall_back_to_current_week(kiosk_url: str) -> None
         assert resp.status == 200
 
 
+def test_kiosk_serves_sqlite_like_on_lenovo(tmp_path) -> None:
+    """Regression (bring-up bug): repo created in one thread, requests served by the
+    server — must not hit sqlite3 cross-thread errors (single-threaded HTTPServer)."""
+    import queue
+
+    from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepository
+
+    db = tmp_path / "core.db"
+    seed = SQLiteOrderRepository(db)
+    osvc = OrderService(seed)
+    core = OperationalCoreService(seed)
+    order, v1 = osvc.convert_inquiry_to_order(_inquiry(date(2026, 10, 1)))
+    core.confirm_kitchen_print(order.order_id, v1.order_version_id)
+    core.make_order_version_effective(order.order_id, v1.order_version_id)
+    seed.close()
+
+    ready: queue.Queue = queue.Queue()
+
+    def run() -> None:  # mirrors main(): repo + server built in the serving thread
+        repo = SQLiteOrderRepository(db)
+        server = create_kiosk_server(repo, host="127.0.0.1", port=0)
+        ready.put(server)
+        server.serve_forever()
+
+    threading.Thread(target=run, daemon=True).start()
+    server = ready.get(timeout=5)
+    host, port = server.server_address[:2]
+    try:
+        with urllib.request.urlopen(f"http://{host}:{port}/?year=2026&week=40") as resp:
+            assert resp.status == 200
+            body = resp.read().decode("utf-8")
+        assert "Hamburg" in body
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_kiosk_module_has_no_write_surface() -> None:
     """Pack §3: the kiosk never calls a repository write."""
     from pathlib import Path

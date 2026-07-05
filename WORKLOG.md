@@ -1542,3 +1542,23 @@ Must not be changed
 	•	panel stays a thin skin: no domain logic in the UI layer
 	•	auth stays mandatory; LAN-only rule stays
 	•	the two reason vocabularies stay separate in all views
+
+⸻
+
+Entry 048
+
+Date: 2026-07-05 — bring-up bug fix: SQLite cross-thread crash in UI servers
+Scope: kiosk_server.py, office_panel.py (narrow implementation fix)
+Status: accepted
+
+Completed
+	•	first live bring-up on the kitchen Lenovo surfaced a real defect: kiosk crashed on first GET with sqlite3.ProgrammingError (connection created in main thread, request handled in a ThreadingHTTPServer worker thread)
+	•	the office panel had the identical pattern and was fixed in the same step (strictly required: it would crash the same way on first request)
+	•	fix: ThreadingHTTPServer replaced with single-threaded HTTPServer in both UI servers — smallest safe fix; kiosk is a one-client read-only display, and single-threading additionally serializes panel writes on SQLite
+	•	regression tests added for both servers that mirror the Lenovo setup (sqlite repos + server built in the serving thread, requests over live HTTP); the kiosk test reproduced the exact production traceback before the fix
+	•	test-gap cause recorded: existing live-socket tests used in-memory repositories only, so SQLite never crossed a thread boundary in CI
+	•	suite 210 passed
+
+Must not be changed
+	•	UI servers stay single-threaded until an accepted step introduces per-request/thread-local connections
+	•	no other behavior touched

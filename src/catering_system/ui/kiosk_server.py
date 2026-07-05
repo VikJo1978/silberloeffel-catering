@@ -9,7 +9,7 @@ from __future__ import annotations
 import argparse
 import html
 from datetime import date
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from catering_system.domain.wochenuebersicht import Wochenuebersicht
@@ -111,8 +111,11 @@ def make_kiosk_handler(order_repository: OrderRepository) -> type[BaseHTTPReques
 
 def create_kiosk_server(
     order_repository: OrderRepository, host: str = "0.0.0.0", port: int = 8080
-) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), make_kiosk_handler(order_repository))
+) -> HTTPServer:
+    # Single-threaded on purpose: the shared sqlite3 connection must stay on the
+    # thread that serves requests (bring-up bug, WORKLOG Entry 048). A read-only
+    # display with one client does not need request threading.
+    return HTTPServer((host, port), make_kiosk_handler(order_repository))
 
 
 def main() -> None:

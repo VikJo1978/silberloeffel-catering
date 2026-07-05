@@ -13,7 +13,7 @@ import base64
 import html
 import os
 from datetime import date
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from catering_system.domain.inquiry import CRM_PIPELINE, Inquiry, PLANNING_MODES
@@ -495,8 +495,11 @@ def create_office_panel_server(
     password: str,
     host: str = "0.0.0.0",
     port: int = 8081,
-) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer(
+) -> HTTPServer:
+    # Single-threaded on purpose: the shared sqlite3 connections must stay on the
+    # thread that serves requests (bring-up bug, WORKLOG Entry 048). This also
+    # serializes writes — desirable on SQLite for a 1–2-person office.
+    return HTTPServer(
         (host, port), make_office_panel_handler(inquiry_repo, order_repo, password)
     )
 
