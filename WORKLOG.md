@@ -1393,3 +1393,31 @@ Open
 Must not be changed
 	•	kiosk stays read-only; no mutating endpoint may be added to it
 	•	no frontend build tooling / JS frameworks in the kiosk MVP
+
+⸻
+
+Entry 042
+
+Date: 2026-07-05 — integration and deployment layer (code side)
+Scope: INTEGRATION_DEPLOYMENT_EXECUTION_PACK_V1
+Status: accepted (code side); external deploys remain manual user steps
+
+Completed
+	•	pack written and accepted
+	•	HubSpotOfficeInquiryHttp behind the existing HubSpotOfficeInquiryPort: stdlib urllib, injectable transport (tests never touch the network), token strictly from HUBSPOT_PRIVATE_APP_TOKEN env, missing token raises loudly before any request; explicit flat inquiry→properties mapping (crm_stage travels as plain text — stage-id mapping is portal configuration, not domain logic)
+	•	infra/cloudflare_worker/worker.js — §8 External Secure Intake Layer: POST-only, 16KB cap, field whitelist, text trim/limit, ISO event_date required, server-side bearer forward, upstream responses never relayed to the public caller
+	•	DEPLOYMENT.md — manual bring-up steps: kiosk on kitchen Lenovo (SQLite on local disk per Core-on-Lenovo rule), HubSpot Private App + custom properties, wrangler deploy, recommended bring-up order
+	•	tests: documented request shape (URL/auth/body), Protocol conformance, mapping correctness incl. None guest count, token-not-in-body, missing-token failure; suite 179 passed
+
+Accepted
+	•	integration layer is transport only; no change to Core truth semantics
+	•	no secrets in code, tests, or browser-served content
+	•	Noop stub remains the explicit no-op choice; HTTP client never silently no-ops
+
+Open
+	•	performing the external deploys (HubSpot account, Cloudflare account, physical Lenovo) — owner's manual steps per DEPLOYMENT.md
+	•	office-side wiring that calls sync_inquiry_from_core on inquiry create/update (belongs to office automation, not Core)
+
+Must not be changed
+	•	HubSpot token stays env-only and server-side
+	•	worker holds no business logic and is not operational truth (§8.3)
