@@ -23,6 +23,32 @@ plain `python3 -m ...` form works.
   make it write.
 - For autostart, wrap the command in a systemd unit or a login item.
 
+## 1a. Office panel on the kitchen Lenovo (LAN-only write surface)
+
+```bash
+OFFICE_PANEL_PASSWORD=<office-password> \
+PYTHONPATH=src python3 -m catering_system.ui.office_panel --db /var/lib/catering/core.db --port 8081
+```
+
+- The panel refuses to start without a password (it is a write surface).
+- LAN-only: never expose port 8081 outside the office/kitchen network — no
+  port forwarding, no reverse proxy to the internet.
+- Office staff log in from office browsers as user `office`.
+- Same database file as the kiosk; the kiosk stays read-only on its own port.
+
+## 1b. Core database backup (both servers run 24/7)
+
+Daily cron on the Lenovo — the SQLite file is the operational truth and is
+not re-derivable:
+
+```cron
+15 3 * * * sqlite3 /var/lib/catering/core.db ".backup /var/backups/catering/core-$(date +\%u).db"
+```
+
+Copy the backup directory to the office server or an external disk as a second
+location. (EspoCRM on the office server needs its own backup — contacts and
+communication live only there.)
+
 ## 2. HubSpot office-facing sync
 
 1. In HubSpot: create a **Private App** with CRM object write scope; copy the

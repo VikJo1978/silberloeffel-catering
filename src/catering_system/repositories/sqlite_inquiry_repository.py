@@ -76,6 +76,15 @@ class SQLiteInquiryRepository:
         ).fetchone()
         if row is None:
             return None
+        return self._row_to_inquiry(row)
+
+    def list_all(self) -> list[Inquiry]:
+        rows = self._conn.execute(
+            "SELECT * FROM inquiries ORDER BY event_date, inquiry_id"
+        ).fetchall()
+        return [self._row_to_inquiry(r) for r in rows]
+
+    def _row_to_inquiry(self, row: tuple) -> Inquiry:
         return Inquiry(
             inquiry_id=row[0],
             event_date=date.fromisoformat(row[1]),

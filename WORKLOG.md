@@ -176,26 +176,27 @@ Must not be changed
 
 ⸻
 
-4. Current active position (updated 2026-07-05; see Entry 036)
+4. Current active position (updated 2026-07-05 evening; see Entries 036–047)
 
 Current phase
-	•	Slice A accepted and closed (Entries 005–009, SLICE_A_CLOSEOUT.md)
-	•	Slice B read-side line B1–B27 accepted (Entries 010–035)
-	•	OPERATIONAL_CORE_EXECUTION_PACK_V1 accepted as the next execution target
+	•	Slice A accepted and closed; Slice B read-side B1–B27 accepted
+	•	implemented and tested: operational core (print gate / effective / READY_TO_SEND), SQLite persistence, Wochenübersicht, kitchen kiosk, integration layer, Storno, office panel
+	•	accepted planning-only: PUBLIC_SITE (Entry 044)
 
 Current next step
-	•	implement OPERATIONAL_CORE_EXECUTION_PACK_V1 §14 (kitchen print gate, effective switch, READY_TO_SEND)
+	•	bring-up per DEPLOYMENT.md (Lenovo, EspoCRM on office server, worker) and first live office use
 
 Current main risk
-	•	further derived-read micro-slicing instead of operational semantics (see pack §12 stop-rule)
-	•	operational layer without persistence (in-memory only loses confirmations on restart)
+	•	unused-in-production code: no live bring-up has happened yet
+	•	first week of real office use will surface process gaps not covered by packs
 
 ⸻
 
 5. Next log entry rule
 
 The next entry should only be added when one of the following happens:
-	•	an OPERATIONAL_CORE_EXECUTION_PACK_V1 step starts, partially completes, or is accepted
+	•	bring-up starts, partially completes, or is accepted
+	•	a PUBLIC_SITE implementation step starts (website source / notes_text as own accepted steps)
 	•	a concrete blocker appears
 	•	actual codebase state is reconciled against accepted documents
 
@@ -217,12 +218,16 @@ where their content is needed, repo evidence and accepted WORKLOG entries win
 
 ⸻
 
-7. Current summary (updated 2026-07-05)
+7. Current summary (updated 2026-07-05 evening)
 
 Slice A (intake): accepted and closed
-Slice B read-side (B1–B27): accepted
-Operational core (kitchen print / effective switch / READY_TO_SEND): pack accepted, implementation next
-Persistence: in-memory only; SQLite adapter planned alongside operational core
+Slice B read-side (B1–B27): accepted (B16/B17 removed, Entry 039)
+Operational core incl. Storno: implemented and tested
+Persistence: SQLite adapters behind the repository Protocols
+UI: kitchen kiosk (read-only) + office panel (primary write surface) implemented
+Integration: HubSpot client (unwired artifact; EspoCRM decided), worker, deploy notes
+Public site: pack accepted planning-only (Entry 044)
+Next: bring-up per DEPLOYMENT.md
 Main discipline: no redesign, no scope drift, no weakening of frozen rules
 
 Entry 005
@@ -1515,3 +1520,25 @@ Must not be changed
 	•	history/candidate/effective references stay untouched on cancel
 	•	no uncancel without its own pack
 	•	B7–B27 progression vocabulary not amended
+
+⸻
+
+Entry 047
+
+Date: 2026-07-05 — office panel implemented
+Scope: OFFICE_PANEL_EXECUTION_PACK_V1 §9 steps 1–4
+Status: accepted
+
+Completed
+	•	ui/office_panel.py: working queue, inquiry create/update/verify, convert (gate-checked), order versions, kitchen print sheet (Küchenzettel), confirm print, make effective, request READY_TO_SEND, Storno button
+	•	basic auth mandatory (panel refuses to start without a password); GET/POST only; unknown paths 404
+	•	§5 respected: progression (B7) reasons rendered only on inquiry views, operational gate reasons only on order views — tested that vocabularies do not co-appear
+	•	additive InquiryRepository.list_all() on Protocol, in-memory, and SQLite adapters
+	•	presentation-only affordance: convert button hidden when the inquiry already has an order (service behavior unchanged); cancelled orders hide action buttons while the server-side gates still refuse (tested)
+	•	DEPLOYMENT.md: panel launch section (§1a) and daily SQLite backup cron (§1b)
+	•	18 new live-socket tests; suite 206 passed
+
+Must not be changed
+	•	panel stays a thin skin: no domain logic in the UI layer
+	•	auth stays mandatory; LAN-only rule stays
+	•	the two reason vocabularies stay separate in all views
