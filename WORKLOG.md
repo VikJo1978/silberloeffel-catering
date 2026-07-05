@@ -1437,3 +1437,27 @@ Completed
 
 Must not be changed
 	•	worker coercion stays limited to digit-only strings; no broader payload rewriting
+
+⸻
+
+Entry 044
+
+Date: 2026-07-05 — public site execution pack accepted
+Scope: PUBLIC_SITE_EXECUTION_PACK_V1
+Status: accepted, planning-only
+
+Meaning
+	•	public site boundaries accepted; implementation deferred
+	•	now-phase contains no code changes (see pack §7)
+
+Completed
+	•	PUBLIC_SITE_EXECUTION_PACK_V1 written, reviewed in external review rounds, and accepted
+	•	full contents live in the pack file only — not duplicated here
+
+Must not be changed
+	•	site stays presentation + intake only
+	•	worker remains the only public entry
+	•	no direct Core access from the site
+	•	no email-parser bridge from the AI assistant
+	•	Stage 1 assistant remains email-to-office only
+	•	"website" inquiry_source and notes_text enter the code only when actual site work starts, each as its own accepted implementation step
