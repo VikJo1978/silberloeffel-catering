@@ -176,19 +176,20 @@ Must not be changed
 
 ⸻
 
-4. Current active position (updated 2026-07-05 evening; see Entries 036–047)
+4. Current active position (updated 2026-07-05 night; see Entries 036–050)
 
 Current phase
-	•	Slice A accepted and closed; Slice B read-side B1–B27 accepted
-	•	implemented and tested: operational core (print gate / effective / READY_TO_SEND), SQLite persistence, Wochenübersicht, kitchen kiosk, integration layer, Storno, office panel
+	•	Lenovo bring-up COMPLETE (Entries 048–050): live end-to-end loop verified, systemd autostart reboot-proven, backups active
+	•	working internal operational MVP: Core + office panel + kiosk on the kitchen Lenovo over Tailscale
 	•	accepted planning-only: PUBLIC_SITE (Entry 044)
 
 Current next step
-	•	bring-up per DEPLOYMENT.md (Lenovo, EspoCRM on office server, worker) and first live office use
+	•	1–2 days of real office use; frictions collected as plain notes, no code changes except real blockers (Entry 050)
+	•	after the window: reconcile frictions into narrow accepted steps; then EspoCRM on the office server
 
 Current main risk
-	•	unused-in-production code: no live bring-up has happened yet
-	•	first week of real office use will surface process gaps not covered by packs
+	•	frictions of real use bypassing the pack discipline ("quick fix" temptation during the observation window)
+	•	single office/kitchen dependence on one Lenovo disk — backups are the only safety net
 
 ⸻
 
@@ -218,16 +219,17 @@ where their content is needed, repo evidence and accepted WORKLOG entries win
 
 ⸻
 
-7. Current summary (updated 2026-07-05 evening)
+7. Current summary (updated 2026-07-05 night)
 
 Slice A (intake): accepted and closed
 Slice B read-side (B1–B27): accepted (B16/B17 removed, Entry 039)
-Operational core incl. Storno: implemented and tested
-Persistence: SQLite adapters behind the repository Protocols
-UI: kitchen kiosk (read-only) + office panel (primary write surface) implemented
-Integration: HubSpot client (unwired artifact; EspoCRM decided), worker, deploy notes
+Operational core incl. Storno: implemented, tested, live on the Lenovo
+Persistence: SQLite behind the repository Protocols; daily backups with cleanup
+UI: kitchen kiosk (read-only, :8082) + office panel (write, :8081) — systemd, reboot-proven
+Integration: HubSpot client (unwired artifact; EspoCRM decided), worker code ready, deploy notes
 Public site: pack accepted planning-only (Entry 044)
-Next: bring-up per DEPLOYMENT.md
+Status: working internal operational MVP (Entry 050)
+Next: observation window (1–2 days real use, friction notes), then EspoCRM / worker / site
 Main discipline: no redesign, no scope drift, no weakening of frozen rules
 
 Entry 005
@@ -1585,3 +1587,26 @@ Open (owner's manual steps on the Lenovo)
 Must not be changed
 	•	panel password lives only in the root-owned env file
 	•	single-threaded UI servers (Entry 048) remain until an accepted step says otherwise
+
+⸻
+
+Entry 050
+
+Date: 2026-07-05 — Lenovo bring-up completed (owner-reported, verified live)
+Scope: closure of Entry 049 open items on the kitchen Lenovo
+Status: Lenovo part of bring-up complete; observation period next
+
+Completed (on the machine, per owner's live verification)
+	•	real panel password set via /etc/catering/office-panel.env (bring-up test password replaced)
+	•	both systemd units installed and enabled; services autostart and survive a reboot (verified by actual reboot)
+	•	core.db backup verified by hand; daily cron backup active; old-backup cleanup configured
+	•	full operational loop re-confirmed live: inquiry → order → print confirmed → wirksam → bereit → kiosk shows the order in the correct ISO week
+	•	current honest product status: working internal operational MVP for own catering — not a demo, not a SaaS
+
+Open
+	•	1–2 days of real working use; frictions recorded as plain notes, reconciled into packs afterwards
+	•	EspoCRM on the office server; worker in real operation; public site; UX polishing
+
+Must not be changed
+	•	no code changes during the observation window except real blockers — frictions are collected first, then turned into narrow accepted steps
+	•	all prior freeze boundaries remain
