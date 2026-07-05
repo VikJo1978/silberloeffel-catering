@@ -1294,3 +1294,27 @@ Must not be changed
 	•	the two §7 fields remain the only operational fields; no further status axis
 	•	gate rule and reason vocabulary stay owned by the operational layer
 	•	confirmation stays idempotent and non-revocable within this layer
+
+⸻
+
+Entry 038
+
+Date: 2026-07-05 — SQLite persistence adapters
+Scope: persistence behind the existing repository Protocols
+Status: accepted
+
+Completed
+	•	SQLiteOrderRepository and SQLiteInquiryRepository implementing the existing Protocols unchanged
+	•	schema mirrors the frozen field sets (incl. the two OPERATIONAL_CORE §7 fields); values re-validated through frozen domain validators on load
+	•	tests: full-field roundtrips, version ordering, KeyError-on-missing-update parity with in-memory, operational-core flow surviving a simulated restart, B7–B27 progression chain running unchanged over SQLite
+	•	full suite passes (164)
+
+Accepted
+	•	persistence is an adapter only: no business rules, no new truth axis, no schema fields beyond the frozen domain
+	•	in-memory repositories remain the default for unit tests
+
+Open
+	•	wiring a concrete db path for real deployment (belongs to the deployment pack, §18 of the operational pack)
+
+Must not be changed
+	•	repository Protocols stay the single seam; services never see SQL
