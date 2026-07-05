@@ -16,6 +16,9 @@ class InMemoryOrderRepository:
     def get_order(self, order_id: str) -> Order | None:
         return self._orders.get(order_id)
 
+    def list_orders(self) -> list[Order]:
+        return sorted(self._orders.values(), key=lambda o: o.order_id)
+
     def update_order(self, order: Order) -> None:
         if order.order_id not in self._orders:
             raise KeyError(order.order_id)

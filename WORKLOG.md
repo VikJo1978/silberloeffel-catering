@@ -1341,3 +1341,29 @@ Open
 
 Must not be changed
 	•	no re-introduction of leaf formatter slices without a consumer and an accepted pack
+
+⸻
+
+Entry 040
+
+Date: 2026-07-05 — Wochenübersicht derived weekly overview
+Scope: WOCHENUEBERSICHT_EXECUTION_PACK_V1
+Status: accepted
+
+Completed
+	•	pack written and accepted (derived-only role per Entry 001 preserved)
+	•	domain/wochenuebersicht.py: frozen WochenuebersichtEntry + Wochenuebersicht, ISO-week helper
+	•	WochenuebersichtService.get_week_overview(iso_year, iso_week) — pure read from orders + effective versions only
+	•	additive OrderRepository.list_orders() on Protocol, in-memory, and SQLite adapters
+	•	tests: empty week, no-effective exclusion, out-of-week exclusion, effective-not-latest (newer history row does not leak in), deterministic ordering, purity; suite 166 passed
+
+Accepted
+	•	overview is derived on demand, never persisted; no WochenübersichtVersion snapshots
+	•	effective versions are the only source; every listed entry is print-confirmed by construction (operational gate)
+
+Open
+	•	kitchen kiosk read-only UI consuming this read model (own pack)
+
+Must not be changed
+	•	derived-only role of Wochenübersicht
+	•	no candidate/latest-historical leakage into the overview

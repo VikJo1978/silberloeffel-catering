@@ -87,6 +87,20 @@ class SQLiteOrderRepository:
             raise KeyError(order.order_id)
         self.save_order(order)
 
+    def list_orders(self) -> list[Order]:
+        rows = self._conn.execute("SELECT * FROM orders ORDER BY order_id").fetchall()
+        return [
+            Order(
+                order_id=r[0],
+                source_inquiry_id=r[1],
+                created_at=_dt(r[2]),
+                updated_at=_dt(r[3]),
+                candidate_order_version_id=r[4],
+                effective_order_version_id=r[5],
+            )
+            for r in rows
+        ]
+
     def save_order_version(self, version: OrderVersion) -> None:
         self._conn.execute(
             "INSERT OR REPLACE INTO order_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
