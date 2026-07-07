@@ -357,16 +357,21 @@ class OfficePanel:
             if _sidebar_rueckruf_count is not None
             else ""
         )
+        storniert_card = (
+            f'<span><strong>{len(storniert)}</strong> Stornierte Aufträge prüfen</span>'
+            if storniert
+            else ""
+        )
         attention = (
             "<h2>Was braucht Aufmerksamkeit?</h2>"
             '<div class="attention">'
             + rueckruf_card
-            + f'<a href="#anfragen"><strong>{len(neue_anfragen)}</strong> Neue Anfragen</a>'
-            f'<a href="#auftraege"><strong>{len(ohne_druck)}</strong> ohne Druckbestätigung</a>'
-            f'<a href="#auftraege"><strong>{len(nicht_wirksam)}</strong> noch nicht operativ wirksam</a>'
+            + f'<a href="#anfragen"><strong>{len(neue_anfragen)}</strong> Neue Anfragen prüfen</a>'
+            f'<a href="#auftraege"><strong>{len(ohne_druck)}</strong> Druckbestätigung fehlt</a>'
+            f'<a href="#auftraege"><strong>{len(nicht_wirksam)}</strong> Aufträge noch nicht wirksam</a>'
             f'<a href="#auftraege"><strong>{len(blockiert)}</strong> Versandfreigabe blockiert</a>'
-            f'<span><strong>{len(storniert)}</strong> storniert</span>'
-            "</div>"
+            + storniert_card
+            + "</div>"
         )
 
         search_box = (
@@ -390,10 +395,10 @@ class OfficePanel:
             ):
                 continue
             inquiry_rows.append(
-                f'<tr><td><a href="/inquiry/{_e(inq.inquiry_id)}">{_e(inq.inquiry_id[:8])}</a></td>'
-                f"<td>{_e(inq.event_date.isoformat())}</td><td>{_e(inq.location_text)}</td>"
+                f"<tr><td>{_e(inq.event_date.isoformat())}</td><td>{_e(inq.location_text)}</td>"
                 f"<td>{_e(inq.crm_stage)}</td><td>{_e(_verification_label(inq.call_verification_status))}</td>"
-                f"<td>{has_order}</td></tr>"
+                f"<td>{has_order}</td>"
+                f'<td><a href="/inquiry/{_e(inq.inquiry_id)}">{_e(inq.inquiry_id[:8])}</a></td></tr>'
             )
 
         order_rows = []
@@ -411,11 +416,11 @@ class OfficePanel:
                 else:
                     status = '<span class="blocked">blockiert</span>'
                     blocker = _e(_ready_to_send_blocker_label(ev.reasons[0])) if ev.reasons else "–"
-            eff = "ja" if o.effective_order_version_id else "–"
+            eff = "bestätigt" if o.effective_order_version_id else "noch nicht bestätigt"
             order_rows.append(
-                f'<tr><td><a href="/order/{_e(o.order_id)}">{_e(o.order_id[:8])}</a></td>'
-                f"<td>{_e(o.source_inquiry_id[:8])}</td><td>{eff}</td>"
-                f"<td>{status}</td><td>{blocker}</td></tr>"
+                f"<tr><td>{status}</td><td>{blocker}</td>"
+                f"<td>{_e(o.source_inquiry_id[:8])}</td><td>{_e(eff)}</td>"
+                f'<td><a href="/order/{_e(o.order_id)}">{_e(o.order_id[:8])}</a></td></tr>'
             )
 
         iso = date.today().isocalendar()
@@ -434,18 +439,31 @@ class OfficePanel:
             + "</table>"
         )
 
+        blocker_rows = []
+        for o in blockiert:
+            ev = self.core.evaluate_ready_to_send(o.order_id)
+            reason = _e(_ready_to_send_blocker_label(ev.reasons[0])) if ev.reasons else "–"
+            blocker_rows.append(
+                f'<li><a href="/order/{_e(o.order_id)}">{_e(o.order_id[:8])}</a> — {reason}</li>'
+            )
+        blocker_section = (
+            '<h2 id="blocker">Wo gibt es Blocker?</h2>'
+            + (f"<ul>{''.join(blocker_rows)}</ul>" if blocker_rows else "<p>keine Blocker.</p>")
+        )
+
         body = (
             attention
+            + diese_woche
+            + blocker_section
             + search_box
             + '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a></p>'
-            '<h2 id="anfragen">Anfragen</h2><table><tr><th>ID</th><th>Datum</th><th>Ort</th>'
-            "<th>CRM-Stufe</th><th>Verifizierung</th><th>Auftrag</th></tr>"
+            '<h2 id="anfragen">Anfragen</h2><table><tr><th>Datum</th><th>Ort</th>'
+            "<th>CRM-Stufe</th><th>Verifizierung</th><th>Auftrag</th><th>ID</th></tr>"
             + "".join(inquiry_rows or ['<tr><td colspan="6">keine</td></tr>'])
-            + '</table><h2 id="auftraege">Aufträge</h2><table><tr><th>ID</th><th>Anfrage</th>'
-            "<th>Wirksam</th><th>Freigabe</th><th>Blocker</th></tr>"
+            + '</table><h2 id="auftraege">Aufträge</h2><table><tr><th>Freigabe</th><th>Blocker</th>'
+            "<th>Anfrage</th><th>Bestätigt</th><th>ID</th></tr>"
             + "".join(order_rows or ['<tr><td colspan="5">keine</td></tr>'])
             + "</table>"
-            + diese_woche
         )
         return _page("Büro-Übersicht", body)
 

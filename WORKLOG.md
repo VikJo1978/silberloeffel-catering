@@ -1982,3 +1982,76 @@ Must not be changed
 	  configurator→Core bridge, no Core schema/domain changes, no merging
 	  of Inquiry and Order into one entity — all explicitly out of scope for
 	  this step per the owner's agreed framing
+
+⸻
+
+Entry 057
+
+Date: 2026-07-08 — Office panel: Arbeitszentrale layout (§6a)
+Scope: src/catering_system/ui/office_panel.py — render_queue() layout only,
+tests/unit/test_office_panel.py — assertions updated, 2 tests added
+Status: accepted (OFFICE_PANEL_NAVIGATION_RETHINK_PACK_V1, option (a): one
+page, no new routes)
+
+Meaning
+	•	owner's live feedback on Entry 056: labels were clearer but the panel
+	  still read as a tabular admin/DB view, not an office work surface.
+	  Planning-only pack (OFFICE_PANEL_NAVIGATION_RETHINK_PACK_V1.md, repo
+	  root) written first per explicit "не кодить" instruction, reviewed,
+	  and confirmed (§6 option a) before any code
+	•	attention cards reworded from state counters to actions: "Neue
+	  Anfragen" → "Neue Anfragen prüfen", "ohne Druckbestätigung" →
+	  "Druckbestätigung fehlt", "noch nicht operativ wirksam" → "Aufträge
+	  noch nicht wirksam". "Versandfreigabe blockiert" unchanged (already
+	  action-shaped). "storniert" card now conditional (only rendered when
+	  count > 0) and reworded to "Stornierte Aufträge prüfen" — a zero-count
+	  card is not an action item
+	•	"Diese Woche" table moved directly under the attention bar (was at the
+	  page bottom) — same query (WochenuebersichtService.get_week_overview),
+	  only position changed
+	•	new "Wo gibt es Blocker?" short list, reusing the already-computed
+	  `blockiert` orders (kitchen_print_not_confirmed is already one of
+	  evaluate_ready_to_send's reasons, so `ohne_druck` is already a subset
+	  of `blockiert` — no union needed, no new query)
+	•	Anfragen/Aufträge table columns reordered, ID demoted to a trailing
+	  link column: Anfragen is now Datum/Ort/CRM-Stufe/Verifizierung/
+	  Auftrag/ID; Aufträge is now Freigabe/Blocker/Anfrage/Bestätigt/ID
+	•	"Wirksam" header/values renamed to "Bestätigt" / "bestätigt" /
+	  "noch nicht bestätigt" — display text only, the underlying boolean
+	  (`o.effective_order_version_id is not None`) is untouched
+	•	explicitly NOT done, per the pack's §5 ("looks small, is not in
+	  scope"): no "Kunde" column — no customer display-name field exists on
+	  Inquiry/Order, only the opaque, never-rendered customer_linkage dict;
+	  adding one needs its own domain decision or a CRM bridge, neither of
+	  which this step touches
+	•	full tables (Anfragen/Aufträge) stay on the same page at the bottom,
+	  same `id="anfragen"`/`id="auftraege"` anchors — sidebar nav unchanged,
+	  no new routes (§6 option a, not b)
+
+Completed
+	•	full suite: 224 passed (222 + 2 new: Blocker-list-empty-then-populated
+	  coverage folded into existing attention tests; new tests for the
+	  conditional storniert card and for ID-last column order)
+	•	verified live: attention cards read as actions, Diese Woche sits above
+	  the full tables, "Wo gibt es Blocker?" renders "keine Blocker." when
+	  empty, both tables show ID as the last column, Aufträge shows
+	  "bestätigt"/"noch nicht bestätigt" instead of "ja"/"–"
+
+Open
+	•	push held pending owner/reviewer verdict per project workflow
+	•	§6 option (b) — separate `/anfragen` and `/auftraege` routes instead
+	  of one page — deferred; only worth it if option (a) still doesn't feel
+	  like enough once seen live over time
+	•	customer display-name column: needs its own Core domain decision
+	  (add a field to Inquiry) or a CRM-bridge decision — neither exists;
+	  not started
+
+Must not be changed
+	•	no Angebot/PDF/Senden/Ablehnen actions, no price display, no
+	  configurator→Core bridge, no Core schema/domain/service/repository
+	  changes — this step is office_panel.py HTML/layout and label text only
+	•	Anfragen and Aufträge stay visually and structurally separate — no
+	  row, card, or table mixes Inquiry and Order (§5, "vocabularies not
+	  merged")
+	•	no customer-name field invented client-side — customer_linkage stays
+	  opaque and unrendered until a real decision is made

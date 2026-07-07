@@ -221,6 +221,17 @@ def test_cancel_shows_storniert_and_hides_actions(panel: str) -> None:
     assert "Küchenzettel" in body  # history stays viewable
 
 
+def test_queue_shows_storniert_card_only_after_a_cancellation(panel: str) -> None:
+    iid = _create_inquiry(panel)
+    oid = _convert(panel, iid)
+    _post(f"{panel}/order/{oid}/cancel", {})
+    _status, body = _get(f"{panel}/")
+    assert _attention_counts(body)["Stornierte Aufträge prüfen"] == 1
+    # Cancelled orders drop out of the Blocker sub-list — nothing to act on.
+    blocker_html = body.split('id="blocker">')[1].split("<form")[0]
+    assert oid[:8] not in blocker_html
+
+
 def test_cancelled_actions_rejected_serverside(panel: str) -> None:
     """Hiding buttons is presentation; the gate itself must still refuse (§1: no panel-side logic)."""
     iid = _create_inquiry(panel)
@@ -444,30 +455,36 @@ def test_queue_shows_attention_bar_and_empty_week(panel: str) -> None:
     status, body = _get(f"{panel}/")
     assert status == 200
     counts = _attention_counts(body)
-    assert counts["Neue Anfragen"] == 0
-    assert counts["ohne Druckbestätigung"] == 0
-    assert counts["noch nicht operativ wirksam"] == 0
+    assert counts["Neue Anfragen prüfen"] == 0
+    assert counts["Druckbestätigung fehlt"] == 0
+    assert counts["Aufträge noch nicht wirksam"] == 0
     assert counts["Versandfreigabe blockiert"] == 0
+    assert "Stornierte Aufträge prüfen" not in body  # no cancelled orders yet
     assert "Diese Woche" in body
     assert "keine wirksamen Aufträge diese Woche" in body
+    assert "Wo gibt es Blocker?" in body
+    assert "keine Blocker." in body
 
 
 def test_attention_counts_reflect_new_inquiry_and_unconfirmed_order(panel: str) -> None:
     iid = _create_inquiry(panel)
     _status, body = _get(f"{panel}/")
-    assert _attention_counts(body)["Neue Anfragen"] == 1
+    assert _attention_counts(body)["Neue Anfragen prüfen"] == 1
 
     oid = _convert(panel, iid)
     _status, body = _get(f"{panel}/")
     counts = _attention_counts(body)
-    # Converting removes it from "Neue Anfragen" (now has an order)...
-    assert counts["Neue Anfragen"] == 0
+    # Converting removes it from "Neue Anfragen prüfen" (now has an order)...
+    assert counts["Neue Anfragen prüfen"] == 0
     # ...but the fresh order has no print confirmation, no effective version,
     # and is therefore also READY_TO_SEND-blocked.
-    assert counts["ohne Druckbestätigung"] == 1
-    assert counts["noch nicht operativ wirksam"] == 1
+    assert counts["Druckbestätigung fehlt"] == 1
+    assert counts["Aufträge noch nicht wirksam"] == 1
     assert counts["Versandfreigabe blockiert"] == 1
     assert oid[:8] in body
+    # Blocker sub-list (§3 Arbeitszentrale) reuses the same evaluation.
+    assert "Wo gibt es Blocker?" in body
+    assert f'/order/{oid}">{oid[:8]}</a> — keine wirksame Auftragsversion' in body
 
 
 def test_order_row_shows_first_blocker_reason(panel: str) -> None:
@@ -487,9 +504,10 @@ def test_full_release_flow_clears_attention_counts(panel: str) -> None:
     _post(f"{panel}/order/{oid}/ready", {})
     _status, body = _get(f"{panel}/")
     counts = _attention_counts(body)
-    assert counts["ohne Druckbestätigung"] == 0
-    assert counts["noch nicht operativ wirksam"] == 0
+    assert counts["Druckbestätigung fehlt"] == 0
+    assert counts["Aufträge noch nicht wirksam"] == 0
     assert counts["Versandfreigabe blockiert"] == 0
+    assert "keine Blocker." in body
 
 
 def test_diese_woche_shows_only_effective_orders_in_current_iso_week(panel: str) -> None:
@@ -515,7 +533,27 @@ def test_diese_woche_shows_only_effective_orders_in_current_iso_week(panel: str)
     _status, body = _get(f"{panel}/")
     # Split on the unique heading id, not the text "Diese Woche" — that text
     # also appears in the sidebar nav link, which precedes the real content.
-    assert other_oid[:8] not in body.split('id="diese-woche"')[1]
+    # Diese Woche now sits above the Blocker section (§3 Arbeitszentrale), so
+    # scope the check to that block only, not everything after it on the page.
+    diese_woche_html = body.split('id="diese-woche"')[1].split('id="blocker"')[0]
+    assert other_oid[:8] not in diese_woche_html
+
+
+def test_queue_tables_put_id_last_not_first(panel: str) -> None:
+    """OFFICE_PANEL_NAVIGATION_RETHINK_PACK_V1 §4: ID demoted to a trailing
+    link column so office staff scan Datum/Ort/Status first."""
+    iid = _create_inquiry(panel)
+    oid = _convert(panel, iid)
+    _status, body = _get(f"{panel}/")
+    assert (
+        "<th>Datum</th><th>Ort</th><th>CRM-Stufe</th><th>Verifizierung</th>"
+        "<th>Auftrag</th><th>ID</th>"
+    ) in body
+    assert (
+        "<th>Freigabe</th><th>Blocker</th><th>Anfrage</th><th>Bestätigt</th><th>ID</th>"
+    ) in body
+    assert "noch nicht bestätigt" in body
+    assert f'<a href="/order/{oid}">{oid[:8]}</a></td></tr>' in body  # ID cell is last
 
 
 def test_search_filters_inquiries_and_orders(panel: str) -> None:
