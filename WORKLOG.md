@@ -1634,3 +1634,46 @@ Fixed
 Must not be changed
 	•	no configurator→Core bridge without an accepted pack
 	•	the §3 mechanism must not be implemented during the observation window
+
+⸻
+
+Entry 052
+
+Date: 2026-07-07 — office panel visual facelift (presentation-only)
+Scope: src/catering_system/ui/office_panel.py — `_STYLE`, `_page()`
+Status: accepted, no domain changes
+
+Meaning
+	•	owner asked for the office panel to visually match the fingerfood-app
+	  configurator's Angebot-Formular styling (same brand facelift already
+	  applied there: sage accent #5c6f63 pulled from the logo, Playfair
+	  Display for headings, logo in a white top band)
+	•	pure CSS/markup change: new `_STYLE` block, logo embedded as a base64
+	  data URI constant (`_LOGO_DATA_URI`) so no static-file route or
+	  filesystem dependency was added; `_page()` wraps body in a `.brandbar`
+	  + `.content` shell
+	•	no class names or text strings that `tests/unit/test_office_panel.py`
+	  asserts on were touched (verified: all 40 assertions in that file check
+	  substrings like "STORNIERT", "READY_TO_SEND blockiert", vocabulary
+	  codes — none check CSS/markup structure)
+	•	kiosk_server.py has its own separate styling and was intentionally not
+	  touched — owner asked specifically about the office panel
+
+Completed
+	•	full suite: 210 passed (unchanged count — no test added or removed,
+	  this is presentation-only)
+	•	verified live: logged into the running office panel (Basic Auth,
+	  local dev password), confirmed the brand band/logo, Playfair headings,
+	  sage-styled tables and buttons render correctly on both the Büro-
+	  Übersicht list view and an individual Auftrag detail view (incl. a
+	  STORNIERT order, confirming status coloring survived unchanged)
+
+Open
+	•	kiosk_server.py not restyled (out of scope for this ask)
+	•	push held pending owner/reviewer verdict per project workflow
+
+Must not be changed
+	•	office_panel.py still adds no domain semantics (pack §1) — this step
+	  stayed purely visual, no route/behavior changes
+	•	render_print_sheet() (Küchenzettel) intentionally untouched — separate
+	  large-font kitchen printout, not part of this ask
