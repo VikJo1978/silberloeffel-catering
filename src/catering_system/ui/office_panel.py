@@ -67,6 +67,7 @@ input, select { border: 1px solid #d3d6d1; border-radius: 6px; padding: 0.35rem 
 .attention strong { color: var(--accent-deep); }
 .searchbox { margin-bottom: 1rem; }
 .searchbox input { min-width: 16rem; }
+.subtitle { color: #5f5e5a; font-size: 0.9rem; margin: -0.75rem 0 1.25rem; }
 """
 
 
@@ -84,7 +85,7 @@ def _page(title: str, body: str) -> str:
         '<a href="/#anfragen">Anfragen</a>'
         '<a href="/#auftraege">Aufträge</a>'
         '<a href="/#diese-woche">Diese Woche</a>'
-        '<a href="/rueckruf">Rückrufe</a>'
+        '<a href="/rueckruf">Rückrufliste</a>'
         "</nav>"
     )
     return (
@@ -196,16 +197,22 @@ def resolve_missed_call(url: str, user: str, password: str, call_id: str) -> Non
         pass
 
 
+_RUECKRUF_SUBTITLE = (
+    '<p class="subtitle">Verpasste Anrufe sowie Anrufe außerhalb der Bürozeiten, '
+    "die einen Rückruf erfordern.</p>"
+)
+
+
 def render_rueckruf(items: list[dict] | None, error: str | None) -> str:
     if error:
-        body = (
+        body = _RUECKRUF_SUBTITLE + (
             f'<p class="blocked">Rückrufliste nicht erreichbar: {_e(error)}</p>'
             "<p>Prüfe AUERSWALD_SYNC_URL / erreichbarkeit des auerswald-sync Servers.</p>"
         )
-        return _page("Rückrufe", body)
+        return _page("Offene Rückrufe", body)
     if not items:
-        body = "<p>Keine offenen Rückrufe.</p>"
-        return _page("Rückrufe", body)
+        body = _RUECKRUF_SUBTITLE + "<p>Keine offenen Rückrufe.</p>"
+        return _page("Offene Rückrufe", body)
     rows = []
     for it in items:
         contact = _e(it["contact_name"]) if it.get("contact_found") else "Unbekannt"
@@ -222,13 +229,13 @@ def render_rueckruf(items: list[dict] | None, error: str | None) -> str:
             "<button>Erledigt</button></form>"
             "</td></tr>"
         )
-    body = (
+    body = _RUECKRUF_SUBTITLE + (
         "<table><tr><th>Datum</th><th>Zeit</th><th>Nummer</th>"
         "<th>Grund</th><th>Kontakt</th><th></th></tr>"
         + "".join(rows)
         + "</table>"
     )
-    return _page("Rückrufe", body)
+    return _page("Offene Rückrufe", body)
 
 
 class OfficePanel:
