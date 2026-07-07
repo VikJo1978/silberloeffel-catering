@@ -1851,3 +1851,58 @@ Must not be changed
 	•	sidebar targets must stay absolute paths/anchors, not bare #fragments
 	  — a bare "#anfragen" would only work from "/" itself, not from order/
 	  inquiry/Rückrufe pages
+
+⸻
+
+Entry 056
+
+Date: 2026-07-07 — Sidebar Rückruf-Badge (task indicator, not a stat)
+Scope: src/catering_system/ui/office_panel.py — _page(), fetch_rueckruf_count(), do_GET
+Status: accepted
+
+Meaning
+	•	owner wants to see at a glance, from anywhere in the panel, whether
+	  there are unhandled callbacks — without opening the Rückrufliste
+	•	explicit framing: this is a task-count ("how many still need
+	  handling"), not a statistics widget — zero open callbacks shows no
+	  badge at all, same as "unconfigured"/"unreachable" (nothing to flag
+	  either way, no need to distinguish those states visually)
+	•	same data source as the Rückrufliste page itself
+	  (fetch_missed_board/build_missed_board_items on auerswald-sync) — no
+	  new business rule, fetch_rueckruf_count() is a one-line wrapper that
+	  only takes the length
+	•	still read-only: the badge never writes anything; POST /rueckruf/
+	  resolve is unchanged
+
+Completed
+	•	no second request: /rueckruf reuses its own already-fetched items list
+	  for the badge (no extra fetch); other pages fetch once via
+	  fetch_rueckruf_count() to populate the badge, so every page render
+	  makes at most one auerswald-sync request, not two
+	•	the count is stored in a per-request module global
+	  (_sidebar_rueckruf_count), set once in do_GET (or _error_page for the
+	  do_POST error path) before any _page()-rendering call — safe only
+	  because the server is single-threaded (Entry 048's own invariant);
+	  chose this over threading every render method's signature to keep the
+	  change narrow (owner: "не создавать отдельную бизнес-логику")
+	•	graceful when auerswald-sync is unset/unreachable: badge simply does
+	  not render (no warning icon chosen — quieter, matches the panel's
+	  existing minimal style; a page-load error there was already handled
+	  gracefully since Entry 053)
+	•	tests: 3 new — no badge when unconfigured, badge count matches
+	  Rückrufliste's own count and is visible from the Start page too (with
+	  an explicit fetch-count assertion proving no second request), badge
+	  disappears immediately after resolving the only open call. Full suite:
+	  222 passed (was 219)
+	•	verified live with a disposable synthetic stub (not the owner's real
+	  auerswald-sync data, learning from the earlier incident): badge showed
+	  "3" on both Start and Rückrufliste pages, dropped to "2" immediately
+	  after clicking "Erledigt" on one row
+
+Must not be changed
+	•	_sidebar_rueckruf_count must only ever be set right before a
+	  _page()-rendering call, never left stale across requests — relies on
+	  the single-threaded, one-request-at-a-time server invariant (Entry 048)
+	•	badge stays a task-count semantic (open work), not a general call
+	  statistic — do not add total/answered/all-time counts to it later
+	  without a fresh decision

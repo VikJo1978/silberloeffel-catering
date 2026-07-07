@@ -329,14 +329,20 @@ _AUERSWALD_ITEMS = [
 ]
 
 
-def _make_auerswald_stub(resolved: list) -> HTTPServer:
+def _make_auerswald_stub(resolved: list, hits: list | None = None) -> HTTPServer:
     class StubHandler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
             pass
 
         def do_GET(self) -> None:  # noqa: N802
             if self.path.startswith("/missed-board.json"):
-                payload = json.dumps({"items": _AUERSWALD_ITEMS}).encode()
+                if hits is not None:
+                    hits.append(self.path)
+                # Mirrors the real auerswald-sync: resolved calls drop out of
+                # the board on the next fetch (build_missed_board_items()
+                # excludes resolved_call_ids).
+                remaining = [it for it in _AUERSWALD_ITEMS if it["call_id"] not in resolved]
+                payload = json.dumps({"items": remaining}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(payload)))
@@ -523,3 +529,84 @@ def test_search_filters_inquiries_and_orders(panel: str) -> None:
     _status, body = _get(f"{panel}/?q=nichts-passt-hier")
     assert luebeck_iid[:8] not in body and hamburg_iid[:8] not in body
     assert "keine" in body
+
+
+# -- Sidebar Rückruf badge --------------------------------------------------
+
+
+def test_sidebar_has_no_badge_when_auerswald_not_configured(panel: str) -> None:
+    _status, body = _get(f"{panel}/")
+    assert '<span class="badge">' not in body
+
+
+def test_sidebar_shows_badge_count_from_same_source_as_rueckrufliste() -> None:
+    resolved: list = []
+    hits: list = []
+    stub = _make_auerswald_stub(resolved, hits)
+    stub_thread = threading.Thread(target=stub.serve_forever, daemon=True)
+    stub_thread.start()
+    stub_host, stub_port = stub.server_address[:2]
+
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    server = create_office_panel_server(
+        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0,
+        auerswald_url=f"http://{stub_host}:{stub_port}",
+        auerswald_user="office", auerswald_password="secret",
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    base = f"http://{host}:{port}"
+    try:
+        # Badge visible from the Start page — not only inside /rueckruf itself.
+        status, body = _get(f"{base}/")
+        assert status == 200
+        assert '<span class="badge">1</span>' in body
+        assert len(hits) == 1  # exactly one fetch for this page load
+
+        # /rueckruf reuses that fetch for both the list and its own badge —
+        # still exactly one more request total, not two.
+        status, body = _get(f"{base}/rueckruf")
+        assert status == 200
+        assert '<span class="badge">1</span>' in body
+        assert len(hits) == 2  # one more request total for this page, not two
+    finally:
+        server.shutdown()
+        server.server_close()
+        stub.shutdown()
+        stub.server_close()
+
+
+def test_sidebar_badge_disappears_after_resolving_the_only_call() -> None:
+    resolved: list = []
+    stub = _make_auerswald_stub(resolved)
+    stub_thread = threading.Thread(target=stub.serve_forever, daemon=True)
+    stub_thread.start()
+    stub_host, stub_port = stub.server_address[:2]
+
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    server = create_office_panel_server(
+        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0,
+        auerswald_url=f"http://{stub_host}:{stub_port}",
+        auerswald_user="office", auerswald_password="secret",
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    base = f"http://{host}:{port}"
+    try:
+        _status, body = _get(f"{base}/")
+        assert '<span class="badge">1</span>' in body
+
+        _post(f"{base}/rueckruf/resolve", {"call_id": _AUERSWALD_ITEMS[0]["call_id"]})
+        # Stub now excludes the resolved call — badge must reflect that
+        # immediately on the very next page load, no stale count.
+        _status, body = _get(f"{base}/")
+        assert '<span class="badge">' not in body
+    finally:
+        server.shutdown()
+        server.server_close()
+        stub.shutdown()
+        stub.server_close()

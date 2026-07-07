@@ -47,6 +47,8 @@ body { font-family: 'DM Sans', system-ui, sans-serif; margin: 0; background: #f6
 .sidebar { width: 11rem; flex-shrink: 0; display: flex; flex-direction: column; gap: 0.2rem; padding: 1.5rem 1rem; position: sticky; top: 0; }
 .sidebar a { padding: 0.5rem 0.75rem; border-radius: 6px; text-decoration: none; color: #33413a; font-size: 0.9rem; }
 .sidebar a:hover { background: var(--accent-soft); }
+.sidebar a.rueckruf-link { display: flex; justify-content: space-between; align-items: center; }
+.badge { background: var(--accent); color: #fff; border-radius: 999px; font-size: 0.75rem; font-weight: 600; line-height: 1.4; min-width: 1.4rem; padding: 0.05rem 0.45rem; text-align: center; }
 .content { flex: 1; min-width: 0; padding: 2rem 2rem 2rem 0; }
 a { color: var(--accent); }
 h1 { font-family: 'Playfair Display', Georgia, serif; font-size: 1.9rem; font-weight: 600; margin: 0.5rem 0 1.25rem; }
@@ -75,17 +77,28 @@ def _e(text: object) -> str:
     return html.escape(str(text))
 
 
+# Sidebar Rückruf-badge count, current request only. Set once per request
+# (do_GET/do_POST's _error_page, before any _page()-rendering call) and read
+# here. A plain module global is safe only because the server is guaranteed
+# single-threaded, one request at a time (WORKLOG Entry 048) — do not reuse
+# this pattern if that invariant ever changes.
+_sidebar_rueckruf_count: int | None = None
+
+
 def _page(title: str, body: str) -> str:
     # Persistent sidebar on every page (owner feedback 2026-07-07: one long
     # stacked page read as clutter). All targets are absolute paths/anchors
     # on "/" so the sidebar works identically from any page, not just "/".
+    rueckruf_label = "Rückrufliste"
+    if _sidebar_rueckruf_count:  # None or 0 -> no badge, nothing to flag
+        rueckruf_label += f' <span class="badge">{_sidebar_rueckruf_count}</span>'
     nav = (
         '<nav class="sidebar">'
         '<a href="/">Start</a>'
         '<a href="/#anfragen">Anfragen</a>'
         '<a href="/#auftraege">Aufträge</a>'
         '<a href="/#diese-woche">Diese Woche</a>'
-        '<a href="/rueckruf">Rückrufliste</a>'
+        f'<a href="/rueckruf" class="rueckruf-link">{rueckruf_label}</a>'
         "</nav>"
     )
     return (
@@ -169,6 +182,17 @@ def fetch_missed_board(
         return data.get("items", []), None
     except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
         return None, str(exc)
+
+
+def fetch_rueckruf_count(url: str, user: str, password: str) -> int | None:
+    """Sidebar badge count. Same source/call as the Rückrufliste page itself
+    (fetch_missed_board) — not a second data source or a new business rule,
+    just its length. None means "show no badge": unconfigured, unreachable,
+    or genuinely zero open callbacks all render the same (nothing to flag)."""
+    items, error = fetch_missed_board(url, user, password)
+    if error or not items:
+        return None
+    return len(items)
 
 
 class _NoRedirect(urllib.request.HTTPErrorProcessor):
@@ -608,6 +632,10 @@ def make_office_panel_handler(
             self.end_headers()
 
         def _error_page(self, message: str, status: int = 400) -> None:
+            global _sidebar_rueckruf_count
+            _sidebar_rueckruf_count = fetch_rueckruf_count(
+                auerswald_url, auerswald_user, auerswald_password
+            )
             self._html(_page("Fehler", f'<p class="blocked">{_e(message)}</p>'), status)
 
         def _form(self) -> dict[str, str]:
@@ -626,6 +654,17 @@ def make_office_panel_handler(
                 return
             parsed = urlparse(self.path)
             parts = [p for p in parsed.path.split("/") if p]
+            global _sidebar_rueckruf_count
+            if parts == ["rueckruf"]:
+                # Reuse this one fetch for both the list and the sidebar
+                # badge — no second request (owner requirement).
+                items, error = fetch_missed_board(auerswald_url, auerswald_user, auerswald_password)
+                _sidebar_rueckruf_count = len(items) if items else None
+                self._html(render_rueckruf(items, error))
+                return
+            _sidebar_rueckruf_count = fetch_rueckruf_count(
+                auerswald_url, auerswald_user, auerswald_password
+            )
             if not parts:
                 q = parse_qs(parsed.query).get("q", [""])[0]
                 self._html(panel.render_queue(q))
@@ -639,9 +678,6 @@ def make_office_panel_handler(
                 self._html(page) if page else self.send_error(404)
             elif len(parts) == 3 and parts[0] == "order" and parts[2] == "print":
                 self._print_sheet(parts[1], parsed.query)
-            elif parts == ["rueckruf"]:
-                items, error = fetch_missed_board(auerswald_url, auerswald_user, auerswald_password)
-                self._html(render_rueckruf(items, error))
             else:
                 self.send_error(404)
 
