@@ -27,6 +27,7 @@ from catering_system.services.inquiry_service import InquiryService
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
 from catering_system.services.progression_service import ProgressionService
+from catering_system.services.wochenuebersicht_service import WochenuebersichtService
 
 _OFFICE_SOURCES = ("phone", "email", "manual")
 
@@ -56,6 +57,12 @@ button:hover { background: var(--accent-deep); border-color: var(--accent-deep);
 fieldset { margin-bottom: 1rem; border: 1px solid #e2e5e2; border-radius: 8px; background: #fff; }
 label { display: inline-block; min-width: 12rem; }
 input, select { border: 1px solid #d3d6d1; border-radius: 6px; padding: 0.35rem 0.55rem; font: inherit; }
+.attention { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1.25rem; }
+.attention a, .attention span { background: #fff; border: 1px solid #e2e5e2; border-radius: 8px; padding: 0.5rem 0.9rem; text-decoration: none; color: inherit; font-size: 0.9rem; }
+.attention a:hover { border-color: var(--accent); }
+.attention strong { color: var(--accent-deep); }
+.searchbox { margin-bottom: 1rem; }
+.searchbox input { min-width: 16rem; }
 """
 
 
@@ -218,49 +225,125 @@ class OfficePanel:
         self.order_service = OrderService(order_repo)
         self.core = OperationalCoreService(order_repo)
         self.progression = ProgressionService(order_repo)
+        self.wochenuebersicht = WochenuebersichtService(order_repo)
 
     # -- queue -----------------------------------------------------------
 
-    def render_queue(self) -> str:
-        inquiry_rows = []
+    def render_queue(self, q: str = "") -> str:
+        needle = q.strip().lower()
+
+        def _matches(*fields: str) -> bool:
+            if not needle:
+                return True
+            return any(needle in f.lower() for f in fields)
+
         orders = self._orders.list_orders()
         orders_by_inquiry: dict[str, list[Order]] = {}
         for o in orders:
             orders_by_inquiry.setdefault(o.source_inquiry_id, []).append(o)
-        for inq in self._inquiries.list_all():
+
+        # -- Heute / Aufmerksamkeit: counts from data already loaded above,
+        # no new service calls. Every number here maps onto an existing,
+        # already-accepted concept (progression B7 / operational gate) —
+        # this is a summary view, not a new domain concept.
+        all_inquiries = self._inquiries.list_all()
+        neue_anfragen = [i for i in all_inquiries if i.inquiry_id not in orders_by_inquiry]
+        active_orders = [o for o in orders if o.cancelled_at is None]
+        ohne_druck = [
+            o for o in active_orders
+            if not any(
+                v.kitchen_print_confirmed_at is not None
+                for v in self._orders.list_order_versions(o.order_id)
+            )
+        ]
+        nicht_wirksam = [o for o in active_orders if o.effective_order_version_id is None]
+        blockiert = [
+            o for o in active_orders if not self.core.evaluate_ready_to_send(o.order_id).ready
+        ]
+        storniert = [o for o in orders if o.cancelled_at is not None]
+        attention = (
+            '<div class="attention">'
+            f'<a href="#anfragen"><strong>{len(neue_anfragen)}</strong> Neue Anfragen</a>'
+            f'<a href="#auftraege"><strong>{len(ohne_druck)}</strong> ohne Druckbestätigung</a>'
+            f'<a href="#auftraege"><strong>{len(nicht_wirksam)}</strong> nicht wirksam</a>'
+            f'<a href="#auftraege"><strong>{len(blockiert)}</strong> READY_TO_SEND blockiert</a>'
+            f'<span><strong>{len(storniert)}</strong> storniert</span>'
+            "</div>"
+        )
+
+        search_box = (
+            '<form method="get" action="/" class="searchbox">'
+            f'<input type="text" name="q" value="{_e(q)}" placeholder="Suche: ID, Ort, Datum…">'
+            "<button type=\"submit\">Suchen</button>"
+            + (' <a href="/">Zurücksetzen</a>' if q else "")
+            + "</form>"
+        )
+
+        inquiry_rows = []
+        for inq in all_inquiries:
             has_order = "ja" if inq.inquiry_id in orders_by_inquiry else "–"
+            if not _matches(
+                inq.inquiry_id, inq.location_text, inq.event_date.isoformat(), inq.crm_stage
+            ):
+                continue
             inquiry_rows.append(
                 f'<tr><td><a href="/inquiry/{_e(inq.inquiry_id)}">{_e(inq.inquiry_id[:8])}</a></td>'
                 f"<td>{_e(inq.event_date.isoformat())}</td><td>{_e(inq.location_text)}</td>"
                 f"<td>{_e(inq.crm_stage)}</td><td>{_e(inq.call_verification_status)}</td>"
                 f"<td>{has_order}</td></tr>"
             )
+
         order_rows = []
         for o in orders:
+            if not _matches(o.order_id, o.source_inquiry_id):
+                continue
             if o.cancelled_at is not None:
                 status = '<span class="cancelled">STORNIERT</span>'
+                blocker = "–"
             else:
                 ev = self.core.evaluate_ready_to_send(o.order_id)
-                status = (
-                    '<span class="ok">bereit</span>'
-                    if ev.ready
-                    else f'<span class="blocked">blockiert</span>'
-                )
+                if ev.ready:
+                    status = '<span class="ok">bereit</span>'
+                    blocker = "–"
+                else:
+                    status = '<span class="blocked">blockiert</span>'
+                    blocker = _e(ev.reasons[0]) if ev.reasons else "–"
             eff = "ja" if o.effective_order_version_id else "–"
             order_rows.append(
                 f'<tr><td><a href="/order/{_e(o.order_id)}">{_e(o.order_id[:8])}</a></td>'
-                f"<td>{_e(o.source_inquiry_id[:8])}</td><td>{eff}</td><td>{status}</td></tr>"
+                f"<td>{_e(o.source_inquiry_id[:8])}</td><td>{eff}</td>"
+                f"<td>{status}</td><td>{blocker}</td></tr>"
             )
+
+        iso = date.today().isocalendar()
+        week = self.wochenuebersicht.get_week_overview(iso.year, iso.week)
+        week_rows = [
+            f"<tr><td>{_e(e.event_date.isoformat())}</td><td>{_e(e.time_window_text)}</td>"
+            f"<td>{_e(e.location_text)}</td>"
+            f"<td>{_e(str(e.guest_count_estimate) if e.guest_count_estimate is not None else '–')}</td>"
+            f'<td><a href="/order/{_e(e.order_id)}">{_e(e.order_id[:8])}</a></td></tr>'
+            for e in week.entries
+        ]
+        diese_woche = (
+            f"<h2>Diese Woche (KW {iso.week}/{iso.year})</h2>"
+            "<table><tr><th>Datum</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th><th>Auftrag</th></tr>"
+            + "".join(week_rows or ['<tr><td colspan="5">keine wirksamen Aufträge diese Woche</td></tr>'])
+            + "</table>"
+        )
+
         body = (
-            '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a>'
+            attention
+            + search_box
+            + '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a>'
             ' &middot; <a href="/rueckruf">Rückrufe</a></p>'
-            "<h2>Anfragen</h2><table><tr><th>ID</th><th>Datum</th><th>Ort</th>"
+            '<h2 id="anfragen">Anfragen</h2><table><tr><th>ID</th><th>Datum</th><th>Ort</th>'
             "<th>CRM-Stufe</th><th>Verifizierung</th><th>Auftrag</th></tr>"
             + "".join(inquiry_rows or ['<tr><td colspan="6">keine</td></tr>'])
-            + "</table><h2>Aufträge</h2><table><tr><th>ID</th><th>Anfrage</th>"
-            "<th>Wirksam</th><th>Freigabe</th></tr>"
-            + "".join(order_rows or ['<tr><td colspan="4">keine</td></tr>'])
+            + '</table><h2 id="auftraege">Aufträge</h2><table><tr><th>ID</th><th>Anfrage</th>'
+            "<th>Wirksam</th><th>Freigabe</th><th>Blocker</th></tr>"
+            + "".join(order_rows or ['<tr><td colspan="5">keine</td></tr>'])
             + "</table>"
+            + diese_woche
         )
         return _page("Büro-Übersicht", body)
 
@@ -522,7 +605,8 @@ def make_office_panel_handler(
             parsed = urlparse(self.path)
             parts = [p for p in parsed.path.split("/") if p]
             if not parts:
-                self._html(panel.render_queue())
+                q = parse_qs(parsed.query).get("q", [""])[0]
+                self._html(panel.render_queue(q))
             elif parts == ["inquiry", "new"]:
                 self._html(panel.render_inquiry_form())
             elif len(parts) == 2 and parts[0] == "inquiry":

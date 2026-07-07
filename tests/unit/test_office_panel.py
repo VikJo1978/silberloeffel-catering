@@ -420,3 +420,104 @@ def test_rueckruf_lists_items_from_auerswald_stub() -> None:
         server.server_close()
         stub.shutdown()
         stub.server_close()
+
+
+# -- Dashboard: Heute-Aufmerksamkeit, Blocker column, Diese Woche, Suche ----
+# All derived from data already fetched for the existing tables — no new
+# domain concepts, matches pack §1 ("adds no domain semantics").
+
+import re
+from datetime import date
+
+
+def _attention_counts(body: str) -> dict[str, int]:
+    return {m.group(2): int(m.group(1)) for m in re.finditer(r"<strong>(\d+)</strong>\s*([^<]+)", body)}
+
+
+def test_queue_shows_attention_bar_and_empty_week(panel: str) -> None:
+    status, body = _get(f"{panel}/")
+    assert status == 200
+    counts = _attention_counts(body)
+    assert counts["Neue Anfragen"] == 0
+    assert counts["ohne Druckbestätigung"] == 0
+    assert counts["nicht wirksam"] == 0
+    assert counts["READY_TO_SEND blockiert"] == 0
+    assert "Diese Woche" in body
+    assert "keine wirksamen Aufträge diese Woche" in body
+
+
+def test_attention_counts_reflect_new_inquiry_and_unconfirmed_order(panel: str) -> None:
+    iid = _create_inquiry(panel)
+    _status, body = _get(f"{panel}/")
+    assert _attention_counts(body)["Neue Anfragen"] == 1
+
+    oid = _convert(panel, iid)
+    _status, body = _get(f"{panel}/")
+    counts = _attention_counts(body)
+    # Converting removes it from "Neue Anfragen" (now has an order)...
+    assert counts["Neue Anfragen"] == 0
+    # ...but the fresh order has no print confirmation, no effective version,
+    # and is therefore also READY_TO_SEND-blocked.
+    assert counts["ohne Druckbestätigung"] == 1
+    assert counts["nicht wirksam"] == 1
+    assert counts["READY_TO_SEND blockiert"] == 1
+    assert oid[:8] in body
+
+
+def test_order_row_shows_first_blocker_reason(panel: str) -> None:
+    iid = _create_inquiry(panel)
+    _convert(panel, iid)
+    _status, body = _get(f"{panel}/")
+    assert "no_effective_version" in body  # first reason right after convert
+
+
+def test_full_release_flow_clears_attention_counts(panel: str) -> None:
+    iid = _create_inquiry(panel)
+    oid = _convert(panel, iid)
+    _status, body = _get(f"{panel}/order/{oid}")
+    vid = body.split('name="order_version_id" value="')[1].split('"')[0]
+    _post(f"{panel}/order/{oid}/print-confirm", {"order_version_id": vid})
+    _post(f"{panel}/order/{oid}/effective", {"order_version_id": vid})
+    _post(f"{panel}/order/{oid}/ready", {})
+    _status, body = _get(f"{panel}/")
+    counts = _attention_counts(body)
+    assert counts["ohne Druckbestätigung"] == 0
+    assert counts["nicht wirksam"] == 0
+    assert counts["READY_TO_SEND blockiert"] == 0
+
+
+def test_diese_woche_shows_only_effective_orders_in_current_iso_week(panel: str) -> None:
+    today = date.today().isoformat()
+    iid = _create_inquiry(panel, event_date=today, location_text="Kielort")
+    oid = _convert(panel, iid)
+    _status, body = _get(f"{panel}/order/{oid}")
+    vid = body.split('name="order_version_id" value="')[1].split('"')[0]
+    _post(f"{panel}/order/{oid}/print-confirm", {"order_version_id": vid})
+    _post(f"{panel}/order/{oid}/effective", {"order_version_id": vid})
+
+    _status, body = _get(f"{panel}/")
+    assert "Kielort" in body
+    assert "keine wirksamen Aufträge diese Woche" not in body
+
+    # A different-week (default helper) order must not show up in the mini-week.
+    other_iid = _create_inquiry(panel)  # default event_date=2026-10-01
+    other_oid = _convert(panel, other_iid)
+    _status, other_body = _get(f"{panel}/order/{other_oid}")
+    other_vid = other_body.split('name="order_version_id" value="')[1].split('"')[0]
+    _post(f"{panel}/order/{other_oid}/print-confirm", {"order_version_id": other_vid})
+    _post(f"{panel}/order/{other_oid}/effective", {"order_version_id": other_vid})
+    _status, body = _get(f"{panel}/")
+    assert other_oid[:8] not in body.split("Diese Woche")[1]
+
+
+def test_search_filters_inquiries_and_orders(panel: str) -> None:
+    hamburg_iid = _create_inquiry(panel)  # default location "Hamburg"
+    luebeck_iid = _create_inquiry(panel, location_text="Lübeck")
+
+    _status, body = _get(f"{panel}/?q=L%C3%BCbeck")
+    assert luebeck_iid[:8] in body
+    assert hamburg_iid[:8] not in body
+
+    _status, body = _get(f"{panel}/?q=nichts-passt-hier")
+    assert luebeck_iid[:8] not in body and hamburg_iid[:8] not in body
+    assert "keine" in body

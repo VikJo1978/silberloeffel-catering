@@ -1746,3 +1746,70 @@ Must not be changed
 	  Inquiry creation from a missed call, no write into Core from this path
 	•	auerswald-sync remains its own repo/service; this repo must not grow
 	  a second copy of its call-parsing logic
+
+⸻
+
+Entry 054
+
+Date: 2026-07-07 — Büro-Übersicht: Heute-Aufmerksamkeit, Blocker column, Diese Woche, Suche
+Scope: src/catering_system/ui/office_panel.py — render_queue() rewrite
+Status: accepted
+
+Meaning
+	•	owner relayed an external reviewer's dashboard proposal for the office
+	  panel (raw tables → "what needs attention today" overview). Reviewed it
+	  first: two of the proposed blocks (Verpasste Anrufe / Rückruf-Status)
+	  required a data source that doesn't exist in this repo — that became
+	  Entry 053 (separate, already-running auerswald-sync service). The rest
+	  of the proposal needed no new domain concepts, only reorganizing data
+	  the office panel already computes — narrow, no-domain-semantics step
+	  (pack §1), same class of change as Entry 052's facelift
+	•	added to the existing "/" queue view, in order:
+	  1. "Heute" attention bar — five counts (Neue Anfragen ohne Auftrag,
+	     Aufträge ohne Druckbestätigung, nicht wirksam, READY_TO_SEND
+	     blockiert, storniert), each derived from data the page already
+	     loads; no new repository/service calls beyond one already-used
+	     evaluate_ready_to_send() per order (same call the Aufträge table
+	     already made)
+	  2. Aufträge table gained a "Blocker" column: first reason from the
+	     already-existing evaluate_ready_to_send().reasons, previously only
+	     shown on the individual order page
+	  3. "Diese Woche" mini-view: reuses WochenuebersichtService (existing,
+	     kiosk-only until now) read-only inside the office panel — same
+	     derived-only guarantee (effective versions only, cancelled excluded)
+	  4. Schnellsuche: plain `?q=` GET param, substring match server-side
+	     across inquiry_id/location/date/crm_stage and order_id/inquiry_id;
+	     no JS, no new endpoint — same "/" route, same render
+	•	explicitly NOT built (deferred, not decided): a dedicated Wochen-page
+	  inside the office panel (kiosk remains the only full week view);
+	  cross-linking to the kiosk's own URL (would need a new config value,
+	  same shape as auerswald_url — not done without being asked)
+
+Completed
+	•	tests: 6 new — empty-state attention bar, counts reacting to a real
+	  convert (neue_anfragen drops, three others rise), blocker reason
+	  string visible in the row, full release flow clearing all counts back
+	  to 0, Diese-Woche showing only the current-ISO-week effective order
+	  and excluding a different-week one, search filtering both tables by
+	  substring. Full suite: 219 passed (was 213)
+	•	verified live: real attention counts (0/0/0/0, 1 storniert from the
+	  existing test STORNIERT order) rendered correctly in the brand-
+	  facelifted style; search for "Test" correctly narrowed Anfragen to
+	  the matching row and Aufträge to "keine" (no ID match)
+	•	found and killed one stale office-panel process left running from
+	  earlier in the session (pre-facelift code, blocking port 8081) before
+	  this verification — noted so it isn't mistaken for a real bring-up
+	  issue later
+
+Open
+	•	push held pending owner/reviewer verdict per project workflow
+	•	no Wochen-page / kiosk cross-link in the office panel (see above)
+
+Must not be changed
+	•	attention counts and Blocker column are read-only summaries of
+	  existing accepted concepts (progression B7 / operational gate) — must
+	  not become a third vocabulary; still just B7 progression on inquiry
+	  views and the operational gate's own reasons on order views (§5)
+	•	Diese Woche in the office panel stays derived-only, same guarantee as
+	  the kiosk (effective versions only, cancelled excluded) — do not let
+	  it show candidate/latest-historical versions
