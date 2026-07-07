@@ -1906,3 +1906,79 @@ Must not be changed
 	•	badge stays a task-count semantic (open work), not a general call
 	  statistic — do not add total/answered/all-time counts to it later
 	  without a fresh decision
+
+⸻
+
+Entry 056
+
+Date: 2026-07-07 — Office panel: safe UX labels + attention grouping
+Scope: src/catering_system/ui/office_panel.py — display-only label mapping,
+tests/unit/test_office_panel.py — assertions updated to match
+Status: accepted (OFFICE_PANEL_SAFE_UX_LABELS_AND_GROUPING_V1, narrowed from
+a larger reviewer proposal after explicit scoping — see below)
+
+Meaning
+	•	owner relayed an external reviewer's proposal to rebuild the office
+	  panel as a task-queue ("Büro-Zentrale") with Angebot/PDF/Senden/
+	  Ablehnen actions. Correctly flagged by the owner as partially crossing
+	  frozen architecture boundaries before any code was written: Core has
+	  no price/Angebot/PDF concept (that lives in the separate fingerfood-app,
+	  no accepted bridge exists), no Inquiry "rejected" state exists, and
+	  merging Anfragen/Aufträge into one list would blur the frozen
+	  Inquiry(process truth)/Order(operational truth) vocabulary separation
+	  (§5, "vocabularies not merged")
+	•	narrowed, by explicit agreement, to a UI-only display-label pass: no
+	  Core/domain/service/repository/schema changes, no new actions, no new
+	  states, sections (Anfragen/Aufträge/Rückrufe) stay separate
+	•	three separate label dicts, deliberately not merged, mirroring the
+	  three vocabularies that must stay apart per §5:
+	  - CALL_VERIFICATION_STATUS_LABELS (simple status, both Anfragen table
+	    and Anfrage detail)
+	  - READY_TO_SEND_BLOCKER_LABELS (operational gate, order views only —
+	    Aufträge table's Blocker column and the order detail page)
+	  - PROGRESSION_BLOCKER_LABELS (B7 progression, inquiry views only — the
+	    "Konvertierung blockiert" list on the Anfrage detail page)
+	  fallback for the two blocker dicts is `f"technischer Blocker: {code}"` /
+	  `f"technischer Fortschritts-Blocker: {code}"` (owner's explicit
+	  correction over a silent passthrough) — never crashes on an unmapped
+	  code, and still tells the office it's looking at a real, if
+	  untranslated, technical reason rather than hiding it entirely
+	•	Anfragen table's "Auftrag" column: "ja" → a real "Auftrag öffnen" link
+	  to the existing `/order/{id}` route (first linked order) when one
+	  exists; unchanged "–" when none — pure navigation, not a new concept,
+	  Inquiry and Order stay distinct rows in distinct tables
+	•	added "Was braucht Aufmerksamkeit?" heading above the attention bar,
+	  and a "N Rückrufe offen" card as its first entry — reuses
+	  `_sidebar_rueckruf_count`, already fetched once per request for the
+	  sidebar badge (Entry 055) before `render_queue()` runs; no second
+	  auerswald-sync request. Card omitted when the count is None
+	  (unconfigured/unreachable, same as the badge); unlike the other
+	  attention cards, 0 is a real confirmed value here since it comes from
+	  an external fetch rather than Core's own always-available data
+
+Completed
+	•	full suite: 222 passed (unchanged count — no test added or removed,
+	  8 existing tests' assertions updated from raw codes to the new human
+	  labels, per the agreed plan)
+	•	verified live: Anfragen row shows "keine Rückrufprüfung nötig" and a
+	  working "Auftrag öffnen" link to the real order route; a STORNIERT
+	  order's Freigabe section shows "Versandfreigabe blockiert:" /
+	  "Auftrag storniert" — no raw codes anywhere checked
+
+Open
+	•	push held pending owner/reviewer verdict per project workflow
+	•	the larger reviewer proposal (Büro-Zentrale task queue, Angebot/PDF/
+	  Senden, Wochenplanung day-view, Auftrag/Anfrage detail card) remains
+	  out of scope; would need its own execution pack and, for the
+	  Angebot/PDF/Senden parts specifically, a prior decision on a
+	  configurator→Core bridge that does not exist today
+
+Must not be changed
+	•	CALL_VERIFICATION_STATUS_LABELS / READY_TO_SEND_BLOCKER_LABELS /
+	  PROGRESSION_BLOCKER_LABELS must stay three separate dicts — never
+	  merge them into one lookup, that would blur §5's vocabulary separation
+	  even though this step is UI-only
+	•	no Angebot/PDF/Senden/Ablehnen actions, no price display, no
+	  configurator→Core bridge, no Core schema/domain changes, no merging
+	  of Inquiry and Order into one entity — all explicitly out of scope for
+	  this step per the owner's agreed framing

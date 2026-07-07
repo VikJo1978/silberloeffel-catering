@@ -126,7 +126,7 @@ def test_unverified_inquiry_shows_progression_block_and_convert_fails(panel: str
     iid = _create_inquiry(panel, call_verification_required="1")
     _status, body = _get(f"{panel}/inquiry/{iid}")
     assert "Konvertierung blockiert" in body
-    assert "inquiry_call_verification_unsatisfied" in body  # B7 vocabulary on inquiry view
+    assert "Rückrufprüfung noch nicht erfüllt" in body  # B7 vocabulary, human label, on inquiry view
     with pytest.raises(urllib.error.HTTPError) as exc:
         _post(f"{panel}/inquiry/{iid}/convert", {})
     assert exc.value.code == 400
@@ -135,7 +135,7 @@ def test_unverified_inquiry_shows_progression_block_and_convert_fails(panel: str
 def test_verify_then_convert(panel: str) -> None:
     iid = _create_inquiry(panel, call_verification_required="1")
     _status, _url, body = _post(f"{panel}/inquiry/{iid}/verify", {})
-    assert "verified" in body
+    assert "verifiziert" in body
     oid = _convert(panel, iid)
     status, body = _get(f"{panel}/order/{oid}")
     assert status == 200
@@ -157,9 +157,9 @@ def test_order_shows_operational_block_reasons(panel: str) -> None:
     iid = _create_inquiry(panel)
     oid = _convert(panel, iid)
     _status, body = _get(f"{panel}/order/{oid}")
-    assert "READY_TO_SEND blockiert" in body
-    assert "no_effective_version" in body  # operational vocabulary on order view
-    assert "inquiry_call_verification_unsatisfied" not in body  # vocabularies not merged (§5)
+    assert "Versandfreigabe blockiert" in body
+    assert "keine wirksame Auftragsversion" in body  # operational vocabulary, human label, on order view
+    assert "Rückrufprüfung noch nicht erfüllt" not in body  # vocabularies not merged (§5)
 
 
 def test_effective_before_print_rejected(panel: str) -> None:
@@ -217,7 +217,7 @@ def test_cancel_shows_storniert_and_hides_actions(panel: str) -> None:
     _status, _url, body = _post(f"{panel}/order/{oid}/cancel", {})
     assert "STORNIERT" in body
     assert "Auftrag stornieren" not in body  # actions hidden
-    assert "order_cancelled" in body  # operational reason shown
+    assert "Auftrag storniert" in body  # operational reason shown, human label
     assert "Küchenzettel" in body  # history stays viewable
 
 
@@ -446,8 +446,8 @@ def test_queue_shows_attention_bar_and_empty_week(panel: str) -> None:
     counts = _attention_counts(body)
     assert counts["Neue Anfragen"] == 0
     assert counts["ohne Druckbestätigung"] == 0
-    assert counts["nicht wirksam"] == 0
-    assert counts["READY_TO_SEND blockiert"] == 0
+    assert counts["noch nicht operativ wirksam"] == 0
+    assert counts["Versandfreigabe blockiert"] == 0
     assert "Diese Woche" in body
     assert "keine wirksamen Aufträge diese Woche" in body
 
@@ -465,8 +465,8 @@ def test_attention_counts_reflect_new_inquiry_and_unconfirmed_order(panel: str) 
     # ...but the fresh order has no print confirmation, no effective version,
     # and is therefore also READY_TO_SEND-blocked.
     assert counts["ohne Druckbestätigung"] == 1
-    assert counts["nicht wirksam"] == 1
-    assert counts["READY_TO_SEND blockiert"] == 1
+    assert counts["noch nicht operativ wirksam"] == 1
+    assert counts["Versandfreigabe blockiert"] == 1
     assert oid[:8] in body
 
 
@@ -474,7 +474,7 @@ def test_order_row_shows_first_blocker_reason(panel: str) -> None:
     iid = _create_inquiry(panel)
     _convert(panel, iid)
     _status, body = _get(f"{panel}/")
-    assert "no_effective_version" in body  # first reason right after convert
+    assert "keine wirksame Auftragsversion" in body  # first reason right after convert, human label
 
 
 def test_full_release_flow_clears_attention_counts(panel: str) -> None:
@@ -488,8 +488,8 @@ def test_full_release_flow_clears_attention_counts(panel: str) -> None:
     _status, body = _get(f"{panel}/")
     counts = _attention_counts(body)
     assert counts["ohne Druckbestätigung"] == 0
-    assert counts["nicht wirksam"] == 0
-    assert counts["READY_TO_SEND blockiert"] == 0
+    assert counts["noch nicht operativ wirksam"] == 0
+    assert counts["Versandfreigabe blockiert"] == 0
 
 
 def test_diese_woche_shows_only_effective_orders_in_current_iso_week(panel: str) -> None:

@@ -77,6 +77,44 @@ def _e(text: object) -> str:
     return html.escape(str(text))
 
 
+# UI-only display labels (OFFICE_PANEL_SAFE_UX_LABELS_AND_GROUPING_V1,
+# 2026-07-07). Pure display mapping — the underlying Core/domain values are
+# untouched, and the three vocabularies stay separate on purpose (§5,
+# "vocabularies not merged"): call-verification status is its own simple
+# status, READY_TO_SEND blocker reasons are the operational-gate vocabulary
+# (order views only), and progression blocker reasons are the B7 vocabulary
+# (inquiry-to-order conversion views only). Never merge these dicts.
+CALL_VERIFICATION_STATUS_LABELS: dict[str, str] = {
+    "not_required": "keine Rückrufprüfung nötig",
+    "pending": "Rückrufprüfung ausstehend",
+    "verified": "verifiziert",
+    "failed": "Rückrufprüfung fehlgeschlagen",
+    "blocked": "Rückrufprüfung blockiert",
+}
+READY_TO_SEND_BLOCKER_LABELS: dict[str, str] = {
+    "ready_to_send_order_not_found": "Auftrag nicht gefunden",
+    "order_cancelled": "Auftrag storniert",
+    "no_effective_version": "keine wirksame Auftragsversion",
+    "effective_version_not_resolvable": "wirksame Version nicht auffindbar",
+    "kitchen_print_not_confirmed": "Druckbestätigung fehlt",
+}
+PROGRESSION_BLOCKER_LABELS: dict[str, str] = {
+    "inquiry_call_verification_unsatisfied": "Rückrufprüfung noch nicht erfüllt",
+}
+
+
+def _verification_label(value: str) -> str:
+    return CALL_VERIFICATION_STATUS_LABELS.get(value, value or "–")
+
+
+def _ready_to_send_blocker_label(code: str) -> str:
+    return READY_TO_SEND_BLOCKER_LABELS.get(code, f"technischer Blocker: {code}")
+
+
+def _progression_blocker_label(code: str) -> str:
+    return PROGRESSION_BLOCKER_LABELS.get(code, f"technischer Fortschritts-Blocker: {code}")
+
+
 # Sidebar Rückruf-badge count, current request only. Set once per request
 # (do_GET/do_POST's _error_page, before any _page()-rendering call) and read
 # here. A plain module global is safe only because the server is guaranteed
@@ -308,12 +346,25 @@ class OfficePanel:
             o for o in active_orders if not self.core.evaluate_ready_to_send(o.order_id).ready
         ]
         storniert = [o for o in orders if o.cancelled_at is not None]
+        # Reuses the same count already fetched for the sidebar badge (set
+        # before render_queue() runs, see do_GET) — no second auerswald-sync
+        # request. None = not configured/unreachable -> card omitted, same
+        # as the sidebar badge; unlike the other cards, 0 is a real fetched
+        # value here (they never depend on an external service, so 0 always
+        # means "confirmed empty").
+        rueckruf_card = (
+            f'<a href="/rueckruf"><strong>{_sidebar_rueckruf_count}</strong> Rückrufe offen</a>'
+            if _sidebar_rueckruf_count is not None
+            else ""
+        )
         attention = (
+            "<h2>Was braucht Aufmerksamkeit?</h2>"
             '<div class="attention">'
-            f'<a href="#anfragen"><strong>{len(neue_anfragen)}</strong> Neue Anfragen</a>'
+            + rueckruf_card
+            + f'<a href="#anfragen"><strong>{len(neue_anfragen)}</strong> Neue Anfragen</a>'
             f'<a href="#auftraege"><strong>{len(ohne_druck)}</strong> ohne Druckbestätigung</a>'
-            f'<a href="#auftraege"><strong>{len(nicht_wirksam)}</strong> nicht wirksam</a>'
-            f'<a href="#auftraege"><strong>{len(blockiert)}</strong> READY_TO_SEND blockiert</a>'
+            f'<a href="#auftraege"><strong>{len(nicht_wirksam)}</strong> noch nicht operativ wirksam</a>'
+            f'<a href="#auftraege"><strong>{len(blockiert)}</strong> Versandfreigabe blockiert</a>'
             f'<span><strong>{len(storniert)}</strong> storniert</span>'
             "</div>"
         )
@@ -328,7 +379,12 @@ class OfficePanel:
 
         inquiry_rows = []
         for inq in all_inquiries:
-            has_order = "ja" if inq.inquiry_id in orders_by_inquiry else "–"
+            linked_orders = orders_by_inquiry.get(inq.inquiry_id, [])
+            has_order = (
+                f'<a href="/order/{_e(linked_orders[0].order_id)}">Auftrag öffnen</a>'
+                if linked_orders
+                else "–"
+            )
             if not _matches(
                 inq.inquiry_id, inq.location_text, inq.event_date.isoformat(), inq.crm_stage
             ):
@@ -336,7 +392,7 @@ class OfficePanel:
             inquiry_rows.append(
                 f'<tr><td><a href="/inquiry/{_e(inq.inquiry_id)}">{_e(inq.inquiry_id[:8])}</a></td>'
                 f"<td>{_e(inq.event_date.isoformat())}</td><td>{_e(inq.location_text)}</td>"
-                f"<td>{_e(inq.crm_stage)}</td><td>{_e(inq.call_verification_status)}</td>"
+                f"<td>{_e(inq.crm_stage)}</td><td>{_e(_verification_label(inq.call_verification_status))}</td>"
                 f"<td>{has_order}</td></tr>"
             )
 
@@ -354,7 +410,7 @@ class OfficePanel:
                     blocker = "–"
                 else:
                     status = '<span class="blocked">blockiert</span>'
-                    blocker = _e(ev.reasons[0]) if ev.reasons else "–"
+                    blocker = _e(_ready_to_send_blocker_label(ev.reasons[0])) if ev.reasons else "–"
             eff = "ja" if o.effective_order_version_id else "–"
             order_rows.append(
                 f'<tr><td><a href="/order/{_e(o.order_id)}">{_e(o.order_id[:8])}</a></td>'
@@ -430,7 +486,7 @@ class OfficePanel:
             return None
         ev = self.progression.evaluate_inquiry_to_order_progression(inq)
         if ev.blocked:
-            reasons = "".join(f"<li>{_e(r)}</li>" for r in ev.reasons)
+            reasons = "".join(f"<li>{_e(_progression_blocker_label(r))}</li>" for r in ev.reasons)
             prog = f'<p class="blocked">Konvertierung blockiert:</p><ul>{reasons}</ul>'
         else:
             prog = '<p class="ok">Konvertierung möglich.</p>'
@@ -467,7 +523,7 @@ class OfficePanel:
 <tr><th>Ort</th><td>{_e(inq.location_text)}</td></tr>
 <tr><th>Gäste</th><td>{_e(guests or "–")}</td></tr>
 <tr><th>CRM-Stufe</th><td>{_e(inq.crm_stage)}</td></tr>
-<tr><th>Verifizierung</th><td>{_e(inq.call_verification_status)}</td></tr>
+<tr><th>Verifizierung</th><td>{_e(_verification_label(inq.call_verification_status))}</td></tr>
 </table>
 <h2>Vorgangsprüfung (Progression)</h2>{prog}
 <p>{verify_btn}{convert}</p>
@@ -541,8 +597,8 @@ class OfficePanel:
         if ev.ready:
             release = '<p class="ok">READY_TO_SEND: bereit.</p>'
         else:
-            reasons = "".join(f"<li>{_e(r)}</li>" for r in ev.reasons)
-            release = f'<p class="blocked">READY_TO_SEND blockiert:</p><ul>{reasons}</ul>'
+            reasons = "".join(f"<li>{_e(_ready_to_send_blocker_label(r))}</li>" for r in ev.reasons)
+            release = f'<p class="blocked">Versandfreigabe blockiert:</p><ul>{reasons}</ul>'
         header = (
             '<p class="cancelled">STORNIERT</p>'
             if cancelled
