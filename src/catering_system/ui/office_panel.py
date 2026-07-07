@@ -43,7 +43,11 @@ _STYLE = """
 body { font-family: 'DM Sans', system-ui, sans-serif; margin: 0; background: #f6f7f6; color: #1a1f1c; }
 .brandbar { background: #fff; border-bottom: 1px solid #e2e5e2; padding: 0.75rem 2rem; }
 .brandbar img { height: 44px; display: block; }
-.content { max-width: 70rem; margin: 0 auto; padding: 2rem; }
+.layout { display: flex; align-items: flex-start; max-width: 78rem; margin: 0 auto; }
+.sidebar { width: 11rem; flex-shrink: 0; display: flex; flex-direction: column; gap: 0.2rem; padding: 1.5rem 1rem; position: sticky; top: 0; }
+.sidebar a { padding: 0.5rem 0.75rem; border-radius: 6px; text-decoration: none; color: #33413a; font-size: 0.9rem; }
+.sidebar a:hover { background: var(--accent-soft); }
+.content { flex: 1; min-width: 0; padding: 2rem 2rem 2rem 0; }
 a { color: var(--accent); }
 h1 { font-family: 'Playfair Display', Georgia, serif; font-size: 1.9rem; font-weight: 600; margin: 0.5rem 0 1.25rem; }
 h2 { font-family: 'Playfair Display', Georgia, serif; font-size: 1.3rem; font-weight: 600; margin-top: 2rem; }
@@ -71,11 +75,23 @@ def _e(text: object) -> str:
 
 
 def _page(title: str, body: str) -> str:
+    # Persistent sidebar on every page (owner feedback 2026-07-07: one long
+    # stacked page read as clutter). All targets are absolute paths/anchors
+    # on "/" so the sidebar works identically from any page, not just "/".
+    nav = (
+        '<nav class="sidebar">'
+        '<a href="/">Start</a>'
+        '<a href="/#anfragen">Anfragen</a>'
+        '<a href="/#auftraege">Aufträge</a>'
+        '<a href="/#diese-woche">Diese Woche</a>'
+        '<a href="/rueckruf">Rückrufe</a>'
+        "</nav>"
+    )
     return (
         f'<!DOCTYPE html><html lang="de"><head><meta charset="utf-8">'
         f"<title>{_e(title)}</title><style>{_STYLE}</style></head>"
         f'<body><div class="brandbar"><img src="{_LOGO_DATA_URI}" alt="Silberlöffel Event Catering Service"></div>'
-        f'<div class="content"><p><a href="/">&larr; Übersicht</a></p><h1>{_e(title)}</h1>{body}</div></body></html>'
+        f'<div class="layout">{nav}<div class="content"><h1>{_e(title)}</h1>{body}</div></div></body></html>'
     )
 
 
@@ -325,7 +341,7 @@ class OfficePanel:
             for e in week.entries
         ]
         diese_woche = (
-            f"<h2>Diese Woche (KW {iso.week}/{iso.year})</h2>"
+            f'<h2 id="diese-woche">Diese Woche (KW {iso.week}/{iso.year})</h2>'
             "<table><tr><th>Datum</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th><th>Auftrag</th></tr>"
             + "".join(week_rows or ['<tr><td colspan="5">keine wirksamen Aufträge diese Woche</td></tr>'])
             + "</table>"
@@ -334,8 +350,7 @@ class OfficePanel:
         body = (
             attention
             + search_box
-            + '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a>'
-            ' &middot; <a href="/rueckruf">Rückrufe</a></p>'
+            + '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a></p>'
             '<h2 id="anfragen">Anfragen</h2><table><tr><th>ID</th><th>Datum</th><th>Ort</th>'
             "<th>CRM-Stufe</th><th>Verifizierung</th><th>Auftrag</th></tr>"
             + "".join(inquiry_rows or ['<tr><td colspan="6">keine</td></tr>'])

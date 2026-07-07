@@ -1813,3 +1813,41 @@ Must not be changed
 	•	Diese Woche in the office panel stays derived-only, same guarantee as
 	  the kiosk (effective versions only, cancelled excluded) — do not let
 	  it show candidate/latest-historical versions
+
+⸻
+
+Entry 055
+
+Date: 2026-07-07 — Persistent left sidebar nav (Start/Anfragen/Aufträge/Diese Woche/Rückrufe)
+Scope: src/catering_system/ui/office_panel.py — _page() layout
+Status: accepted
+
+Meaning
+	•	owner feedback: the single stacked page (attention bar, search, two
+	  tables, mini-week) read as clutter ("сплошное нагромождение"). Chose
+	  the narrower of two options offered: persistent sidebar with anchor
+	  links on the existing single page, not a split into separate
+	  Anfragen/Aufträge/Woche routes — smaller change, same content
+	•	_page() (used by every page, not just "/") now wraps body in a
+	  .sidebar + .content flex layout; sidebar targets are absolute
+	  (/#anfragen, /#auftraege, /#diese-woche, /rueckruf) so it works
+	  identically from any page, not just the queue
+	•	dropped the old standalone "← Übersicht" link and the inline
+	  "Rückrufe" link next to "+ Neue Anfrage erfassen" — both superseded by
+	  the sidebar, would have been duplicate navigation
+
+Completed
+	•	full suite: 219 passed. One existing test
+	  (test_diese_woche_shows_only_effective_orders_in_current_iso_week) had
+	  to split on the id="diese-woche" attribute instead of the text
+	  "Diese Woche" — that text now also appears in the sidebar link, which
+	  precedes the real content in HTML source order and was breaking the
+	  test's naive string-split isolation
+	•	verified live: sidebar renders on the queue page in the brand style;
+	  direct navigation to /rueckruf and to /#anfragen (anchor exists)
+	  confirmed working
+
+Must not be changed
+	•	sidebar targets must stay absolute paths/anchors, not bare #fragments
+	  — a bare "#anfragen" would only work from "/" itself, not from order/
+	  inquiry/Rückrufe pages

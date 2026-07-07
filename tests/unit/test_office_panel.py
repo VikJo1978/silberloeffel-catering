@@ -507,7 +507,9 @@ def test_diese_woche_shows_only_effective_orders_in_current_iso_week(panel: str)
     _post(f"{panel}/order/{other_oid}/print-confirm", {"order_version_id": other_vid})
     _post(f"{panel}/order/{other_oid}/effective", {"order_version_id": other_vid})
     _status, body = _get(f"{panel}/")
-    assert other_oid[:8] not in body.split("Diese Woche")[1]
+    # Split on the unique heading id, not the text "Diese Woche" — that text
+    # also appears in the sidebar nav link, which precedes the real content.
+    assert other_oid[:8] not in body.split('id="diese-woche"')[1]
 
 
 def test_search_filters_inquiries_and_orders(panel: str) -> None:
