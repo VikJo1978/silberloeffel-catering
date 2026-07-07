@@ -11,10 +11,13 @@ from __future__ import annotations
 import argparse
 import base64
 import html
+import json
 import os
+import urllib.error
+import urllib.request
 from datetime import date
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlencode, urlparse
 
 from catering_system.domain.inquiry import CRM_PIPELINE, Inquiry, PLANNING_MODES
 from catering_system.domain.order import Order, OrderVersion
@@ -113,6 +116,98 @@ table{{border-collapse:collapse}}h1{{font-size:1.8rem}}</style></head><body>
 </body></html>"""
 
 
+# -- Rückrufe: read-only pull from the separate auerswald-sync call-log
+# service (own repo/server, NOT Core, NOT EspoCRM). Pre-inquiry office signal
+# only — never writes into Core, never creates an Inquiry automatically. The
+# only write this makes is the office-initiated "erledigt" resolve, which
+# goes to auerswald-sync's own /missed/resolve, not to Core.
+
+
+def _auth_header(user: str, password: str) -> str | None:
+    if not user and not password:
+        return None
+    token = base64.b64encode(f"{user}:{password}".encode()).decode()
+    return f"Basic {token}"
+
+
+def fetch_missed_board(
+    url: str, user: str, password: str, limit: int = 100
+) -> tuple[list[dict] | None, str | None]:
+    if not url:
+        return None, "AUERSWALD_SYNC_URL nicht konfiguriert"
+    req = urllib.request.Request(f"{url.rstrip('/')}/missed-board.json?limit={limit}")
+    auth = _auth_header(user, password)
+    if auth:
+        req.add_header("Authorization", auth)
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return data.get("items", []), None
+    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
+        return None, str(exc)
+
+
+class _NoRedirect(urllib.request.HTTPErrorProcessor):
+    """auerswald-sync's own /missed/resolve replies 303 to its own HTML
+    /missed-board page (fine for a browser, irrelevant here) — don't follow
+    it and don't treat it as an error; we only care that the POST landed."""
+
+    def http_response(self, request, response):
+        return response
+
+    https_response = http_response
+
+
+def resolve_missed_call(url: str, user: str, password: str, call_id: str) -> None:
+    req = urllib.request.Request(
+        f"{url.rstrip('/')}/missed/resolve",
+        data=urlencode({"call_id": call_id}).encode(),
+        method="POST",
+    )
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    auth = _auth_header(user, password)
+    if auth:
+        req.add_header("Authorization", auth)
+    opener = urllib.request.build_opener(_NoRedirect)
+    with opener.open(req, timeout=5):
+        pass
+
+
+def render_rueckruf(items: list[dict] | None, error: str | None) -> str:
+    if error:
+        body = (
+            f'<p class="blocked">Rückrufliste nicht erreichbar: {_e(error)}</p>'
+            "<p>Prüfe AUERSWALD_SYNC_URL / erreichbarkeit des auerswald-sync Servers.</p>"
+        )
+        return _page("Rückrufe", body)
+    if not items:
+        body = "<p>Keine offenen Rückrufe.</p>"
+        return _page("Rückrufe", body)
+    rows = []
+    for it in items:
+        contact = _e(it["contact_name"]) if it.get("contact_found") else "Unbekannt"
+        rows.append(
+            "<tr>"
+            f"<td>{_e(it.get('date', ''))}</td>"
+            f"<td>{_e(it.get('time', ''))}</td>"
+            f"<td>{_e(it.get('phone', ''))}</td>"
+            f"<td>{_e(it.get('reason', ''))}</td>"
+            f"<td>{contact}</td>"
+            "<td>"
+            '<form class="inline" method="post" action="/rueckruf/resolve">'
+            f'<input type="hidden" name="call_id" value="{_e(it.get("call_id", ""))}">'
+            "<button>Erledigt</button></form>"
+            "</td></tr>"
+        )
+    body = (
+        "<table><tr><th>Datum</th><th>Zeit</th><th>Nummer</th>"
+        "<th>Grund</th><th>Kontakt</th><th></th></tr>"
+        + "".join(rows)
+        + "</table>"
+    )
+    return _page("Rückrufe", body)
+
+
 class OfficePanel:
     """Route handling and rendering; kept separate from the HTTP handler for testability."""
 
@@ -157,7 +252,8 @@ class OfficePanel:
                 f"<td>{_e(o.source_inquiry_id[:8])}</td><td>{eff}</td><td>{status}</td></tr>"
             )
         body = (
-            '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a></p>'
+            '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a>'
+            ' &middot; <a href="/rueckruf">Rückrufe</a></p>'
             "<h2>Anfragen</h2><table><tr><th>ID</th><th>Datum</th><th>Ort</th>"
             "<th>CRM-Stufe</th><th>Verifizierung</th><th>Auftrag</th></tr>"
             + "".join(inquiry_rows or ['<tr><td colspan="6">keine</td></tr>'])
@@ -373,6 +469,9 @@ def make_office_panel_handler(
     inquiry_repo: InquiryRepository,
     order_repo: OrderRepository,
     password: str,
+    auerswald_url: str = "",
+    auerswald_user: str = "",
+    auerswald_password: str = "",
 ) -> type[BaseHTTPRequestHandler]:
     panel = OfficePanel(inquiry_repo, order_repo)
     expected = "Basic " + base64.b64encode(f"office:{password}".encode()).decode()
@@ -434,6 +533,9 @@ def make_office_panel_handler(
                 self._html(page) if page else self.send_error(404)
             elif len(parts) == 3 and parts[0] == "order" and parts[2] == "print":
                 self._print_sheet(parts[1], parsed.query)
+            elif parts == ["rueckruf"]:
+                items, error = fetch_missed_board(auerswald_url, auerswald_user, auerswald_password)
+                self._html(render_rueckruf(items, error))
             else:
                 self.send_error(404)
 
@@ -464,6 +566,10 @@ def make_office_panel_handler(
                 self._inquiry_action(parts[1], parts[2])
             elif len(parts) == 3 and parts[0] == "order":
                 self._order_action(parts[1], parts[2])
+            elif parts == ["rueckruf", "resolve"]:
+                call_id = self._form()["call_id"]
+                resolve_missed_call(auerswald_url, auerswald_user, auerswald_password, call_id)
+                self._redirect("/rueckruf")
             else:
                 self.send_error(404)
 
@@ -511,12 +617,18 @@ def create_office_panel_server(
     password: str,
     host: str = "0.0.0.0",
     port: int = 8081,
+    auerswald_url: str = "",
+    auerswald_user: str = "",
+    auerswald_password: str = "",
 ) -> HTTPServer:
     # Single-threaded on purpose: the shared sqlite3 connections must stay on the
     # thread that serves requests (bring-up bug, WORKLOG Entry 048). This also
     # serializes writes — desirable on SQLite for a 1–2-person office.
     return HTTPServer(
-        (host, port), make_office_panel_handler(inquiry_repo, order_repo, password)
+        (host, port),
+        make_office_panel_handler(
+            inquiry_repo, order_repo, password, auerswald_url, auerswald_user, auerswald_password
+        ),
     )
 
 
@@ -529,6 +641,22 @@ def main() -> None:
         "--password",
         default=os.environ.get("OFFICE_PANEL_PASSWORD", ""),
         help="Office password (or set OFFICE_PANEL_PASSWORD)",
+    )
+    parser.add_argument(
+        "--auerswald-url",
+        default=os.environ.get("AUERSWALD_SYNC_URL", ""),
+        help="Base URL of the separate auerswald-sync call-log service "
+        "(or set AUERSWALD_SYNC_URL) — read-only Rückrufe list, optional",
+    )
+    parser.add_argument(
+        "--auerswald-user",
+        default=os.environ.get("AUERSWALD_SYNC_USER", ""),
+        help="Basic auth user for auerswald-sync (or set AUERSWALD_SYNC_USER)",
+    )
+    parser.add_argument(
+        "--auerswald-password",
+        default=os.environ.get("AUERSWALD_SYNC_PASSWORD", ""),
+        help="Basic auth password for auerswald-sync (or set AUERSWALD_SYNC_PASSWORD)",
     )
     args = parser.parse_args()
     if not args.password:
@@ -546,6 +674,9 @@ def main() -> None:
         args.password,
         args.host,
         args.port,
+        args.auerswald_url,
+        args.auerswald_user,
+        args.auerswald_password,
     )
     print(f"Office panel on http://{args.host}:{args.port}/ (user: office)")
     server.serve_forever()

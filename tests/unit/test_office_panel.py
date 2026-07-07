@@ -302,3 +302,121 @@ def test_unknown_paths_404(panel: str) -> None:
         with pytest.raises(urllib.error.HTTPError) as exc:
             _get(f"{panel}{path}")
         assert exc.value.code == 404
+
+
+# -- Rückrufe: read-only pull from a stubbed auerswald-sync -----------------
+# auerswald-sync is a separate, real service (own repo/server) that is NOT
+# part of this codebase; these tests stand in a minimal stub for its
+# /missed-board.json and /missed/resolve so the office panel's read-only
+# integration can be exercised without a live auerswald-sync instance.
+
+import json
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+_AUERSWALD_ITEMS = [
+    {
+        "call_id": "07.07.26|09:00:00|+491234",
+        "date": "07.07.26",
+        "time": "09:00:00",
+        "duration": "00:00:12",
+        "phone": "01234",
+        "normalized_phone": "+491234",
+        "contact_found": False,
+        "contact_name": "Unbekannt",
+        "contact_url": "",
+        "reason": "Nicht angenommen",
+    }
+]
+
+
+def _make_auerswald_stub(resolved: list) -> HTTPServer:
+    class StubHandler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+            pass
+
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path.startswith("/missed-board.json"):
+                payload = json.dumps({"items": _AUERSWALD_ITEMS}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+            else:
+                self.send_error(404)
+
+        def do_POST(self) -> None:  # noqa: N802
+            if self.path == "/missed/resolve":
+                length = int(self.headers.get("Content-Length", "0"))
+                form = urllib.parse.parse_qs(self.rfile.read(length).decode())
+                resolved.append(form["call_id"][0])
+                self.send_response(303)
+                self.send_header("Location", "/missed-board")
+                self.end_headers()
+            else:
+                self.send_error(404)
+
+    return HTTPServer(("127.0.0.1", 0), StubHandler)
+
+
+def test_rueckruf_not_configured_shows_message_not_crash(panel: str) -> None:
+    status, body = _get(f"{panel}/rueckruf")
+    assert status == 200
+    assert "nicht erreichbar" in body or "nicht konfiguriert" in body
+
+
+def test_rueckruf_unreachable_url_shows_error_not_crash() -> None:
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    # Port 1 is reserved/unroutable — guaranteed connection failure, no live server needed.
+    server = create_office_panel_server(
+        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0,
+        auerswald_url="http://127.0.0.1:1", auerswald_user="u", auerswald_password="p",
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    try:
+        status, body = _get(f"http://{host}:{port}/rueckruf")
+        assert status == 200
+        assert "nicht erreichbar" in body
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_rueckruf_lists_items_from_auerswald_stub() -> None:
+    resolved: list = []
+    stub = _make_auerswald_stub(resolved)
+    stub_thread = threading.Thread(target=stub.serve_forever, daemon=True)
+    stub_thread.start()
+    stub_host, stub_port = stub.server_address[:2]
+
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    server = create_office_panel_server(
+        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0,
+        auerswald_url=f"http://{stub_host}:{stub_port}",
+        auerswald_user="office", auerswald_password="secret",
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    base = f"http://{host}:{port}"
+    try:
+        status, body = _get(f"{base}/rueckruf")
+        assert status == 200
+        assert "Nicht angenommen" in body
+        assert "01234" in body
+
+        # Resolve action forwards to auerswald-sync's own endpoint, redirects back.
+        status, final_url, body = _post(
+            f"{base}/rueckruf/resolve", {"call_id": _AUERSWALD_ITEMS[0]["call_id"]}
+        )
+        assert status == 200 and final_url == f"{base}/rueckruf"
+        assert resolved == [_AUERSWALD_ITEMS[0]["call_id"]]
+    finally:
+        server.shutdown()
+        server.server_close()
+        stub.shutdown()
+        stub.server_close()

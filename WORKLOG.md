@@ -1677,3 +1677,72 @@ Must not be changed
 	  stayed purely visual, no route/behavior changes
 	•	render_print_sheet() (Küchenzettel) intentionally untouched — separate
 	  large-font kitchen printout, not part of this ask
+
+⸻
+
+Entry 053
+
+Date: 2026-07-07 — Rückrufe: read-only pull from auerswald-sync (separate service)
+Scope: src/catering_system/ui/office_panel.py — new fetch_missed_board(),
+resolve_missed_call(), render_rueckruf(), GET /rueckruf, POST /rueckruf/resolve
+Status: accepted
+
+Meaning
+	•	owner has a separate, already-running service (own repo, ~/projects/
+	  auerswald-sync, not this repo, not Core, not EspoCRM) that syncs call
+	  logs from an Auerswald PBX and computes a missed-call/callback board
+	  (auerswald-sync's own build_missed_board_items()); office panel now
+	  reads that board read-only, no bridge into Core in either direction
+	•	this is the first time office_panel.py makes an outbound HTTP call to
+	  a non-Core system — a new kind of capability compared to the existing
+	  EspoCRM pattern ("no CRM→Core bridge... EspoCRM needs no network
+	  route"), so flagging it explicitly rather than treating it as routine:
+	  it is still read-only + one narrow write (the resolve toggle, which
+	  lands in auerswald-sync's own state, never Core's)
+	•	auerswald-sync itself gained one additive route, GET /missed-board.json
+	  (same data as its existing HTML /missed-board), so office panel doesn't
+	  scrape HTML; verified live against the real call log
+	•	no Inquiry is ever created automatically from a missed call; converting
+	  a callback into a real Inquiry remains an explicit office action via
+	  the existing "+ Neue Anfrage erfassen" flow — this step adds visibility
+	  only
+
+Completed
+	•	`fetch_missed_board()` / `resolve_missed_call()`: plain urllib, Basic
+	  Auth, 5s timeout, all failure modes (unset URL, unreachable host, bad
+	  auth, timeout) caught and rendered as a plain error message — never a
+	  crash
+	•	found and fixed a real robustness bug during testing: auerswald-sync's
+	  /missed/resolve replies 303 to its own HTML /missed-board; the naive
+	  urlopen() followed that redirect and could raise if the target wasn't
+	  reachable/implemented. Fixed with a custom opener that does not follow
+	  redirects — the resolve action only needs to know the POST landed
+	•	CLI/env config: --auerswald-url/--auerswald-user/--auerswald-password
+	  (or AUERSWALD_SYNC_URL/_USER/_PASSWORD), all optional — panel works
+	  exactly as before if unset (shows "nicht konfiguriert" on /rueckruf)
+	•	tests: 3 new (not configured → graceful message; unreachable host →
+	  graceful message; stubbed auerswald-sync → items render + resolve
+	  round-trips). Full suite: 213 passed (was 210)
+	•	verified live end-to-end against the real call log: real missed-call
+	  rows rendered in the office panel's brand-facelifted style; clicking
+	  "Erledigt" correctly called through to auerswald-sync's real
+	  /missed/resolve and the row disappeared on next load
+	•	incident during that live verification, self-caught and disclosed:
+	  the smoketest pointed at auerswald-sync's real data/ directory (needed
+	  for realistic read data) and the "Erledigt" click wrote a real
+	  call_id into the real resolved_missed_calls.json. Confirmed with the
+	  owner and reverted that file to its pre-test state
+	  ({"resolved_call_ids": []}); nothing here is git-tracked so no commit
+	  was affected
+
+Open
+	•	real production AUERSWALD_SYNC_URL/credentials for the Lenovo/VPS
+	  deployment not yet set (DEPLOYMENT.md not updated in this step —
+	  narrow code step only)
+	•	push held pending owner/reviewer verdict per project workflow
+
+Must not be changed
+	•	Rückrufe stays read-only + the one resolve toggle; no automatic
+	  Inquiry creation from a missed call, no write into Core from this path
+	•	auerswald-sync remains its own repo/service; this repo must not grow
+	  a second copy of its call-parsing logic
