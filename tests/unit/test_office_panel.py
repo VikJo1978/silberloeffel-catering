@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import threading
 import urllib.error
 import urllib.parse
@@ -12,7 +13,11 @@ import pytest
 
 from catering_system.repositories.in_memory_inquiry_repository import InMemoryInquiryRepository
 from catering_system.repositories.in_memory_order_repository import InMemoryOrderRepository
-from catering_system.ui.office_panel import OfficePanel, create_office_panel_server
+from catering_system.ui.office_panel import (
+    OfficePanel,
+    create_office_panel_server,
+    parse_proposal_payload,
+)
 
 _PASSWORD = "test-pw"
 _AUTH = "Basic " + base64.b64encode(f"office:{_PASSWORD}".encode()).decode()
@@ -860,3 +865,185 @@ def test_next_step_empty_when_order_has_no_versions() -> None:
     panel, order, _v1 = _panel_with_order()
     fake_order = replace(order, order_id="unknown-order-id")
     assert panel._next_step_action(fake_order) == ""
+
+
+# -- proposal preview (CONFIGURATOR_OFFICE_MANUAL_HANDOFF_PACK_V1) --------
+# Read-only import preview for proposal_payload_v1: parse and render only.
+# Nothing here may create an Inquiry, Order, or OrderVersion.
+
+_VALID_PROPOSAL: dict = {
+    "schema_version": "proposal_payload_v1",
+    "source": "fingerfood-configurator",
+    "proposal_id": "local-42",
+    "title": "Angebot Sommerfest",
+    "event_date": "2026-09-12",
+    "guest_count": 30,
+    "selected_items": [
+        {
+            "name": "Mini Wraps",
+            "quantity": 30,
+            "unit_price": 2.9,
+            "total_price": 87.0,
+            "notes": "vegetarisch",
+        }
+    ],
+    "calculated_total_net": 87.0,
+    "calculated_total_gross": 103.53,
+    "notes": "Freitext aus Angebotsphase",
+}
+
+
+def _proposal(remove: tuple[str, ...] = (), **overrides: object) -> str:
+    data = {k: v for k, v in _VALID_PROPOSAL.items() if k not in remove}
+    data.update(overrides)
+    return json.dumps(data)
+
+
+# parser --
+
+
+def test_parse_proposal_valid() -> None:
+    payload = parse_proposal_payload(_proposal())
+    assert payload["title"] == "Angebot Sommerfest"
+    assert payload["selected_items"][0]["name"] == "Mini Wraps"
+
+
+def test_parse_proposal_invalid_json() -> None:
+    with pytest.raises(ValueError, match="Ungültiges JSON"):
+        parse_proposal_payload("{not json")
+
+
+def test_parse_proposal_not_an_object() -> None:
+    with pytest.raises(ValueError, match="JSON-Objekt"):
+        parse_proposal_payload('["a", "b"]')
+
+
+def test_parse_proposal_schema_version_missing_or_wrong() -> None:
+    with pytest.raises(ValueError, match="schema_version"):
+        parse_proposal_payload(_proposal(remove=("schema_version",)))
+    with pytest.raises(ValueError, match="schema_version"):
+        parse_proposal_payload(_proposal(schema_version="proposal_payload_v2"))
+
+
+def test_parse_proposal_source_missing_or_wrong() -> None:
+    with pytest.raises(ValueError, match="source"):
+        parse_proposal_payload(_proposal(remove=("source",)))
+    with pytest.raises(ValueError, match="source"):
+        parse_proposal_payload(_proposal(source="somewhere-else"))
+
+
+def test_parse_proposal_title_missing_or_empty() -> None:
+    with pytest.raises(ValueError, match="title"):
+        parse_proposal_payload(_proposal(remove=("title",)))
+    with pytest.raises(ValueError, match="title"):
+        parse_proposal_payload(_proposal(title="   "))
+
+
+def test_parse_proposal_event_date_missing_or_invalid() -> None:
+    with pytest.raises(ValueError, match="event_date"):
+        parse_proposal_payload(_proposal(remove=("event_date",)))
+    with pytest.raises(ValueError, match="event_date"):
+        parse_proposal_payload(_proposal(event_date="12.09.2026"))
+
+
+def test_parse_proposal_guest_count_missing_or_invalid() -> None:
+    with pytest.raises(ValueError, match="guest_count"):
+        parse_proposal_payload(_proposal(remove=("guest_count",)))
+    with pytest.raises(ValueError, match="guest_count"):
+        parse_proposal_payload(_proposal(guest_count="30"))
+    # >= 1: no evidence anywhere in domain/services that 0 guests is a
+    # supported value, so the preview refuses it.
+    with pytest.raises(ValueError, match="guest_count"):
+        parse_proposal_payload(_proposal(guest_count=0))
+    # bool is an int subclass and must not slip through.
+    with pytest.raises(ValueError, match="guest_count"):
+        parse_proposal_payload(_proposal(guest_count=True))
+
+
+def test_parse_proposal_selected_items_missing_or_invalid() -> None:
+    with pytest.raises(ValueError, match="selected_items"):
+        parse_proposal_payload(_proposal(remove=("selected_items",)))
+    with pytest.raises(ValueError, match="selected_items"):
+        parse_proposal_payload(_proposal(selected_items="Mini Wraps"))
+    with pytest.raises(ValueError, match=r"selected_items\[1\]"):
+        parse_proposal_payload(_proposal(selected_items=["just a string"]))
+    with pytest.raises(ValueError, match="name"):
+        parse_proposal_payload(_proposal(selected_items=[{"quantity": 5}]))
+    with pytest.raises(ValueError, match="name"):
+        parse_proposal_payload(_proposal(selected_items=[{"name": "  "}]))
+
+
+def test_parse_proposal_optional_fields_absent_ok() -> None:
+    raw = _proposal(
+        remove=("proposal_id", "calculated_total_net", "calculated_total_gross", "notes"),
+        selected_items=[{"name": "Mini Wraps"}],
+    )
+    payload = parse_proposal_payload(raw)
+    assert payload["guest_count"] == 30
+    assert payload["selected_items"] == [{"name": "Mini Wraps"}]
+
+
+# HTTP --
+
+
+def test_proposal_preview_form_renders(panel: str) -> None:
+    status, body = _get(f"{panel}/proposal-preview")
+    assert status == 200
+    assert "payload_json" in body and "<textarea" in body
+    assert "keine Core-Daten wurden erstellt oder geändert" in body
+    assert "not operational truth" in body
+
+
+def test_proposal_preview_post_valid_renders_preview(panel: str) -> None:
+    status, _url, body = _post(f"{panel}/proposal-preview", {"payload_json": _proposal()})
+    assert status == 200
+    assert "fingerfood-configurator" in body
+    assert "Angebot Sommerfest" in body
+    assert "2026-09-12" in body
+    assert "Mini Wraps" in body
+    assert "2.9" in body and "87.0" in body and "103.53" in body
+    assert "Freitext aus Angebotsphase" in body
+    # explicit not-truth marking on the preview itself
+    assert "proposal/import preview" in body
+    assert "keine Core-Daten wurden erstellt oder geändert" in body
+    assert "not operational truth" in body
+
+
+def test_proposal_preview_post_invalid_json_is_400(panel: str) -> None:
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _post(f"{panel}/proposal-preview", {"payload_json": "{not json"})
+    assert exc.value.code == 400
+    assert "Ungültiges JSON" in exc.value.read().decode("utf-8")
+
+
+def test_proposal_preview_post_wrong_schema_version_is_400(panel: str) -> None:
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _post(
+            f"{panel}/proposal-preview",
+            {"payload_json": _proposal(schema_version="something_else")},
+        )
+    assert exc.value.code == 400
+    assert "schema_version" in exc.value.read().decode("utf-8")
+
+
+def test_proposal_preview_creates_nothing_in_core() -> None:
+    """The boundary test: a successful preview POST leaves Core repositories
+    completely empty — no Inquiry, no Order, no OrderVersion."""
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    server = create_office_panel_server(
+        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    try:
+        status, _url, _body = _post(
+            f"http://{host}:{port}/proposal-preview", {"payload_json": _proposal()}
+        )
+        assert status == 200
+        assert inquiry_repo.list_all() == []
+        assert order_repo.list_orders() == []
+    finally:
+        server.shutdown()
+        server.server_close()

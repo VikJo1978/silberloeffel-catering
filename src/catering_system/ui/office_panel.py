@@ -70,6 +70,7 @@ input, select { border: 1px solid #d3d6d1; border-radius: 6px; padding: 0.35rem 
 .searchbox { margin-bottom: 1rem; }
 .searchbox input { min-width: 16rem; }
 .subtitle { color: #5f5e5a; font-size: 0.9rem; margin: -0.75rem 0 1.25rem; }
+.proposal-banner { background: #fdf6e3; border: 1px solid #d9c47e; border-radius: 8px; padding: 0.6rem 0.9rem; color: #7a5d00; font-weight: 600; margin-bottom: 1.25rem; }
 """
 
 
@@ -137,6 +138,7 @@ def _page(title: str, body: str) -> str:
         '<a href="/auftraege">Aufträge</a>'
         '<a href="/#diese-woche">Diese Woche</a>'
         f'<a href="/rueckruf" class="rueckruf-link">{rueckruf_label}</a>'
+        '<a href="/proposal-preview">Angebots-Import</a>'
         "</nav>"
     )
     return (
@@ -298,6 +300,113 @@ def render_rueckruf(items: list[dict] | None, error: str | None) -> str:
         + "</table>"
     )
     return _page("Offene Rückrufe", body)
+
+
+# -- Proposal preview: read-only import preview for proposal_payload_v1
+# (CONFIGURATOR_OFFICE_MANUAL_HANDOFF_PACK_V1, frozen 334cd11). The payload is
+# proposal data exported from the separate fingerfood-app configurator — never
+# Core truth. This surface parses and renders only: nothing is persisted, no
+# Inquiry/Order/OrderVersion is created or changed, and the preview offers no
+# action that writes anywhere. Core truth still arises only through the
+# regular office-panel forms, after manual office work.
+
+PROPOSAL_PAYLOAD_SCHEMA_VERSION = "proposal_payload_v1"
+PROPOSAL_PAYLOAD_SOURCE = "fingerfood-configurator"
+
+_PROPOSAL_PREVIEW_WARNING = (
+    '<p class="proposal-banner">Nur Angebots-Vorschau (proposal/import preview) — '
+    "keine Core-Daten wurden erstellt oder geändert — Angebotsdaten sind keine "
+    "operative Wahrheit (not operational truth).</p>"
+)
+
+
+def parse_proposal_payload(raw: str) -> dict:
+    """Validate pasted JSON against the pack's base fields (pack §2); parse only,
+    write nothing. Raises ValueError with an office-readable message."""
+    try:
+        payload = json.loads(raw)
+    except ValueError as exc:
+        raise ValueError(f"Ungültiges JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("Ungültiges JSON: erwartet wird ein JSON-Objekt ({...})")
+    if payload.get("schema_version") != PROPOSAL_PAYLOAD_SCHEMA_VERSION:
+        raise ValueError(
+            f"schema_version fehlt oder unbekannt (erwartet: {PROPOSAL_PAYLOAD_SCHEMA_VERSION!r})"
+        )
+    if payload.get("source") != PROPOSAL_PAYLOAD_SOURCE:
+        raise ValueError(f"source fehlt oder unbekannt (erwartet: {PROPOSAL_PAYLOAD_SOURCE!r})")
+    title = payload.get("title")
+    if not isinstance(title, str) or not title.strip():
+        raise ValueError("title fehlt oder ist leer")
+    event_date = payload.get("event_date")
+    if not isinstance(event_date, str):
+        raise ValueError("event_date fehlt (erwartet: JJJJ-MM-TT)")
+    try:
+        date.fromisoformat(event_date)
+    except ValueError as exc:
+        raise ValueError(
+            f"event_date ist kein gültiges Datum (JJJJ-MM-TT): {event_date!r}"
+        ) from exc
+    guest_count = payload.get("guest_count")
+    # bool is an int subclass — true/false must not pass as a guest count.
+    if not isinstance(guest_count, int) or isinstance(guest_count, bool) or guest_count < 1:
+        raise ValueError("guest_count fehlt oder ist keine ganze Zahl >= 1")
+    items = payload.get("selected_items")
+    if not isinstance(items, list):
+        raise ValueError("selected_items fehlt oder ist keine Liste")
+    for pos, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"selected_items[{pos}] ist kein Objekt")
+        name = item.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"selected_items[{pos}]: name fehlt oder ist leer")
+    # proposal_id, calculated_total_net/gross, notes and per-item
+    # quantity/prices/notes are optional proposal data — displayed if present,
+    # never validated beyond that (pack §2).
+    return payload
+
+
+def render_proposal_preview_form() -> str:
+    body = _PROPOSAL_PREVIEW_WARNING + (
+        "<p>JSON-Export (proposal_payload_v1) aus dem Konfigurator hier einfügen. "
+        "Die Vorschau zeigt die Daten nur an — es wird nichts gespeichert und "
+        "kein Vorgang angelegt.</p>"
+        '<form method="post" action="/proposal-preview">'
+        '<p><textarea name="payload_json" rows="14" '
+        'style="width:100%;box-sizing:border-box;font-family:monospace"></textarea></p>'
+        "<p><button type=\"submit\">Vorschau anzeigen</button></p></form>"
+    )
+    return _page("Angebots-Import (Vorschau)", body)
+
+
+def render_proposal_preview(payload: dict) -> str:
+    def _opt(value: object) -> str:
+        return _e(value) if value is not None and value != "" else "–"
+
+    item_rows = "".join(
+        "<tr>"
+        f"<td>{_e(item['name'])}</td>"
+        f"<td>{_opt(item.get('quantity'))}</td>"
+        f"<td>{_opt(item.get('unit_price'))}</td>"
+        f"<td>{_opt(item.get('total_price'))}</td>"
+        f"<td>{_opt(item.get('notes'))}</td>"
+        "</tr>"
+        for item in payload["selected_items"]
+    )
+    body = _PROPOSAL_PREVIEW_WARNING + f"""<table>
+<tr><th>Quelle</th><td>{_e(payload["source"])}</td></tr>
+<tr><th>Titel</th><td>{_e(payload["title"])}</td></tr>
+<tr><th>Datum (Vorschlag)</th><td>{_e(payload["event_date"])}</td></tr>
+<tr><th>Gäste (Vorschlag)</th><td>{_e(payload["guest_count"])}</td></tr>
+<tr><th>Summe netto (berechnet)</th><td>{_opt(payload.get("calculated_total_net"))}</td></tr>
+<tr><th>Summe brutto (berechnet)</th><td>{_opt(payload.get("calculated_total_gross"))}</td></tr>
+<tr><th>Notizen</th><td>{_opt(payload.get("notes"))}</td></tr>
+<tr><th>Proposal-ID (lokal)</th><td>{_opt(payload.get("proposal_id"))}</td></tr>
+</table>
+<h2>Positionen (Vorschlag)</h2>
+<table><tr><th>Name</th><th>Menge</th><th>Einzelpreis</th><th>Gesamt</th><th>Notiz</th></tr>{item_rows}</table>
+<p><a href="/proposal-preview">Weitere Vorschau anzeigen</a></p>"""
+    return _page("Angebots-Import (Vorschau)", body)
 
 
 class OfficePanel:
@@ -904,6 +1013,8 @@ def make_office_panel_handler(
             elif parts == ["auftraege"]:
                 q = parse_qs(parsed.query).get("q", [""])[0]
                 self._html(panel.render_auftraege(q))
+            elif parts == ["proposal-preview"]:
+                self._html(render_proposal_preview_form())
             elif parts == ["inquiry", "new"]:
                 phone = parse_qs(parsed.query).get("phone", [""])[0]
                 self._html(panel.render_inquiry_form(phone))
@@ -945,6 +1056,20 @@ def make_office_panel_handler(
                 self._inquiry_action(parts[1], parts[2])
             elif len(parts) == 3 and parts[0] == "order":
                 self._order_action(parts[1], parts[2])
+            elif parts == ["proposal-preview"]:
+                # Parse-and-render only (CONFIGURATOR_OFFICE_MANUAL_HANDOFF
+                # pack): nothing is persisted and nothing is created, so
+                # there is deliberately no redirect — the preview itself is
+                # the whole result. Invalid payloads raise ValueError and
+                # land in do_POST's existing 400 error page.
+                payload = parse_proposal_payload(self._form().get("payload_json", ""))
+                # This POST renders a full page directly (no redirect into
+                # do_GET), so refresh the sidebar badge like do_GET does.
+                global _sidebar_rueckruf_count
+                _sidebar_rueckruf_count = fetch_rueckruf_count(
+                    auerswald_url, auerswald_user, auerswald_password
+                )
+                self._html(render_proposal_preview(payload))
             elif parts == ["rueckruf", "resolve"]:
                 call_id = self._form()["call_id"]
                 resolve_missed_call(auerswald_url, auerswald_user, auerswald_password, call_id)
