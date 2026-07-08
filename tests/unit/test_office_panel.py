@@ -909,13 +909,22 @@ def test_parse_proposal_valid() -> None:
 
 
 def test_parse_proposal_invalid_json() -> None:
-    with pytest.raises(ValueError, match="Ungültiges JSON"):
+    with pytest.raises(ValueError) as exc:
         parse_proposal_payload("{not json")
+    message = str(exc.value)
+    # human-friendly hint first, technical detail preserved after it
+    assert "Ungültiges JSON" in message
+    assert ".json-Datei" in message
+    assert "nicht den Dateinamen" in message
+    assert "Technisches Detail:" in message
 
 
 def test_parse_proposal_not_an_object() -> None:
-    with pytest.raises(ValueError, match="JSON-Objekt"):
+    with pytest.raises(ValueError) as exc:
         parse_proposal_payload('["a", "b"]')
+    message = str(exc.value)
+    assert "JSON-Objekt" in message
+    assert ".json-Datei" in message
 
 
 def test_parse_proposal_schema_version_missing_or_wrong() -> None:
@@ -992,6 +1001,10 @@ def test_proposal_preview_form_renders(panel: str) -> None:
     assert "payload_json" in body and "<textarea" in body
     assert "keine Core-Daten wurden erstellt oder geändert" in body
     assert "not operational truth" in body
+    # office-user instructions (UX fix after the first live test)
+    assert "So funktioniert der Büro-Import" in body
+    assert "Export fürs Büro (JSON)" in body
+    assert "nur den Inhalt der .json-Datei" in body
 
 
 def test_proposal_preview_post_valid_renders_preview(panel: str) -> None:
@@ -1013,7 +1026,11 @@ def test_proposal_preview_post_invalid_json_is_400(panel: str) -> None:
     with pytest.raises(urllib.error.HTTPError) as exc:
         _post(f"{panel}/proposal-preview", {"payload_json": "{not json"})
     assert exc.value.code == 400
-    assert "Ungültiges JSON" in exc.value.read().decode("utf-8")
+    body = exc.value.read().decode("utf-8")
+    assert "Ungültiges JSON" in body
+    # human-friendly hint for the office user, not just the parser detail
+    assert ".json-Datei" in body
+    assert "nicht den Dateinamen" in body
 
 
 def test_proposal_preview_post_wrong_schema_version_is_400(panel: str) -> None:

@@ -326,9 +326,16 @@ def parse_proposal_payload(raw: str) -> dict:
     try:
         payload = json.loads(raw)
     except ValueError as exc:
-        raise ValueError(f"Ungültiges JSON: {exc}") from exc
+        raise ValueError(
+            "Ungültiges JSON. Bitte den Inhalt der .json-Datei einfügen, "
+            "nicht den Dateinamen und nicht die Datei selbst. "
+            f"Technisches Detail: {exc}"
+        ) from exc
     if not isinstance(payload, dict):
-        raise ValueError("Ungültiges JSON: erwartet wird ein JSON-Objekt ({...})")
+        raise ValueError(
+            "Ungültiges JSON. Erwartet wird ein einzelnes JSON-Objekt von { bis } — "
+            "bitte den kompletten Inhalt der .json-Datei einfügen."
+        )
     if payload.get("schema_version") != PROPOSAL_PAYLOAD_SCHEMA_VERSION:
         raise ValueError(
             f"schema_version fehlt oder unbekannt (erwartet: {PROPOSAL_PAYLOAD_SCHEMA_VERSION!r})"
@@ -368,9 +375,16 @@ def parse_proposal_payload(raw: str) -> dict:
 
 def render_proposal_preview_form() -> str:
     body = _PROPOSAL_PREVIEW_WARNING + (
-        "<p>JSON-Export (proposal_payload_v1) aus dem Konfigurator hier einfügen. "
-        "Die Vorschau zeigt die Daten nur an — es wird nichts gespeichert und "
-        "kein Vorgang angelegt.</p>"
+        "<p><strong>So funktioniert der Büro-Import:</strong></p>"
+        "<ol>"
+        "<li>Im Configurator „Export fürs Büro (JSON)“ klicken.</li>"
+        "<li>Die heruntergeladene .json-Datei öffnen (Doppelklick oder Texteditor).</li>"
+        "<li>Den kompletten JSON-Text von <code>{</code> bis <code>}</code> kopieren.</li>"
+        "<li>Unten einfügen und „Vorschau anzeigen“ klicken.</li>"
+        "</ol>"
+        '<p class="subtitle">Keine Datei hier ablegen, keinen Dateinamen einfügen — '
+        "nur den Inhalt der .json-Datei. Die Vorschau zeigt die Daten nur an: es wird "
+        "nichts gespeichert und kein Vorgang angelegt.</p>"
         '<form method="post" action="/proposal-preview">'
         '<p><textarea name="payload_json" rows="14" '
         'style="width:100%;box-sizing:border-box;font-family:monospace"></textarea></p>'
