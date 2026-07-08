@@ -17,7 +17,7 @@ import urllib.error
 import urllib.request
 from datetime import date
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.parse import parse_qs, quote, urlencode, urlparse
 
 from catering_system.domain.inquiry import CRM_PIPELINE, Inquiry, PLANNING_MODES
 from catering_system.domain.order import Order, OrderVersion
@@ -133,8 +133,8 @@ def _page(title: str, body: str) -> str:
     nav = (
         '<nav class="sidebar">'
         '<a href="/">Start</a>'
-        '<a href="/#anfragen">Anfragen</a>'
-        '<a href="/#auftraege">Aufträge</a>'
+        '<a href="/anfragen">Anfragen</a>'
+        '<a href="/auftraege">Aufträge</a>'
         '<a href="/#diese-woche">Diese Woche</a>'
         f'<a href="/rueckruf" class="rueckruf-link">{rueckruf_label}</a>'
         "</nav>"
@@ -303,7 +303,9 @@ def render_rueckruf(items: list[dict] | None, error: str | None) -> str:
 class OfficePanel:
     """Route handling and rendering; kept separate from the HTTP handler for testability."""
 
-    def __init__(self, inquiry_repo: InquiryRepository, order_repo: OrderRepository) -> None:
+    def __init__(
+        self, inquiry_repo: InquiryRepository, order_repo: OrderRepository, kiosk_url: str = ""
+    ) -> None:
         self._inquiries = inquiry_repo
         self._orders = order_repo
         self.inquiry_service = InquiryService(inquiry_repo)
@@ -311,17 +313,51 @@ class OfficePanel:
         self.core = OperationalCoreService(order_repo)
         self.progression = ProgressionService(order_repo)
         self.wochenuebersicht = WochenuebersichtService(order_repo)
+        # Single source of truth for the "full week" deep link — the kitchen
+        # kiosk (catering_system.ui.kiosk_server) already owns that view via
+        # the same WochenuebersichtService (OFFICE_PANEL_EXECUTION_PACK_V1
+        # §6: Wochenübersicht stays derived-only, panel may at most link to
+        # it). Empty -> no link shown, same graceful-degrade convention as
+        # the Rückrufe integration.
+        self.kiosk_url = kiosk_url
+
+    def _next_step_action(self, order: Order) -> str:
+        """UI action-target resolution for existing routes only — not new
+        order semantics. Picks the target OrderVersion (candidate_order_
+        version_id if set and real, else the highest version_number — a
+        display fallback, not new truth; documented in domain/order.py as
+        exactly this: an "office-side progression hint") and returns
+        whichever of the two existing, ordered actions applies. Order
+        matters: operational_core_service.make_order_version_effective()
+        itself refuses a version whose kitchen print isn't confirmed yet
+        (raises ValueError) — so print-confirm must be offered first, never
+        "Wirksam machen" for an unprinted version, even if that version's
+        READY_TO_SEND reason would otherwise be reported as
+        no_effective_version rather than kitchen_print_not_confirmed."""
+        versions = self._orders.list_order_versions(order.order_id)
+        if not versions:
+            return ""
+        version = next(
+            (v for v in versions if v.order_version_id == order.candidate_order_version_id),
+            None,
+        )
+        if version is None:
+            version = max(versions, key=lambda v: v.version_number)
+        if version.kitchen_print_confirmed_at is None:
+            label, action = "Druck bestätigen", "print-confirm"
+        elif version.order_version_id != order.effective_order_version_id:
+            label, action = "Wirksam machen", "effective"
+        else:
+            return ""
+        return (
+            f'<form class="inline" method="post" action="/order/{_e(order.order_id)}/{action}">'
+            f'<input type="hidden" name="order_version_id" value="{_e(version.order_version_id)}">'
+            f"<button>{label}</button></form>"
+        )
 
     # -- queue -----------------------------------------------------------
 
-    def render_queue(self, q: str = "") -> str:
-        needle = q.strip().lower()
-
-        def _matches(*fields: str) -> bool:
-            if not needle:
-                return True
-            return any(needle in f.lower() for f in fields)
-
+    def render_queue(self, rueckruf_items: list[dict] | None) -> str:
         orders = self._orders.list_orders()
         orders_by_inquiry: dict[str, list[Order]] = {}
         for o in orders:
@@ -374,16 +410,133 @@ class OfficePanel:
             + "</div>"
         )
 
+        iso = date.today().isocalendar()
+        week = self.wochenuebersicht.get_week_overview(iso.year, iso.week)
+        week_rows = [
+            f"<tr><td>{_e(e.event_date.isoformat())}</td><td>{_e(e.time_window_text)}</td>"
+            f"<td>{_e(e.location_text)}</td>"
+            f"<td>{_e(str(e.guest_count_estimate) if e.guest_count_estimate is not None else '–')}</td>"
+            f'<td><a href="/order/{_e(e.order_id)}">{_e(e.order_id[:8])}</a></td></tr>'
+            for e in week.entries
+        ]
+        kiosk_link = (
+            f' <a href="{_e(self.kiosk_url)}">Vollständige Wochenübersicht (Küche)</a>'
+            if self.kiosk_url
+            else ""
+        )
+        diese_woche = (
+            f'<h2 id="diese-woche">Diese Woche (KW {iso.week}/{iso.year})</h2>'
+            "<table><tr><th>Datum</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th><th>Auftrag</th></tr>"
+            + "".join(week_rows or ['<tr><td colspan="5">keine wirksamen Aufträge diese Woche</td></tr>'])
+            + "</table>"
+            + kiosk_link
+        )
+
+        # -- three action queues (§11 addendum): top 5 rows each, one
+        # primary action per row, full lists live at /rueckruf, /anfragen,
+        # /auftraege. rueckruf_items is None when auerswald-sync is
+        # unconfigured/unreachable -> the whole queue is omitted, same
+        # graceful-degrade convention as the sidebar badge (not an error
+        # page, the rest of the Startseite still renders).
+        rueckruf_section = ""
+        if rueckruf_items is not None:
+            rows = []
+            for it in rueckruf_items[:5]:
+                contact = _e(it["contact_name"]) if it.get("contact_found") else "Unbekannt"
+                phone = it.get("phone", "")
+                rows.append(
+                    f"<li>{_e(it.get('date', ''))} {_e(it.get('time', ''))} — "
+                    f"{_e(phone)} ({contact}) "
+                    '<form class="inline" method="post" action="/rueckruf/resolve">'
+                    f'<input type="hidden" name="call_id" value="{_e(it.get("call_id", ""))}">'
+                    "<button>Erledigt</button></form> "
+                    f'<a href="/inquiry/new?phone={quote(phone)}">Anfrage erfassen</a></li>'
+                )
+            rueckruf_section = (
+                "<h2>Rückruf nötig</h2>"
+                + (f"<ul>{''.join(rows)}</ul>" if rows else "<p>keine offenen Rückrufe.</p>")
+                + '<p><a href="/rueckruf">Alle anzeigen</a></p>'
+            )
+
+        neue_anfragen_rows = []
+        for inq in neue_anfragen[:5]:
+            if inq.call_verification_required and inq.call_verification_status != "verified":
+                action = (
+                    f'<form class="inline" method="post" action="/inquiry/{_e(inq.inquiry_id)}/verify">'
+                    "<button>Telefonisch verifiziert</button></form>"
+                )
+            else:
+                action = (
+                    f'<form class="inline" method="post" action="/inquiry/{_e(inq.inquiry_id)}/convert">'
+                    "<button>In Auftrag umwandeln</button></form>"
+                )
+            neue_anfragen_rows.append(
+                f'<li><a href="/inquiry/{_e(inq.inquiry_id)}">{_e(inq.event_date.isoformat())} · '
+                f"{_e(inq.location_text)}</a> {action}</li>"
+            )
+        neue_anfragen_section = (
+            "<h2>Neue Anfragen</h2>"
+            + (
+                f"<ul>{''.join(neue_anfragen_rows)}</ul>"
+                if neue_anfragen_rows
+                else "<p>keine neuen Anfragen.</p>"
+            )
+            + '<p><a href="/anfragen">Alle anzeigen</a></p>'
+        )
+
+        auftraege_rows = []
+        for o in blockiert[:5]:
+            ev = self.core.evaluate_ready_to_send(o.order_id)
+            reason = _e(_ready_to_send_blocker_label(ev.reasons[0])) if ev.reasons else "–"
+            action = self._next_step_action(o)
+            auftraege_rows.append(
+                f'<li><a href="/order/{_e(o.order_id)}">{_e(o.order_id[:8])}</a> — {reason} {action}</li>'
+            )
+        auftraege_section = (
+            "<h2>Aufträge mit nächstem Schritt</h2>"
+            + (
+                f"<ul>{''.join(auftraege_rows)}</ul>"
+                if auftraege_rows
+                else "<p>keine offenen Schritte.</p>"
+            )
+            + '<p><a href="/auftraege">Alle anzeigen</a></p>'
+        )
+
+        body = (
+            attention
+            + diese_woche
+            + rueckruf_section
+            + neue_anfragen_section
+            + auftraege_section
+            + '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a></p>'
+        )
+        return _page("Büro-Übersicht", body)
+
+    # -- full lists (moved out of the Startseite, §11 addendum §13) ------
+
+    def render_anfragen(self, q: str = "") -> str:
+        needle = q.strip().lower()
+
+        def _matches(*fields: str) -> bool:
+            if not needle:
+                return True
+            return any(needle in f.lower() for f in fields)
+
+        orders = self._orders.list_orders()
+        orders_by_inquiry: dict[str, list[Order]] = {}
+        for o in orders:
+            orders_by_inquiry.setdefault(o.source_inquiry_id, []).append(o)
+
         search_box = (
-            '<form method="get" action="/" class="searchbox">'
+            '<form method="get" action="/anfragen" class="searchbox">'
             f'<input type="text" name="q" value="{_e(q)}" placeholder="Suche: ID, Ort, Datum…">'
             "<button type=\"submit\">Suchen</button>"
-            + (' <a href="/">Zurücksetzen</a>' if q else "")
+            + (' <a href="/anfragen">Zurücksetzen</a>' if q else "")
             + "</form>"
         )
 
-        inquiry_rows = []
-        for inq in all_inquiries:
+        rows = []
+        for inq in self._inquiries.list_all():
             linked_orders = orders_by_inquiry.get(inq.inquiry_id, [])
             has_order = (
                 f'<a href="/order/{_e(linked_orders[0].order_id)}">Auftrag öffnen</a>'
@@ -394,15 +547,41 @@ class OfficePanel:
                 inq.inquiry_id, inq.location_text, inq.event_date.isoformat(), inq.crm_stage
             ):
                 continue
-            inquiry_rows.append(
+            rows.append(
                 f"<tr><td>{_e(inq.event_date.isoformat())}</td><td>{_e(inq.location_text)}</td>"
                 f"<td>{_e(inq.crm_stage)}</td><td>{_e(_verification_label(inq.call_verification_status))}</td>"
                 f"<td>{has_order}</td>"
                 f'<td><a href="/inquiry/{_e(inq.inquiry_id)}">{_e(inq.inquiry_id[:8])}</a></td></tr>'
             )
 
-        order_rows = []
-        for o in orders:
+        body = (
+            search_box
+            + '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a></p>'
+            "<table><tr><th>Datum</th><th>Ort</th>"
+            "<th>CRM-Stufe</th><th>Verifizierung</th><th>Auftrag</th><th>ID</th></tr>"
+            + "".join(rows or ['<tr><td colspan="6">keine</td></tr>'])
+            + "</table>"
+        )
+        return _page("Anfragen", body)
+
+    def render_auftraege(self, q: str = "") -> str:
+        needle = q.strip().lower()
+
+        def _matches(*fields: str) -> bool:
+            if not needle:
+                return True
+            return any(needle in f.lower() for f in fields)
+
+        search_box = (
+            '<form method="get" action="/auftraege" class="searchbox">'
+            f'<input type="text" name="q" value="{_e(q)}" placeholder="Suche: ID, Ort, Datum…">'
+            "<button type=\"submit\">Suchen</button>"
+            + (' <a href="/auftraege">Zurücksetzen</a>' if q else "")
+            + "</form>"
+        )
+
+        rows = []
+        for o in self._orders.list_orders():
             if not _matches(o.order_id, o.source_inquiry_id):
                 continue
             if o.cancelled_at is not None:
@@ -417,61 +596,31 @@ class OfficePanel:
                     status = '<span class="blocked">blockiert</span>'
                     blocker = _e(_ready_to_send_blocker_label(ev.reasons[0])) if ev.reasons else "–"
             eff = "bestätigt" if o.effective_order_version_id else "noch nicht bestätigt"
-            order_rows.append(
+            rows.append(
                 f"<tr><td>{status}</td><td>{blocker}</td>"
                 f"<td>{_e(o.source_inquiry_id[:8])}</td><td>{_e(eff)}</td>"
                 f'<td><a href="/order/{_e(o.order_id)}">{_e(o.order_id[:8])}</a></td></tr>'
             )
 
-        iso = date.today().isocalendar()
-        week = self.wochenuebersicht.get_week_overview(iso.year, iso.week)
-        week_rows = [
-            f"<tr><td>{_e(e.event_date.isoformat())}</td><td>{_e(e.time_window_text)}</td>"
-            f"<td>{_e(e.location_text)}</td>"
-            f"<td>{_e(str(e.guest_count_estimate) if e.guest_count_estimate is not None else '–')}</td>"
-            f'<td><a href="/order/{_e(e.order_id)}">{_e(e.order_id[:8])}</a></td></tr>'
-            for e in week.entries
-        ]
-        diese_woche = (
-            f'<h2 id="diese-woche">Diese Woche (KW {iso.week}/{iso.year})</h2>'
-            "<table><tr><th>Datum</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th><th>Auftrag</th></tr>"
-            + "".join(week_rows or ['<tr><td colspan="5">keine wirksamen Aufträge diese Woche</td></tr>'])
-            + "</table>"
-        )
-
-        blocker_rows = []
-        for o in blockiert:
-            ev = self.core.evaluate_ready_to_send(o.order_id)
-            reason = _e(_ready_to_send_blocker_label(ev.reasons[0])) if ev.reasons else "–"
-            blocker_rows.append(
-                f'<li><a href="/order/{_e(o.order_id)}">{_e(o.order_id[:8])}</a> — {reason}</li>'
-            )
-        blocker_section = (
-            '<h2 id="blocker">Wo gibt es Blocker?</h2>'
-            + (f"<ul>{''.join(blocker_rows)}</ul>" if blocker_rows else "<p>keine Blocker.</p>")
-        )
-
         body = (
-            attention
-            + diese_woche
-            + blocker_section
-            + search_box
-            + '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a></p>'
-            '<h2 id="anfragen">Anfragen</h2><table><tr><th>Datum</th><th>Ort</th>'
-            "<th>CRM-Stufe</th><th>Verifizierung</th><th>Auftrag</th><th>ID</th></tr>"
-            + "".join(inquiry_rows or ['<tr><td colspan="6">keine</td></tr>'])
-            + '</table><h2 id="auftraege">Aufträge</h2><table><tr><th>Freigabe</th><th>Blocker</th>'
+            search_box
+            + "<table><tr><th>Freigabe</th><th>Blocker</th>"
             "<th>Anfrage</th><th>Bestätigt</th><th>ID</th></tr>"
-            + "".join(order_rows or ['<tr><td colspan="5">keine</td></tr>'])
+            + "".join(rows or ['<tr><td colspan="5">keine</td></tr>'])
             + "</table>"
         )
-        return _page("Büro-Übersicht", body)
+        return _page("Aufträge", body)
 
     # -- inquiries -------------------------------------------------------
 
-    def render_inquiry_form(self) -> str:
+    def render_inquiry_form(self, phone: str = "") -> str:
         src_opts = "".join(f'<option value="{s}">{s}</option>' for s in _OFFICE_SOURCES)
-        body = f"""<form method="post" action="/inquiry/new"><fieldset>
+        # Rückruf -> Inquiry hint only (§11 addendum §14): Inquiry has no
+        # phone/contact field at all (domain/inquiry.py), so this is never
+        # written anywhere — it's page context for the office worker, shown
+        # once, not a prefilled form field bound to any Inquiry attribute.
+        phone_hint = f'<p class="subtitle">Anruf von: {_e(phone)}</p>' if phone else ""
+        body = phone_hint + f"""<form method="post" action="/inquiry/new"><fieldset>
 <p><label>Datum*</label><input type="date" name="event_date" required></p>
 <p><label>Kanal</label><select name="inquiry_source">{src_opts}</select></p>
 <p><label>Zeitfenster</label><input name="time_window_text"></p>
@@ -675,8 +824,9 @@ def make_office_panel_handler(
     auerswald_url: str = "",
     auerswald_user: str = "",
     auerswald_password: str = "",
+    kiosk_url: str = "",
 ) -> type[BaseHTTPRequestHandler]:
-    panel = OfficePanel(inquiry_repo, order_repo)
+    panel = OfficePanel(inquiry_repo, order_repo, kiosk_url)
     expected = "Basic " + base64.b64encode(f"office:{password}".encode()).decode()
 
     class OfficePanelHandler(BaseHTTPRequestHandler):
@@ -736,14 +886,27 @@ def make_office_panel_handler(
                 _sidebar_rueckruf_count = len(items) if items else None
                 self._html(render_rueckruf(items, error))
                 return
+            if not parts:
+                # "/" also needs the actual rows (not just the count) for
+                # the Rückruf-nötig queue (§11 addendum) — same one fetch
+                # covers both the queue and the sidebar badge, still no
+                # second auerswald-sync request per page.
+                items, error = fetch_missed_board(auerswald_url, auerswald_user, auerswald_password)
+                _sidebar_rueckruf_count = len(items) if items else None
+                self._html(panel.render_queue(items))
+                return
             _sidebar_rueckruf_count = fetch_rueckruf_count(
                 auerswald_url, auerswald_user, auerswald_password
             )
-            if not parts:
+            if parts == ["anfragen"]:
                 q = parse_qs(parsed.query).get("q", [""])[0]
-                self._html(panel.render_queue(q))
+                self._html(panel.render_anfragen(q))
+            elif parts == ["auftraege"]:
+                q = parse_qs(parsed.query).get("q", [""])[0]
+                self._html(panel.render_auftraege(q))
             elif parts == ["inquiry", "new"]:
-                self._html(panel.render_inquiry_form())
+                phone = parse_qs(parsed.query).get("phone", [""])[0]
+                self._html(panel.render_inquiry_form(phone))
             elif len(parts) == 2 and parts[0] == "inquiry":
                 page = panel.render_inquiry(parts[1])
                 self._html(page) if page else self.send_error(404)
@@ -836,6 +999,7 @@ def create_office_panel_server(
     auerswald_url: str = "",
     auerswald_user: str = "",
     auerswald_password: str = "",
+    kiosk_url: str = "",
 ) -> HTTPServer:
     # Single-threaded on purpose: the shared sqlite3 connections must stay on the
     # thread that serves requests (bring-up bug, WORKLOG Entry 048). This also
@@ -843,7 +1007,13 @@ def create_office_panel_server(
     return HTTPServer(
         (host, port),
         make_office_panel_handler(
-            inquiry_repo, order_repo, password, auerswald_url, auerswald_user, auerswald_password
+            inquiry_repo,
+            order_repo,
+            password,
+            auerswald_url,
+            auerswald_user,
+            auerswald_password,
+            kiosk_url,
         ),
     )
 
@@ -874,6 +1044,12 @@ def main() -> None:
         default=os.environ.get("AUERSWALD_SYNC_PASSWORD", ""),
         help="Basic auth password for auerswald-sync (or set AUERSWALD_SYNC_PASSWORD)",
     )
+    parser.add_argument(
+        "--kiosk-url",
+        default=os.environ.get("KIOSK_URL", ""),
+        help="Base URL of the separate kitchen kiosk (or set KIOSK_URL) — "
+        "single source of truth for the optional 'full week' deep link, optional",
+    )
     args = parser.parse_args()
     if not args.password:
         raise SystemExit(
@@ -893,6 +1069,7 @@ def main() -> None:
         args.auerswald_url,
         args.auerswald_user,
         args.auerswald_password,
+        args.kiosk_url,
     )
     print(f"Office panel on http://{args.host}:{args.port}/ (user: office)")
     server.serve_forever()

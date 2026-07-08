@@ -2055,3 +2055,105 @@ Must not be changed
 	  merged")
 	•	no customer-name field invented client-side — customer_linkage stays
 	  opaque and unrendered until a real decision is made
+
+⸻
+
+Entry 058
+
+Date: 2026-07-08 — Office panel: Action Dashboard (§11 addendum)
+Scope: src/catering_system/ui/office_panel.py — new routes, queue rendering,
+version-target resolution; tests/unit/test_office_panel.py — migrated +
+14 new tests
+Status: accepted (OFFICE_PANEL_NAVIGATION_RETHINK_PACK_V1 §11–§16, narrow
+diff plan reviewed before code)
+
+Meaning
+	•	Startseite (`GET /`) no longer shows full Anfragen/Aufträge tables or
+	  a search box. It shows three action queues, top 5 rows each with an
+	  "Alle anzeigen" link to the full list: Rückruf nötig, Neue Anfragen,
+	  Aufträge mit nächstem Schritt. §6a's "Wo gibt es Blocker?" block is
+	  removed, replaced (not duplicated) by the richer "Aufträge mit
+	  nächstem Schritt" queue — same underlying `blockiert` list, one
+	  primary action per row instead of just a static reason
+	•	two new routes carry the full lists moved out of the Startseite,
+	  verbatim (same columns/order as §6a): `GET /anfragen`, `GET
+	  /auftraege`, each with its own search box (search no longer lives on
+	  the dashboard — a top-5 action queue isn't something you text-search,
+	  a full list is). Sidebar nav updated from `#anfragen`/`#auftraege`
+	  anchors to the real routes
+	•	`/` now fetches the full `fetch_missed_board(...)` result (not just
+	  the lightweight count) — one request still, reused for both the
+	  sidebar badge and the queue's top-5 rows. `items is None`
+	  (unconfigured/unreachable) omits the whole "Rückruf nötig" block, same
+	  graceful-degrade convention as the badge — the rest of the Startseite
+	  keeps rendering, not an error page
+	•	`GET /inquiry/new?phone=...` shows the number as read-only page
+	  context ("Anruf von: ...") above the form, used by the Rückruf
+	  queue's "Anfrage erfassen" link. Never written anywhere: Inquiry
+	  (domain/inquiry.py) has no phone/contact field at all, so there was
+	  nowhere to prefill it into even if we wanted to. No auto-create —
+	  the office worker still fills in and submits the form themselves
+	•	`_next_step_action()`: resolves one primary button per "Aufträge mit
+	  nächstem Schritt" row. Caught during implementation, not before: an
+	  earlier version of this logic (still in an earlier draft of the pack)
+	  picked the action from `evaluate_ready_to_send(...).reasons[0]`
+	  directly — wrong, because `operational_core_service.
+	  make_order_version_effective()` itself refuses a version whose
+	  kitchen print isn't confirmed (raises ValueError), while a freshly-
+	  converted order's first READY_TO_SEND reason is `no_effective_version`,
+	  not `kitchen_print_not_confirmed` (the facts check runs in that
+	  order). Following reasons[0] literally would have shown "Wirksam
+	  machen" before the version was even printed — a button that fails the
+	  instant it's clicked. Fixed to resolve straight from the target
+	  OrderVersion's own fields (kitchen_print_confirmed_at, then
+	  effective_order_version_id) instead — pack §14 corrected to match.
+	  Target version = `candidate_order_version_id` if it names a real
+	  version of this order, else the highest `version_number` (display
+	  fallback, not new truth — the field itself is documented in
+	  domain/order.py as "office-side progression hint"). Note:
+	  candidate_order_version_id is currently never set through the office
+	  panel UI (OrderService.set_candidate_order_version is service-layer
+	  only, unwired) — so today the fallback path is the one actually
+	  exercised; the candidate-preference branch is forward-compatible, not
+	  dead weight
+	•	kiosk deep link: single `--kiosk-url`/`KIOSK_URL` config (same
+	  pattern as `--auerswald-url`), threaded through
+	  make_office_panel_handler/create_office_panel_server/main(), stored
+	  once on `OfficePanel.kiosk_url`. Empty by default → no link shown.
+	  This is the only "full Woche" surface — no new office-panel route,
+	  per OFFICE_PANEL_EXECUTION_PACK_V1 §6 (Wochenübersicht stays
+	  kiosk-owned, panel may at most link to it)
+
+Completed
+	•	full suite: 236 passed (222 baseline + 2 from §6a + net-new additions
+	  this step: migrated 3 tests to the new routes, added 14 new tests —
+	  Rückruf-queue-from-stub, degraded-source-survives, kiosk-link
+	  present/absent, phone-hint-writes-nothing, top-5-cap-with-Alle-
+	  anzeigen, and five direct `_next_step_action()` tests covering
+	  candidate-preferred / latest-fallback / foreign-candidate-fallback /
+	  print-before-effective-ordering / no-versions-empty-string)
+	•	verified live: Startseite shows the three queues (no "Wo gibt es
+	  Blocker?"), `/anfragen` and `/auftraege` render the full tables with
+	  working search, sidebar links point at the real routes
+
+Open
+	•	push held pending owner/reviewer verdict per project workflow
+	•	kiosk cross-service link mechanics for the real Lenovo deployment
+	  (base URL value) — local dev only exercised via an explicit
+	  `--kiosk-url` test value; no real port/URL committed anywhere
+	•	row-count cap (5) and search relocation were both explicit owner
+	  decisions this step, not left implicit — see
+	  OFFICE_PANEL_NAVIGATION_RETHINK_PACK_V1 §11–§16 for the full reasoning
+	  trail
+
+Must not be changed
+	•	no Angebot/PDF/Senden/Ablehnen/Preise, no Core schema/domain/service/
+	  repository change, no configurator→Core bridge
+	•	Rückruf/Neue-Anfragen/Aufträge queues stay three visually distinct
+	  blocks — never merged into one list (§5)
+	•	no automatic Inquiry creation from a missed call; no phone/contact
+	  field added to Inquiry
+	•	`_next_step_action()` must keep resolving from the target
+	  OrderVersion's own fields (print-confirmed, then effective), never
+	  from `evaluate_ready_to_send(...).reasons[0]` directly — that
+	  ordering mismatch is exactly the bug this entry fixed

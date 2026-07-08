@@ -12,7 +12,7 @@ import pytest
 
 from catering_system.repositories.in_memory_inquiry_repository import InMemoryInquiryRepository
 from catering_system.repositories.in_memory_order_repository import InMemoryOrderRepository
-from catering_system.ui.office_panel import create_office_panel_server
+from catering_system.ui.office_panel import OfficePanel, create_office_panel_server
 
 _PASSWORD = "test-pw"
 _AUTH = "Basic " + base64.b64encode(f"office:{_PASSWORD}".encode()).decode()
@@ -227,9 +227,9 @@ def test_queue_shows_storniert_card_only_after_a_cancellation(panel: str) -> Non
     _post(f"{panel}/order/{oid}/cancel", {})
     _status, body = _get(f"{panel}/")
     assert _attention_counts(body)["Stornierte Aufträge prüfen"] == 1
-    # Cancelled orders drop out of the Blocker sub-list — nothing to act on.
-    blocker_html = body.split('id="blocker">')[1].split("<form")[0]
-    assert oid[:8] not in blocker_html
+    # Cancelled orders drop out of the "next step" queue — nothing to act on.
+    queue_html = body.split("Aufträge mit nächstem Schritt")[1]
+    assert oid[:8] not in queue_html
 
 
 def test_cancelled_actions_rejected_serverside(panel: str) -> None:
@@ -462,8 +462,10 @@ def test_queue_shows_attention_bar_and_empty_week(panel: str) -> None:
     assert "Stornierte Aufträge prüfen" not in body  # no cancelled orders yet
     assert "Diese Woche" in body
     assert "keine wirksamen Aufträge diese Woche" in body
-    assert "Wo gibt es Blocker?" in body
-    assert "keine Blocker." in body
+    assert "Neue Anfragen" in body
+    assert "keine neuen Anfragen." in body
+    assert "Aufträge mit nächstem Schritt" in body
+    assert "keine offenen Schritte." in body
 
 
 def test_attention_counts_reflect_new_inquiry_and_unconfirmed_order(panel: str) -> None:
@@ -482,9 +484,16 @@ def test_attention_counts_reflect_new_inquiry_and_unconfirmed_order(panel: str) 
     assert counts["Aufträge noch nicht wirksam"] == 1
     assert counts["Versandfreigabe blockiert"] == 1
     assert oid[:8] in body
-    # Blocker sub-list (§3 Arbeitszentrale) reuses the same evaluation.
-    assert "Wo gibt es Blocker?" in body
+    # "Aufträge mit nächstem Schritt" (§11 addendum) reuses the same
+    # evaluation for the reason text, but the button is resolved from the
+    # target version's own fields, not from reasons[0] directly: right
+    # after convert, print isn't confirmed yet, so the correct next step is
+    # "Druck bestätigen", never "Wirksam machen" (Core itself refuses that
+    # for an unprinted version).
+    assert "Aufträge mit nächstem Schritt" in body
     assert f'/order/{oid}">{oid[:8]}</a> — keine wirksame Auftragsversion' in body
+    assert f'action="/order/{oid}/print-confirm"' in body
+    assert f'action="/order/{oid}/effective"' not in body
 
 
 def test_order_row_shows_first_blocker_reason(panel: str) -> None:
@@ -507,7 +516,7 @@ def test_full_release_flow_clears_attention_counts(panel: str) -> None:
     assert counts["Druckbestätigung fehlt"] == 0
     assert counts["Aufträge noch nicht wirksam"] == 0
     assert counts["Versandfreigabe blockiert"] == 0
-    assert "keine Blocker." in body
+    assert "keine offenen Schritte." in body
 
 
 def test_diese_woche_shows_only_effective_orders_in_current_iso_week(panel: str) -> None:
@@ -535,38 +544,49 @@ def test_diese_woche_shows_only_effective_orders_in_current_iso_week(panel: str)
     # also appears in the sidebar nav link, which precedes the real content.
     # Diese Woche now sits above the Blocker section (§3 Arbeitszentrale), so
     # scope the check to that block only, not everything after it on the page.
-    diese_woche_html = body.split('id="diese-woche"')[1].split('id="blocker"')[0]
+    diese_woche_html = body.split('id="diese-woche"')[1].split("<h2>Neue Anfragen</h2>")[0]
     assert other_oid[:8] not in diese_woche_html
 
 
 def test_queue_tables_put_id_last_not_first(panel: str) -> None:
     """OFFICE_PANEL_NAVIGATION_RETHINK_PACK_V1 §4: ID demoted to a trailing
-    link column so office staff scan Datum/Ort/Status first."""
+    link column so office staff scan Datum/Ort/Status first. Full tables
+    live on /anfragen and /auftraege (§11 addendum), not the Startseite."""
     iid = _create_inquiry(panel)
     oid = _convert(panel, iid)
-    _status, body = _get(f"{panel}/")
+    _status, anfragen_body = _get(f"{panel}/anfragen")
     assert (
         "<th>Datum</th><th>Ort</th><th>CRM-Stufe</th><th>Verifizierung</th>"
         "<th>Auftrag</th><th>ID</th>"
-    ) in body
+    ) in anfragen_body
+    assert iid[:8] in anfragen_body
+
+    _status, auftraege_body = _get(f"{panel}/auftraege")
     assert (
         "<th>Freigabe</th><th>Blocker</th><th>Anfrage</th><th>Bestätigt</th><th>ID</th>"
-    ) in body
-    assert "noch nicht bestätigt" in body
-    assert f'<a href="/order/{oid}">{oid[:8]}</a></td></tr>' in body  # ID cell is last
+    ) in auftraege_body
+    assert "noch nicht bestätigt" in auftraege_body
+    assert f'<a href="/order/{oid}">{oid[:8]}</a></td></tr>' in auftraege_body  # ID cell is last
 
 
 def test_search_filters_inquiries_and_orders(panel: str) -> None:
+    """Search lives on /anfragen and /auftraege, not the Startseite (§11
+    addendum: the dashboard is an action queue, not a searchable table)."""
     hamburg_iid = _create_inquiry(panel)  # default location "Hamburg"
     luebeck_iid = _create_inquiry(panel, location_text="Lübeck")
 
-    _status, body = _get(f"{panel}/?q=L%C3%BCbeck")
+    _status, body = _get(f"{panel}/anfragen?q=L%C3%BCbeck")
     assert luebeck_iid[:8] in body
     assert hamburg_iid[:8] not in body
 
-    _status, body = _get(f"{panel}/?q=nichts-passt-hier")
+    _status, body = _get(f"{panel}/anfragen?q=nichts-passt-hier")
     assert luebeck_iid[:8] not in body and hamburg_iid[:8] not in body
     assert "keine" in body
+
+
+def test_dashboard_has_no_search_box(panel: str) -> None:
+    _status, body = _get(f"{panel}/")
+    assert 'class="searchbox"' not in body
 
 
 # -- Sidebar Rückruf badge --------------------------------------------------
@@ -648,3 +668,195 @@ def test_sidebar_badge_disappears_after_resolving_the_only_call() -> None:
         server.server_close()
         stub.shutdown()
         stub.server_close()
+
+
+# -- Action Dashboard (§11 addendum): Rückruf-nötig queue, degrade, kiosk --
+
+
+def test_dashboard_shows_rueckruf_queue_from_auerswald_stub() -> None:
+    resolved: list = []
+    stub = _make_auerswald_stub(resolved)
+    stub_thread = threading.Thread(target=stub.serve_forever, daemon=True)
+    stub_thread.start()
+    stub_host, stub_port = stub.server_address[:2]
+
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    server = create_office_panel_server(
+        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0,
+        auerswald_url=f"http://{stub_host}:{stub_port}",
+        auerswald_user="office", auerswald_password="secret",
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    base = f"http://{host}:{port}"
+    try:
+        _status, body = _get(f"{base}/")
+        assert "Rückruf nötig" in body
+        assert "01234" in body  # phone — the compact row is date/time/phone/contact only
+        assert 'action="/rueckruf/resolve"' in body
+        assert "/inquiry/new?phone=01234" in body  # "Anfrage erfassen" hint link
+        assert '<a href="/rueckruf">Alle anzeigen</a>' in body
+    finally:
+        server.shutdown()
+        server.server_close()
+        stub.shutdown()
+        stub.server_close()
+
+
+def test_dashboard_survives_degraded_rueckruf_source() -> None:
+    """Owner requirement: if the missed-call source is unreachable, the
+    Startseite must still render — the Rückruf queue is simply omitted
+    (same graceful-degrade convention as the sidebar badge), not an error
+    page, and the rest of the dashboard keeps working."""
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    server = create_office_panel_server(
+        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0,
+        auerswald_url="http://127.0.0.1:1", auerswald_user="u", auerswald_password="p",
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    base = f"http://{host}:{port}"
+    try:
+        status, body = _get(f"{base}/")
+        assert status == 200
+        assert "Rückruf nötig" not in body
+        assert "Neue Anfragen" in body
+        assert "Aufträge mit nächstem Schritt" in body
+        assert "Was braucht Aufmerksamkeit?" in body
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_dashboard_no_kiosk_link_when_kiosk_url_unset(panel: str) -> None:
+    status, body = _get(f"{panel}/")
+    assert status == 200
+    assert "Vollständige Wochenübersicht" not in body
+
+
+def test_dashboard_shows_kiosk_link_when_configured() -> None:
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    server = create_office_panel_server(
+        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0,
+        kiosk_url="http://kiosk.local:8082",
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    base = f"http://{host}:{port}"
+    try:
+        status, body = _get(f"{base}/")
+        assert status == 200
+        assert 'href="http://kiosk.local:8082"' in body
+        assert "Vollständige Wochenübersicht" in body
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_inquiry_new_shows_phone_hint_but_writes_nothing_to_inquiry(panel: str) -> None:
+    status, body = _get(f"{panel}/inquiry/new?phone=017112345")
+    assert status == 200
+    assert "Anruf von: 017112345" in body
+    iid = _create_inquiry(panel)  # phone was never a form field -> unaffected
+    _status, body = _get(f"{panel}/inquiry/{iid}")
+    assert "017112345" not in body
+
+
+def test_dashboard_queues_capped_at_five_with_alle_anzeigen_link(panel: str) -> None:
+    for _ in range(7):
+        _create_inquiry(panel)
+    _status, body = _get(f"{panel}/")
+    assert _attention_counts(body)["Neue Anfragen prüfen"] == 7
+    assert body.count('<button>In Auftrag umwandeln</button>') == 5
+    assert '<a href="/anfragen">Alle anzeigen</a>' in body
+    _status, full_body = _get(f"{panel}/anfragen")
+    assert full_body.count("<tr>") == 8  # header row + all 7, not just top 5
+
+
+# -- _next_step_action (§11 addendum §14, corrected version resolution) ----
+# OfficePanel is "kept separate from the HTTP handler for testability"
+# (class docstring) — tested directly here since the panel currently has no
+# HTTP route that ever sets candidate_order_version_id (B6's
+# set_candidate_order_version is service-layer only, unwired in the UI), so
+# these scenarios aren't reachable through the black-box HTTP tests above.
+
+
+def _panel_with_order():
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    panel = OfficePanel(inquiry_repo, order_repo)
+    inquiry = panel.inquiry_service.create_inquiry(
+        event_date=date(2026, 10, 1),
+        inquiry_source="phone",
+        crm_stage="Neue Anfrage",
+        customer_linkage={},
+        time_window_text="mittags",
+        location_text="Hamburg",
+        guest_count_estimate=10,
+        planning_mode="caterer_suggestion",
+        call_verification_required=False,
+        call_verification_status="not_required",
+    )
+    order, v1 = panel.order_service.convert_inquiry_to_order(inquiry)
+    return panel, order, v1
+
+
+def test_next_step_targets_latest_version_when_no_candidate_set() -> None:
+    panel, order, v1 = _panel_with_order()
+    action_html = panel._next_step_action(order)
+    assert "Druck bestätigen" in action_html
+    assert f'value="{v1.order_version_id}"' in action_html
+
+
+def test_next_step_prefers_candidate_over_latest_version() -> None:
+    panel, order, v1 = _panel_with_order()
+    v2 = panel.order_service.create_relevant_order_change_version(
+        order, event_date=date(2026, 10, 2), time_window_text="abends",
+        location_text="Kiel", guest_count_estimate=12, planning_mode="caterer_suggestion",
+    )
+    panel.order_service.set_candidate_order_version(order.order_id, v1.order_version_id)
+    order = panel._orders.get_order(order.order_id)
+    action_html = panel._next_step_action(order)
+    # Candidate is v1, not the higher version_number v2 -> v1 wins.
+    assert f'value="{v1.order_version_id}"' in action_html
+    assert v2.order_version_id not in action_html
+
+
+def test_next_step_never_offers_effective_before_print_confirmed() -> None:
+    """The real invariant this resolution exists to protect: Core itself
+    refuses make_order_version_effective() for an unprinted version."""
+    panel, order, v1 = _panel_with_order()
+    action_html = panel._next_step_action(order)
+    assert "print-confirm" in action_html
+    assert "effective" not in action_html
+
+    panel.core.confirm_kitchen_print(order.order_id, v1.order_version_id)
+    order = panel._orders.get_order(order.order_id)
+    action_html = panel._next_step_action(order)
+    assert "Wirksam machen" in action_html
+    assert f'action="/order/{order.order_id}/effective"' in action_html
+
+
+def test_next_step_falls_back_to_latest_when_candidate_is_foreign() -> None:
+    """Defensive case: a candidate_order_version_id that doesn't resolve to
+    any real version of this order must not crash the Startseite."""
+    from dataclasses import replace
+
+    panel, order, v1 = _panel_with_order()
+    broken = replace(order, candidate_order_version_id="does-not-exist")
+    action_html = panel._next_step_action(broken)
+    assert f'value="{v1.order_version_id}"' in action_html
+
+
+def test_next_step_empty_when_order_has_no_versions() -> None:
+    from dataclasses import replace
+
+    panel, order, _v1 = _panel_with_order()
+    fake_order = replace(order, order_id="unknown-order-id")
+    assert panel._next_step_action(fake_order) == ""

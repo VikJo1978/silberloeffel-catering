@@ -209,3 +209,185 @@ matching the safe-labels-step workflow):
 	5.	WORKLOG acceptance entry
 Later (own steps, not this pack): §6 option (b) if needed; any customer
 display-name resolution (needs its own Core or CRM-bridge pack first).
+
+⸻
+
+11. Addendum — Action Dashboard (2026-07-08)
+
+Context: §1–§10 above were written and §6 option (a) was implemented and
+shipped (commit ab47533, WORKLOG Entry 057) — reworded attention cards,
+Diese Woche promoted, a Blocker sub-list, ID demoted. Owner + external
+reviewer follow-up concluded (a) alone is not enough: the Startseite still
+reads as "all the data" rather than "what do I do now." This addendum
+authorizes the next increment — turning the Startseite into an action
+dashboard — following the same scoping discipline as the base pack. Still
+planning-only; no code in this addendum.
+
+12. What changes on the Startseite
+
+The Startseite (`GET /`) stops showing the full Anfragen/Aufträge tables.
+It shows three queues only, each a short list of rows that need an action,
+built from data already computed today — no new query, no new domain
+field:
+	•	Rückruf nötig — today's `_sidebar_rueckruf_count`-backed list
+		(fetch_missed_board), same source as `/rueckruf` today, just the top
+		N rows inline instead of only a count + link
+	•	Neue Anfragen — today's `neue_anfragen` list (inquiries with no
+		linked order), unchanged
+	•	Aufträge mit nächstem Schritt — today's `blockiert` list (already a
+		superset of `ohne_druck`, since `kitchen_print_not_confirmed` is one
+		of `evaluate_ready_to_send`'s own reasons — confirmed in
+		domain/ready_to_send.py), the same list §6a's "Wo gibt es Blocker?"
+		already renders. This addendum's queue replaces that block rather
+		than duplicating it: same data, richer per-row action (see §14)
+The attention-bar counters (§4) stay at the very top, unchanged — they are
+the "at a glance" summary; the three queues below are the work surface that
+replaces the old full tables. Their `#anfragen`/`#auftraege` anchor links
+must be repointed to the new routes in §13, not to in-page anchors that no
+longer contain the full tables.
+"Diese Woche" (§3) stays as its existing compact 5-column mini-view — it is
+already short and non-tabular-feeling; no change needed here.
+
+13. Full lists move to separate routes — exact inventory
+
+Of the four full lists named in the discussion, only two actually need new
+routes; the other two already exist elsewhere and should be linked to, not
+rebuilt:
+	•	Anfragen — needs a new route, `GET /anfragen`: the exact table §6a
+		already built (Datum/Ort/CRM-Stufe/Verifizierung/Auftrag/ID), moved
+		verbatim out of render_queue() into its own render method
+	•	Aufträge — needs a new route, `GET /auftraege`: same, the exact
+		Freigabe/Blocker/Anfrage/Bestätigt/ID table, moved verbatim
+	•	Rückrufliste — already has its own route, `GET /rueckruf` (built in
+		the earlier Rückrufe step). No new route needed; the dashboard queue
+		in §12 is a subset view of the same data, not a duplicate surface
+	•	Woche (full week / multi-week) — already exists as the kitchen kiosk
+		(`catering_system.ui.kiosk_server`, separate read-only service,
+		reuses the same `WochenuebersichtService.get_week_overview`). Per
+		OFFICE_PANEL_EXECUTION_PACK_V1 §6, Wochenübersicht editing/rebuilding
+		inside the office panel is out of scope — "the panel may at most
+		link to the kiosk view." No new office-panel route; a link to the
+		existing kiosk is enough if a full week view is wanted from the
+		panel. The exact cross-service link (kiosk runs on a different port,
+		8082 in local dev) is a small implementation detail for the coding
+		step, not a scope decision — flagged here so it isn't forgotten, not
+		blocking this addendum
+Sidebar nav updates from anchor links to real routes: "Anfragen" →
+`/anfragen`, "Aufträge" → `/auftraege`; "Diese Woche" and "Rückrufliste"
+entries are unchanged (still `/#diese-woche` and `/rueckruf`).
+
+14. Exact action → route/service-call mapping (no pseudo-actions)
+
+Per the rule "if there is no exact existing action behind a button, that
+button must not appear," every row action below is traced to the existing
+route it already POSTs to today, unchanged:
+
+Rückruf nötig (per row):
+	•	"Erledigt" → `POST /rueckruf/resolve` (existing — identical to the
+		button already on `/rueckruf` today)
+	•	"Anfrage erfassen" → a plain link to `GET /inquiry/new` (existing
+		route/form). Not a prefill in the domain sense: Inquiry
+		(domain/inquiry.py) has no phone/contact field at all today — only
+		event_date, time_window_text, location_text, guest_count_estimate,
+		planning_mode, call_verification_*, and the opaque customer_linkage.
+		"Prefilled" can only mean the phone number is carried as a query
+		param and shown as read-only page context above the form (e.g. "Anruf
+		von: 0171...") for the office worker's own reference — it is never
+		written into any Inquiry field, because no such field exists. Adding
+		one is a domain decision this addendum does not make (see §15)
+
+Neue Anfragen (per row, exactly one primary action, chosen the same way
+render_inquiry() already decides which button to show today):
+	•	if `inq.call_verification_required and inq.call_verification_status
+		!= "verified"` → "Telefonisch verifiziert" → `POST
+		/inquiry/{id}/verify` (existing route, today only on the inquiry
+		detail page — moving it inline to the dashboard row is reuse of the
+		same call, not a new action)
+	•	else → "In Auftrag umwandeln" → `POST /inquiry/{id}/convert`
+		(existing route)
+	•	"Öffnen" (plain navigation link to `GET /inquiry/{id}`) may sit
+		alongside as a secondary link, not a second button — opening the
+		detail page is navigation, not an action, so it does not break the
+		"one primary action per row" rule
+
+Aufträge mit nächstem Schritt (per row, exactly one primary action). NOT
+derived from `evaluate_ready_to_send(order_id).reasons[0]` directly — an
+earlier draft of this addendum said so and that was wrong, caught during
+implementation: `operational_core_service.make_order_version_effective()`
+itself refuses a version whose kitchen print isn't confirmed (raises
+ValueError), but a freshly-converted order's first READY_TO_SEND reason is
+`no_effective_version`, not `kitchen_print_not_confirmed` (the facts check
+order in that sequence). Following `reasons[0]` literally would have shown
+"Wirksam machen" before the version was even printed — a button that fails
+the moment it's clicked, exactly the invented-pseudo-action failure mode
+§14's own rule exists to prevent. Correct resolution, derived from the
+target OrderVersion's own fields instead:
+	•	resolve the target version the same way as before: `order.candidate_
+		order_version_id` if it names a real version of this order, else the
+		highest `version_number` (display fallback, not new truth)
+	•	if that version's `kitchen_print_confirmed_at is None` → "Druck
+		bestätigen" → `POST /order/{id}/print-confirm` (existing route)
+	•	else if `version.order_version_id != order.effective_order_version_id`
+		→ "Wirksam machen" → `POST /order/{id}/effective` (existing route)
+	•	else → no button (should not occur for a row in `blockiert`, defensive
+		only)
+	•	cancelled orders cannot occur here: `blockiert` is filtered from
+		`active_orders`, which already excludes cancelled orders
+	•	"Öffnen" (plain navigation link to `GET /order/{id}`) may sit
+		alongside as a secondary link, same reasoning as above
+
+15. Explicit non-goals
+
+	•	no automatic Inquiry creation from a missed call — the auerswald-sync
+		integration keeps its standing rule ("never writes into Core, never
+		creates an Inquiry automatically"); §14's "Anfrage erfassen" is a
+		link the office worker clicks and completes themselves, never a
+		background action
+	•	no new phone/contact field added to Inquiry in this step — the
+		"prefill" in §14 is page-context display only, not a stored value;
+		adding a real field is a separate Core domain decision, not part of
+		this addendum
+	•	"Freigabe anfordern" (`POST /order/{id}/ready`, i.e.
+		`request_ready_to_send`) is explicitly NOT one of the §14 next-step
+		actions. Reading operational_core_service.py: it "changes no order
+		truth in either branch" — it only emits an audit event
+		(OrderReadyToSend / OrderReadyToSendBlocked) and does not affect
+		`ready`, which is derived purely from facts (effective version +
+		print confirmation, domain/ready_to_send.py). Treating it as a
+		blocker-resolving action would misrepresent what it does. It stays
+		on the order detail page only, exactly as today
+	•	no merging of the three queues into one list — Rückruf/Neue
+		Anfragen/Aufträge mit nächstem Schritt stay three visually distinct
+		blocks, each mapped to exactly one of the three vocabularies that
+		§5 already keeps apart. A row from one queue never appears in
+		another
+	•	no Angebot/PDF/Senden/Preise/Ablehnen, no Core schema/domain/service/
+		repository change, no configurator→Core bridge — unchanged from §7
+	•	hiding ID/CRM-Stufe/Verifizierung/etc. from the Startseite is a
+		visibility decision only: every one of those fields stays exactly as
+		shipped in §6a on the new `/anfragen` and `/auftraege` routes (§13)
+		and on the existing detail pages — nothing is removed from the
+		system
+	•	the office panel does not grow CRM features (contact history, notes,
+		follow-up scheduling) — EspoCRM stays the side-context/deep-link
+		target per OFFICE_PANEL_EXECUTION_PACK_V1 §2; this addendum only
+		reshapes how existing Core-owned actions are surfaced
+
+16. Open items before coding
+
+	•	kiosk cross-service link mechanics (§13, Woche) — needs a base-URL
+		decision (env var vs. hardcoded local port), small and not scope-
+		affecting, resolve at diff-plan time for that specific piece
+	•	exact row count / truncation for each queue (e.g. top 5–10 as
+		DeepSeek suggested) vs. showing all — a display detail, not a scope
+		question, decide during the diff-plan step
+
+Resolved (owner confirmed, 2026-07-08):
+	•	§12's "Aufträge mit nächstem Schritt" REPLACES §6a's "Wo gibt es
+		Blocker?" heading/section — it is not shown alongside it. Same
+		underlying `blockiert` list; showing both would put two near-
+		identical attention zones on the Startseite ("here are the
+		blockers" and "here's what to do about them"), which reintroduces
+		the overload this addendum exists to remove. The implementation step
+		must delete §6a's "Wo gibt es Blocker?" block, not add a second one
+		next to it.
