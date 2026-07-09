@@ -31,3 +31,29 @@ def normalize_public_wix_inquiry_payload(raw: Mapping[str, Any]) -> dict[str, An
         if isinstance(v, str):
             out[key] = v.strip()
     return out
+
+
+def normalize_public_website_inquiry_payload(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate/sanitize/minimally normalize before website_form adapter (§8.2).
+
+    Same thin, adapter-specific pass as normalize_public_wix_inquiry_payload —
+    strips user-controlled text fields, copies to a new dict. Length caps and
+    field-shape validation stay the website_form adapter's own job
+    (WEBSITE_FORM_INTAKE_TO_INQUIRY_PACK_V1 §5/§6), not this layer's.
+    """
+    out: dict[str, Any] = dict(raw)
+    for key in (
+        "location_text",
+        "time_window_text",
+        "company",
+        "name",
+        "event_type",
+        "phone",
+        "email",
+        "message",
+        "submission_id",
+    ):
+        v = out.get(key)
+        if isinstance(v, str):
+            out[key] = v.strip()
+    return out
