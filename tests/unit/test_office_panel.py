@@ -1064,3 +1064,108 @@ def test_proposal_preview_creates_nothing_in_core() -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+# -- "Anfrage aus Vorschau vorbereiten" (PROPOSAL_PREVIEW_MANUAL_INQUIRY_
+# PACK_V1 §4, narrowed): GET-only link from a rendered preview into the
+# existing /inquiry/new form, carrying only event_date + guest_count_estimate.
+
+
+def _prepare_link_query(body: str) -> str:
+    """Extract the query string of the 'Anfrage aus Vorschau vorbereiten' link."""
+    assert "Anfrage aus Vorschau vorbereiten" in body
+    return body.split('href="/inquiry/new?')[1].split('"')[0]
+
+
+def test_proposal_preview_contains_prepare_link_with_safe_hints_only(panel: str) -> None:
+    _status, _url, body = _post(f"{panel}/proposal-preview", {"payload_json": _proposal()})
+    query = _prepare_link_query(body)
+    params = urllib.parse.parse_qs(query)
+    # exactly the two safe, real-field hints — nothing else
+    assert params == {"event_date": ["2026-09-12"], "guest_count_estimate": ["30"]}
+    for forbidden in (
+        "title",
+        "notes",
+        "items_summary",
+        "selected_items",
+        "proposal_id",
+        "unit_price",
+        "total_price",
+        "calculated_total_net",
+        "calculated_total_gross",
+        "source",
+    ):
+        assert forbidden not in params
+
+
+def test_inquiry_form_prefills_from_query(panel: str) -> None:
+    status, body = _get(f"{panel}/inquiry/new?event_date=2026-09-12&guest_count_estimate=30")
+    assert status == 200
+    assert 'name="event_date" value="2026-09-12"' in body
+    assert 'name="guest_count_estimate" inputmode="numeric" value="30"' in body
+    # still the existing form with its explicit submit — no new write control
+    assert "Anfrage anlegen" in body
+
+
+def test_inquiry_form_without_query_renders_empty_prefill(panel: str) -> None:
+    status, body = _get(f"{panel}/inquiry/new")
+    assert status == 200
+    assert 'name="event_date" value=""' in body
+    assert 'name="guest_count_estimate" inputmode="numeric" value=""' in body
+
+
+def test_prepare_link_get_creates_nothing_in_core() -> None:
+    """Following the prepare link (GET with hints) must not create anything."""
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    server = create_office_panel_server(
+        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    try:
+        status, _body = _get(
+            f"http://{host}:{port}/inquiry/new?event_date=2026-09-12&guest_count_estimate=30"
+        )
+        assert status == 200
+        assert inquiry_repo.list_all() == []
+        assert order_repo.list_orders() == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_manual_submit_wins_over_query_hints() -> None:
+    """Query hints are prefill only: the office-edited form values are what
+    create the Inquiry, and no Order/OrderVersion appears anywhere."""
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    server = create_office_panel_server(
+        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    base = f"http://{host}:{port}"
+    try:
+        # office saw hints 2026-09-12 / 30, but edited both before submitting
+        _status, _url, body = _post(
+            f"{base}/inquiry/new",
+            {
+                "event_date": "2026-10-05",
+                "inquiry_source": "manual",
+                "time_window_text": "",
+                "location_text": "",
+                "guest_count_estimate": "25",
+                "planning_mode": "caterer_suggestion",
+            },
+        )
+        inquiries = inquiry_repo.list_all()
+        assert len(inquiries) == 1
+        assert inquiries[0].event_date.isoformat() == "2026-10-05"
+        assert inquiries[0].guest_count_estimate == 25
+        assert order_repo.list_orders() == []
+    finally:
+        server.shutdown()
+        server.server_close()

@@ -397,6 +397,20 @@ def render_proposal_preview(payload: dict) -> str:
     def _opt(value: object) -> str:
         return _e(value) if value is not None and value != "" else "–"
 
+    # "Anfrage aus Vorschau vorbereiten" (PROPOSAL_PREVIEW_MANUAL_INQUIRY_PACK
+    # _V1 §4, narrowed by review 2026-07-09): a GET-only link into the existing
+    # /inquiry/new form, carrying ONLY the two hints that map to real, editable
+    # Inquiry fields — event_date and guest_count_estimate. Deliberately NOT in
+    # the URL: title, notes, items, prices, proposal_id, source — the preview
+    # page itself is the read-only context for those. Following the link writes
+    # nothing; the only write stays the existing explicit form submit.
+    prepare_query = urlencode(
+        {
+            "event_date": payload["event_date"],
+            "guest_count_estimate": payload["guest_count"],
+        }
+    )
+
     item_rows = "".join(
         "<tr>"
         f"<td>{_e(item['name'])}</td>"
@@ -419,6 +433,7 @@ def render_proposal_preview(payload: dict) -> str:
 </table>
 <h2>Positionen (Vorschlag)</h2>
 <table><tr><th>Name</th><th>Menge</th><th>Einzelpreis</th><th>Gesamt</th><th>Notiz</th></tr>{item_rows}</table>
+<p><a href="/inquiry/new?{prepare_query}">Anfrage aus Vorschau vorbereiten</a></p>
 <p><a href="/proposal-preview">Weitere Vorschau anzeigen</a></p>"""
     return _page("Angebots-Import (Vorschau)", body)
 
@@ -736,19 +751,26 @@ class OfficePanel:
 
     # -- inquiries -------------------------------------------------------
 
-    def render_inquiry_form(self, phone: str = "") -> str:
+    def render_inquiry_form(
+        self, phone: str = "", event_date: str = "", guest_count_estimate: str = ""
+    ) -> str:
         src_opts = "".join(f'<option value="{s}">{s}</option>' for s in _OFFICE_SOURCES)
         # Rückruf -> Inquiry hint only (§11 addendum §14): Inquiry has no
         # phone/contact field at all (domain/inquiry.py), so this is never
         # written anywhere — it's page context for the office worker, shown
         # once, not a prefilled form field bound to any Inquiry attribute.
         phone_hint = f'<p class="subtitle">Anruf von: {_e(phone)}</p>' if phone else ""
+        # event_date / guest_count_estimate: optional prefill hints from the
+        # proposal preview link (PROPOSAL_PREVIEW_MANUAL_INQUIRY_PACK_V1 §4).
+        # Prefill only — both fields stay editable and the submitted form
+        # values are what create_inquiry sees; the query hints never override
+        # office input and are never written anywhere by themselves.
         body = phone_hint + f"""<form method="post" action="/inquiry/new"><fieldset>
-<p><label>Datum*</label><input type="date" name="event_date" required></p>
+<p><label>Datum*</label><input type="date" name="event_date" value="{_e(event_date)}" required></p>
 <p><label>Kanal</label><select name="inquiry_source">{src_opts}</select></p>
 <p><label>Zeitfenster</label><input name="time_window_text"></p>
 <p><label>Ort</label><input name="location_text"></p>
-<p><label>Gäste (ca.)</label><input name="guest_count_estimate" inputmode="numeric"></p>
+<p><label>Gäste (ca.)</label><input name="guest_count_estimate" inputmode="numeric" value="{_e(guest_count_estimate)}"></p>
 <p><label>Planungsmodus</label>{_planning_mode_select(PLANNING_MODES[0])}</p>
 <p><label>Rückruf-Verifizierung nötig</label><input type="checkbox" name="call_verification_required" value="1"></p>
 <p><button type="submit">Anfrage anlegen</button></p>
@@ -1030,8 +1052,14 @@ def make_office_panel_handler(
             elif parts == ["proposal-preview"]:
                 self._html(render_proposal_preview_form())
             elif parts == ["inquiry", "new"]:
-                phone = parse_qs(parsed.query).get("phone", [""])[0]
-                self._html(panel.render_inquiry_form(phone))
+                q = parse_qs(parsed.query)
+                self._html(
+                    panel.render_inquiry_form(
+                        phone=q.get("phone", [""])[0],
+                        event_date=q.get("event_date", [""])[0],
+                        guest_count_estimate=q.get("guest_count_estimate", [""])[0],
+                    )
+                )
             elif len(parts) == 2 and parts[0] == "inquiry":
                 page = panel.render_inquiry(parts[1])
                 self._html(page) if page else self.send_error(404)
