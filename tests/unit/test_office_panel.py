@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import html
 import json
 import re
 import threading
@@ -1221,31 +1222,26 @@ def test_proposal_preview_creates_nothing_in_core() -> None:
 # existing /inquiry/new form, carrying only event_date + guest_count_estimate.
 
 
-def _prepare_link_query(body: str) -> str:
-    """Extract the query string of the 'Anfrage aus Vorschau vorbereiten' link."""
-    assert "Anfrage aus Vorschau vorbereiten" in body
-    return body.split('href="/inquiry/new?')[1].split('"')[0]
+def _prepare_form_hidden_payload(body: str) -> dict:
+    """Extract and JSON-decode the prepare form's hidden payload_json field."""
+    assert 'action="/proposal-preview/prepare"' in body
+    raw = body.split('name="payload_json" value="')[1].split('">')[0]
+    return json.loads(html.unescape(raw))
 
 
-def test_proposal_preview_contains_prepare_link_with_safe_hints_only(panel: str) -> None:
+def test_proposal_preview_contains_prepare_form_with_full_payload(panel: str) -> None:
+    """PROPOSAL_PREVIEW_INTAKE_MAPPING_IMPLEMENTATION_PACK_V1 §3/§6: the
+    prepare button is now a POST form (not a GET link with two safe hints),
+    carrying the already-validated payload re-serialized, unmodified — the
+    mapping/stripping of prices happens at prepare time (§5/§6), not here."""
     _status, _url, body = _post(f"{panel}/proposal-preview", {"payload_json": _proposal()})
-    query = _prepare_link_query(body)
-    params = urllib.parse.parse_qs(query)
-    # exactly the two safe, real-field hints — nothing else
-    assert params == {"event_date": ["2026-09-12"], "guest_count_estimate": ["30"]}
-    for forbidden in (
-        "title",
-        "notes",
-        "items_summary",
-        "selected_items",
-        "proposal_id",
-        "unit_price",
-        "total_price",
-        "calculated_total_net",
-        "calculated_total_gross",
-        "source",
-    ):
-        assert forbidden not in params
+    assert "Anfrage aus Vorschau vorbereiten" in body
+    hidden = _prepare_form_hidden_payload(body)
+    assert hidden["title"] == "Angebot Sommerfest"
+    assert hidden["event_date"] == "2026-09-12"
+    assert hidden["guest_count"] == 30
+    assert hidden["selected_items"][0]["name"] == "Mini Wraps"
+    assert hidden["proposal_id"] == "local-42"
 
 
 def test_inquiry_form_prefills_from_query(panel: str) -> None:
@@ -1316,6 +1312,218 @@ def test_manual_submit_wins_over_query_hints() -> None:
         assert inquiries[0].event_date.isoformat() == "2026-10-05"
         assert inquiries[0].guest_count_estimate == 25
         assert order_repo.list_orders() == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+# -- POST /proposal-preview/prepare (PROPOSAL_PREVIEW_INTAKE_MAPPING_
+# IMPLEMENTATION_PACK_V1): read-only mapping step between the preview and
+# the existing /inquiry/new form. Writes nothing; the only write anywhere
+# in this flow stays the pre-existing explicit POST /inquiry/new submit.
+
+
+def _prepare(base: str, proposal_json: str) -> tuple[int, str]:
+    status, _url, body = _post(f"{base}/proposal-preview/prepare", {"payload_json": proposal_json})
+    return status, body
+
+
+def test_prepare_renders_inquiry_form_with_mapped_intake_fields(panel: str) -> None:
+    status, body = _prepare(panel, _proposal())
+    assert status == 200
+    assert "Anfrage anlegen" in body  # still the existing, unmodified form
+    assert 'name="inquiry_source"' in body
+    assert '<option value="configurator" selected>' in body
+    assert 'name="event_date" value="2026-09-12"' in body
+    assert 'name="guest_count_estimate" inputmode="numeric" value="30"' in body
+    assert 'name="intake_subject" value="Angebot Sommerfest"' in body
+    assert ">Freitext aus Angebotsphase</textarea>" in body  # intake_message from notes
+    assert ">Mini Wraps × 30</textarea>" in body  # intake_summary
+    assert 'name="intake_external_ref" value="local-42"' in body  # from proposal_id
+
+
+def test_prepare_intake_summary_falls_back_to_name_without_quantity(panel: str) -> None:
+    proposal = _proposal(
+        selected_items=[{"name": "Servietten"}, {"name": "Mini Wraps", "quantity": 10}]
+    )
+    _status, body = _prepare(panel, proposal)
+    assert ">Servietten\nMini Wraps × 10</textarea>" in body
+
+
+def test_prepare_response_contains_no_price_figures(panel: str) -> None:
+    _status, body = _prepare(panel, _proposal())
+    for forbidden in ("€", "2.9", "87.0", "103.53", "unit_price", "total_price"):
+        assert forbidden not in body
+
+
+def test_prepare_missing_notes_and_proposal_id_prefill_empty(panel: str) -> None:
+    proposal = _proposal(remove=("notes", "proposal_id"))
+    _status, body = _prepare(panel, proposal)
+    assert 'name="intake_external_ref" value=""' in body
+    assert "<textarea name=\"intake_message\" rows=\"4\"></textarea>" in body
+
+
+def test_prepare_invalid_json_is_400(panel: str) -> None:
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _post(f"{panel}/proposal-preview/prepare", {"payload_json": "{not json"})
+    assert exc.value.code == 400
+    body = exc.value.read().decode("utf-8")
+    assert "Ungültiges JSON" in body
+
+
+def test_prepare_wrong_schema_version_is_400(panel: str) -> None:
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _post(
+            f"{panel}/proposal-preview/prepare",
+            {"payload_json": _proposal(schema_version="something_else")},
+        )
+    assert exc.value.code == 400
+
+
+def test_prepare_handles_long_multiline_notes_and_many_items(panel: str) -> None:
+    """Regression guard for the transport decision (pack §3): a long,
+    multi-paragraph note plus many selected_items must round-trip correctly
+    through the POST body — this would be exactly the case a GET query
+    string handles awkwardly or truncates."""
+    long_note = "Kunde ruft zurück.\n\n" + ("Sehr ausführlicher Wunschtext. " * 60)
+    many_items = [{"name": f"Position {i}", "quantity": i} for i in range(1, 21)]
+    proposal = _proposal(notes=long_note, selected_items=many_items)
+    status, body = _prepare(panel, proposal)
+    assert status == 200
+    assert "Sehr ausführlicher Wunschtext." in body
+    assert "Position 1 × 1" in body
+    assert "Position 20 × 20" in body
+
+
+def test_prepare_creates_nothing_in_core() -> None:
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    server = create_office_panel_server(
+        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    try:
+        status, _body = _prepare(f"http://{host}:{port}", _proposal())
+        assert status == 200
+        assert inquiry_repo.list_all() == []
+        assert order_repo.list_orders() == []
+        assert order_repo._versions == {}  # noqa: SLF001
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_explicit_submit_after_prepare_uses_edited_values_not_proposal_defaults() -> None:
+    """The office sees prepare's prefilled values (from the proposal) but
+    edits them before submitting — the edited values must win, exactly like
+    the existing query-hint flow's test_manual_submit_wins_over_query_hints."""
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    server = create_office_panel_server(
+        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    base = f"http://{host}:{port}"
+    try:
+        status, _body = _prepare(base, _proposal())
+        assert status == 200
+        _status, _url, body = _post(
+            f"{base}/inquiry/new",
+            {
+                "event_date": "2026-10-05",
+                "inquiry_source": "manual",
+                "time_window_text": "",
+                "location_text": "",
+                "guest_count_estimate": "25",
+                "planning_mode": "caterer_suggestion",
+                "intake_subject": "Vom Büro überarbeiteter Betreff",
+                "intake_message": "",
+                "intake_summary": "",
+                "intake_external_ref": "",
+            },
+        )
+        inquiries = inquiry_repo.list_all()
+        assert len(inquiries) == 1
+        assert inquiries[0].event_date.isoformat() == "2026-10-05"
+        assert inquiries[0].guest_count_estimate == 25
+        assert inquiries[0].inquiry_source == "manual"
+        assert inquiries[0].intake_subject == "Vom Büro überarbeiteter Betreff"
+        assert order_repo.list_orders() == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_prepare_then_submit_then_convert_does_not_leak_intake_into_order(panel: str) -> None:
+    """Full flow: prepare -> explicit submit -> convert. selected_items never
+    become OrderVersion.items; no price ever reaches Core."""
+    _status, prepare_body = _prepare(panel, _proposal())
+    assert "Mini Wraps × 30" in prepare_body
+
+    _status, url, _body = _post(
+        f"{panel}/inquiry/new",
+        {
+            "event_date": "2026-09-12",
+            "inquiry_source": "configurator",
+            "time_window_text": "",
+            "location_text": "",
+            "guest_count_estimate": "30",
+            "planning_mode": "caterer_suggestion",
+            "intake_subject": "Angebot Sommerfest",
+            "intake_message": "Freitext aus Angebotsphase",
+            "intake_summary": "Mini Wraps × 30",
+            "intake_external_ref": "local-42",
+        },
+    )
+    iid = url.rsplit("/", 1)[-1]
+    oid = _convert(panel, iid)
+    status, order_body = _get(f"{panel}/order/{oid}")
+    assert status == 200
+    assert "Mini Wraps" not in order_body
+    assert "2.9" not in order_body and "87.0" not in order_body
+
+    from dataclasses import fields
+
+    from catering_system.domain.order import Order, OrderVersion
+
+    assert not any(f.name.startswith("intake_") for f in fields(Order))
+    assert not any(f.name.startswith("intake_") for f in fields(OrderVersion))
+
+
+def test_prepare_then_submit_does_not_change_wochenuebersicht() -> None:
+    from catering_system.services.wochenuebersicht_service import WochenuebersichtService
+
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    server = create_office_panel_server(
+        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    base = f"http://{host}:{port}"
+    week = WochenuebersichtService(order_repo)
+    before = week.get_week_overview(2026, 37)
+    try:
+        _prepare(base, _proposal())
+        _post(
+            f"{base}/inquiry/new",
+            {
+                "event_date": "2026-09-12",
+                "inquiry_source": "configurator",
+                "time_window_text": "",
+                "location_text": "",
+                "guest_count_estimate": "30",
+                "planning_mode": "caterer_suggestion",
+                "intake_subject": "Angebot Sommerfest",
+            },
+        )
+        after = week.get_week_overview(2026, 37)
+        assert after == before
     finally:
         server.shutdown()
         server.server_close()

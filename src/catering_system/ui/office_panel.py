@@ -404,19 +404,17 @@ def render_proposal_preview(payload: dict) -> str:
     def _opt(value: object) -> str:
         return _e(value) if value is not None and value != "" else "–"
 
-    # "Anfrage aus Vorschau vorbereiten" (PROPOSAL_PREVIEW_MANUAL_INQUIRY_PACK
-    # _V1 §4, narrowed by review 2026-07-09): a GET-only link into the existing
-    # /inquiry/new form, carrying ONLY the two hints that map to real, editable
-    # Inquiry fields — event_date and guest_count_estimate. Deliberately NOT in
-    # the URL: title, notes, items, prices, proposal_id, source — the preview
-    # page itself is the read-only context for those. Following the link writes
-    # nothing; the only write stays the existing explicit form submit.
-    prepare_query = urlencode(
-        {
-            "event_date": payload["event_date"],
-            "guest_count_estimate": payload["guest_count"],
-        }
-    )
+    # "Anfrage aus Vorschau vorbereiten" (PROPOSAL_PREVIEW_INTAKE_MAPPING_
+    # IMPLEMENTATION_PACK_V1 §3/§6): POST prepare step, not a GET link —
+    # title/notes/selected_items summary can be long/multiline, which the
+    # 2026-07-09 review already flagged as too fragile for a query string
+    # (see PROPOSAL_PREVIEW_MANUAL_INQUIRY_PACK_V1 §9). The hidden field
+    # carries the already-validated payload, re-serialized — not the
+    # office's original raw textarea text — so /proposal-preview/prepare can
+    # re-run parse_proposal_payload() as the single source of validation.
+    # Following this form writes nothing; the only write stays the existing
+    # explicit /inquiry/new submit.
+    prepare_payload_json = json.dumps(payload)
 
     item_rows = "".join(
         "<tr>"
@@ -440,7 +438,10 @@ def render_proposal_preview(payload: dict) -> str:
 </table>
 <h2>Positionen (Vorschlag)</h2>
 <table><tr><th>Name</th><th>Menge</th><th>Einzelpreis</th><th>Gesamt</th><th>Notiz</th></tr>{item_rows}</table>
-<p><a href="/inquiry/new?{prepare_query}">Anfrage aus Vorschau vorbereiten</a></p>
+<form method="post" action="/proposal-preview/prepare">
+<input type="hidden" name="payload_json" value="{_e(prepare_payload_json)}">
+<button type="submit">Anfrage aus Vorschau vorbereiten</button>
+</form>
 <p><a href="/proposal-preview">Weitere Vorschau anzeigen</a></p>"""
     return _page("Angebots-Import (Vorschau)", body)
 
@@ -759,19 +760,33 @@ class OfficePanel:
     # -- inquiries -------------------------------------------------------
 
     def render_inquiry_form(
-        self, phone: str = "", event_date: str = "", guest_count_estimate: str = ""
+        self,
+        phone: str = "",
+        event_date: str = "",
+        guest_count_estimate: str = "",
+        inquiry_source: str = "",
+        intake_subject: str = "",
+        intake_message: str = "",
+        intake_summary: str = "",
+        intake_external_ref: str = "",
     ) -> str:
-        src_opts = "".join(f'<option value="{s}">{s}</option>' for s in _OFFICE_SOURCES)
+        src_opts = "".join(
+            f'<option value="{s}"{" selected" if s == inquiry_source else ""}>{s}</option>'
+            for s in _OFFICE_SOURCES
+        )
         # Rückruf -> Inquiry hint only (§11 addendum §14): Inquiry has no
         # phone/contact field at all (domain/inquiry.py), so this is never
         # written anywhere — it's page context for the office worker, shown
         # once, not a prefilled form field bound to any Inquiry attribute.
         phone_hint = f'<p class="subtitle">Anruf von: {_e(phone)}</p>' if phone else ""
-        # event_date / guest_count_estimate: optional prefill hints from the
-        # proposal preview link (PROPOSAL_PREVIEW_MANUAL_INQUIRY_PACK_V1 §4).
-        # Prefill only — both fields stay editable and the submitted form
-        # values are what create_inquiry sees; the query hints never override
-        # office input and are never written anywhere by themselves.
+        # event_date / guest_count_estimate / inquiry_source / intake_*:
+        # optional prefill hints, from either the proposal preview's GET hint
+        # (event_date/guest_count_estimate only, PROPOSAL_PREVIEW_MANUAL_
+        # INQUIRY_PACK_V1 §4) or the POST prepare step (all seven,
+        # PROPOSAL_PREVIEW_INTAKE_MAPPING_IMPLEMENTATION_PACK_V1 §5/§6).
+        # Prefill only — every field stays editable and the submitted form
+        # values are what create_inquiry sees; hints never override office
+        # input and are never written anywhere by themselves.
         body = phone_hint + f"""<form method="post" action="/inquiry/new"><fieldset>
 <p><label>Datum*</label><input type="date" name="event_date" value="{_e(event_date)}" required></p>
 <p><label>Kanal</label><select name="inquiry_source">{src_opts}</select></p>
@@ -781,10 +796,10 @@ class OfficePanel:
 <p><label>Planungsmodus</label>{_planning_mode_select(PLANNING_MODES[0])}</p>
 <p><label>Rückruf-Verifizierung nötig</label><input type="checkbox" name="call_verification_required" value="1"></p>
 <p class="subtitle">Intake-Kontext — keine Auftrags-/Küchenfreigabe.</p>
-<p><label>Betreff</label><input name="intake_subject"></p>
-<p><label>Nachricht</label><textarea name="intake_message" rows="4"></textarea></p>
-<p><label>Zusammenfassung</label><textarea name="intake_summary" rows="3"></textarea></p>
-<p><label>Externe Referenz</label><input name="intake_external_ref"></p>
+<p><label>Betreff</label><input name="intake_subject" value="{_e(intake_subject)}"></p>
+<p><label>Nachricht</label><textarea name="intake_message" rows="4">{_e(intake_message)}</textarea></p>
+<p><label>Zusammenfassung</label><textarea name="intake_summary" rows="3">{_e(intake_summary)}</textarea></p>
+<p><label>Externe Referenz</label><input name="intake_external_ref" value="{_e(intake_external_ref)}"></p>
 <p><button type="submit">Anfrage anlegen</button></p>
 </fieldset></form>"""
         return _page("Neue Anfrage", body)
@@ -1150,6 +1165,31 @@ def make_office_panel_handler(
                     auerswald_url, auerswald_user, auerswald_password
                 )
                 self._html(render_proposal_preview(payload))
+            elif parts == ["proposal-preview", "prepare"]:
+                # PROPOSAL_PREVIEW_INTAKE_MAPPING_IMPLEMENTATION_PACK_V1 §6:
+                # re-parses the same hidden payload with the exact same
+                # validator as the preview above (single source of
+                # validation) and renders the Inquiry form pre-filled —
+                # still parse-and-render only, no repository write anywhere
+                # in this branch, no redirect (nothing was written).
+                payload = parse_proposal_payload(self._form().get("payload_json", ""))
+                summary_lines = "\n".join(
+                    f"{item['name']} × {item['quantity']}"
+                    if item.get("quantity") is not None
+                    else item["name"]
+                    for item in payload["selected_items"]
+                )
+                self._html(
+                    panel.render_inquiry_form(
+                        event_date=payload["event_date"],
+                        guest_count_estimate=str(payload["guest_count"]),
+                        inquiry_source="configurator",
+                        intake_subject=payload["title"],
+                        intake_message=payload.get("notes") or "",
+                        intake_summary=summary_lines,
+                        intake_external_ref=payload.get("proposal_id") or "",
+                    )
+                )
             elif parts == ["rueckruf", "resolve"]:
                 call_id = self._form()["call_id"]
                 resolve_missed_call(auerswald_url, auerswald_user, auerswald_password, call_id)
