@@ -109,10 +109,26 @@ READY_TO_SEND_BLOCKER_LABELS: dict[str, str] = {
 PROGRESSION_BLOCKER_LABELS: dict[str, str] = {
     "inquiry_call_verification_unsatisfied": "Rückrufprüfung noch nicht erfüllt",
 }
+# Kanal (inquiry_source) display labels — its own vocabulary, never merged
+# with the three above (WEBSITE_FORM_INQUIRY_OFFICE_UX_PACK_V1 §4/§8).
+# Legacy/adapter-only/future values (phone, wix_form, missed_call,
+# ai_telefonist) deliberately have no label yet — fallback renders the raw
+# value, same convention as the other three label dicts.
+SOURCE_LABELS: dict[str, str] = {
+    "website_form": "Website-Anfrage",
+    "configurator": "Angebots-Import",
+    "manual": "Manuell erfasst",
+    "phone_by_office": "Telefon (Büro)",
+    "email": "E-Mail",
+}
 
 
 def _verification_label(value: str) -> str:
     return CALL_VERIFICATION_STATUS_LABELS.get(value, value or "–")
+
+
+def _source_label(value: str) -> str:
+    return SOURCE_LABELS.get(value, value or "–")
 
 
 def _ready_to_send_blocker_label(code: str) -> str:
@@ -690,12 +706,28 @@ class OfficePanel:
                 else "–"
             )
             if not _matches(
-                inq.inquiry_id, inq.location_text, inq.event_date.isoformat(), inq.crm_stage
+                inq.inquiry_id,
+                inq.location_text,
+                inq.event_date.isoformat(),
+                inq.crm_stage,
+                inq.inquiry_source,
+                inq.intake_subject or "",
             ):
                 continue
+            betreff_raw = inq.intake_subject or ""
+            betreff = (
+                betreff_raw[:40] + "…" if len(betreff_raw) > 40 else betreff_raw
+            ) or "–"
+            verif_text = _e(_verification_label(inq.call_verification_status))
+            verif_cell = (
+                f'<span class="blocked">{verif_text}</span>'
+                if inq.call_verification_required and inq.call_verification_status != "verified"
+                else verif_text
+            )
             rows.append(
                 f"<tr><td>{_e(inq.event_date.isoformat())}</td><td>{_e(inq.location_text)}</td>"
-                f"<td>{_e(inq.crm_stage)}</td><td>{_e(_verification_label(inq.call_verification_status))}</td>"
+                f"<td>{_e(_source_label(inq.inquiry_source))}</td><td>{_e(betreff)}</td>"
+                f"<td>{_e(inq.crm_stage)}</td><td>{verif_cell}</td>"
                 f"<td>{has_order}</td>"
                 f'<td><a href="/inquiry/{_e(inq.inquiry_id)}">{_e(inq.inquiry_id[:8])}</a></td></tr>'
             )
@@ -703,9 +735,9 @@ class OfficePanel:
         body = (
             search_box
             + '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a></p>'
-            "<table><tr><th>Datum</th><th>Ort</th>"
+            "<table><tr><th>Datum</th><th>Ort</th><th>Kanal</th><th>Betreff</th>"
             "<th>CRM-Stufe</th><th>Verifizierung</th><th>Auftrag</th><th>ID</th></tr>"
-            + "".join(rows or ['<tr><td colspan="6">keine</td></tr>'])
+            + "".join(rows or ['<tr><td colspan="8">keine</td></tr>'])
             + "</table>"
         )
         return _page("Anfragen", body)
@@ -872,9 +904,18 @@ class OfficePanel:
             )
             if value
         )
-        body = f"""<table>
+        # Website-only context banner (WEBSITE_FORM_INQUIRY_OFFICE_UX_PACK_V1
+        # §5) — reuses .proposal-banner, no new style. Never shown for any
+        # other source.
+        website_banner = (
+            '<p class="proposal-banner">Website-Anfrage — noch kein Auftrag. '
+            "Nur Intake-Kontext, keine Küchenfreigabe.</p>"
+            if inq.inquiry_source == "website_form"
+            else ""
+        )
+        body = website_banner + f"""<table>
 <tr><th>Datum</th><td>{_e(inq.event_date.isoformat())}</td></tr>
-<tr><th>Kanal</th><td>{_e(inq.inquiry_source)}</td></tr>
+<tr><th>Kanal</th><td>{_e(_source_label(inq.inquiry_source))}</td></tr>
 <tr><th>Zeitfenster</th><td>{_e(inq.time_window_text)}</td></tr>
 <tr><th>Ort</th><td>{_e(inq.location_text)}</td></tr>
 <tr><th>Gäste</th><td>{_e(guests or "–")}</td></tr>

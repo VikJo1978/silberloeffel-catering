@@ -201,10 +201,22 @@ def test_create_inquiry_with_intake_fields_stores_and_shows_them(panel: str) -> 
     assert "proposal-42" in body
 
 
-def test_create_inquiry_intake_fields_not_shown_on_list_view(panel: str) -> None:
-    _iid = _create_inquiry(panel, intake_subject="Nur-Detail-Test-Betreff")
+def test_create_inquiry_intake_subject_shown_but_message_not_on_list_view(
+    panel: str,
+) -> None:
+    """WEBSITE_FORM_INQUIRY_OFFICE_UX_PACK_V1 §4: intake_subject now appears
+    (truncated) as the list's Betreff column — superseding the pre-pack
+    behavior where no intake field appeared in the list at all. The other
+    three intake fields (message/summary/external_ref) still stay
+    detail-only, unchanged."""
+    _iid = _create_inquiry(
+        panel,
+        intake_subject="Nur-Betreff-Test",
+        intake_message="Nur-Detail-Message-Test",
+    )
     _status, body = _get(f"{panel}/anfragen")
-    assert "Nur-Detail-Test-Betreff" not in body
+    assert "Nur-Betreff-Test" in body
+    assert "Nur-Detail-Message-Test" not in body
 
 
 def test_update_inquiry_sets_and_clears_intake_fields(panel: str) -> None:
@@ -712,7 +724,8 @@ def test_queue_tables_put_id_last_not_first(panel: str) -> None:
     oid = _convert(panel, iid)
     _status, anfragen_body = _get(f"{panel}/anfragen")
     assert (
-        "<th>Datum</th><th>Ort</th><th>CRM-Stufe</th><th>Verifizierung</th>"
+        "<th>Datum</th><th>Ort</th><th>Kanal</th><th>Betreff</th>"
+        "<th>CRM-Stufe</th><th>Verifizierung</th>"
         "<th>Auftrag</th><th>ID</th>"
     ) in anfragen_body
     assert iid[:8] in anfragen_body
@@ -1527,3 +1540,142 @@ def test_prepare_then_submit_does_not_change_wochenuebersicht() -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+# -- website_form Office UX (WEBSITE_FORM_INQUIRY_OFFICE_UX_PACK_V1) --------
+# Kanal/Betreff list columns, shared source label helper, website_form-only
+# detail banner, extended search. No verification/action-flow changes.
+
+
+def test_list_shows_website_form_kanal_label(panel: str) -> None:
+    _iid = _create_inquiry(panel, inquiry_source="website_form")
+    _status, body = _get(f"{panel}/anfragen")
+    assert "Website-Anfrage" in body
+    assert "website_form" not in body  # raw enum never shown, label only
+
+
+def test_list_shows_betreff_from_intake_subject(panel: str) -> None:
+    _iid = _create_inquiry(panel, intake_subject="Firmenfeier Musterfirma")
+    _status, body = _get(f"{panel}/anfragen")
+    assert "Firmenfeier Musterfirma" in body
+
+
+def test_list_betreff_truncated_around_40_chars(panel: str) -> None:
+    long_subject = "X" * 60
+    _iid = _create_inquiry(panel, intake_subject=long_subject)
+    _status, body = _get(f"{panel}/anfragen")
+    assert ("X" * 40 + "…") in body
+    assert long_subject not in body
+
+
+def test_list_empty_betreff_renders_dash(panel: str) -> None:
+    _iid = _create_inquiry(panel)
+    _status, body = _get(f"{panel}/anfragen")
+    assert "<td>–</td>" in body
+
+
+def test_source_label_helper_covers_non_website_source(panel: str) -> None:
+    """The label dict isn't a one-off for website_form — confirms it works
+    generically, using manual (an office-dropdown-visible source) as the
+    non-website case."""
+    _iid = _create_inquiry(panel, inquiry_source="manual")
+    _status, body = _get(f"{panel}/anfragen")
+    assert "Manuell erfasst" in body
+
+
+def test_list_pending_required_verification_uses_blocked_class(panel: str) -> None:
+    _iid = _create_inquiry(panel, call_verification_required="1")
+    _status, body = _get(f"{panel}/anfragen")
+    assert '<span class="blocked">Rückrufprüfung ausstehend</span>' in body
+
+
+def test_list_verified_or_not_required_has_no_blocked_class(panel: str) -> None:
+    _iid = _create_inquiry(panel)  # call_verification_required not set → not_required
+    _status, body = _get(f"{panel}/anfragen")
+    assert '<span class="blocked">' not in body
+
+
+def test_search_finds_by_inquiry_source(panel: str) -> None:
+    _iid = _create_inquiry(panel, inquiry_source="website_form")
+    _status, body = _get(f"{panel}/anfragen?q=website_form")
+    assert "Website-Anfrage" in body
+
+
+def test_search_finds_by_intake_subject(panel: str) -> None:
+    iid = _create_inquiry(panel, intake_subject="EinzigartigerSuchbegriff")
+    _status, body = _get(f"{panel}/anfragen?q=EinzigartigerSuchbegriff")
+    assert iid[:8] in body
+
+
+def test_detail_shows_website_anfrage_label(panel: str) -> None:
+    iid = _create_inquiry(panel, inquiry_source="website_form")
+    _status, body = _get(f"{panel}/inquiry/{iid}")
+    assert "Website-Anfrage" in body
+
+
+def test_detail_website_form_banner_present(panel: str) -> None:
+    iid = _create_inquiry(panel, inquiry_source="website_form")
+    _status, body = _get(f"{panel}/inquiry/{iid}")
+    assert (
+        "Website-Anfrage — noch kein Auftrag. Nur Intake-Kontext, "
+        "keine Küchenfreigabe." in body
+    )
+    assert 'class="proposal-banner"' in body
+
+
+def test_detail_banner_absent_for_non_website_source(panel: str) -> None:
+    iid = _create_inquiry(panel, inquiry_source="manual")
+    _status, body = _get(f"{panel}/inquiry/{iid}")
+    assert "noch kein Auftrag" not in body
+
+
+def test_detail_intake_message_remains_escaped(panel: str) -> None:
+    iid = _create_inquiry(
+        panel,
+        inquiry_source="website_form",
+        intake_message="<script>alert(1)</script> & special",
+    )
+    _status, body = _get(f"{panel}/inquiry/{iid}")
+    assert "<script>alert(1)</script>" not in body
+    assert "&lt;script&gt;" in body
+
+
+def test_verification_button_text_unchanged_for_website_form(panel: str) -> None:
+    iid = _create_inquiry(
+        panel, inquiry_source="website_form", call_verification_required="1"
+    )
+    _status, body = _get(f"{panel}/inquiry/{iid}")
+    assert "Telefonisch verifiziert" in body
+    assert "Rückruf erledigt" not in body
+
+
+def test_viewing_list_and_detail_creates_no_order_or_orderversion() -> None:
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    server = create_office_panel_server(
+        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    base = f"http://{host}:{port}"
+    try:
+        iid = _create_inquiry(base, inquiry_source="website_form")
+        _get(f"{base}/anfragen")
+        _get(f"{base}/inquiry/{iid}")
+        assert order_repo.list_orders() == []
+        assert order_repo._versions == {}  # noqa: SLF001
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_conversion_still_blocked_for_unverified_website_form_inquiry(
+    panel: str,
+) -> None:
+    iid = _create_inquiry(
+        panel, inquiry_source="website_form", call_verification_required="1"
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _post(f"{panel}/inquiry/{iid}/convert", {})
+    assert exc.value.code == 400
