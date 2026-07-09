@@ -14,6 +14,12 @@
 
 const MAX_BODY_BYTES = 16 * 1024;
 
+// wix_form's original contract (still needed — Wix and the own site may run
+// in parallel during transition, PUBLIC_SITE_EXECUTION_PACK_V1 §2.2) plus
+// website_form's fields (WORKER_TO_CORE_WEBSITE_INTAKE_PACK_V1 §1.4/§5).
+// Neither planning_mode nor customer_linkage is read by website_form_
+// adapter.py — kept here only for wix_form compatibility, not mapped into
+// Order logic anywhere downstream.
 const ALLOWED_FIELDS = new Set([
   "event_date",
   "time_window_text",
@@ -21,9 +27,31 @@ const ALLOWED_FIELDS = new Set([
   "guest_count_estimate",
   "planning_mode",
   "customer_linkage",
+  "company",
+  "name",
+  "event_type",
+  "phone",
+  "email",
+  "message",
+  "submission_id",
 ]);
 
-const TEXT_FIELDS = ["time_window_text", "location_text"];
+// Short, label-like/contact fields stay capped at 500 like the original two.
+// "message" gets its own, larger cap — WEBSITE_FORM_INTAKE_TO_INQUIRY_PACK_V1
+// §6 sized intake_message's own truncation at ~5000 chars; capping it here
+// at 500 would silently lose content long before that already-accepted
+// limit is ever reached.
+const TEXT_FIELDS_500 = [
+  "time_window_text",
+  "location_text",
+  "company",
+  "name",
+  "event_type",
+  "phone",
+  "email",
+  "submission_id",
+];
+const TEXT_FIELDS_5000 = ["message"];
 
 function sanitize(raw) {
   const out = {};
@@ -31,8 +59,11 @@ function sanitize(raw) {
     if (!ALLOWED_FIELDS.has(key)) continue; // strip everything not whitelisted
     out[key] = value;
   }
-  for (const key of TEXT_FIELDS) {
+  for (const key of TEXT_FIELDS_500) {
     if (typeof out[key] === "string") out[key] = out[key].trim().slice(0, 500);
+  }
+  for (const key of TEXT_FIELDS_5000) {
+    if (typeof out[key] === "string") out[key] = out[key].trim().slice(0, 5000);
   }
   if (typeof out.event_date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(out.event_date)) {
     return null; // event_date is required and must be ISO yyyy-mm-dd
@@ -81,3 +112,8 @@ export default {
     });
   },
 };
+
+// Named export purely for testability (sanitize.test.mjs) — inert to the
+// Workers runtime, which only ever invokes the default export's fetch()
+// handler. Does not change deployed behavior.
+export { sanitize };
