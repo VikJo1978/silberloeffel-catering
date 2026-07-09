@@ -6,7 +6,17 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Literal, TypedDict, cast
 
-InquirySource = Literal["wix_form", "email", "phone", "manual"]
+InquirySource = Literal[
+    "wix_form",  # legacy/adapter-compatible; not office-offered, not new-default
+    "phone",  # legacy/adapter-compatible; office dropdown uses phone_by_office instead
+    "manual",
+    "phone_by_office",
+    "missed_call",
+    "ai_telefonist",
+    "website_form",
+    "configurator",
+    "email",
+]
 
 # Frozen CRM pipeline (ordered; single source of truth for crm_stage).
 CrmStage = Literal[
@@ -120,6 +130,14 @@ class Inquiry:
     planning_mode: PlanningMode
     call_verification_required: bool
     call_verification_status: CallVerificationStatus
+    # Intake context (INQUIRY_INTAKE_CONTEXT_FIELDS_PACK_V1): freeform,
+    # channel-agnostic notes about how/why the inquiry arrived. Not operational
+    # truth — never read by progression/READY_TO_SEND/kiosk/Wochenübersicht,
+    # never copied onto Order/OrderVersion at conversion time.
+    intake_subject: str | None = None
+    intake_message: str | None = None
+    intake_summary: str | None = None
+    intake_external_ref: str | None = None
 
 
 def inquiry_allows_order_conversion(inquiry: Inquiry) -> bool:

@@ -28,7 +28,19 @@ from catering_system.domain.slice_a_events import (
 )
 from catering_system.repositories.inquiry_repository import InquiryRepository
 
-_ALLOWED_SOURCES: frozenset[str] = frozenset({"wix_form", "email", "phone", "manual"})
+_ALLOWED_SOURCES: frozenset[str] = frozenset(
+    {
+        "wix_form",
+        "phone",
+        "manual",
+        "phone_by_office",
+        "missed_call",
+        "ai_telefonist",
+        "website_form",
+        "configurator",
+        "email",
+    }
+)
 
 _UNSET = object()
 
@@ -45,6 +57,15 @@ def validate_inquiry_source(value: str) -> InquirySource:
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _normalize_intake(value: str | None) -> str | None:
+    """Trim; empty/whitespace-only becomes None (INQUIRY_INTAKE_CONTEXT_FIELDS
+    _IMPLEMENTATION_PACK_V1 §3 — one consistent rule for all four intake fields)."""
+    if value is None:
+        return None
+    trimmed = value.strip()
+    return trimmed or None
 
 
 class InquiryService:
@@ -74,6 +95,10 @@ class InquiryService:
         planning_mode: str,
         call_verification_required: bool,
         call_verification_status: str,
+        intake_subject: str | None = None,
+        intake_message: str | None = None,
+        intake_summary: str | None = None,
+        intake_external_ref: str | None = None,
     ) -> Inquiry:
         _log.info("create_inquiry called inquiry_source=%s", inquiry_source)
         try:
@@ -100,6 +125,10 @@ class InquiryService:
             planning_mode=pm,
             call_verification_required=call_verification_required,
             call_verification_status=cvs,
+            intake_subject=_normalize_intake(intake_subject),
+            intake_message=_normalize_intake(intake_message),
+            intake_summary=_normalize_intake(intake_summary),
+            intake_external_ref=_normalize_intake(intake_external_ref),
         )
         self._repository.save(inquiry)
         _log.info("inquiry created inquiry_id=%s", inquiry.inquiry_id)
@@ -120,6 +149,10 @@ class InquiryService:
         planning_mode: str | object = _UNSET,
         call_verification_required: bool | object = _UNSET,
         call_verification_status: str | object = _UNSET,
+        intake_subject: str | None | object = _UNSET,
+        intake_message: str | None | object = _UNSET,
+        intake_summary: str | None | object = _UNSET,
+        intake_external_ref: str | None | object = _UNSET,
     ) -> Inquiry:
         _log.info("update_inquiry called inquiry_id=%s", inquiry_id)
         current = self._repository.get_by_id(inquiry_id)
@@ -176,6 +209,18 @@ class InquiryService:
             if call_verification_required is not _UNSET
             else current.call_verification_required,  # type: ignore[arg-type]
             call_verification_status=next_cvs,
+            intake_subject=_normalize_intake(intake_subject)
+            if intake_subject is not _UNSET
+            else current.intake_subject,  # type: ignore[arg-type]
+            intake_message=_normalize_intake(intake_message)
+            if intake_message is not _UNSET
+            else current.intake_message,  # type: ignore[arg-type]
+            intake_summary=_normalize_intake(intake_summary)
+            if intake_summary is not _UNSET
+            else current.intake_summary,  # type: ignore[arg-type]
+            intake_external_ref=_normalize_intake(intake_external_ref)
+            if intake_external_ref is not _UNSET
+            else current.intake_external_ref,  # type: ignore[arg-type]
         )
         self._repository.update(updated)
         _log.info("inquiry updated inquiry_id=%s", inquiry_id)

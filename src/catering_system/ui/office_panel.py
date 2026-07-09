@@ -29,7 +29,14 @@ from catering_system.services.order_service import OrderService
 from catering_system.services.progression_service import ProgressionService
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
 
-_OFFICE_SOURCES = ("phone", "email", "manual")
+# Office-visible subset of InquirySource (domain/inquiry.py) — deliberately
+# narrower than InquiryService._ALLOWED_SOURCES (INQUIRY_INTAKE_CONTEXT_FIELDS
+# _IMPLEMENTATION_PACK_V1 §3/§6): phone/wix_form stay legacy/adapter-only
+# (src/catering_system/intake/phone_adapter.py, wix_form_adapter.py already
+# write them through the validated path), missed_call/ai_telefonist stay
+# adapter-only until their own integration exists — nothing writes them yet,
+# so offering them here would be misleading.
+_OFFICE_SOURCES = ("manual", "phone_by_office", "email", "website_form", "configurator")
 
 # Brand facelift (2026-07-07): same palette/typography as the fingerfood-app
 # configurator (sage accent from the logo, Playfair Display headings) so the
@@ -773,6 +780,11 @@ class OfficePanel:
 <p><label>Gäste (ca.)</label><input name="guest_count_estimate" inputmode="numeric" value="{_e(guest_count_estimate)}"></p>
 <p><label>Planungsmodus</label>{_planning_mode_select(PLANNING_MODES[0])}</p>
 <p><label>Rückruf-Verifizierung nötig</label><input type="checkbox" name="call_verification_required" value="1"></p>
+<p class="subtitle">Intake-Kontext — keine Auftrags-/Küchenfreigabe.</p>
+<p><label>Betreff</label><input name="intake_subject"></p>
+<p><label>Nachricht</label><textarea name="intake_message" rows="4"></textarea></p>
+<p><label>Zusammenfassung</label><textarea name="intake_summary" rows="3"></textarea></p>
+<p><label>Externe Referenz</label><input name="intake_external_ref"></p>
 <p><button type="submit">Anfrage anlegen</button></p>
 </fieldset></form>"""
         return _page("Neue Anfrage", body)
@@ -790,6 +802,10 @@ class OfficePanel:
             planning_mode=form.get("planning_mode", PLANNING_MODES[0]),
             call_verification_required=required,
             call_verification_status="pending" if required else "not_required",
+            intake_subject=form.get("intake_subject", ""),
+            intake_message=form.get("intake_message", ""),
+            intake_summary=form.get("intake_summary", ""),
+            intake_external_ref=form.get("intake_external_ref", ""),
         )
 
     def render_inquiry(self, inquiry_id: str) -> str | None:
@@ -828,6 +844,19 @@ class OfficePanel:
                 "<button>In Auftrag umwandeln</button></form>"
             )
         guests = str(inq.guest_count_estimate) if inq.guest_count_estimate is not None else ""
+        # Intake context: only shown as table rows when present, so an old
+        # Inquiry from before this pack doesn't grow four "–" rows for
+        # nothing (INQUIRY_INTAKE_CONTEXT_FIELDS_IMPLEMENTATION_PACK_V1 §6).
+        intake_rows = "".join(
+            f"<tr><th>{label}</th><td>{_e(value)}</td></tr>"
+            for label, value in (
+                ("Betreff", inq.intake_subject),
+                ("Nachricht", inq.intake_message),
+                ("Zusammenfassung", inq.intake_summary),
+                ("Externe Referenz", inq.intake_external_ref),
+            )
+            if value
+        )
         body = f"""<table>
 <tr><th>Datum</th><td>{_e(inq.event_date.isoformat())}</td></tr>
 <tr><th>Kanal</th><td>{_e(inq.inquiry_source)}</td></tr>
@@ -836,7 +865,7 @@ class OfficePanel:
 <tr><th>Gäste</th><td>{_e(guests or "–")}</td></tr>
 <tr><th>CRM-Stufe</th><td>{_e(inq.crm_stage)}</td></tr>
 <tr><th>Verifizierung</th><td>{_e(_verification_label(inq.call_verification_status))}</td></tr>
-</table>
+{intake_rows}</table>
 <h2>Vorgangsprüfung (Progression)</h2>{prog}
 <p>{verify_btn}{convert}</p>
 <h2>Anfrage bearbeiten</h2>
@@ -847,6 +876,11 @@ class OfficePanel:
 <p><label>Gäste (ca.)</label><input name="guest_count_estimate" value="{_e(guests)}"></p>
 <p><label>Planungsmodus</label>{_planning_mode_select(inq.planning_mode)}</p>
 <p><label>CRM-Stufe</label>{_crm_stage_select(inq.crm_stage)}</p>
+<p class="subtitle">Intake-Kontext — keine Auftrags-/Küchenfreigabe.</p>
+<p><label>Betreff</label><input name="intake_subject" value="{_e(inq.intake_subject or "")}"></p>
+<p><label>Nachricht</label><textarea name="intake_message" rows="4">{_e(inq.intake_message or "")}</textarea></p>
+<p><label>Zusammenfassung</label><textarea name="intake_summary" rows="3">{_e(inq.intake_summary or "")}</textarea></p>
+<p><label>Externe Referenz</label><input name="intake_external_ref" value="{_e(inq.intake_external_ref or "")}"></p>
 <p><button type="submit">Speichern</button></p>
 </fieldset></form>"""
         return _page(f"Anfrage {inq.inquiry_id[:8]}", body)
@@ -860,6 +894,10 @@ class OfficePanel:
             guest_count_estimate=_opt_int(form.get("guest_count_estimate", "")),
             planning_mode=form.get("planning_mode", PLANNING_MODES[0]),
             crm_stage=form.get("crm_stage", CRM_PIPELINE[0]),
+            intake_subject=form.get("intake_subject", ""),
+            intake_message=form.get("intake_message", ""),
+            intake_summary=form.get("intake_summary", ""),
+            intake_external_ref=form.get("intake_external_ref", ""),
         )
 
     # -- orders ----------------------------------------------------------

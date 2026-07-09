@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -36,6 +37,10 @@ def _sample_inquiry() -> Inquiry:
         planning_mode=PLANNING_MODES[0],
         call_verification_required=False,
         call_verification_status=CALL_VERIFICATION_STATUSES[0],
+        intake_subject="Betreff",
+        intake_message="Nachricht",
+        intake_summary="Zusammenfassung",
+        intake_external_ref="ref-1",
     )
 
 
@@ -44,7 +49,71 @@ def test_inquiry_roundtrip_preserves_all_fields(tmp_path: Path) -> None:
     inquiry = _sample_inquiry()
     repo.save(inquiry)
     loaded = repo.get_by_id(inquiry.inquiry_id)
-    assert loaded == inquiry  # incl. tz-aware datetimes and linkage dict
+    assert loaded == inquiry  # incl. tz-aware datetimes, linkage dict, intake fields
+
+
+def test_sqlite_inquiry_migration_from_pre_intake_context_schema(tmp_path: Path) -> None:
+    """INQUIRY_INTAKE_CONTEXT_FIELDS_IMPLEMENTATION_PACK_V1 §4/§9 — same
+    shape as test_storno.py::test_sqlite_roundtrip_and_pre_storno_migration:
+    a pre-this-pack (13-column) inquiries table gets the four intake columns
+    added in place, old rows load with None, and a fresh save/reopen
+    round-trips the new fields correctly."""
+    import json
+    import sqlite3
+
+    db = tmp_path / "old.db"
+    conn = sqlite3.connect(db)  # simulate a pre-intake-context database
+    conn.executescript(
+        """
+        CREATE TABLE inquiries (
+            inquiry_id TEXT PRIMARY KEY, event_date TEXT NOT NULL,
+            created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+            inquiry_source TEXT NOT NULL, crm_stage TEXT NOT NULL,
+            customer_linkage TEXT NOT NULL, time_window_text TEXT NOT NULL,
+            location_text TEXT NOT NULL, guest_count_estimate INTEGER,
+            planning_mode TEXT NOT NULL, call_verification_required INTEGER NOT NULL,
+            call_verification_status TEXT NOT NULL
+        );
+        """
+    )
+    now = datetime.now(timezone.utc).isoformat()
+    conn.execute(
+        "INSERT INTO inquiries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "pre-intake-id",
+            "2026-10-01",
+            now,
+            now,
+            "manual",
+            CRM_PIPELINE[0],
+            json.dumps({}),
+            "mittags",
+            "Hamburg",
+            25,
+            PLANNING_MODES[0],
+            0,
+            CALL_VERIFICATION_STATUSES[0],
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    repo = SQLiteInquiryRepository(db)  # migration runs here
+    legacy = repo.get_by_id("pre-intake-id")
+    assert legacy is not None
+    assert legacy.intake_subject is None
+    assert legacy.intake_message is None
+    assert legacy.intake_summary is None
+    assert legacy.intake_external_ref is None
+
+    updated = replace(legacy, intake_subject="Nachträglich gesetzt")
+    repo.update(updated)
+    repo.close()
+
+    repo2 = SQLiteInquiryRepository(db)
+    reloaded = repo2.get_by_id("pre-intake-id")
+    assert reloaded is not None
+    assert reloaded.intake_subject == "Nachträglich gesetzt"
 
 
 def test_inquiry_update_missing_raises(tmp_path: Path) -> None:

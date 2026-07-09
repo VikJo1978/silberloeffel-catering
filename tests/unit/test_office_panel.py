@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import threading
 import urllib.error
 import urllib.parse
@@ -153,6 +154,155 @@ def test_converted_inquiry_shows_order_link_instead_of_button(panel: str) -> Non
     _status, body = _get(f"{panel}/inquiry/{iid}")
     assert "Auftrag vorhanden" in body and oid[:8] in body
     assert "In Auftrag umwandeln" not in body
+
+
+# -- intake context (INQUIRY_INTAKE_CONTEXT_FIELDS_IMPLEMENTATION_PACK_V1) --
+
+
+def test_new_inquiry_form_shows_office_safe_source_dropdown_and_warning(panel: str) -> None:
+    status, body = _get(f"{panel}/inquiry/new")
+    assert status == 200
+    assert "Intake-Kontext — keine Auftrags-/Küchenfreigabe." in body
+    kanal_select = re.search(r'name="inquiry_source">(.*?)</select>', body, re.DOTALL)
+    assert kanal_select is not None
+    options = re.findall(r'<option value="([^"]+)">', kanal_select.group(1))
+    assert options == ["manual", "phone_by_office", "email", "website_form", "configurator"]
+    # legacy/adapter-only/future sources deliberately not office-offered
+    for hidden in ("phone", "wix_form", "missed_call", "ai_telefonist"):
+        assert f'value="{hidden}"' not in body
+
+
+def test_create_inquiry_without_intake_fields_still_works(panel: str) -> None:
+    iid = _create_inquiry(panel)
+    _status, body = _get(f"{panel}/inquiry/{iid}")
+    assert "Vorgangsprüfung" in body
+    # summary table stays free of intake rows when nothing was entered (the
+    # edit form below always shows the four labeled inputs, empty — that's
+    # expected, checked separately by the "stores and shows them" test)
+    assert "<th>Betreff</th>" not in body
+    assert "<th>Nachricht</th>" not in body
+    assert "<th>Zusammenfassung</th>" not in body
+    assert "<th>Externe Referenz</th>" not in body
+
+
+def test_create_inquiry_with_intake_fields_stores_and_shows_them(panel: str) -> None:
+    iid = _create_inquiry(
+        panel,
+        intake_subject="Firmenfeier Musterfirma",
+        intake_message="Kunde möchte Buffet für 30 Personen, Rückruf gewünscht.",
+        intake_summary="30 Pers., Buffet, Rückruf",
+        intake_external_ref="proposal-42",
+    )
+    _status, body = _get(f"{panel}/inquiry/{iid}")
+    assert "Firmenfeier Musterfirma" in body
+    assert "Kunde möchte Buffet für 30 Personen, Rückruf gewünscht." in body
+    assert "30 Pers., Buffet, Rückruf" in body
+    assert "proposal-42" in body
+
+
+def test_create_inquiry_intake_fields_not_shown_on_list_view(panel: str) -> None:
+    _iid = _create_inquiry(panel, intake_subject="Nur-Detail-Test-Betreff")
+    _status, body = _get(f"{panel}/anfragen")
+    assert "Nur-Detail-Test-Betreff" not in body
+
+
+def test_update_inquiry_sets_and_clears_intake_fields(panel: str) -> None:
+    iid = _create_inquiry(panel, intake_subject="Erstfassung")
+    _post(
+        f"{panel}/inquiry/{iid}/update",
+        {
+            "event_date": "2026-10-01",
+            "time_window_text": "mittags",
+            "location_text": "Hamburg",
+            "guest_count_estimate": "25",
+            "planning_mode": "caterer_suggestion",
+            "crm_stage": "Neue Anfrage",
+            "intake_subject": "Zweitfassung",
+            "intake_message": "",
+            "intake_summary": "",
+            "intake_external_ref": "",
+        },
+    )
+    _status, body = _get(f"{panel}/inquiry/{iid}")
+    assert "Zweitfassung" in body
+    assert "Erstfassung" not in body
+
+
+def test_creating_inquiry_with_intake_context_creates_no_order_or_orderversion() -> None:
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    server = create_office_panel_server(
+        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    try:
+        base = f"http://{host}:{port}"
+        _create_inquiry(
+            base,
+            intake_subject="Betreff",
+            intake_message="Nachricht",
+            intake_summary="Zusammenfassung",
+            intake_external_ref="ref-1",
+        )
+        assert len(inquiry_repo.list_all()) == 1
+        assert order_repo.list_orders() == []
+        assert order_repo._versions == {}  # noqa: SLF001 — no public "list all versions" method
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_intake_context_does_not_change_wochenuebersicht() -> None:
+    """Kiosk/Wochenübersicht output is byte-identical before/after an
+    Inquiry with full intake context is created — WochenuebersichtService
+    reads OrderVersion only, never Inquiry (07083cc §1's evidence)."""
+    from catering_system.services.wochenuebersicht_service import WochenuebersichtService
+
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    panel = OfficePanel(inquiry_repo, order_repo)
+    week = WochenuebersichtService(order_repo)
+    before = week.get_week_overview(2026, 40)
+
+    panel.create_inquiry(
+        {
+            "event_date": "2026-10-01",
+            "inquiry_source": "manual",
+            "time_window_text": "mittags",
+            "location_text": "Hamburg",
+            "guest_count_estimate": "25",
+            "planning_mode": "caterer_suggestion",
+            "intake_subject": "Betreff",
+            "intake_message": "Nachricht",
+            "intake_summary": "Zusammenfassung",
+            "intake_external_ref": "ref-1",
+        }
+    )
+    after = week.get_week_overview(2026, 40)
+    assert after == before
+
+
+def test_convert_inquiry_with_intake_context_does_not_leak_into_order(panel: str) -> None:
+    """convert_inquiry_to_order must not turn intake_summary into
+    OrderVersion.items — there is no such field to leak into, and this
+    proves the conversion doesn't crash or invent one."""
+    iid = _create_inquiry(
+        panel,
+        intake_subject="Betreff",
+        intake_summary="2x Brötchen Mix, 10 Personen",
+    )
+    oid = _convert(panel, iid)
+    status, body = _get(f"{panel}/order/{oid}")
+    assert status == 200
+    assert "2x Brötchen Mix, 10 Personen" not in body
+    from dataclasses import fields
+
+    from catering_system.domain.order import Order, OrderVersion
+
+    assert not any(f.name.startswith("intake_") for f in fields(Order))
+    assert not any(f.name.startswith("intake_") for f in fields(OrderVersion))
 
 
 # -- orders -------------------------------------------------------------

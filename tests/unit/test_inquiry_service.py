@@ -43,7 +43,17 @@ def _base_create_kwargs() -> dict:
 def test_create_works_for_each_allowed_inquiry_source() -> None:
     repo = InMemoryInquiryRepository()
     svc = InquiryService(repo)
-    for src in ("wix_form", "email", "phone", "manual"):
+    for src in (
+        "wix_form",
+        "phone",
+        "manual",
+        "phone_by_office",
+        "missed_call",
+        "ai_telefonist",
+        "website_form",
+        "configurator",
+        "email",
+    ):
         q = svc.create_inquiry(inquiry_source=src, **_base_create_kwargs())
         assert q.inquiry_source == src
 
@@ -53,6 +63,126 @@ def test_invalid_inquiry_source_rejected() -> None:
     svc = InquiryService(repo)
     with pytest.raises(ValueError, match="inquiry_source"):
         svc.create_inquiry(inquiry_source="other", **_base_create_kwargs())
+
+
+def test_phone_still_accepted_legacy_adapter_compatible() -> None:
+    """Regression guard: src/catering_system/intake/phone_adapter.py writes
+    inquiry_source="phone" through this exact validated path — must never
+    start rejecting it (INQUIRY_INTAKE_CONTEXT_FIELDS_IMPLEMENTATION_PACK_V1,
+    "phone" correction accepted alongside §1's wix_form finding)."""
+    repo = InMemoryInquiryRepository()
+    svc = InquiryService(repo)
+    q = svc.create_inquiry(inquiry_source="phone", **_base_create_kwargs())
+    assert q.inquiry_source == "phone"
+
+
+def test_wix_form_still_accepted_legacy_adapter_compatible() -> None:
+    """Regression guard for 07083cc §1 / IMPLEMENTATION_PACK §1: wix_form_
+    adapter.py writes inquiry_source="wix_form" through this exact validated
+    path — must never start rejecting it."""
+    repo = InMemoryInquiryRepository()
+    svc = InquiryService(repo)
+    q = svc.create_inquiry(inquiry_source="wix_form", **_base_create_kwargs())
+    assert q.inquiry_source == "wix_form"
+
+
+# -- intake context (INQUIRY_INTAKE_CONTEXT_FIELDS_IMPLEMENTATION_PACK_V1) --
+
+
+def test_create_inquiry_intake_fields_optional() -> None:
+    repo = InMemoryInquiryRepository()
+    svc = InquiryService(repo)
+    q = svc.create_inquiry(inquiry_source="manual", **_base_create_kwargs())
+    assert q.intake_subject is None
+    assert q.intake_message is None
+    assert q.intake_summary is None
+    assert q.intake_external_ref is None
+
+
+def test_create_inquiry_intake_fields_pass_through() -> None:
+    repo = InMemoryInquiryRepository()
+    svc = InquiryService(repo)
+    q = svc.create_inquiry(
+        inquiry_source="manual",
+        intake_subject="Betreff",
+        intake_message="Nachricht",
+        intake_summary="Zusammenfassung",
+        intake_external_ref="ref-1",
+        **_base_create_kwargs(),
+    )
+    assert q.intake_subject == "Betreff"
+    assert q.intake_message == "Nachricht"
+    assert q.intake_summary == "Zusammenfassung"
+    assert q.intake_external_ref == "ref-1"
+
+
+def test_create_inquiry_intake_fields_empty_and_whitespace_normalize_to_none() -> None:
+    repo = InMemoryInquiryRepository()
+    svc = InquiryService(repo)
+    q = svc.create_inquiry(
+        inquiry_source="manual",
+        intake_subject="",
+        intake_message="   ",
+        intake_summary="\t\n",
+        intake_external_ref="  x  ",
+        **_base_create_kwargs(),
+    )
+    assert q.intake_subject is None
+    assert q.intake_message is None
+    assert q.intake_summary is None
+    assert q.intake_external_ref == "x"  # trimmed, not blanked
+
+
+def test_update_inquiry_sets_and_clears_intake_fields() -> None:
+    repo = InMemoryInquiryRepository()
+    svc = InquiryService(repo)
+    q0 = svc.create_inquiry(
+        inquiry_source="manual", intake_subject="Erst", **_base_create_kwargs()
+    )
+    q1 = svc.update_inquiry(q0.inquiry_id, intake_subject="Zweit")
+    assert q1.intake_subject == "Zweit"
+    q2 = svc.update_inquiry(q1.inquiry_id, intake_subject="")
+    assert q2.intake_subject is None
+
+
+def test_update_inquiry_without_intake_kwargs_preserves_existing_intake() -> None:
+    repo = InMemoryInquiryRepository()
+    svc = InquiryService(repo)
+    q0 = svc.create_inquiry(
+        inquiry_source="manual", intake_subject="Bleibt", **_base_create_kwargs()
+    )
+    q1 = svc.update_inquiry(q0.inquiry_id, location_text="Leipzig")
+    assert q1.intake_subject == "Bleibt"
+
+
+def test_direct_inquiry_construction_without_intake_fields_still_works() -> None:
+    """Dataclass compatibility: every pre-existing direct Inquiry(...) call
+    site (sqlite repo, service, 9 test files) omits the new fields and must
+    keep working via their None defaults."""
+    from datetime import date as _date
+    from datetime import datetime as _datetime
+    from datetime import timezone as _timezone
+
+    now = _datetime.now(_timezone.utc)
+    inquiry = Inquiry(
+        inquiry_id="x",
+        event_date=_date(2026, 1, 1),
+        created_at=now,
+        updated_at=now,
+        inquiry_source="manual",
+        crm_stage=CRM_PIPELINE[0],
+        customer_linkage={},
+        time_window_text="",
+        location_text="",
+        guest_count_estimate=None,
+        planning_mode=PLANNING_MODES[0],
+        call_verification_required=False,
+        call_verification_status=CALL_VERIFICATION_STATUSES[0],
+    )
+    assert inquiry.intake_subject is None
+    assert inquiry.intake_message is None
+    assert inquiry.intake_summary is None
+    assert inquiry.intake_external_ref is None
 
 
 def test_invalid_crm_stage_rejected() -> None:

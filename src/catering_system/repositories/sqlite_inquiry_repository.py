@@ -35,15 +35,28 @@ CREATE TABLE IF NOT EXISTS inquiries (
     guest_count_estimate INTEGER,
     planning_mode TEXT NOT NULL,
     call_verification_required INTEGER NOT NULL,
-    call_verification_status TEXT NOT NULL
+    call_verification_status TEXT NOT NULL,
+    intake_subject TEXT,
+    intake_message TEXT,
+    intake_summary TEXT,
+    intake_external_ref TEXT
 );
 """
+
+_INTAKE_COLUMNS = ("intake_subject", "intake_message", "intake_summary", "intake_external_ref")
 
 
 class SQLiteInquiryRepository:
     def __init__(self, db_path: str | Path) -> None:
         self._conn = sqlite3.connect(str(db_path))
         self._conn.executescript(_SCHEMA)
+        # INQUIRY_INTAKE_CONTEXT_FIELDS_IMPLEMENTATION_PACK_V1 §4: defensive
+        # in-place migration for pre-intake-context databases, same pattern as
+        # SQLiteOrderRepository's STORNO cancelled_at column.
+        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(inquiries)").fetchall()}
+        for col in _INTAKE_COLUMNS:
+            if col not in cols:
+                self._conn.execute(f"ALTER TABLE inquiries ADD COLUMN {col} TEXT")
         self._conn.commit()
 
     def close(self) -> None:
@@ -51,7 +64,8 @@ class SQLiteInquiryRepository:
 
     def save(self, inquiry: Inquiry) -> None:
         self._conn.execute(
-            "INSERT OR REPLACE INTO inquiries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO inquiries VALUES "
+            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 inquiry.inquiry_id,
                 inquiry.event_date.isoformat(),
@@ -66,6 +80,10 @@ class SQLiteInquiryRepository:
                 inquiry.planning_mode,
                 1 if inquiry.call_verification_required else 0,
                 inquiry.call_verification_status,
+                inquiry.intake_subject,
+                inquiry.intake_message,
+                inquiry.intake_summary,
+                inquiry.intake_external_ref,
             ),
         )
         self._conn.commit()
@@ -99,6 +117,10 @@ class SQLiteInquiryRepository:
             planning_mode=validate_planning_mode(row[10]),
             call_verification_required=bool(row[11]),
             call_verification_status=validate_call_verification_status(row[12]),
+            intake_subject=row[13],
+            intake_message=row[14],
+            intake_summary=row[15],
+            intake_external_ref=row[16],
         )
 
     def update(self, inquiry: Inquiry) -> None:
