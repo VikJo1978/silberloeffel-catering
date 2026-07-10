@@ -57,9 +57,27 @@ request in §4.6/§4.7 uses `--config` rather than a header string. The
 leak-check-then-unset ordering in §4.8 was also fixed: the grep-based leak
 check against $WEBSITE_INTAKE_TOKEN now runs strictly before `unset
 WEBSITE_INTAKE_TOKEN`, since running it after would grep for an empty
-string and pass vacuously rather than proving anything. Still zero ops
-actions and zero unit file creation performed by this pack itself — plan
-only.
+string and pass vacuously rather than proving anything.
+
+Revision note (v5, this version): §3.0 has now actually been run on the
+live Lenovo (2026-07-10), not just planned — see §3.0's confirmation block
+below for the full result. Two consequences of that real output: (1) User=,
+Group=, WorkingDirectory=, Environment=, and the interpreter path agree
+between catering-kiosk and catering-office-panel, so §3.0's stop-and-flag
+condition did not trigger, and §3.6's unit template below is now filled in
+with those confirmed real values rather than <from §3.0> placeholders; (2)
+the same live ExecStart= output also revealed that the actual Core DB path
+is /home/viktor/catering-runtime/core.db, not /var/lib/catering/core.db —
+every occurrence of the old, wrongly-assumed path (inherited from
+DEPLOYMENT.md's documented default, which this pack had not itself
+verified against the live host until now) has been corrected throughout
+§2–§5 and §9 in this pass. DEPLOYMENT.md itself is not touched by this
+correction — it documents a general/default bring-up procedure, and this
+pack's own wrong assumption about this one Lenovo's actual runtime path is
+this pack's error to fix, not DEPLOYMENT.md's. The systemd unit file itself
+is still not created on disk by this pack — §3.6 below is filled in as the
+exact content it will have once a separate explicit GO authorizes actually
+writing infra/systemd/catering-website-intake.service.
 
 ⸻
 
@@ -141,6 +159,35 @@ does not yet have hard proof of that for the current installed state, and
 picking one of two disagreeing patterns without a decision would be a
 guess, not a confirmed fact.
 
+Confirmed on the live Lenovo (2026-07-10) — §3.0 has actually been run;
+this is real output, not a plan:
+
+	catering-kiosk: User=viktor, Group=(absent), WorkingDirectory=
+	/home/viktor/projects/silberloeffel-catering, Environment=PYTHONPATH=
+	/home/viktor/projects/silberloeffel-catering/src, ExecStart uses
+	/usr/bin/python3 (confirmed via readlink -f on the running process's
+	/proc/<pid>/exe: resolves to /usr/bin/python3.13), --db
+	/home/viktor/catering-runtime/core.db, no EnvironmentFile.
+
+	catering-office-panel: identical User=/Group=/WorkingDirectory=/
+	Environment=/interpreter to catering-kiosk; additionally has
+	EnvironmentFile=/etc/catering/office-panel.env; same --db
+	/home/viktor/catering-runtime/core.db.
+
+The two units agree on every value this pack cares about — the
+stop-and-flag condition above did not trigger. §3.6 below is filled in
+with these confirmed values.
+
+This same output also corrected a standing wrong assumption in every prior
+version of this pack: the real Core DB path is
+/home/viktor/catering-runtime/core.db, not /var/lib/catering/core.db as
+DEPLOYMENT.md's general example and this pack's own earlier drafts assumed.
+Every reference to the old path elsewhere in this document (§3.4's backup
+source, §3.5's access checks, §3.6's ExecStart, §4.4/§4.9's SQL commands,
+§4.10's rollback note) has been corrected in this revision to
+/home/viktor/catering-runtime/core.db, and the directory check in §3.5 now
+targets /home/viktor/catering-runtime instead of /var/lib/catering.
+
 3.1 Generate the token (once, on the Lenovo or any trusted machine):
 
 	openssl rand -hex 32
@@ -179,7 +226,7 @@ touching anything else on the host:
 
 	BACKUP="/var/backups/catering/core-pre-website-intake-$(date +%Y%m%d-%H%M%S).db"
 	sudo install -d -m 0750 /var/backups/catering
-	sudo sqlite3 /var/lib/catering/core.db ".backup '$BACKUP'"
+	sudo sqlite3 /home/viktor/catering-runtime/core.db ".backup '$BACKUP'"
 	sudo sqlite3 "$BACKUP" "PRAGMA integrity_check;"
 
 Expected: ok. Record the actual $BACKUP path used — it must be written into
@@ -193,21 +240,20 @@ repo's core.db already uses) needs to create a `-journal` sibling file next
 to the database during writes, which requires write access to the
 containing directory as well as the file:
 
-	namei -l /var/lib/catering/core.db
-	sudo -u <service-user-from-3.0> test -r /var/lib/catering/core.db
-	sudo -u <service-user-from-3.0> test -w /var/lib/catering/core.db
-	sudo -u <service-user-from-3.0> test -w /var/lib/catering
+	namei -l /home/viktor/catering-runtime/core.db
+	sudo -u viktor test -r /home/viktor/catering-runtime/core.db
+	sudo -u viktor test -w /home/viktor/catering-runtime/core.db
+	sudo -u viktor test -w /home/viktor/catering-runtime
 
-All three test commands must succeed (exit 0). <service-user-from-3.0> is
-whatever §3.0 showed as User= for the existing two services — not assumed
-to be literally "catering" until confirmed.
+The confirmed service user is viktor. All three test commands must exit 0.
 
 3.6 Create the systemd unit at infra/systemd/catering-website-intake.service
 in the repo. This is the one file this pack proposes creating in the repo
 (tracked); everything else in this section runs only on the Lenovo, outside
-git. Every value below marked <from §3.0> must be replaced with the actual
-value §3.0 returned before this file is committed — a unit containing
-placeholder text must not be committed:
+git. The values below are §3.0's confirmed real values (see the
+confirmation block in §3.0 above) — no placeholders remain, and this is the
+exact content the file will have once a separate explicit GO authorizes
+actually writing it:
 
 	# Website intake receiver (Worker-facing, loopback-only) — installed per
 	# LENOVO_WEBSITE_INTAKE_SYSTEMD_IMPLEMENTATION_PACK_V1.
@@ -221,17 +267,20 @@ placeholder text must not be committed:
 
 	[Service]
 	Type=simple
-	User=<from §3.0>
-	Group=<from §3.0 — omit this line entirely if the existing units have no Group=>
-	WorkingDirectory=<from §3.0>
-	Environment=<from §3.0, copied verbatim — do not recompute>
+	User=viktor
+	WorkingDirectory=/home/viktor/projects/silberloeffel-catering
+	Environment=PYTHONPATH=/home/viktor/projects/silberloeffel-catering/src
 	EnvironmentFile=/etc/catering/website-intake.env
-	ExecStart=<from §3.0, real interpreter path> -m catering_system.ui.website_intake_endpoint --db /var/lib/catering/core.db --host 127.0.0.1 --port 8083
+	ExecStart=/usr/bin/python3 -m catering_system.ui.website_intake_endpoint --db /home/viktor/catering-runtime/core.db --host 127.0.0.1 --port 8083
 	Restart=on-failure
 	RestartSec=3
 
 	[Install]
 	WantedBy=multi-user.target
+
+No Group= line — both catering-kiosk and catering-office-panel run with
+Group= absent/empty, so per §3.0's rule this unit omits it too rather than
+writing an empty value.
 
 StartLimitIntervalSec=60 / StartLimitBurst=5 caps restart attempts to 5
 within any 60-second window — without this, a bad token/env/DB path would
@@ -304,9 +353,9 @@ longer — for the leak check in §4.8, which must run before it is unset
 
 4.4 SQL baseline, taken before any HTTP request is sent:
 
-	BASE_INQUIRIES="$(sudo sqlite3 /var/lib/catering/core.db 'SELECT COUNT(*) FROM inquiries;')"
-	BASE_ORDERS="$(sudo sqlite3 /var/lib/catering/core.db 'SELECT COUNT(*) FROM orders;')"
-	BASE_ORDER_VERSIONS="$(sudo sqlite3 /var/lib/catering/core.db 'SELECT COUNT(*) FROM order_versions;')"
+	BASE_INQUIRIES="$(sudo sqlite3 /home/viktor/catering-runtime/core.db 'SELECT COUNT(*) FROM inquiries;')"
+	BASE_ORDERS="$(sudo sqlite3 /home/viktor/catering-runtime/core.db 'SELECT COUNT(*) FROM orders;')"
+	BASE_ORDER_VERSIONS="$(sudo sqlite3 /home/viktor/catering-runtime/core.db 'SELECT COUNT(*) FROM order_versions;')"
 
 4.5 From the Lenovo itself (not remotely), request without a token:
 
@@ -384,10 +433,10 @@ and investigate rather than continuing to §4.9.
 
 4.9 SQL post-check against the §4.4 baseline — executable assertions:
 
-	POST_INQUIRIES="$(sudo sqlite3 /var/lib/catering/core.db 'SELECT COUNT(*) FROM inquiries;')"
-	POST_ORDERS="$(sudo sqlite3 /var/lib/catering/core.db 'SELECT COUNT(*) FROM orders;')"
-	POST_ORDER_VERSIONS="$(sudo sqlite3 /var/lib/catering/core.db 'SELECT COUNT(*) FROM order_versions;')"
-	MATCHING_ROWS="$(sudo sqlite3 /var/lib/catering/core.db \
+	POST_INQUIRIES="$(sudo sqlite3 /home/viktor/catering-runtime/core.db 'SELECT COUNT(*) FROM inquiries;')"
+	POST_ORDERS="$(sudo sqlite3 /home/viktor/catering-runtime/core.db 'SELECT COUNT(*) FROM orders;')"
+	POST_ORDER_VERSIONS="$(sudo sqlite3 /home/viktor/catering-runtime/core.db 'SELECT COUNT(*) FROM order_versions;')"
+	MATCHING_ROWS="$(sudo sqlite3 /home/viktor/catering-runtime/core.db \
 	  "SELECT COUNT(*) FROM inquiries WHERE inquiry_source='website_form' AND intake_external_ref='$SUBMISSION_ID';")"
 
 	test "$POST_INQUIRIES" -eq $((BASE_INQUIRIES + 1))
@@ -404,7 +453,7 @@ Inquiry appears with source website_form and intake_external_ref equal to
 $SUBMISSION_ID. This record is kept, not deleted — it becomes a documented
 production install-smoke record, identified by its $SUBMISSION_ID (recorded
 in §9's execution report). No SQL DELETE is performed against
-/var/lib/catering/core.db by this pack, and no UI delete action is assumed
+/home/viktor/catering-runtime/core.db by this pack, and no UI delete action is assumed
 or invoked, since no confirmed, owner-approved "delete an Inquiry" flow has
 been established anywhere in this project to date. If the owner later
 wants this test record gone, that is its own separate, explicitly
@@ -483,12 +532,14 @@ tracked file from the repository, and vice versa.
 
 7. Open gaps — not decided here, flagged for the owner
 
-	•	the real User=/Group=/WorkingDirectory=/interpreter path §3.0
-		produces on the actual Lenovo — unknown from this Mac session,
-		must be read from the live host, not guessed
-	•	whether the two existing services actually agree with each other on
-		those values (§3.0's stop-and-flag condition) — unverified until
-		§3.0 is actually run
+	•	resolved (2026-07-10): §3.0 has been run on the live Lenovo; User=,
+		Group=, WorkingDirectory=, Environment=, and interpreter path all
+		agree between catering-kiosk and catering-office-panel, and §3.6
+		now carries those confirmed real values — no longer an open gap
+	•	resolved (2026-07-10): the real Core DB path is
+		/home/viktor/catering-runtime/core.db, not /var/lib/catering/
+		core.db as every earlier version of this pack assumed — corrected
+		throughout §2–§5 and §9 in this revision
 	•	timing of the future Tunnel/Worker pack relative to this one — this
 		pack can be performed and left running indefinitely with zero
 		external exposure before Tunnel work ever starts
@@ -510,11 +561,17 @@ larger deployment design.
 
 ⸻
 
-9. Execution report (to be filled in when §3–§4 are actually performed —
-empty in this planning-only version)
+9. Execution report (§3.0 has actually been run and is filled in below;
+§3.1 onward remain unperformed as of this revision)
 
-	•	§3.0 confirmed values: User=, Group= (or "absent"), WorkingDirectory=,
-		Environment=, interpreter path
+	•	§3.0 confirmed values (live Lenovo, 2026-07-10): User=viktor,
+		Group=(absent), WorkingDirectory=/home/viktor/projects/
+		silberloeffel-catering, Environment=PYTHONPATH=/home/viktor/
+		projects/silberloeffel-catering/src, interpreter=/usr/bin/python3
+		(resolves to /usr/bin/python3.13); both existing units agree, stop
+		condition not triggered; real Core DB path confirmed as
+		/home/viktor/catering-runtime/core.db (corrected throughout this
+		pack in this revision)
 	•	§3.4 actual $BACKUP path and integrity_check result
 	•	§3.5 access-check results (pass/fail for each of the three test
 		commands)
