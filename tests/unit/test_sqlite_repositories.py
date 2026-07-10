@@ -127,6 +127,56 @@ def test_inquiry_get_unknown_returns_none(tmp_path: Path) -> None:
     assert repo.get_by_id("missing") is None
 
 
+# -- find_by_source_and_external_ref (WEBSITE_FORM_INTAKE_IDEMPOTENCY_PACK_V1) --
+
+
+def test_find_by_source_and_external_ref_matches(tmp_path: Path) -> None:
+    repo = SQLiteInquiryRepository(tmp_path / "test.db")
+    inquiry = replace(
+        _sample_inquiry(), inquiry_source="website_form", intake_external_ref="web-42"
+    )
+    repo.save(inquiry)
+    found = repo.find_by_source_and_external_ref("website_form", "web-42")
+    assert found is not None
+    assert found.inquiry_id == inquiry.inquiry_id
+
+
+def test_find_by_source_and_external_ref_returns_none_when_source_differs(
+    tmp_path: Path,
+) -> None:
+    """Same intake_external_ref value, different source — must not match
+    (configurator's proposal_id and website_form's submission_id can
+    coincidentally share a value; source-scoping prevents a false match)."""
+    repo = SQLiteInquiryRepository(tmp_path / "test.db")
+    inquiry = replace(
+        _sample_inquiry(), inquiry_source="configurator", intake_external_ref="42"
+    )
+    repo.save(inquiry)
+    assert repo.find_by_source_and_external_ref("website_form", "42") is None
+
+
+def test_find_by_source_and_external_ref_returns_none_when_ref_differs(
+    tmp_path: Path,
+) -> None:
+    repo = SQLiteInquiryRepository(tmp_path / "test.db")
+    inquiry = replace(
+        _sample_inquiry(), inquiry_source="website_form", intake_external_ref="web-42"
+    )
+    repo.save(inquiry)
+    assert repo.find_by_source_and_external_ref("website_form", "does-not-exist") is None
+
+
+def test_find_by_source_and_external_ref_returns_none_when_ref_missing(
+    tmp_path: Path,
+) -> None:
+    repo = SQLiteInquiryRepository(tmp_path / "test.db")
+    inquiry = replace(
+        _sample_inquiry(), inquiry_source="website_form", intake_external_ref=None
+    )
+    repo.save(inquiry)
+    assert repo.find_by_source_and_external_ref("website_form", "web-42") is None
+
+
 def test_order_roundtrip_and_version_ordering(tmp_path: Path) -> None:
     repo = SQLiteOrderRepository(tmp_path / "test.db")
     osvc = OrderService(repo)

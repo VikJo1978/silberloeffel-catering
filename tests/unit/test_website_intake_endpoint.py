@@ -222,3 +222,66 @@ def test_no_order_or_orderversion_path_touched(server) -> None:
     _post(base, _VALID_PAYLOAD)
     assert order_repo.list_orders() == []
     assert order_repo._versions == {}  # noqa: SLF001 — no public "list all versions" method
+
+
+# -- idempotency (WEBSITE_FORM_INTAKE_IDEMPOTENCY_PACK_V1) ------------------
+
+
+def test_first_post_with_submission_id_creates_one_inquiry(server) -> None:
+    base, inquiry_repo, _order_repo = server
+    status, body, _raw = _post(base, _VALID_PAYLOAD)
+    assert status == 202
+    assert len(inquiry_repo.list_all()) == 1
+    assert inquiry_repo.list_all()[0].intake_external_ref == "web-42"
+
+
+def test_retry_same_submission_id_returns_same_inquiry_id(server) -> None:
+    base, inquiry_repo, _order_repo = server
+    _status1, body1, _raw1 = _post(base, _VALID_PAYLOAD)
+    status2, body2, _raw2 = _post(base, _VALID_PAYLOAD)
+    assert status2 == 202
+    assert body2["accepted"] is True
+    assert body2["inquiry_id"] == body1["inquiry_id"]
+    assert len(inquiry_repo.list_all()) == 1
+
+
+def test_retry_with_different_payload_same_submission_id_still_no_duplicate(
+    server,
+) -> None:
+    """Even if the retried payload's other fields differ slightly (e.g. a
+    Worker resending with an updated timestamp elsewhere), matching
+    submission_id alone is enough to short-circuit — no adapter call, no
+    second Inquiry."""
+    base, inquiry_repo, _order_repo = server
+    _status1, body1, _raw1 = _post(base, _VALID_PAYLOAD)
+    retried = {**_VALID_PAYLOAD, "message": "Ein anderer Text als beim ersten Mal."}
+    status2, body2, _raw2 = _post(base, retried)
+    assert status2 == 202
+    assert body2["inquiry_id"] == body1["inquiry_id"]
+    assert len(inquiry_repo.list_all()) == 1
+    # the stored Inquiry keeps its original message — retry never re-ran the adapter
+    assert inquiry_repo.list_all()[0].intake_message != "Ein anderer Text als beim ersten Mal."
+
+
+def test_missing_submission_id_can_create_multiple_inquiries(server) -> None:
+    base, inquiry_repo, _order_repo = server
+    payload = {k: v for k, v in _VALID_PAYLOAD.items() if k != "submission_id"}
+    _post(base, payload)
+    _post(base, payload)
+    assert len(inquiry_repo.list_all()) == 2
+
+
+def test_empty_submission_id_can_create_multiple_inquiries(server) -> None:
+    base, inquiry_repo, _order_repo = server
+    payload = {**_VALID_PAYLOAD, "submission_id": ""}
+    _post(base, payload)
+    _post(base, payload)
+    assert len(inquiry_repo.list_all()) == 2
+
+
+def test_duplicate_path_creates_no_order_or_orderversion(server) -> None:
+    base, _inquiry_repo, order_repo = server
+    _post(base, _VALID_PAYLOAD)
+    _post(base, _VALID_PAYLOAD)  # the duplicate/idempotent-replay request
+    assert order_repo.list_orders() == []
+    assert order_repo._versions == {}  # noqa: SLF001

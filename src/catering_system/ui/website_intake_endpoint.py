@@ -93,6 +93,24 @@ def make_website_intake_handler(
             if "event_date" in payload:
                 payload = dict(payload)
                 payload["event_date"] = _parse_event_date(payload["event_date"])
+            # WEBSITE_FORM_INTAKE_IDEMPOTENCY_PACK_V1 §6: a Worker retry with
+            # the same submission_id must not create a second Inquiry — reply
+            # with the already-existing one instead of calling the adapter
+            # again. No submission_id (missing/empty/non-string) means no
+            # lookup is possible; current behavior is unchanged in that case.
+            submission_id = payload.get("submission_id")
+            if isinstance(submission_id, str) and submission_id:
+                existing = inquiry_repository.find_by_source_and_external_ref(
+                    "website_form", submission_id
+                )
+                if existing is not None:
+                    _log.info(
+                        "website intake: duplicate submission_id, "
+                        "returning existing inquiry_id=%s",
+                        existing.inquiry_id,
+                    )
+                    self._json(202, {"accepted": True, "inquiry_id": existing.inquiry_id})
+                    return
             try:
                 inquiry = intake_from_website_form(service, payload)
             except (ValueError, TypeError) as exc:

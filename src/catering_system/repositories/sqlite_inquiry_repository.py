@@ -127,3 +127,19 @@ class SQLiteInquiryRepository:
         if self.get_by_id(inquiry.inquiry_id) is None:
             raise KeyError(inquiry.inquiry_id)
         self.save(inquiry)
+
+    def find_by_source_and_external_ref(
+        self, inquiry_source: str, intake_external_ref: str
+    ) -> Inquiry | None:
+        # WEBSITE_FORM_INTAKE_IDEMPOTENCY_PACK_V1 §5: source-scoped on purpose
+        # — intake_external_ref is written by more than one channel
+        # (website_form's submission_id, configurator's proposal_id), so a
+        # ref-only lookup could match across unrelated channels. No index:
+        # not needed at this table's expected V1 row count (§5/§8).
+        row = self._conn.execute(
+            "SELECT * FROM inquiries WHERE inquiry_source = ? AND intake_external_ref = ? LIMIT 1",
+            (inquiry_source, intake_external_ref),
+        ).fetchone()
+        if row is None:
+            return None
+        return self._row_to_inquiry(row)

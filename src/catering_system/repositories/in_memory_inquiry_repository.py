@@ -22,3 +22,14 @@ class InMemoryInquiryRepository:
         if inquiry.inquiry_id not in self._by_id:
             raise KeyError(inquiry.inquiry_id)
         self._by_id[inquiry.inquiry_id] = inquiry
+
+    def find_by_source_and_external_ref(
+        self, inquiry_source: str, intake_external_ref: str
+    ) -> Inquiry | None:
+        for inquiry in self._by_id.values():
+            if (
+                inquiry.inquiry_source == inquiry_source
+                and inquiry.intake_external_ref == intake_external_ref
+            ):
+                return inquiry
+        return None
