@@ -17,8 +17,11 @@ Production facts:
 - SSH user: `viktor`
 - repository: `/home/viktor/projects/silberloeffel-catering`
 - database: `/home/viktor/catering-runtime/core.db`
+- daily backups: `/home/viktor/catering-runtime/backups`
 - deployed production revision verified on 2026-07-12: `ad9bafc`
 - `PRAGMA quick_check`: `ok`
+- daily backup cron: 03:15, 14-day retention, `umask 077`
+- manual cron-equivalent backup verified on 2026-07-12: `ok`, mode `600`
 
 Staging facts:
 
@@ -32,7 +35,7 @@ Staging facts:
 
 ## Quality baseline
 
-- Python tests: **390 passed**
+- Python tests: **392 passed**
 - coverage gate: **90% minimum**; last local result above the gate
 - Ruff: clean
 - Mypy: clean
@@ -41,16 +44,11 @@ Staging facts:
 
 ## Operational risks
 
-### Critical — scheduled backup path is not writable by its cron owner
+### High — no verified off-host backup yet
 
-The `viktor` crontab schedules a daily SQLite backup at 03:15 and 14-day
-retention cleanup at 03:30. However, `/var/backups/catering` was observed as
-`root:root` with mode `750`; `viktor` could not list it. The backup job is
-therefore not considered healthy until ownership is corrected and a file is
-created and verified manually.
-
-Resolution and verification are documented in
-[Backup and restore](runbooks/backup-restore.md#repair-the-current-backup-permission).
+The local scheduled backup was repaired and proven, but it remains on the same
+Lenovo disk as the production database. Disk loss would remove both. Add an
+encrypted, verified copy on a different machine or storage provider.
 
 ### High — production is not yet connected to the public website
 
@@ -67,7 +65,7 @@ before restart.
 
 ## Next milestones
 
-1. Repair and prove the automatic production backup.
+1. Add and prove an encrypted off-host production backup.
 2. Obtain access to the real Silberlöffel website.
 3. Configure a TLS-protected public intake path through Cloudflare.
 4. Port the approved staging form into the real site.

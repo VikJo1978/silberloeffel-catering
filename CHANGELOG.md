@@ -7,8 +7,10 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
 
 - Reorganized project documentation into maintained architecture, API,
   operations, user, security, and decision guides.
-- Marked the unverified automatic-backup permission as an active operational
-  risk.
+- Repaired the production backup schedule by moving it to the private,
+  user-owned runtime directory and enforcing owner-only files with `umask 077`.
+- Created and verified a cron-equivalent backup against production row counts
+  while all three services remained active.
 
 ## 2026-07-12
 

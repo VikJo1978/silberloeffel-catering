@@ -8,43 +8,38 @@ when it exists, is non-empty, and passes `PRAGMA quick_check`.
 The `viktor` crontab on Lenovo contains:
 
 ```cron
-15 3 * * * sqlite3 /home/viktor/catering-runtime/core.db ".backup /var/backups/catering/core-$(date +\%F).db"
-30 3 * * * find /var/backups/catering -name 'core-*.db' -mtime +14 -delete
+15 3 * * * umask 077 && sqlite3 /home/viktor/catering-runtime/core.db ".backup /home/viktor/catering-runtime/backups/core-$(date +\%F).db"
+30 3 * * * find /home/viktor/catering-runtime/backups -name 'core-*.db' -mtime +14 -delete
 ```
 
-This intends to create a daily online SQLite backup and retain 14 days.
+This creates a daily online SQLite backup with owner-only file permissions and
+retains 14 days.
 
-## Repair the current backup permission
+## Verified state
 
-As observed on 2026-07-12, `/var/backups/catering` is `root:root` with mode
-`750`, while the jobs run as `viktor`. Treat scheduled backups as broken until
-the following is performed and verified.
+On 2026-07-12 the original `/var/backups/catering` destination was found
+unwritable by the `viktor` cron owner. Sudo required a password, so the cron was
+moved to the private user-owned runtime directory instead of widening a system
+directory's permissions.
 
-On Lenovo:
+Verified proof:
 
-```bash
-sudo chown root:viktor /var/backups/catering
-sudo chmod 770 /var/backups/catering
-```
+- backup: `/home/viktor/catering-runtime/backups/core-2026-07-12.db`
+- owner/mode: `viktor:viktor`, `600`
+- size at verification: 57,344 bytes
+- source `quick_check`: `ok`
+- backup `quick_check`: `ok`
+- source/backup row counts: 3 inquiries, 1 order, 1 order version
+- all three production services remained active
+- previous crontab: `/home/viktor/catering-runtime/crontab-before-backup-fix-20260712.txt`
 
-Then create a manual proof backup as `viktor`:
-
-```bash
-stamp=$(date +%F-%H%M%S)
-target="/var/backups/catering/core-manual-$stamp.db"
-sqlite3 /home/viktor/catering-runtime/core.db ".backup $target"
-test -s "$target"
-sqlite3 "$target" 'PRAGMA quick_check;'
-ls -lh "$target"
-```
-
-Expected: a non-zero file and exactly `ok` from `quick_check`.
-
-After the next scheduled run:
+Check the newest scheduled backup:
 
 ```bash
-ls -lh /var/backups/catering/core-$(date +%F).db
-sqlite3 /var/backups/catering/core-$(date +%F).db 'PRAGMA quick_check;'
+backup=/home/viktor/catering-runtime/backups/core-$(date +%F).db
+test -s "$backup"
+stat -c '%U:%G %a %s %y %n' "$backup"
+sqlite3 "$backup" 'PRAGMA quick_check;'
 ```
 
 ## Pre-deploy backup

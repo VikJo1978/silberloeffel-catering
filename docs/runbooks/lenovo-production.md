@@ -12,6 +12,7 @@ reconstructable from CRM or staging; protect it before every deployment.
 | SSH user | `viktor` |
 | Repository | `/home/viktor/projects/silberloeffel-catering` |
 | Core database | `/home/viktor/catering-runtime/core.db` |
+| Daily backups | `/home/viktor/catering-runtime/backups` |
 | Environment files | `/etc/catering/*.env` |
 
 | Service | Port | Exposure | Writes Core |
