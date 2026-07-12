@@ -40,6 +40,11 @@ CREATE INDEX IF NOT EXISTS idx_order_versions_order_id
     ON order_versions (order_id, version_number);
 """
 
+_UNIQUE_VERSION_NUMBER_INDEX = """
+CREATE UNIQUE INDEX IF NOT EXISTS uq_order_versions_order_version_number
+    ON order_versions (order_id, version_number);
+"""
+
 
 def _dt(value: str) -> datetime:
     return datetime.fromisoformat(value)
@@ -53,25 +58,37 @@ class SQLiteOrderRepository:
         cols = {r[1] for r in self._conn.execute("PRAGMA table_info(orders)").fetchall()}
         if "cancelled_at" not in cols:
             self._conn.execute("ALTER TABLE orders ADD COLUMN cancelled_at TEXT")
+        duplicate = self._conn.execute(
+            "SELECT order_id, version_number FROM order_versions "
+            "GROUP BY order_id, version_number HAVING COUNT(*) > 1 LIMIT 1"
+        ).fetchone()
+        if duplicate is not None:
+            self._conn.close()
+            raise ValueError(
+                "cannot enforce unique order version numbers: duplicate "
+                f"version_number {duplicate[1]} for order {duplicate[0]!r}"
+            )
+        self._conn.execute(_UNIQUE_VERSION_NUMBER_INDEX)
         self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
 
-    def save_order(self, order: Order) -> None:
-        self._conn.execute(
-            "INSERT OR REPLACE INTO orders VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (
-                order.order_id,
-                order.source_inquiry_id,
-                order.created_at.isoformat(),
-                order.updated_at.isoformat(),
-                order.candidate_order_version_id,
-                order.effective_order_version_id,
-                order.cancelled_at.isoformat() if order.cancelled_at is not None else None,
-            ),
-        )
-        self._conn.commit()
+    def save_order_with_initial_version(
+        self, order: Order, version: OrderVersion
+    ) -> None:
+        """Create the aggregate root and v1 in one SQLite transaction."""
+        if version.order_id != order.order_id or version.version_number != 1:
+            raise ValueError("initial version must be v1 of the supplied order")
+        with self._conn:
+            self._conn.execute(
+                "INSERT INTO orders VALUES (?, ?, ?, ?, ?, ?, ?)",
+                self._order_values(order),
+            )
+            self._conn.execute(
+                "INSERT INTO order_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                self._version_values(version),
+            )
 
     def get_order(self, order_id: str) -> Order | None:
         row = self._conn.execute(
@@ -90,9 +107,10 @@ class SQLiteOrderRepository:
         )
 
     def update_order(self, order: Order) -> None:
-        if self.get_order(order.order_id) is None:
-            raise KeyError(order.order_id)
-        self.save_order(order)
+        with self._conn:
+            updated = self._update_order_row(order)
+            if updated != 1:
+                raise KeyError(order.order_id)
 
     def list_orders(self) -> list[Order]:
         rows = self._conn.execute("SELECT * FROM orders ORDER BY order_id").fetchall()
@@ -109,25 +127,75 @@ class SQLiteOrderRepository:
             for r in rows
         ]
 
-    def save_order_version(self, version: OrderVersion) -> None:
-        self._conn.execute(
-            "INSERT OR REPLACE INTO order_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                version.order_version_id,
-                version.order_id,
-                version.version_number,
-                version.created_at.isoformat(),
-                version.event_date.isoformat(),
-                version.time_window_text,
-                version.location_text,
-                version.guest_count_estimate,
-                version.planning_mode,
-                version.kitchen_print_confirmed_at.isoformat()
-                if version.kitchen_print_confirmed_at is not None
-                else None,
-            ),
+    def append_order_version(self, order: Order, version: OrderVersion) -> None:
+        """Append a version and update its aggregate root in one transaction."""
+        if version.order_id != order.order_id or version.version_number < 1:
+            raise ValueError("version must belong to the supplied order")
+        with self._conn:
+            updated = self._update_order_row(order)
+            if updated != 1:
+                raise KeyError(order.order_id)
+            self._conn.execute(
+                "INSERT INTO order_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                self._version_values(version),
+            )
+
+    def update_order_version(self, version: OrderVersion) -> None:
+        with self._conn:
+            updated = self._conn.execute(
+                """
+                UPDATE order_versions SET
+                    order_id = ?, version_number = ?, created_at = ?,
+                    event_date = ?, time_window_text = ?, location_text = ?,
+                    guest_count_estimate = ?, planning_mode = ?,
+                    kitchen_print_confirmed_at = ?
+                WHERE order_version_id = ?
+                """,
+                self._version_values(version)[1:] + (version.order_version_id,),
+            ).rowcount
+            if updated != 1:
+                raise KeyError(version.order_version_id)
+
+    def _update_order_row(self, order: Order) -> int:
+        return self._conn.execute(
+            """
+            UPDATE orders SET
+                source_inquiry_id = ?, created_at = ?, updated_at = ?,
+                candidate_order_version_id = ?, effective_order_version_id = ?,
+                cancelled_at = ?
+            WHERE order_id = ?
+            """,
+            self._order_values(order)[1:] + (order.order_id,),
+        ).rowcount
+
+    @staticmethod
+    def _order_values(order: Order) -> tuple:
+        return (
+            order.order_id,
+            order.source_inquiry_id,
+            order.created_at.isoformat(),
+            order.updated_at.isoformat(),
+            order.candidate_order_version_id,
+            order.effective_order_version_id,
+            order.cancelled_at.isoformat() if order.cancelled_at is not None else None,
         )
-        self._conn.commit()
+
+    @staticmethod
+    def _version_values(version: OrderVersion) -> tuple:
+        return (
+            version.order_version_id,
+            version.order_id,
+            version.version_number,
+            version.created_at.isoformat(),
+            version.event_date.isoformat(),
+            version.time_window_text,
+            version.location_text,
+            version.guest_count_estimate,
+            version.planning_mode,
+            version.kitchen_print_confirmed_at.isoformat()
+            if version.kitchen_print_confirmed_at is not None
+            else None,
+        )
 
     def get_order_version(self, order_version_id: str) -> OrderVersion | None:
         row = self._conn.execute(

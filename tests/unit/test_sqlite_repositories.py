@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -197,6 +198,63 @@ def test_order_roundtrip_and_version_ordering(tmp_path: Path) -> None:
     assert [v.version_number for v in rows] == [1, 2]
     assert rows[0] == v1
     assert rows[1] == v2
+
+
+def test_initial_order_and_version_creation_rolls_back_together(tmp_path: Path) -> None:
+    """A failed v1 insert must not leave an order without its initial version."""
+    repo = SQLiteOrderRepository(tmp_path / "test.db")
+    existing_order, existing_v1 = OrderService(repo).convert_inquiry_to_order(
+        _sample_inquiry()
+    )
+    new_order = replace(
+        existing_order,
+        order_id="new-order",
+        candidate_order_version_id=None,
+        effective_order_version_id=None,
+    )
+    colliding_v1 = replace(existing_v1, order_id=new_order.order_id)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        repo.save_order_with_initial_version(new_order, colliding_v1)
+
+    assert repo.get_order(new_order.order_id) is None
+    assert repo.get_order_version(existing_v1.order_version_id) == existing_v1
+
+
+def test_initial_version_must_belong_to_order_and_be_v1(tmp_path: Path) -> None:
+    repo = SQLiteOrderRepository(tmp_path / "test.db")
+    order, v1 = OrderService(repo).convert_inquiry_to_order(_sample_inquiry())
+    invalid_order = replace(order, order_id="new-order")
+
+    with pytest.raises(ValueError, match="must be v1 of the supplied order"):
+        repo.save_order_with_initial_version(invalid_order, v1)
+
+    assert repo.get_order(invalid_order.order_id) is None
+
+
+def test_append_version_conflict_rolls_back_order_update(tmp_path: Path) -> None:
+    """A duplicate version number must not leave updated aggregate metadata."""
+    repo = SQLiteOrderRepository(tmp_path / "test.db")
+    order, v1 = OrderService(repo).convert_inquiry_to_order(_sample_inquiry())
+    updated_order = replace(order, updated_at=order.updated_at + timedelta(minutes=1))
+    duplicate_number = replace(v1, order_version_id="different-version-id")
+
+    with pytest.raises(sqlite3.IntegrityError):
+        repo.append_order_version(updated_order, duplicate_number)
+
+    assert repo.get_order(order.order_id) == order
+    assert repo.list_order_versions(order.order_id) == [v1]
+
+
+def test_update_unknown_order_version_does_not_insert(tmp_path: Path) -> None:
+    repo = SQLiteOrderRepository(tmp_path / "test.db")
+    _order, v1 = OrderService(repo).convert_inquiry_to_order(_sample_inquiry())
+    missing = replace(v1, order_version_id="missing-version")
+
+    with pytest.raises(KeyError):
+        repo.update_order_version(missing)
+
+    assert repo.get_order_version(missing.order_version_id) is None
 
 
 def test_order_update_missing_raises(tmp_path: Path) -> None:

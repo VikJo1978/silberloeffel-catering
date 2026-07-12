@@ -15,9 +15,10 @@ import json
 import os
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from datetime import date
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from urllib.parse import parse_qs, quote, urlencode, urlparse
+from urllib.parse import quote, urlencode
 
 from catering_system.domain.inquiry import CRM_PIPELINE, Inquiry, PLANNING_MODES
 from catering_system.domain.order import Order, OrderVersion
@@ -139,21 +140,28 @@ def _progression_blocker_label(code: str) -> str:
     return PROGRESSION_BLOCKER_LABELS.get(code, f"technischer Fortschritts-Blocker: {code}")
 
 
-# Sidebar Rückruf-badge count, current request only. Set once per request
-# (do_GET/do_POST's _error_page, before any _page()-rendering call) and read
-# here. A plain module global is safe only because the server is guaranteed
-# single-threaded, one request at a time (WORKLOG Entry 048) — do not reuse
-# this pattern if that invariant ever changes.
-_sidebar_rueckruf_count: int | None = None
+@dataclass(frozen=True)
+class OfficePageContext:
+    """Request-local display data shared by the page shell and body renderer."""
+
+    rueckruf_count: int | None = None
 
 
-def _page(title: str, body: str) -> str:
+_EMPTY_PAGE_CONTEXT = OfficePageContext()
+
+
+def _page(
+    title: str,
+    body: str,
+    *,
+    context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
+) -> str:
     # Persistent sidebar on every page (owner feedback 2026-07-07: one long
     # stacked page read as clutter). All targets are absolute paths/anchors
     # on "/" so the sidebar works identically from any page, not just "/".
     rueckruf_label = "Rückrufliste"
-    if _sidebar_rueckruf_count:  # None or 0 -> no badge, nothing to flag
-        rueckruf_label += f' <span class="badge">{_sidebar_rueckruf_count}</span>'
+    if context.rueckruf_count:  # None or 0 -> no badge, nothing to flag
+        rueckruf_label += f' <span class="badge">{context.rueckruf_count}</span>'
     nav = (
         '<nav class="sidebar">'
         '<a href="/">Start</a>'
@@ -290,16 +298,21 @@ _RUECKRUF_SUBTITLE = (
 )
 
 
-def render_rueckruf(items: list[dict] | None, error: str | None) -> str:
+def render_rueckruf(
+    items: list[dict] | None,
+    error: str | None,
+    *,
+    context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
+) -> str:
     if error:
         body = _RUECKRUF_SUBTITLE + (
             f'<p class="blocked">Rückrufliste nicht erreichbar: {_e(error)}</p>'
             "<p>Prüfe AUERSWALD_SYNC_URL / erreichbarkeit des auerswald-sync Servers.</p>"
         )
-        return _page("Offene Rückrufe", body)
+        return _page("Offene Rückrufe", body, context=context)
     if not items:
         body = _RUECKRUF_SUBTITLE + "<p>Keine offenen Rückrufe.</p>"
-        return _page("Offene Rückrufe", body)
+        return _page("Offene Rückrufe", body, context=context)
     rows = []
     for it in items:
         contact = _e(it["contact_name"]) if it.get("contact_found") else "Unbekannt"
@@ -322,7 +335,7 @@ def render_rueckruf(items: list[dict] | None, error: str | None) -> str:
         + "".join(rows)
         + "</table>"
     )
-    return _page("Offene Rückrufe", body)
+    return _page("Offene Rückrufe", body, context=context)
 
 
 # -- Proposal preview: read-only import preview for proposal_payload_v1
@@ -396,7 +409,9 @@ def parse_proposal_payload(raw: str) -> dict:
     return payload
 
 
-def render_proposal_preview_form() -> str:
+def render_proposal_preview_form(
+    *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
+) -> str:
     body = _PROPOSAL_PREVIEW_WARNING + (
         "<p><strong>So funktioniert der Büro-Import:</strong></p>"
         "<ol>"
@@ -413,10 +428,12 @@ def render_proposal_preview_form() -> str:
         'style="width:100%;box-sizing:border-box;font-family:monospace"></textarea></p>'
         "<p><button type=\"submit\">Vorschau anzeigen</button></p></form>"
     )
-    return _page("Angebots-Import (Vorschau)", body)
+    return _page("Angebots-Import (Vorschau)", body, context=context)
 
 
-def render_proposal_preview(payload: dict) -> str:
+def render_proposal_preview(
+    payload: dict, *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
+) -> str:
     def _opt(value: object) -> str:
         return _e(value) if value is not None and value != "" else "–"
 
@@ -459,7 +476,7 @@ def render_proposal_preview(payload: dict) -> str:
 <button type="submit">Anfrage aus Vorschau vorbereiten</button>
 </form>
 <p><a href="/proposal-preview">Weitere Vorschau anzeigen</a></p>"""
-    return _page("Angebots-Import (Vorschau)", body)
+    return _page("Angebots-Import (Vorschau)", body, context=context)
 
 
 class OfficePanel:
@@ -519,7 +536,12 @@ class OfficePanel:
 
     # -- queue -----------------------------------------------------------
 
-    def render_queue(self, rueckruf_items: list[dict] | None) -> str:
+    def render_queue(
+        self,
+        rueckruf_items: list[dict] | None,
+        *,
+        context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
+    ) -> str:
         orders = self._orders.list_orders()
         orders_by_inquiry: dict[str, list[Order]] = {}
         for o in orders:
@@ -544,15 +566,14 @@ class OfficePanel:
             o for o in active_orders if not self.core.evaluate_ready_to_send(o.order_id).ready
         ]
         storniert = [o for o in orders if o.cancelled_at is not None]
-        # Reuses the same count already fetched for the sidebar badge (set
-        # before render_queue() runs, see do_GET) — no second auerswald-sync
-        # request. None = not configured/unreachable -> card omitted, same
+        # Reuses the same request-local count already fetched for the sidebar
+        # badge — no second auerswald-sync request. None = not configured/unreachable -> card omitted, same
         # as the sidebar badge; unlike the other cards, 0 is a real fetched
         # value here (they never depend on an external service, so 0 always
         # means "confirmed empty").
         rueckruf_card = (
-            f'<a href="/rueckruf"><strong>{_sidebar_rueckruf_count}</strong> Rückrufe offen</a>'
-            if _sidebar_rueckruf_count is not None
+            f'<a href="/rueckruf"><strong>{context.rueckruf_count}</strong> Rückrufe offen</a>'
+            if context.rueckruf_count is not None
             else ""
         )
         storniert_card = (
@@ -672,11 +693,13 @@ class OfficePanel:
             + auftraege_section
             + '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a></p>'
         )
-        return _page("Büro-Übersicht", body)
+        return _page("Büro-Übersicht", body, context=context)
 
     # -- full lists (moved out of the Startseite, §11 addendum §13) ------
 
-    def render_anfragen(self, q: str = "") -> str:
+    def render_anfragen(
+        self, q: str = "", *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
+    ) -> str:
         needle = q.strip().lower()
 
         def _matches(*fields: str) -> bool:
@@ -740,9 +763,11 @@ class OfficePanel:
             + "".join(rows or ['<tr><td colspan="8">keine</td></tr>'])
             + "</table>"
         )
-        return _page("Anfragen", body)
+        return _page("Anfragen", body, context=context)
 
-    def render_auftraege(self, q: str = "") -> str:
+    def render_auftraege(
+        self, q: str = "", *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
+    ) -> str:
         needle = q.strip().lower()
 
         def _matches(*fields: str) -> bool:
@@ -787,7 +812,7 @@ class OfficePanel:
             + "".join(rows or ['<tr><td colspan="5">keine</td></tr>'])
             + "</table>"
         )
-        return _page("Aufträge", body)
+        return _page("Aufträge", body, context=context)
 
     # -- inquiries -------------------------------------------------------
 
@@ -801,6 +826,8 @@ class OfficePanel:
         intake_message: str = "",
         intake_summary: str = "",
         intake_external_ref: str = "",
+        *,
+        context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
     ) -> str:
         src_opts = "".join(
             f'<option value="{s}"{" selected" if s == inquiry_source else ""}>{s}</option>'
@@ -834,7 +861,7 @@ class OfficePanel:
 <p><label>Externe Referenz</label><input name="intake_external_ref" value="{_e(intake_external_ref)}"></p>
 <p><button type="submit">Anfrage anlegen</button></p>
 </fieldset></form>"""
-        return _page("Neue Anfrage", body)
+        return _page("Neue Anfrage", body, context=context)
 
     def create_inquiry(self, form: dict[str, str]) -> Inquiry:
         required = form.get("call_verification_required") == "1"
@@ -855,7 +882,12 @@ class OfficePanel:
             intake_external_ref=form.get("intake_external_ref", ""),
         )
 
-    def render_inquiry(self, inquiry_id: str) -> str | None:
+    def render_inquiry(
+        self,
+        inquiry_id: str,
+        *,
+        context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
+    ) -> str | None:
         inq = self._inquiries.get_by_id(inquiry_id)
         if inq is None:
             return None
@@ -939,7 +971,7 @@ class OfficePanel:
 <p><label>Externe Referenz</label><input name="intake_external_ref" value="{_e(inq.intake_external_ref or "")}"></p>
 <p><button type="submit">Speichern</button></p>
 </fieldset></form>"""
-        return _page(f"Anfrage {inq.inquiry_id[:8]}", body)
+        return _page(f"Anfrage {inq.inquiry_id[:8]}", body, context=context)
 
     def update_inquiry(self, inquiry_id: str, form: dict[str, str]) -> None:
         self.inquiry_service.update_inquiry(
@@ -958,7 +990,12 @@ class OfficePanel:
 
     # -- orders ----------------------------------------------------------
 
-    def render_order(self, order_id: str) -> str | None:
+    def render_order(
+        self,
+        order_id: str,
+        *,
+        context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
+    ) -> str | None:
         order = self._orders.get_order(order_id)
         if order is None:
             return None
@@ -1033,7 +1070,7 @@ class OfficePanel:
 <th>Druck bestätigt</th><th>Status</th><th>Aktionen</th></tr>{''.join(rows)}</table>
 <h2>Freigabe (READY_TO_SEND)</h2>{release}
 {actions_block}"""
-        return _page(f"Auftrag {order.order_id[:8]}", body)
+        return _page(f"Auftrag {order.order_id[:8]}", body, context=context)
 
     def create_version(self, order_id: str, form: dict[str, str]) -> None:
         order = self._orders.get_order(order_id)
@@ -1065,215 +1102,20 @@ def make_office_panel_handler(
     auerswald_password: str = "",
     kiosk_url: str = "",
 ) -> type[BaseHTTPRequestHandler]:
-    panel = OfficePanel(inquiry_repo, order_repo, kiosk_url)
-    expected = "Basic " + base64.b64encode(f"office:{password}".encode()).decode()
+    """Compatibility wrapper; HTTP routing lives in office_panel_http."""
+    from catering_system.ui.office_panel_http import (
+        make_office_panel_handler as make_handler,
+    )
 
-    class OfficePanelHandler(BaseHTTPRequestHandler):
-        server_version = "OfficePanel/1.0"
-
-        # -- plumbing --
-
-        def _authorized(self) -> bool:
-            return self.headers.get("Authorization") == expected
-
-        def _deny(self) -> None:
-            self.send_response(401)
-            self.send_header("WWW-Authenticate", 'Basic realm="Office"')
-            self.end_headers()
-
-        def _html(self, page: str, status: int = 200) -> None:
-            payload = page.encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-
-        def _redirect(self, location: str) -> None:
-            self.send_response(303)
-            self.send_header("Location", location)
-            self.end_headers()
-
-        def _error_page(self, message: str, status: int = 400) -> None:
-            global _sidebar_rueckruf_count
-            _sidebar_rueckruf_count = fetch_rueckruf_count(
-                auerswald_url, auerswald_user, auerswald_password
-            )
-            self._html(_page("Fehler", f'<p class="blocked">{_e(message)}</p>'), status)
-
-        def _form(self) -> dict[str, str]:
-            length = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(length).decode("utf-8")
-            return {k: v[0] for k, v in parse_qs(raw, keep_blank_values=True).items()}
-
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
-            pass
-
-        # -- routing --
-
-        def do_GET(self) -> None:  # noqa: N802
-            if not self._authorized():
-                self._deny()
-                return
-            parsed = urlparse(self.path)
-            parts = [p for p in parsed.path.split("/") if p]
-            global _sidebar_rueckruf_count
-            if parts == ["rueckruf"]:
-                # Reuse this one fetch for both the list and the sidebar
-                # badge — no second request (owner requirement).
-                items, error = fetch_missed_board(auerswald_url, auerswald_user, auerswald_password)
-                _sidebar_rueckruf_count = len(items) if items else None
-                self._html(render_rueckruf(items, error))
-                return
-            if not parts:
-                # "/" also needs the actual rows (not just the count) for
-                # the Rückruf-nötig queue (§11 addendum) — same one fetch
-                # covers both the queue and the sidebar badge, still no
-                # second auerswald-sync request per page.
-                items, error = fetch_missed_board(auerswald_url, auerswald_user, auerswald_password)
-                _sidebar_rueckruf_count = len(items) if items else None
-                self._html(panel.render_queue(items))
-                return
-            _sidebar_rueckruf_count = fetch_rueckruf_count(
-                auerswald_url, auerswald_user, auerswald_password
-            )
-            if parts == ["anfragen"]:
-                q = parse_qs(parsed.query).get("q", [""])[0]
-                self._html(panel.render_anfragen(q))
-            elif parts == ["auftraege"]:
-                q = parse_qs(parsed.query).get("q", [""])[0]
-                self._html(panel.render_auftraege(q))
-            elif parts == ["proposal-preview"]:
-                self._html(render_proposal_preview_form())
-            elif parts == ["inquiry", "new"]:
-                q = parse_qs(parsed.query)
-                self._html(
-                    panel.render_inquiry_form(
-                        phone=q.get("phone", [""])[0],
-                        event_date=q.get("event_date", [""])[0],
-                        guest_count_estimate=q.get("guest_count_estimate", [""])[0],
-                    )
-                )
-            elif len(parts) == 2 and parts[0] == "inquiry":
-                page = panel.render_inquiry(parts[1])
-                self._html(page) if page else self.send_error(404)
-            elif len(parts) == 2 and parts[0] == "order":
-                page = panel.render_order(parts[1])
-                self._html(page) if page else self.send_error(404)
-            elif len(parts) == 3 and parts[0] == "order" and parts[2] == "print":
-                self._print_sheet(parts[1], parsed.query)
-            else:
-                self.send_error(404)
-
-        def _print_sheet(self, order_id: str, query: str) -> None:
-            vid = parse_qs(query).get("version", [""])[0]
-            order = order_repo.get_order(order_id)
-            version = order_repo.get_order_version(vid) if vid else None
-            if order is None or version is None or version.order_id != order_id:
-                self.send_error(404)
-                return
-            self._html(render_print_sheet(order, version))
-
-        def do_POST(self) -> None:  # noqa: N802
-            if not self._authorized():
-                self._deny()
-                return
-            parts = [p for p in urlparse(self.path).path.split("/") if p]
-            try:
-                self._route_post(parts)
-            except (ValueError, KeyError) as exc:
-                self._error_page(str(exc))
-
-        def _route_post(self, parts: list[str]) -> None:
-            if parts == ["inquiry", "new"]:
-                inq = panel.create_inquiry(self._form())
-                self._redirect(f"/inquiry/{inq.inquiry_id}")
-            elif len(parts) == 3 and parts[0] == "inquiry":
-                self._inquiry_action(parts[1], parts[2])
-            elif len(parts) == 3 and parts[0] == "order":
-                self._order_action(parts[1], parts[2])
-            elif parts == ["proposal-preview"]:
-                # Parse-and-render only (CONFIGURATOR_OFFICE_MANUAL_HANDOFF
-                # pack): nothing is persisted and nothing is created, so
-                # there is deliberately no redirect — the preview itself is
-                # the whole result. Invalid payloads raise ValueError and
-                # land in do_POST's existing 400 error page.
-                payload = parse_proposal_payload(self._form().get("payload_json", ""))
-                # This POST renders a full page directly (no redirect into
-                # do_GET), so refresh the sidebar badge like do_GET does.
-                global _sidebar_rueckruf_count
-                _sidebar_rueckruf_count = fetch_rueckruf_count(
-                    auerswald_url, auerswald_user, auerswald_password
-                )
-                self._html(render_proposal_preview(payload))
-            elif parts == ["proposal-preview", "prepare"]:
-                # PROPOSAL_PREVIEW_INTAKE_MAPPING_IMPLEMENTATION_PACK_V1 §6:
-                # re-parses the same hidden payload with the exact same
-                # validator as the preview above (single source of
-                # validation) and renders the Inquiry form pre-filled —
-                # still parse-and-render only, no repository write anywhere
-                # in this branch, no redirect (nothing was written).
-                payload = parse_proposal_payload(self._form().get("payload_json", ""))
-                summary_lines = "\n".join(
-                    f"{item['name']} × {item['quantity']}"
-                    if item.get("quantity") is not None
-                    else item["name"]
-                    for item in payload["selected_items"]
-                )
-                self._html(
-                    panel.render_inquiry_form(
-                        event_date=payload["event_date"],
-                        guest_count_estimate=str(payload["guest_count"]),
-                        inquiry_source="configurator",
-                        intake_subject=payload["title"],
-                        intake_message=payload.get("notes") or "",
-                        intake_summary=summary_lines,
-                        intake_external_ref=payload.get("proposal_id") or "",
-                    )
-                )
-            elif parts == ["rueckruf", "resolve"]:
-                call_id = self._form()["call_id"]
-                resolve_missed_call(auerswald_url, auerswald_user, auerswald_password, call_id)
-                self._redirect("/rueckruf")
-            else:
-                self.send_error(404)
-
-        def _inquiry_action(self, inquiry_id: str, action: str) -> None:
-            if action == "update":
-                panel.update_inquiry(inquiry_id, self._form())
-                self._redirect(f"/inquiry/{inquiry_id}")
-            elif action == "verify":
-                panel.inquiry_service.verify_customer_by_call(inquiry_id)
-                self._redirect(f"/inquiry/{inquiry_id}")
-            elif action == "convert":
-                inq = inquiry_repo.get_by_id(inquiry_id)
-                if inq is None:
-                    self.send_error(404)
-                    return
-                order, _v1 = panel.order_service.convert_inquiry_to_order(inq)
-                self._redirect(f"/order/{order.order_id}")
-            else:
-                self.send_error(404)
-
-        def _order_action(self, order_id: str, action: str) -> None:
-            if action == "version":
-                panel.create_version(order_id, self._form())
-            elif action == "print-confirm":
-                panel.core.confirm_kitchen_print(order_id, self._form()["order_version_id"])
-            elif action == "effective":
-                panel.core.make_order_version_effective(
-                    order_id, self._form()["order_version_id"]
-                )
-            elif action == "ready":
-                panel.core.request_ready_to_send(order_id)
-            elif action == "cancel":
-                panel.core.cancel_order(order_id)
-            else:
-                self.send_error(404)
-                return
-            self._redirect(f"/order/{order_id}")
-
-    return OfficePanelHandler
+    return make_handler(
+        inquiry_repo,
+        order_repo,
+        password,
+        auerswald_url,
+        auerswald_user,
+        auerswald_password,
+        kiosk_url,
+    )
 
 
 def create_office_panel_server(
@@ -1287,20 +1129,21 @@ def create_office_panel_server(
     auerswald_password: str = "",
     kiosk_url: str = "",
 ) -> HTTPServer:
-    # Single-threaded on purpose: the shared sqlite3 connections must stay on the
-    # thread that serves requests (bring-up bug, WORKLOG Entry 048). This also
-    # serializes writes — desirable on SQLite for a 1–2-person office.
-    return HTTPServer(
-        (host, port),
-        make_office_panel_handler(
-            inquiry_repo,
-            order_repo,
-            password,
-            auerswald_url,
-            auerswald_user,
-            auerswald_password,
-            kiosk_url,
-        ),
+    """Compatibility wrapper; server construction lives in office_panel_http."""
+    from catering_system.ui.office_panel_http import (
+        create_office_panel_server as create_server,
+    )
+
+    return create_server(
+        inquiry_repo,
+        order_repo,
+        password,
+        host,
+        port,
+        auerswald_url,
+        auerswald_user,
+        auerswald_password,
+        kiosk_url,
     )
 
 

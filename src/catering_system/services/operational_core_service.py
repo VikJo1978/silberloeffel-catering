@@ -71,7 +71,7 @@ class OperationalCoreService:
         if ver.kitchen_print_confirmed_at is not None:
             return ver
         confirmed = replace(ver, kitchen_print_confirmed_at=_utc_now())
-        self._order_repository.save_order_version(confirmed)
+        self._order_repository.update_order_version(confirmed)
         _log.info(
             "confirm_kitchen_print order_id=%s order_version_id=%s", order_id, order_version_id
         )

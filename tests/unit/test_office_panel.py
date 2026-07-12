@@ -16,9 +16,11 @@ import pytest
 from catering_system.repositories.in_memory_inquiry_repository import InMemoryInquiryRepository
 from catering_system.repositories.in_memory_order_repository import InMemoryOrderRepository
 from catering_system.ui.office_panel import (
+    OfficePageContext,
     OfficePanel,
     create_office_panel_server,
     parse_proposal_payload,
+    render_proposal_preview_form,
 )
 
 _PASSWORD = "test-pw"
@@ -72,6 +74,16 @@ def _create_inquiry(base: str, **overrides: str) -> str:
 def _convert(base: str, inquiry_id: str) -> str:
     _status, url, _body = _post(f"{base}/inquiry/{inquiry_id}/convert", {})
     return url.rsplit("/", 1)[-1]  # order id
+
+
+def test_page_context_badge_does_not_leak_between_renders() -> None:
+    with_badge = render_proposal_preview_form(
+        context=OfficePageContext(rueckruf_count=3)
+    )
+    without_badge = render_proposal_preview_form()
+
+    assert '<span class="badge">3</span>' in with_badge
+    assert '<span class="badge">' not in without_badge
 
 
 # -- auth ---------------------------------------------------------------

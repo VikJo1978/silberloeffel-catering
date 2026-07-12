@@ -61,8 +61,7 @@ class OrderService:
             guest_count_estimate=inquiry.guest_count_estimate,
             planning_mode=inquiry.planning_mode,
         )
-        self._order_repository.save_order(order)
-        self._order_repository.save_order_version(version)
+        self._order_repository.save_order_with_initial_version(order, version)
         _log.info(
             "convert_inquiry_to_order inquiry_id=%s order_id=%s version=%s",
             inquiry.inquiry_id,
@@ -104,9 +103,8 @@ class OrderService:
             guest_count_estimate=guest_count_estimate,
             planning_mode=pm,
         )
-        self._order_repository.save_order_version(version)
-        self._order_repository.update_order(
-            replace(current, updated_at=now),
+        self._order_repository.append_order_version(
+            replace(current, updated_at=now), version
         )
         _log.info(
             "create_relevant_order_change_version order_id=%s version=%s",
