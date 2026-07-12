@@ -10,11 +10,17 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import date
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
-from catering_system.repositories.in_memory_inquiry_repository import InMemoryInquiryRepository
-from catering_system.repositories.in_memory_order_repository import InMemoryOrderRepository
+from catering_system.repositories.in_memory_inquiry_repository import (
+    InMemoryInquiryRepository,
+)
+from catering_system.repositories.in_memory_order_repository import (
+    InMemoryOrderRepository,
+)
 from catering_system.ui.office_panel import (
     OfficePageContext,
     OfficePanel,
@@ -33,7 +39,9 @@ _CSRF_TOKEN = csrf_token_for_password(_PASSWORD)
 def panel():
     inquiry_repo = InMemoryInquiryRepository()
     order_repo = InMemoryOrderRepository()
-    server = create_office_panel_server(inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0)
+    server = create_office_panel_server(
+        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     host, port = server.server_address[:2]
@@ -175,9 +183,27 @@ def test_http_rendered_post_forms_include_csrf_token(panel: str) -> None:
     _assert_all_post_forms_have_csrf(preview_page)
 
 
+def test_office_panel_sets_security_headers(panel: str) -> None:
+    request = urllib.request.Request(f"{panel}/")
+    request.add_header("Authorization", _AUTH)
+    with urllib.request.urlopen(request) as response:
+        assert response.headers["Cache-Control"] == "no-store"
+        assert "form-action 'self'" in response.headers["Content-Security-Policy"]
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+        assert response.headers["X-Frame-Options"] == "DENY"
+
+
+def test_office_panel_rejects_oversized_form_body(panel: str) -> None:
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _post(f"{panel}/proposal-preview", {"payload_json": "x" * (300 * 1024)})
+    assert exc.value.code == 413
+
+
 def test_wrong_password_rejected(panel: str) -> None:
     req = urllib.request.Request(f"{panel}/")
-    req.add_header("Authorization", "Basic " + base64.b64encode(b"office:wrong").decode())
+    req.add_header(
+        "Authorization", "Basic " + base64.b64encode(b"office:wrong").decode()
+    )
     with pytest.raises(urllib.error.HTTPError) as exc:
         urllib.request.urlopen(req)
     assert exc.value.code == 401
@@ -215,11 +241,15 @@ def test_inquiry_detail_and_update(panel: str) -> None:
     assert "Kiel" in body and "2026-10-02" in body and "In Prüfung" in body
 
 
-def test_unverified_inquiry_shows_progression_block_and_convert_fails(panel: str) -> None:
+def test_unverified_inquiry_shows_progression_block_and_convert_fails(
+    panel: str,
+) -> None:
     iid = _create_inquiry(panel, call_verification_required="1")
     _status, body = _get(f"{panel}/inquiry/{iid}")
     assert "Konvertierung blockiert" in body
-    assert "Rückrufprüfung noch nicht erfüllt" in body  # B7 vocabulary, human label, on inquiry view
+    assert (
+        "Rückrufprüfung noch nicht erfüllt" in body
+    )  # B7 vocabulary, human label, on inquiry view
     with pytest.raises(urllib.error.HTTPError) as exc:
         _post(f"{panel}/inquiry/{iid}/convert", {})
     assert exc.value.code == 400
@@ -246,14 +276,22 @@ def test_converted_inquiry_shows_order_link_instead_of_button(panel: str) -> Non
 # -- intake context (INQUIRY_INTAKE_CONTEXT_FIELDS_IMPLEMENTATION_PACK_V1) --
 
 
-def test_new_inquiry_form_shows_office_safe_source_dropdown_and_warning(panel: str) -> None:
+def test_new_inquiry_form_shows_office_safe_source_dropdown_and_warning(
+    panel: str,
+) -> None:
     status, body = _get(f"{panel}/inquiry/new")
     assert status == 200
     assert "Intake-Kontext — keine Auftrags-/Küchenfreigabe." in body
     kanal_select = re.search(r'name="inquiry_source">(.*?)</select>', body, re.DOTALL)
     assert kanal_select is not None
     options = re.findall(r'<option value="([^"]+)">', kanal_select.group(1))
-    assert options == ["manual", "phone_by_office", "email", "website_form", "configurator"]
+    assert options == [
+        "manual",
+        "phone_by_office",
+        "email",
+        "website_form",
+        "configurator",
+    ]
     # legacy/adapter-only/future sources deliberately not office-offered
     for hidden in ("phone", "wix_form", "missed_call", "ai_telefonist"):
         assert f'value="{hidden}"' not in body
@@ -327,7 +365,9 @@ def test_update_inquiry_sets_and_clears_intake_fields(panel: str) -> None:
     assert "Erstfassung" not in body
 
 
-def test_creating_inquiry_with_intake_context_creates_no_order_or_orderversion() -> None:
+def test_creating_inquiry_with_intake_context_creates_no_order_or_orderversion() -> (
+    None
+):
     inquiry_repo = InMemoryInquiryRepository()
     order_repo = InMemoryOrderRepository()
     server = create_office_panel_server(
@@ -357,7 +397,9 @@ def test_intake_context_does_not_change_wochenuebersicht() -> None:
     """Kiosk/Wochenübersicht output is byte-identical before/after an
     Inquiry with full intake context is created — WochenuebersichtService
     reads OrderVersion only, never Inquiry (07083cc §1's evidence)."""
-    from catering_system.services.wochenuebersicht_service import WochenuebersichtService
+    from catering_system.services.wochenuebersicht_service import (
+        WochenuebersichtService,
+    )
 
     inquiry_repo = InMemoryInquiryRepository()
     order_repo = InMemoryOrderRepository()
@@ -383,7 +425,9 @@ def test_intake_context_does_not_change_wochenuebersicht() -> None:
     assert after == before
 
 
-def test_convert_inquiry_with_intake_context_does_not_leak_into_order(panel: str) -> None:
+def test_convert_inquiry_with_intake_context_does_not_leak_into_order(
+    panel: str,
+) -> None:
     """convert_inquiry_to_order must not turn intake_summary into
     OrderVersion.items — there is no such field to leak into, and this
     proves the conversion doesn't crash or invent one."""
@@ -412,8 +456,12 @@ def test_order_shows_operational_block_reasons(panel: str) -> None:
     oid = _convert(panel, iid)
     _status, body = _get(f"{panel}/order/{oid}")
     assert "Versandfreigabe blockiert" in body
-    assert "keine wirksame Auftragsversion" in body  # operational vocabulary, human label, on order view
-    assert "Rückrufprüfung noch nicht erfüllt" not in body  # vocabularies not merged (§5)
+    assert (
+        "keine wirksame Auftragsversion" in body
+    )  # operational vocabulary, human label, on order view
+    assert (
+        "Rückrufprüfung noch nicht erfüllt" not in body
+    )  # vocabularies not merged (§5)
 
 
 def test_effective_before_print_rejected(panel: str) -> None:
@@ -433,7 +481,9 @@ def test_full_release_flow(panel: str) -> None:
     _status, body = _get(f"{panel}/order/{oid}")
     vid = body.split('name="order_version_id" value="')[1].split('"')[0]
     _post(f"{panel}/order/{oid}/print-confirm", {"order_version_id": vid})
-    _status, _url, body = _post(f"{panel}/order/{oid}/effective", {"order_version_id": vid})
+    _status, _url, body = _post(
+        f"{panel}/order/{oid}/effective", {"order_version_id": vid}
+    )
     assert "wirksam" in body
     _status, _url, body = _post(f"{panel}/order/{oid}/ready", {})
     assert "READY_TO_SEND: bereit" in body
@@ -534,16 +584,23 @@ def test_panel_serves_sqlite_like_on_lenovo(tmp_path) -> None:
     full write flow over HTTP must not hit sqlite3 cross-thread errors."""
     import queue
 
-    from catering_system.repositories.sqlite_inquiry_repository import SQLiteInquiryRepository
-    from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepository
+    from catering_system.repositories.sqlite_inquiry_repository import (
+        SQLiteInquiryRepository,
+    )
+    from catering_system.repositories.sqlite_order_repository import (
+        SQLiteOrderRepository,
+    )
 
     db = tmp_path / "core.db"
     ready: queue.Queue = queue.Queue()
 
     def run() -> None:  # mirrors main()
         server = create_office_panel_server(
-            SQLiteInquiryRepository(db), SQLiteOrderRepository(db), _PASSWORD,
-            host="127.0.0.1", port=0,
+            SQLiteInquiryRepository(db),
+            SQLiteOrderRepository(db),
+            _PASSWORD,
+            host="127.0.0.1",
+            port=0,
         )
         ready.put(server)
         server.serve_forever()
@@ -575,9 +632,6 @@ def test_unknown_paths_404(panel: str) -> None:
 # /missed-board.json and /missed/resolve so the office panel's read-only
 # integration can be exercised without a live auerswald-sync instance.
 
-import json
-from http.server import BaseHTTPRequestHandler, HTTPServer
-
 _AUERSWALD_ITEMS = [
     {
         "call_id": "07.07.26|09:00:00|+491234",
@@ -606,7 +660,9 @@ def _make_auerswald_stub(resolved: list, hits: list | None = None) -> HTTPServer
                 # Mirrors the real auerswald-sync: resolved calls drop out of
                 # the board on the next fetch (build_missed_board_items()
                 # excludes resolved_call_ids).
-                remaining = [it for it in _AUERSWALD_ITEMS if it["call_id"] not in resolved]
+                remaining = [
+                    it for it in _AUERSWALD_ITEMS if it["call_id"] not in resolved
+                ]
                 payload = json.dumps({"items": remaining}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -641,8 +697,14 @@ def test_rueckruf_unreachable_url_shows_error_not_crash() -> None:
     order_repo = InMemoryOrderRepository()
     # Port 1 is reserved/unroutable — guaranteed connection failure, no live server needed.
     server = create_office_panel_server(
-        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0,
-        auerswald_url="http://127.0.0.1:1", auerswald_user="u", auerswald_password="p",
+        inquiry_repo,
+        order_repo,
+        _PASSWORD,
+        host="127.0.0.1",
+        port=0,
+        auerswald_url="http://127.0.0.1:1",
+        auerswald_user="u",
+        auerswald_password="p",
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -666,9 +728,14 @@ def test_rueckruf_lists_items_from_auerswald_stub() -> None:
     inquiry_repo = InMemoryInquiryRepository()
     order_repo = InMemoryOrderRepository()
     server = create_office_panel_server(
-        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0,
+        inquiry_repo,
+        order_repo,
+        _PASSWORD,
+        host="127.0.0.1",
+        port=0,
         auerswald_url=f"http://{stub_host}:{stub_port}",
-        auerswald_user="office", auerswald_password="secret",
+        auerswald_user="office",
+        auerswald_password="secret",
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -697,12 +764,12 @@ def test_rueckruf_lists_items_from_auerswald_stub() -> None:
 # All derived from data already fetched for the existing tables — no new
 # domain concepts, matches pack §1 ("adds no domain semantics").
 
-import re
-from datetime import date
-
 
 def _attention_counts(body: str) -> dict[str, int]:
-    return {m.group(2): int(m.group(1)) for m in re.finditer(r"<strong>(\d+)</strong>\s*([^<]+)", body)}
+    return {
+        m.group(2): int(m.group(1))
+        for m in re.finditer(r"<strong>(\d+)</strong>\s*([^<]+)", body)
+    }
 
 
 def test_queue_shows_attention_bar_and_empty_week(panel: str) -> None:
@@ -754,7 +821,9 @@ def test_order_row_shows_first_blocker_reason(panel: str) -> None:
     iid = _create_inquiry(panel)
     _convert(panel, iid)
     _status, body = _get(f"{panel}/")
-    assert "keine wirksame Auftragsversion" in body  # first reason right after convert, human label
+    assert (
+        "keine wirksame Auftragsversion" in body
+    )  # first reason right after convert, human label
 
 
 def test_full_release_flow_clears_attention_counts(panel: str) -> None:
@@ -773,7 +842,9 @@ def test_full_release_flow_clears_attention_counts(panel: str) -> None:
     assert "keine offenen Schritte." in body
 
 
-def test_diese_woche_shows_only_effective_orders_in_current_iso_week(panel: str) -> None:
+def test_diese_woche_shows_only_effective_orders_in_current_iso_week(
+    panel: str,
+) -> None:
     today = date.today().isoformat()
     iid = _create_inquiry(panel, event_date=today, location_text="Kielort")
     oid = _convert(panel, iid)
@@ -798,7 +869,9 @@ def test_diese_woche_shows_only_effective_orders_in_current_iso_week(panel: str)
     # also appears in the sidebar nav link, which precedes the real content.
     # Diese Woche now sits above the Blocker section (§3 Arbeitszentrale), so
     # scope the check to that block only, not everything after it on the page.
-    diese_woche_html = body.split('id="diese-woche"')[1].split("<h2>Neue Anfragen</h2>")[0]
+    diese_woche_html = body.split('id="diese-woche"')[1].split(
+        "<h2>Neue Anfragen</h2>"
+    )[0]
     assert other_oid[:8] not in diese_woche_html
 
 
@@ -821,7 +894,9 @@ def test_queue_tables_put_id_last_not_first(panel: str) -> None:
         "<th>Freigabe</th><th>Blocker</th><th>Anfrage</th><th>Bestätigt</th><th>ID</th>"
     ) in auftraege_body
     assert "noch nicht bestätigt" in auftraege_body
-    assert f'<a href="/order/{oid}">{oid[:8]}</a></td></tr>' in auftraege_body  # ID cell is last
+    assert (
+        f'<a href="/order/{oid}">{oid[:8]}</a></td></tr>' in auftraege_body
+    )  # ID cell is last
 
 
 def test_search_filters_inquiries_and_orders(panel: str) -> None:
@@ -863,9 +938,14 @@ def test_sidebar_shows_badge_count_from_same_source_as_rueckrufliste() -> None:
     inquiry_repo = InMemoryInquiryRepository()
     order_repo = InMemoryOrderRepository()
     server = create_office_panel_server(
-        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0,
+        inquiry_repo,
+        order_repo,
+        _PASSWORD,
+        host="127.0.0.1",
+        port=0,
         auerswald_url=f"http://{stub_host}:{stub_port}",
-        auerswald_user="office", auerswald_password="secret",
+        auerswald_user="office",
+        auerswald_password="secret",
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -901,9 +981,14 @@ def test_sidebar_badge_disappears_after_resolving_the_only_call() -> None:
     inquiry_repo = InMemoryInquiryRepository()
     order_repo = InMemoryOrderRepository()
     server = create_office_panel_server(
-        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0,
+        inquiry_repo,
+        order_repo,
+        _PASSWORD,
+        host="127.0.0.1",
+        port=0,
         auerswald_url=f"http://{stub_host}:{stub_port}",
-        auerswald_user="office", auerswald_password="secret",
+        auerswald_user="office",
+        auerswald_password="secret",
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -938,9 +1023,14 @@ def test_dashboard_shows_rueckruf_queue_from_auerswald_stub() -> None:
     inquiry_repo = InMemoryInquiryRepository()
     order_repo = InMemoryOrderRepository()
     server = create_office_panel_server(
-        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0,
+        inquiry_repo,
+        order_repo,
+        _PASSWORD,
+        host="127.0.0.1",
+        port=0,
         auerswald_url=f"http://{stub_host}:{stub_port}",
-        auerswald_user="office", auerswald_password="secret",
+        auerswald_user="office",
+        auerswald_password="secret",
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -949,7 +1039,9 @@ def test_dashboard_shows_rueckruf_queue_from_auerswald_stub() -> None:
     try:
         _status, body = _get(f"{base}/")
         assert "Rückruf nötig" in body
-        assert "01234" in body  # phone — the compact row is date/time/phone/contact only
+        assert (
+            "01234" in body
+        )  # phone — the compact row is date/time/phone/contact only
         assert 'action="/rueckruf/resolve"' in body
         assert "/inquiry/new?phone=01234" in body  # "Anfrage erfassen" hint link
         assert '<a href="/rueckruf">Alle anzeigen</a>' in body
@@ -968,8 +1060,14 @@ def test_dashboard_survives_degraded_rueckruf_source() -> None:
     inquiry_repo = InMemoryInquiryRepository()
     order_repo = InMemoryOrderRepository()
     server = create_office_panel_server(
-        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0,
-        auerswald_url="http://127.0.0.1:1", auerswald_user="u", auerswald_password="p",
+        inquiry_repo,
+        order_repo,
+        _PASSWORD,
+        host="127.0.0.1",
+        port=0,
+        auerswald_url="http://127.0.0.1:1",
+        auerswald_user="u",
+        auerswald_password="p",
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -997,7 +1095,11 @@ def test_dashboard_shows_kiosk_link_when_configured() -> None:
     inquiry_repo = InMemoryInquiryRepository()
     order_repo = InMemoryOrderRepository()
     server = create_office_panel_server(
-        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0,
+        inquiry_repo,
+        order_repo,
+        _PASSWORD,
+        host="127.0.0.1",
+        port=0,
         kiosk_url="http://kiosk.local:8082",
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -1028,7 +1130,7 @@ def test_dashboard_queues_capped_at_five_with_alle_anzeigen_link(panel: str) -> 
         _create_inquiry(panel)
     _status, body = _get(f"{panel}/")
     assert _attention_counts(body)["Neue Anfragen prüfen"] == 7
-    assert body.count('<button>In Auftrag umwandeln</button>') == 5
+    assert body.count("<button>In Auftrag umwandeln</button>") == 5
     assert '<a href="/anfragen">Alle anzeigen</a>' in body
     _status, full_body = _get(f"{panel}/anfragen")
     assert full_body.count("<tr>") == 8  # header row + all 7, not just top 5
@@ -1072,8 +1174,12 @@ def test_next_step_targets_latest_version_when_no_candidate_set() -> None:
 def test_next_step_prefers_candidate_over_latest_version() -> None:
     panel, order, v1 = _panel_with_order()
     v2 = panel.order_service.create_relevant_order_change_version(
-        order, event_date=date(2026, 10, 2), time_window_text="abends",
-        location_text="Kiel", guest_count_estimate=12, planning_mode="caterer_suggestion",
+        order,
+        event_date=date(2026, 10, 2),
+        time_window_text="abends",
+        location_text="Kiel",
+        guest_count_estimate=12,
+        planning_mode="caterer_suggestion",
     )
     panel.order_service.set_candidate_order_version(order.order_id, v1.order_version_id)
     order = panel._orders.get_order(order.order_id)
@@ -1234,7 +1340,12 @@ def test_parse_proposal_selected_items_missing_or_invalid() -> None:
 
 def test_parse_proposal_optional_fields_absent_ok() -> None:
     raw = _proposal(
-        remove=("proposal_id", "calculated_total_net", "calculated_total_gross", "notes"),
+        remove=(
+            "proposal_id",
+            "calculated_total_net",
+            "calculated_total_gross",
+            "notes",
+        ),
         selected_items=[{"name": "Mini Wraps"}],
     )
     payload = parse_proposal_payload(raw)
@@ -1258,7 +1369,9 @@ def test_proposal_preview_form_renders(panel: str) -> None:
 
 
 def test_proposal_preview_post_valid_renders_preview(panel: str) -> None:
-    status, _url, body = _post(f"{panel}/proposal-preview", {"payload_json": _proposal()})
+    status, _url, body = _post(
+        f"{panel}/proposal-preview", {"payload_json": _proposal()}
+    )
     assert status == 200
     assert "fingerfood-configurator" in body
     assert "Angebot Sommerfest" in body
@@ -1333,7 +1446,9 @@ def test_proposal_preview_contains_prepare_form_with_full_payload(panel: str) ->
     prepare button is now a POST form (not a GET link with two safe hints),
     carrying the already-validated payload re-serialized, unmodified — the
     mapping/stripping of prices happens at prepare time (§5/§6), not here."""
-    _status, _url, body = _post(f"{panel}/proposal-preview", {"payload_json": _proposal()})
+    _status, _url, body = _post(
+        f"{panel}/proposal-preview", {"payload_json": _proposal()}
+    )
     assert "Anfrage aus Vorschau vorbereiten" in body
     hidden = _prepare_form_hidden_payload(body)
     assert hidden["title"] == "Angebot Sommerfest"
@@ -1344,7 +1459,9 @@ def test_proposal_preview_contains_prepare_form_with_full_payload(panel: str) ->
 
 
 def test_inquiry_form_prefills_from_query(panel: str) -> None:
-    status, body = _get(f"{panel}/inquiry/new?event_date=2026-09-12&guest_count_estimate=30")
+    status, body = _get(
+        f"{panel}/inquiry/new?event_date=2026-09-12&guest_count_estimate=30"
+    )
     assert status == 200
     assert 'name="event_date" value="2026-09-12"' in body
     assert 'name="guest_count_estimate" inputmode="numeric" value="30"' in body
@@ -1423,7 +1540,9 @@ def test_manual_submit_wins_over_query_hints() -> None:
 
 
 def _prepare(base: str, proposal_json: str) -> tuple[int, str]:
-    status, _url, body = _post(f"{base}/proposal-preview/prepare", {"payload_json": proposal_json})
+    status, _url, body = _post(
+        f"{base}/proposal-preview/prepare", {"payload_json": proposal_json}
+    )
     return status, body
 
 
@@ -1459,7 +1578,7 @@ def test_prepare_missing_notes_and_proposal_id_prefill_empty(panel: str) -> None
     proposal = _proposal(remove=("notes", "proposal_id"))
     _status, body = _prepare(panel, proposal)
     assert 'name="intake_external_ref" value=""' in body
-    assert "<textarea name=\"intake_message\" rows=\"4\"></textarea>" in body
+    assert '<textarea name="intake_message" rows="4"></textarea>' in body
 
 
 def test_prepare_invalid_json_is_400(panel: str) -> None:
@@ -1514,7 +1633,9 @@ def test_prepare_creates_nothing_in_core() -> None:
         server.server_close()
 
 
-def test_explicit_submit_after_prepare_uses_edited_values_not_proposal_defaults() -> None:
+def test_explicit_submit_after_prepare_uses_edited_values_not_proposal_defaults() -> (
+    None
+):
     """The office sees prepare's prefilled values (from the proposal) but
     edits them before submitting — the edited values must win, exactly like
     the existing query-hint flow's test_manual_submit_wins_over_query_hints."""
@@ -1557,7 +1678,9 @@ def test_explicit_submit_after_prepare_uses_edited_values_not_proposal_defaults(
         server.server_close()
 
 
-def test_prepare_then_submit_then_convert_does_not_leak_intake_into_order(panel: str) -> None:
+def test_prepare_then_submit_then_convert_does_not_leak_intake_into_order(
+    panel: str,
+) -> None:
     """Full flow: prepare -> explicit submit -> convert. selected_items never
     become OrderVersion.items; no price ever reaches Core."""
     _status, prepare_body = _prepare(panel, _proposal())
@@ -1594,7 +1717,9 @@ def test_prepare_then_submit_then_convert_does_not_leak_intake_into_order(panel:
 
 
 def test_prepare_then_submit_does_not_change_wochenuebersicht() -> None:
-    from catering_system.services.wochenuebersicht_service import WochenuebersichtService
+    from catering_system.services.wochenuebersicht_service import (
+        WochenuebersichtService,
+    )
 
     inquiry_repo = InMemoryInquiryRepository()
     order_repo = InMemoryOrderRepository()

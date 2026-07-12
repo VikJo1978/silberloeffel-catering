@@ -13,7 +13,11 @@ import uuid
 from dataclasses import replace
 from datetime import date, datetime, timezone
 
-from catering_system.domain.inquiry import Inquiry, inquiry_allows_order_conversion, validate_planning_mode
+from catering_system.domain.inquiry import (
+    Inquiry,
+    inquiry_allows_order_conversion,
+    validate_planning_mode,
+)
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.repositories.order_repository import OrderRepository
 
@@ -127,7 +131,9 @@ class OrderService:
             return None
         return rows[-1]
 
-    def set_candidate_order_version(self, order_id: str, order_version_id: str) -> Order:
+    def set_candidate_order_version(
+        self, order_id: str, order_version_id: str
+    ) -> Order:
         """B6: set the single office-side candidate version; does not select an effective operational version."""
         current = self._order_repository.get_order(order_id)
         if current is None:
@@ -142,7 +148,9 @@ class OrderService:
                 f"order_version_id {order_version_id!r} is not a version of order {order_id!r}"
             )
         now = _utc_now()
-        updated = replace(current, candidate_order_version_id=order_version_id, updated_at=now)
+        updated = replace(
+            current, candidate_order_version_id=order_version_id, updated_at=now
+        )
         self._order_repository.update_order(updated)
         _log.info(
             "set_candidate_order_version order_id=%s candidate_order_version_id=%s",

@@ -18,7 +18,10 @@ from catering_system.domain.inquiry import (
 from catering_system.repositories.inquiry_repository import (
     DuplicateExternalReferenceError,
 )
-from catering_system.repositories.sqlite_inquiry_repository import SQLiteInquiryRepository
+from catering_system.repositories.sqlite_inquiry_repository import (
+    SQLiteInquiryRepository,
+)
+from catering_system.repositories.sqlite_migrations import apply_migrations
 from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepository
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
@@ -56,7 +59,9 @@ def test_inquiry_roundtrip_preserves_all_fields(tmp_path: Path) -> None:
     assert loaded == inquiry  # incl. tz-aware datetimes, linkage dict, intake fields
 
 
-def test_sqlite_inquiry_migration_from_pre_intake_context_schema(tmp_path: Path) -> None:
+def test_sqlite_inquiry_migration_from_pre_intake_context_schema(
+    tmp_path: Path,
+) -> None:
     """INQUIRY_INTAKE_CONTEXT_FIELDS_IMPLEMENTATION_PACK_V1 §4/§9 — same
     shape as test_storno.py::test_sqlite_roundtrip_and_pre_storno_migration:
     a pre-this-pack (13-column) inquiries table gets the four intake columns
@@ -167,7 +172,9 @@ def test_find_by_source_and_external_ref_returns_none_when_ref_differs(
         _sample_inquiry(), inquiry_source="website_form", intake_external_ref="web-42"
     )
     repo.save(inquiry)
-    assert repo.find_by_source_and_external_ref("website_form", "does-not-exist") is None
+    assert (
+        repo.find_by_source_and_external_ref("website_form", "does-not-exist") is None
+    )
 
 
 def test_find_by_source_and_external_ref_returns_none_when_ref_missing(
@@ -198,7 +205,9 @@ def test_duplicate_website_external_ref_is_rejected_atomically(tmp_path: Path) -
 def test_same_configurator_external_ref_remains_allowed(tmp_path: Path) -> None:
     repo = SQLiteInquiryRepository(tmp_path / "test.db")
     first = replace(
-        _sample_inquiry(), inquiry_source="configurator", intake_external_ref="proposal-1"
+        _sample_inquiry(),
+        inquiry_source="configurator",
+        intake_external_ref="proposal-1",
     )
     second = replace(first, inquiry_id="second-inquiry-id")
     repo.save(first)
@@ -343,3 +352,146 @@ def test_progression_chain_works_over_sqlite(tmp_path: Path) -> None:
     assert cp is not None
     assert cp.blocked is False
     assert cp.candidate_order_version_id == v1.order_version_id
+
+
+def test_component_migrations_are_recorded_once(tmp_path: Path) -> None:
+    db = tmp_path / "test.db"
+    SQLiteInquiryRepository(db).close()
+    SQLiteOrderRepository(db).close()
+    SQLiteInquiryRepository(db).close()
+    SQLiteOrderRepository(db).close()
+
+    connection = sqlite3.connect(db)
+    rows = connection.execute(
+        "SELECT component, version FROM schema_migrations ORDER BY component, version"
+    ).fetchall()
+    connection.close()
+    assert rows == [
+        ("inquiries", 1),
+        ("inquiries", 2),
+        ("inquiries", 3),
+        ("orders", 1),
+        ("orders", 2),
+        ("orders", 3),
+        ("orders", 4),
+        ("orders", 5),
+    ]
+
+
+def test_sqlite_rejects_orphan_order_version(tmp_path: Path) -> None:
+    db = tmp_path / "test.db"
+    repo = SQLiteOrderRepository(db)
+    OrderService(repo).convert_inquiry_to_order(_sample_inquiry())
+    repo.close()
+    connection = sqlite3.connect(db)
+
+    with pytest.raises(sqlite3.IntegrityError, match="owner does not exist"):
+        connection.execute(
+            "INSERT INTO order_versions "
+            "SELECT 'orphan-version', 'missing-order', 2, created_at, event_date, "
+            "time_window_text, location_text, guest_count_estimate, planning_mode, NULL "
+            "FROM order_versions LIMIT 1"
+        )
+    connection.close()
+
+
+def test_sqlite_rejects_unowned_order_reference(tmp_path: Path) -> None:
+    db = tmp_path / "test.db"
+    repo = SQLiteOrderRepository(db)
+    order, _v1 = OrderService(repo).convert_inquiry_to_order(_sample_inquiry())
+    repo.close()
+    connection = sqlite3.connect(db)
+
+    with pytest.raises(sqlite3.IntegrityError, match="reference is not owned"):
+        connection.execute(
+            "UPDATE orders SET candidate_order_version_id = ? WHERE order_id = ?",
+            ("missing-version", order.order_id),
+        )
+    connection.close()
+
+
+def test_sqlite_rejects_deleting_order_that_owns_versions(tmp_path: Path) -> None:
+    db = tmp_path / "test.db"
+    repo = SQLiteOrderRepository(db)
+    order, _v1 = OrderService(repo).convert_inquiry_to_order(_sample_inquiry())
+    repo.close()
+    connection = sqlite3.connect(db)
+
+    with pytest.raises(sqlite3.IntegrityError, match="still owns versions"):
+        connection.execute("DELETE FROM orders WHERE order_id = ?", (order.order_id,))
+    connection.close()
+
+
+def test_sqlite_rejects_moving_referenced_version(tmp_path: Path) -> None:
+    db = tmp_path / "test.db"
+    repo = SQLiteOrderRepository(db)
+    service = OrderService(repo)
+    order, version = service.convert_inquiry_to_order(_sample_inquiry())
+    service.set_candidate_order_version(order.order_id, version.order_version_id)
+    other_order, _other_version = service.convert_inquiry_to_order(
+        replace(_sample_inquiry(), inquiry_id="other-inquiry")
+    )
+    repo.close()
+    connection = sqlite3.connect(db)
+
+    with pytest.raises(sqlite3.IntegrityError, match="version is referenced"):
+        connection.execute(
+            "UPDATE order_versions SET order_id = ? WHERE order_version_id = ?",
+            (other_order.order_id, version.order_version_id),
+        )
+    connection.close()
+
+
+def test_migration_failure_rolls_back_schema_and_history() -> None:
+    connection = sqlite3.connect(":memory:")
+
+    def fail_after_schema_change(conn: sqlite3.Connection) -> None:
+        conn.execute("CREATE TABLE must_rollback (id INTEGER)")
+        raise RuntimeError("migration failed")
+
+    with pytest.raises(RuntimeError, match="migration failed"):
+        apply_migrations(
+            connection, "test", ((1, "failure", fail_after_schema_change),)
+        )
+
+    assert connection.execute(
+        "SELECT COUNT(*) FROM schema_migrations WHERE component = 'test'"
+    ).fetchone() == (0,)
+    assert (
+        connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'must_rollback'"
+        ).fetchone()
+        is None
+    )
+    connection.close()
+
+
+def test_migration_runner_rejects_incomplete_history() -> None:
+    connection = sqlite3.connect(":memory:")
+    migrations = (
+        (1, "one", lambda conn: conn.execute("CREATE TABLE one (id INTEGER)")),
+        (2, "two", lambda conn: conn.execute("CREATE TABLE two (id INTEGER)")),
+    )
+    apply_migrations(connection, "test", migrations)
+    connection.execute(
+        "DELETE FROM schema_migrations WHERE component = 'test' AND version = 1"
+    )
+    connection.commit()
+
+    with pytest.raises(RuntimeError, match="incomplete.*history"):
+        apply_migrations(connection, "test", migrations)
+    connection.close()
+
+
+def test_migration_runner_rejects_changed_migration_name() -> None:
+    connection = sqlite3.connect(":memory:")
+    migration = ((1, "original", lambda _conn: None),)
+    apply_migrations(connection, "test", migration)
+    connection.execute(
+        "UPDATE schema_migrations SET name = 'tampered' WHERE component = 'test'"
+    )
+    connection.commit()
+
+    with pytest.raises(RuntimeError, match="name mismatch"):
+        apply_migrations(connection, "test", migration)
+    connection.close()

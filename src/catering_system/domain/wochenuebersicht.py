@@ -37,7 +37,9 @@ class Wochenuebersicht:
     entries: tuple[WochenuebersichtEntry, ...]
 
 
-def entry_from_effective(order: Order, effective: OrderVersion) -> WochenuebersichtEntry:
+def entry_from_effective(
+    order: Order, effective: OrderVersion
+) -> WochenuebersichtEntry:
     return WochenuebersichtEntry(
         order_id=order.order_id,
         effective_order_version_id=effective.order_version_id,

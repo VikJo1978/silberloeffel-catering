@@ -15,7 +15,9 @@ from catering_system.domain.inquiry import (
 )
 from catering_system.domain.operational_core_events import OrderCancelled
 from catering_system.domain.ready_to_send import READY_REASON_ORDER_CANCELLED
-from catering_system.repositories.in_memory_order_repository import InMemoryOrderRepository
+from catering_system.repositories.in_memory_order_repository import (
+    InMemoryOrderRepository,
+)
 from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepository
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
@@ -41,10 +43,17 @@ def _sample_inquiry() -> Inquiry:
     )
 
 
-def _setup() -> tuple[InMemoryOrderRepository, OrderService, OperationalCoreService, list[object]]:
+def _setup() -> tuple[
+    InMemoryOrderRepository, OrderService, OperationalCoreService, list[object]
+]:
     repo = InMemoryOrderRepository()
     events: list[object] = []
-    return repo, OrderService(repo), OperationalCoreService(repo, event_sink=events.append), events
+    return (
+        repo,
+        OrderService(repo),
+        OperationalCoreService(repo, event_sink=events.append),
+        events,
+    )
 
 
 def test_cancel_sets_fact_and_emits() -> None:

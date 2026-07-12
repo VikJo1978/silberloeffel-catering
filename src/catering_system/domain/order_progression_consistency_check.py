@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from catering_system.domain.order_progression_checkpoint import OrderProgressionCheckpoint
+from catering_system.domain.order_progression_checkpoint import (
+    OrderProgressionCheckpoint,
+)
 from catering_system.domain.order_progression_decision import OrderProgressionDecision
-from catering_system.domain.order_progression_review_summary import OrderProgressionReviewSummary
+from catering_system.domain.order_progression_review_summary import (
+    OrderProgressionReviewSummary,
+)
 from catering_system.domain.order_progression_view import OrderProgressionView
 
 
@@ -49,18 +53,34 @@ def evaluate_order_progression_consistency(
         r.append("checkpoint.reasons != view.reasons")
     if decision.reasons != view.reasons:
         r.append("decision.reasons != view.reasons")
-    if checkpoint.eligible_for_progression_review != decision.eligible_for_progression_review:
-        r.append("checkpoint.eligible_for_progression_review != decision.eligible_for_progression_review")
+    if (
+        checkpoint.eligible_for_progression_review
+        != decision.eligible_for_progression_review
+    ):
+        r.append(
+            "checkpoint.eligible_for_progression_review != decision.eligible_for_progression_review"
+        )
     if checkpoint.candidate_order_version_id != decision.candidate_order_version_id:
-        r.append("checkpoint.candidate_order_version_id != decision.candidate_order_version_id")
+        r.append(
+            "checkpoint.candidate_order_version_id != decision.candidate_order_version_id"
+        )
     if summary.latest_order_version_id != checkpoint.latest_order_version_id:
-        r.append("summary.latest_order_version_id != checkpoint.latest_order_version_id")
+        r.append(
+            "summary.latest_order_version_id != checkpoint.latest_order_version_id"
+        )
     if summary.candidate_order_version_id != checkpoint.candidate_order_version_id:
-        r.append("summary.candidate_order_version_id != checkpoint.candidate_order_version_id")
+        r.append(
+            "summary.candidate_order_version_id != checkpoint.candidate_order_version_id"
+        )
     if summary.blocked != checkpoint.blocked:
         r.append("summary.blocked != checkpoint.blocked")
-    if summary.eligible_for_progression_review != checkpoint.eligible_for_progression_review:
-        r.append("summary.eligible_for_progression_review != checkpoint.eligible_for_progression_review")
+    if (
+        summary.eligible_for_progression_review
+        != checkpoint.eligible_for_progression_review
+    ):
+        r.append(
+            "summary.eligible_for_progression_review != checkpoint.eligible_for_progression_review"
+        )
     if summary.reasons != checkpoint.reasons:
         r.append("summary.reasons != checkpoint.reasons")
     if summary.reason_count != len(checkpoint.reasons):

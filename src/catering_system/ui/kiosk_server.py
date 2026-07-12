@@ -16,7 +16,15 @@ from catering_system.domain.wochenuebersicht import Wochenuebersicht
 from catering_system.repositories.order_repository import OrderRepository
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
 
-_WEEKDAYS_DE = ("Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag")
+_WEEKDAYS_DE = (
+    "Montag",
+    "Dienstag",
+    "Mittwoch",
+    "Donnerstag",
+    "Freitag",
+    "Samstag",
+    "Sonntag",
+)
 
 
 def render_wochenuebersicht_html(view: Wochenuebersicht) -> str:
@@ -24,7 +32,9 @@ def render_wochenuebersicht_html(view: Wochenuebersicht) -> str:
     rows: list[str] = []
     for e in view.entries:
         weekday = _WEEKDAYS_DE[e.event_date.weekday()]
-        guests = str(e.guest_count_estimate) if e.guest_count_estimate is not None else "–"
+        guests = (
+            str(e.guest_count_estimate) if e.guest_count_estimate is not None else "–"
+        )
         rows.append(
             "<tr>"
             f"<td>{weekday} {html.escape(e.event_date.isoformat())}</td>"
@@ -75,11 +85,25 @@ def _requested_week(query: str) -> tuple[int, int]:
     return year, week
 
 
-def make_kiosk_handler(order_repository: OrderRepository) -> type[BaseHTTPRequestHandler]:
+def make_kiosk_handler(
+    order_repository: OrderRepository,
+) -> type[BaseHTTPRequestHandler]:
     service = WochenuebersichtService(order_repository)
 
     class KioskHandler(BaseHTTPRequestHandler):
         server_version = "KitchenKiosk/1.0"
+
+        def end_headers(self) -> None:
+            self.send_header("Cache-Control", "no-store")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'none'; style-src 'unsafe-inline'; "
+                "base-uri 'none'; frame-ancestors 'none'",
+            )
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            super().end_headers()
 
         def do_GET(self) -> None:  # noqa: N802 (http.server API)
             parsed = urlparse(self.path)
@@ -125,7 +149,9 @@ def main() -> None:
     parser.add_argument("--host", default="0.0.0.0")
     args = parser.parse_args()
 
-    from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepository
+    from catering_system.repositories.sqlite_order_repository import (
+        SQLiteOrderRepository,
+    )
 
     server = create_kiosk_server(SQLiteOrderRepository(args.db), args.host, args.port)
     print(f"Kitchen kiosk (read-only) on http://{args.host}:{args.port}/")

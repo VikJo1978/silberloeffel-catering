@@ -10,7 +10,9 @@ from catering_system.domain.inquiry import (
     Inquiry,
     PLANNING_MODES,
 )
-from catering_system.repositories.in_memory_order_repository import InMemoryOrderRepository
+from catering_system.repositories.in_memory_order_repository import (
+    InMemoryOrderRepository,
+)
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
@@ -39,12 +41,24 @@ def _inquiry(event_date: date) -> Inquiry:
     )
 
 
-def _setup() -> tuple[InMemoryOrderRepository, OrderService, OperationalCoreService, WochenuebersichtService]:
+def _setup() -> tuple[
+    InMemoryOrderRepository,
+    OrderService,
+    OperationalCoreService,
+    WochenuebersichtService,
+]:
     repo = InMemoryOrderRepository()
-    return repo, OrderService(repo), OperationalCoreService(repo), WochenuebersichtService(repo)
+    return (
+        repo,
+        OrderService(repo),
+        OperationalCoreService(repo),
+        WochenuebersichtService(repo),
+    )
 
 
-def _make_effective_order(osvc: OrderService, core: OperationalCoreService, event_date: date) -> str:
+def _make_effective_order(
+    osvc: OrderService, core: OperationalCoreService, event_date: date
+) -> str:
     order, v1 = osvc.convert_inquiry_to_order(_inquiry(event_date))
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)

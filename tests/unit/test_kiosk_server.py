@@ -15,11 +15,16 @@ from catering_system.domain.inquiry import (
     Inquiry,
     PLANNING_MODES,
 )
-from catering_system.repositories.in_memory_order_repository import InMemoryOrderRepository
+from catering_system.repositories.in_memory_order_repository import (
+    InMemoryOrderRepository,
+)
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
-from catering_system.ui.kiosk_server import create_kiosk_server, render_wochenuebersicht_html
+from catering_system.ui.kiosk_server import (
+    create_kiosk_server,
+    render_wochenuebersicht_html,
+)
 
 _WEEK_YEAR = 2026
 _WEEK = 40  # contains 2026-10-01
@@ -66,7 +71,9 @@ def test_render_contains_entry_data() -> None:
 
 
 def test_render_empty_week_message() -> None:
-    view = WochenuebersichtService(InMemoryOrderRepository()).get_week_overview(_WEEK_YEAR, _WEEK)
+    view = WochenuebersichtService(InMemoryOrderRepository()).get_week_overview(
+        _WEEK_YEAR, _WEEK
+    )
     page = render_wochenuebersicht_html(view)
     assert "Keine Lieferungen in dieser Woche" in page
 
@@ -94,6 +101,9 @@ def kiosk_url():
 def test_get_week_over_http(kiosk_url: str) -> None:
     with urllib.request.urlopen(f"{kiosk_url}/?year={_WEEK_YEAR}&week={_WEEK}") as resp:
         assert resp.status == 200
+        assert resp.headers["Cache-Control"] == "no-store"
+        assert resp.headers["X-Content-Type-Options"] == "nosniff"
+        assert resp.headers["X-Frame-Options"] == "DENY"
         body = resp.read().decode("utf-8")
     assert "Hamburg" in body
     assert "KW 40/2026" in body
@@ -122,7 +132,9 @@ def test_kiosk_serves_sqlite_like_on_lenovo(tmp_path) -> None:
     server — must not hit sqlite3 cross-thread errors (single-threaded HTTPServer)."""
     import queue
 
-    from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepository
+    from catering_system.repositories.sqlite_order_repository import (
+        SQLiteOrderRepository,
+    )
 
     db = tmp_path / "core.db"
     seed = SQLiteOrderRepository(db)
@@ -161,5 +173,11 @@ def test_kiosk_module_has_no_write_surface() -> None:
     import catering_system.ui.kiosk_server as mod
 
     source = Path(mod.__file__).read_text(encoding="utf-8")
-    for forbidden in ("save_order", "update_order", "save_order_version", ".save(", ".update("):
+    for forbidden in (
+        "save_order",
+        "update_order",
+        "save_order_version",
+        ".save(",
+        ".update(",
+    ):
         assert forbidden not in source

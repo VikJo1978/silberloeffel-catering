@@ -13,6 +13,7 @@ single narrow route, and the adapter's own full field-by-field validation.
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
 import logging
 import os
@@ -59,6 +60,14 @@ def make_website_intake_handler(
     class WebsiteIntakeHandler(BaseHTTPRequestHandler):
         server_version = "WebsiteIntake/1.0"
 
+        def end_headers(self) -> None:
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Security-Policy", "default-src 'none'")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+            super().end_headers()
+
         def _json(self, status: int, payload: dict) -> None:
             body = json.dumps(payload).encode("utf-8")
             self.send_response(status)
@@ -71,7 +80,9 @@ def make_website_intake_handler(
             if self.path != _ROUTE:
                 self.send_error(404)
                 return
-            if self.headers.get("Authorization") != expected_auth:
+            if not hmac.compare_digest(
+                self.headers.get("Authorization", ""), expected_auth
+            ):
                 _log.warning("website intake: auth rejected")
                 self._json(401, {"error": "unauthorized"})
                 return
@@ -79,7 +90,14 @@ def make_website_intake_handler(
             if not content_type.startswith("application/json"):
                 self._json(415, {"error": "unsupported content type"})
                 return
-            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                self._json(400, {"error": "invalid content length"})
+                return
+            if length < 0:
+                self._json(400, {"error": "invalid content length"})
+                return
             if length > _MAX_BODY_BYTES:
                 self._json(413, {"error": "payload too large"})
                 return
@@ -112,7 +130,9 @@ def make_website_intake_handler(
                         "returning existing inquiry_id=%s",
                         existing.inquiry_id,
                     )
-                    self._json(202, {"accepted": True, "inquiry_id": existing.inquiry_id})
+                    self._json(
+                        202, {"accepted": True, "inquiry_id": existing.inquiry_id}
+                    )
                     return
             try:
                 inquiry = intake_from_website_form(service, payload)
@@ -133,9 +153,7 @@ def make_website_intake_handler(
                     "returning existing inquiry_id=%s",
                     existing.inquiry_id,
                 )
-                self._json(
-                    202, {"accepted": True, "inquiry_id": existing.inquiry_id}
-                )
+                self._json(202, {"accepted": True, "inquiry_id": existing.inquiry_id})
                 return
             except (ValueError, TypeError) as exc:
                 _log.warning("website intake: rejected (%s)", type(exc).__name__)
@@ -167,11 +185,15 @@ def create_website_intake_server(
     # Single-threaded on purpose: the shared sqlite3 connection must stay on
     # the thread that serves requests (bring-up bug, WORKLOG Entry 048) —
     # same constraint as office_panel.py/kiosk_server.py.
-    return HTTPServer((host, port), make_website_intake_handler(inquiry_repository, token))
+    return HTTPServer(
+        (host, port), make_website_intake_handler(inquiry_repository, token)
+    )
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Website form intake receiver (Worker-facing)")
+    parser = argparse.ArgumentParser(
+        description="Website form intake receiver (Worker-facing)"
+    )
     parser.add_argument("--db", required=True, help="Path to the Core SQLite database")
     parser.add_argument("--port", type=int, default=8083)
     parser.add_argument("--host", default="0.0.0.0")
@@ -187,7 +209,9 @@ def main() -> None:
             "(--token or WEBSITE_INTAKE_TOKEN): it is a write surface"
         )
 
-    from catering_system.repositories.sqlite_inquiry_repository import SQLiteInquiryRepository
+    from catering_system.repositories.sqlite_inquiry_repository import (
+        SQLiteInquiryRepository,
+    )
 
     server = create_website_intake_server(
         SQLiteInquiryRepository(args.db), args.token, args.host, args.port

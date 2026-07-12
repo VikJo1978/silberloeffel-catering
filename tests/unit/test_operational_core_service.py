@@ -24,7 +24,9 @@ from catering_system.domain.ready_to_send import (
     READY_REASON_NO_EFFECTIVE_VERSION,
     READY_REASON_ORDER_NOT_FOUND,
 )
-from catering_system.repositories.in_memory_order_repository import InMemoryOrderRepository
+from catering_system.repositories.in_memory_order_repository import (
+    InMemoryOrderRepository,
+)
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
 
@@ -48,10 +50,17 @@ def _sample_inquiry() -> Inquiry:
     )
 
 
-def _setup() -> tuple[InMemoryOrderRepository, OrderService, OperationalCoreService, list[object]]:
+def _setup() -> tuple[
+    InMemoryOrderRepository, OrderService, OperationalCoreService, list[object]
+]:
     repo = InMemoryOrderRepository()
     events: list[object] = []
-    return repo, OrderService(repo), OperationalCoreService(repo, event_sink=events.append), events
+    return (
+        repo,
+        OrderService(repo),
+        OperationalCoreService(repo, event_sink=events.append),
+        events,
+    )
 
 
 def test_confirm_kitchen_print_sets_timestamp_and_emits() -> None:
@@ -62,7 +71,9 @@ def test_confirm_kitchen_print_sets_timestamp_and_emits() -> None:
     stored = repo.get_order_version(v1.order_version_id)
     assert stored is not None and stored.kitchen_print_confirmed_at is not None
     assert events == [
-        KitchenPrintConfirmed(order_id=order.order_id, order_version_id=v1.order_version_id)
+        KitchenPrintConfirmed(
+            order_id=order.order_id, order_version_id=v1.order_version_id
+        )
     ]
 
 
@@ -104,7 +115,9 @@ def test_make_effective_succeeds_after_confirmation() -> None:
     updated = core.make_order_version_effective(order.order_id, v1.order_version_id)
     assert updated.effective_order_version_id == v1.order_version_id
     stored = repo.get_order(order.order_id)
-    assert stored is not None and stored.effective_order_version_id == v1.order_version_id
+    assert (
+        stored is not None and stored.effective_order_version_id == v1.order_version_id
+    )
     assert events[-1] == OrderVersionMadeEffective(
         order_id=order.order_id, order_version_id=v1.order_version_id
     )
@@ -183,7 +196,9 @@ def test_confirming_old_version_does_not_affect_current_effective() -> None:
     core.make_order_version_effective(order.order_id, v2.order_version_id)
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)  # old version
     stored = repo.get_order(order.order_id)
-    assert stored is not None and stored.effective_order_version_id == v2.order_version_id
+    assert (
+        stored is not None and stored.effective_order_version_id == v2.order_version_id
+    )
 
 
 def test_ready_to_send_unknown_order_blocked() -> None:
@@ -245,7 +260,9 @@ def test_request_ready_to_send_emits_success() -> None:
     assert events[-1] == OrderReadyToSend(order_id=order.order_id)
 
 
-def test_ready_reason_when_effective_set_but_print_missing_is_unreachable_via_service() -> None:
+def test_ready_reason_when_effective_set_but_print_missing_is_unreachable_via_service() -> (
+    None
+):
     """The service gate makes KITCHEN_PRINT_NOT_CONFIRMED unreachable through commands;
     the domain rule still covers it for defense in depth."""
     from catering_system.domain.ready_to_send import evaluate_ready_to_send_from_facts

@@ -19,7 +19,9 @@ import pytest
 from catering_system.repositories.in_memory_inquiry_repository import (
     InMemoryInquiryRepository,
 )
-from catering_system.repositories.in_memory_order_repository import InMemoryOrderRepository
+from catering_system.repositories.in_memory_order_repository import (
+    InMemoryOrderRepository,
+)
 from catering_system.ui.website_intake_endpoint import create_website_intake_server
 
 _TOKEN = "test-website-intake-token"
@@ -39,7 +41,9 @@ def server():
     srv.server_close()
 
 
-def _post(base: str, payload: dict | str, *, token: str | None = _TOKEN) -> tuple[int, dict, bytes]:
+def _post(
+    base: str, payload: dict | str, *, token: str | None = _TOKEN
+) -> tuple[int, dict, bytes]:
     body = payload if isinstance(payload, str) else json.dumps(payload)
     req = urllib.request.Request(
         f"{base}/intake/website-form",
@@ -100,6 +104,23 @@ def test_valid_post_creates_exactly_one_inquiry(server) -> None:
     assert order_repo.list_orders() == []
 
 
+def test_response_sets_security_headers(server) -> None:
+    base, _inquiry_repo, _order_repo = server
+    request = urllib.request.Request(
+        f"{base}/intake/website-form",
+        data=json.dumps(_VALID_PAYLOAD).encode("utf-8"),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {_TOKEN}",
+        },
+    )
+    with urllib.request.urlopen(request) as response:
+        assert response.headers["Cache-Control"] == "no-store"
+        assert response.headers["Content-Security-Policy"] == "default-src 'none'"
+        assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+
 def test_response_does_not_echo_contact_details(server) -> None:
     base, _inquiry_repo, _order_repo = server
     _status, _body, raw = _post(base, _VALID_PAYLOAD)
@@ -143,7 +164,10 @@ def test_wrong_path_rejected(server) -> None:
         f"{base}/some/other/path",
         data=json.dumps(_VALID_PAYLOAD).encode("utf-8"),
         method="POST",
-        headers={"Content-Type": "application/json", "Authorization": f"Bearer {_TOKEN}"},
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {_TOKEN}",
+        },
     )
     with pytest.raises(urllib.error.HTTPError) as exc:
         urllib.request.urlopen(req)
@@ -260,9 +284,7 @@ def test_duplicate_insert_race_returns_existing_inquiry() -> None:
             )
 
     inquiry_repo = LookupRaceRepository()
-    srv = create_website_intake_server(
-        inquiry_repo, _TOKEN, host="127.0.0.1", port=0
-    )
+    srv = create_website_intake_server(inquiry_repo, _TOKEN, host="127.0.0.1", port=0)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     host, port = srv.server_address[:2]
@@ -295,7 +317,10 @@ def test_retry_with_different_payload_same_submission_id_still_no_duplicate(
     assert body2["inquiry_id"] == body1["inquiry_id"]
     assert len(inquiry_repo.list_all()) == 1
     # the stored Inquiry keeps its original message — retry never re-ran the adapter
-    assert inquiry_repo.list_all()[0].intake_message != "Ein anderer Text als beim ersten Mal."
+    assert (
+        inquiry_repo.list_all()[0].intake_message
+        != "Ein anderer Text als beim ersten Mal."
+    )
 
 
 def test_missing_submission_id_can_create_multiple_inquiries(server) -> None:

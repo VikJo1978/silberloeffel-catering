@@ -24,13 +24,19 @@ from catering_system.domain.order_progression_badges import (
     OrderProgressionBadges,
     derive_order_progression_badges,
 )
-from catering_system.domain.order_progression_reason_codes import OrderProgressionReasonCodes
+from catering_system.domain.order_progression_reason_codes import (
+    OrderProgressionReasonCodes,
+)
 from catering_system.domain.order_progression_reason_fingerprint import (
     OrderProgressionReasonFingerprint,
     derive_order_progression_reason_fingerprint,
 )
-from catering_system.domain.order_progression_reason_presence import OrderProgressionReasonPresence
-from catering_system.domain.order_progression_readiness_flags import OrderProgressionReadinessFlags
+from catering_system.domain.order_progression_reason_presence import (
+    OrderProgressionReasonPresence,
+)
+from catering_system.domain.order_progression_readiness_flags import (
+    OrderProgressionReadinessFlags,
+)
 from catering_system.domain.order_progression_severity import (
     OrderProgressionSeverity,
     derive_order_progression_severity,
@@ -43,13 +49,19 @@ from catering_system.domain.order_progression_status_label import (
     OrderProgressionStatusLabel,
     derive_order_progression_status_label,
 )
-from catering_system.domain.order_progression_text_summary import format_order_progression_export_text
-from catering_system.domain.order_progression_checkpoint import OrderProgressionCheckpoint
+from catering_system.domain.order_progression_text_summary import (
+    format_order_progression_export_text,
+)
+from catering_system.domain.order_progression_checkpoint import (
+    OrderProgressionCheckpoint,
+)
 from catering_system.domain.order_progression_consistency_check import (
     OrderProgressionConsistencyCheck,
     evaluate_order_progression_consistency,
 )
-from catering_system.domain.order_progression_review_summary import OrderProgressionReviewSummary
+from catering_system.domain.order_progression_review_summary import (
+    OrderProgressionReviewSummary,
+)
 from catering_system.domain.order_progression_decision import OrderProgressionDecision
 from catering_system.domain.order_progression_view import OrderProgressionView
 from catering_system.domain.progression_blockers import (
@@ -59,7 +71,9 @@ from catering_system.domain.progression_blockers import (
     REASON_ORDER_NOT_FOUND,
     evaluate_inquiry_to_order_progression,
 )
-from catering_system.repositories.in_memory_order_repository import InMemoryOrderRepository
+from catering_system.repositories.in_memory_order_repository import (
+    InMemoryOrderRepository,
+)
 from catering_system.services.order_service import OrderService
 from catering_system.services.progression_service import ProgressionService
 
@@ -135,9 +149,9 @@ def test_candidate_progression_not_blocked_when_candidate_set() -> None:
 
 
 def test_candidate_progression_blocked_when_order_unknown() -> None:
-    ev = ProgressionService(InMemoryOrderRepository()).evaluate_candidate_version_progression(
-        "00000000-0000-0000-0000-000000000000"
-    )
+    ev = ProgressionService(
+        InMemoryOrderRepository()
+    ).evaluate_candidate_version_progression("00000000-0000-0000-0000-000000000000")
     assert ev.blocked is True
     assert REASON_ORDER_NOT_FOUND in ev.reasons
 
@@ -243,7 +257,9 @@ def test_progression_decision_not_eligible_when_candidate_not_resolvable() -> No
 
 def test_progression_decision_not_eligible_when_order_unknown() -> None:
     missing = "00000000-0000-0000-0000-000000000000"
-    d = ProgressionService(InMemoryOrderRepository()).evaluate_order_progression_decision(missing)
+    d = ProgressionService(
+        InMemoryOrderRepository()
+    ).evaluate_order_progression_decision(missing)
     assert d.order_id == missing
     assert d.eligible_for_progression_review is False
     assert REASON_ORDER_NOT_FOUND in d.reasons
@@ -319,8 +335,14 @@ def test_review_summary_matches_checkpoint_and_reason_count() -> None:
     assert cp is not None and sm is not None
     assert isinstance(sm, OrderProgressionReviewSummary)
     assert sm.order_id == cp.order_id
-    assert sm.latest_order_version_id == cp.latest_order_version_id == v2.order_version_id
-    assert sm.candidate_order_version_id == cp.candidate_order_version_id == v1.order_version_id
+    assert (
+        sm.latest_order_version_id == cp.latest_order_version_id == v2.order_version_id
+    )
+    assert (
+        sm.candidate_order_version_id
+        == cp.candidate_order_version_id
+        == v1.order_version_id
+    )
     assert sm.blocked == cp.blocked
     assert sm.eligible_for_progression_review == cp.eligible_for_progression_review
     assert sm.reasons == cp.reasons
@@ -344,9 +366,9 @@ def test_review_summary_when_candidate_absent() -> None:
 
 def test_review_summary_unknown_order_returns_none() -> None:
     assert (
-        ProgressionService(InMemoryOrderRepository()).get_order_progression_review_summary(
-            "00000000-0000-0000-0000-000000000000"
-        )
+        ProgressionService(
+            InMemoryOrderRepository()
+        ).get_order_progression_review_summary("00000000-0000-0000-0000-000000000000")
         is None
     )
 
@@ -367,7 +389,9 @@ def test_consistency_check_consistent_when_layers_align() -> None:
 
 def test_consistency_check_unknown_order_returns_none() -> None:
     assert (
-        ProgressionService(InMemoryOrderRepository()).get_order_progression_consistency_check(
+        ProgressionService(
+            InMemoryOrderRepository()
+        ).get_order_progression_consistency_check(
             "00000000-0000-0000-0000-000000000000"
         )
         is None
@@ -404,7 +428,13 @@ def test_bundle_matches_individual_derived_getters() -> None:
     cp = prog.get_order_progression_checkpoint(oid)
     sm = prog.get_order_progression_review_summary(oid)
     cc = prog.get_order_progression_consistency_check(oid)
-    assert b is not None and view is not None and cp is not None and sm is not None and cc is not None
+    assert (
+        b is not None
+        and view is not None
+        and cp is not None
+        and sm is not None
+        and cc is not None
+    )
     assert isinstance(b, OrderProgressionBundle)
     assert b.order_id == oid
     assert b.view == view
@@ -446,8 +476,14 @@ def test_export_flattened_from_bundle_checkpoint_and_consistency() -> None:
     assert isinstance(ex, OrderProgressionExport)
     cp = b.checkpoint
     assert ex.order_id == oid
-    assert ex.latest_order_version_id == cp.latest_order_version_id == v2.order_version_id
-    assert ex.candidate_order_version_id == cp.candidate_order_version_id == v1.order_version_id
+    assert (
+        ex.latest_order_version_id == cp.latest_order_version_id == v2.order_version_id
+    )
+    assert (
+        ex.candidate_order_version_id
+        == cp.candidate_order_version_id
+        == v1.order_version_id
+    )
     assert ex.blocked == cp.blocked
     assert ex.eligible_for_progression_review == cp.eligible_for_progression_review
     assert ex.reasons == cp.reasons
@@ -458,9 +494,9 @@ def test_export_flattened_from_bundle_checkpoint_and_consistency() -> None:
 
 def test_text_summary_unknown_order_returns_none() -> None:
     assert (
-        ProgressionService(InMemoryOrderRepository()).get_order_progression_text_summary(
-            "00000000-0000-0000-0000-000000000000"
-        )
+        ProgressionService(
+            InMemoryOrderRepository()
+        ).get_order_progression_text_summary("00000000-0000-0000-0000-000000000000")
         is None
     )
 
@@ -506,9 +542,9 @@ def test_format_order_progression_export_text_fixed_shape() -> None:
 
 def test_reason_codes_unknown_order_returns_none() -> None:
     assert (
-        ProgressionService(InMemoryOrderRepository()).get_order_progression_reason_codes(
-            "00000000-0000-0000-0000-000000000000"
-        )
+        ProgressionService(
+            InMemoryOrderRepository()
+        ).get_order_progression_reason_codes("00000000-0000-0000-0000-000000000000")
         is None
     )
 
@@ -532,9 +568,9 @@ def test_reason_codes_matches_export_order_and_count() -> None:
 
 def test_status_label_unknown_order_returns_none() -> None:
     assert (
-        ProgressionService(InMemoryOrderRepository()).get_order_progression_status_label(
-            "00000000-0000-0000-0000-000000000000"
-        )
+        ProgressionService(
+            InMemoryOrderRepository()
+        ).get_order_progression_status_label("00000000-0000-0000-0000-000000000000")
         is None
     )
 
@@ -738,9 +774,9 @@ def test_derive_order_progression_severity_priority() -> None:
 
 def test_state_signature_unknown_order_returns_none() -> None:
     assert (
-        ProgressionService(InMemoryOrderRepository()).get_order_progression_state_signature(
-            "00000000-0000-0000-0000-000000000000"
-        )
+        ProgressionService(
+            InMemoryOrderRepository()
+        ).get_order_progression_state_signature("00000000-0000-0000-0000-000000000000")
         is None
     )
 
@@ -864,7 +900,9 @@ def test_order_progression_facts_from_export_synthetic() -> None:
 
 def test_reason_fingerprint_unknown_order_returns_none() -> None:
     assert (
-        ProgressionService(InMemoryOrderRepository()).get_order_progression_reason_fingerprint(
+        ProgressionService(
+            InMemoryOrderRepository()
+        ).get_order_progression_reason_fingerprint(
             "00000000-0000-0000-0000-000000000000"
         )
         is None
@@ -921,9 +959,9 @@ def test_derive_order_progression_reason_fingerprint_synthetic() -> None:
 
 def test_readiness_flags_unknown_order_returns_none() -> None:
     assert (
-        ProgressionService(InMemoryOrderRepository()).get_order_progression_readiness_flags(
-            "00000000-0000-0000-0000-000000000000"
-        )
+        ProgressionService(
+            InMemoryOrderRepository()
+        ).get_order_progression_readiness_flags("00000000-0000-0000-0000-000000000000")
         is None
     )
 
@@ -988,9 +1026,9 @@ def test_order_progression_readiness_flags_from_export_synthetic() -> None:
 
 def test_reason_presence_unknown_order_returns_none() -> None:
     assert (
-        ProgressionService(InMemoryOrderRepository()).get_order_progression_reason_presence(
-            "00000000-0000-0000-0000-000000000000"
-        )
+        ProgressionService(
+            InMemoryOrderRepository()
+        ).get_order_progression_reason_presence("00000000-0000-0000-0000-000000000000")
         is None
     )
 
@@ -1097,7 +1135,9 @@ def test_evaluate_order_progression_consistency_detects_mismatch() -> None:
         reason_count=1,
         reasons=(REASON_CANDIDATE_ORDER_VERSION_MISSING,),
     )
-    out = evaluate_order_progression_consistency(oid, view, decision, checkpoint, summary)
+    out = evaluate_order_progression_consistency(
+        oid, view, decision, checkpoint, summary
+    )
     assert out.consistent is False
     assert "checkpoint.blocked != view.blocked" in out.reasons
 

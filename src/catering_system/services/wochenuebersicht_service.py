@@ -34,4 +34,6 @@ class WochenuebersichtService:
                 continue
             entries.append(entry_from_effective(order, effective))
         entries.sort(key=lambda e: (e.event_date, e.time_window_text, e.order_id))
-        return Wochenuebersicht(iso_year=iso_year, iso_week=iso_week, entries=tuple(entries))
+        return Wochenuebersicht(
+            iso_year=iso_year, iso_week=iso_week, entries=tuple(entries)
+        )

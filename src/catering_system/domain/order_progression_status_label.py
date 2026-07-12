@@ -27,4 +27,6 @@ class OrderProgressionStatusLabel:
 
     @classmethod
     def from_export(cls, ex: OrderProgressionExport) -> OrderProgressionStatusLabel:
-        return cls(order_id=ex.order_id, status_label=derive_order_progression_status_label(ex))
+        return cls(
+            order_id=ex.order_id, status_label=derive_order_progression_status_label(ex)
+        )

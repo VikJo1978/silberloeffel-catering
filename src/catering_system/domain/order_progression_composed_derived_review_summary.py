@@ -4,10 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from catering_system.domain.order_progression_checkpoint import OrderProgressionCheckpoint
+from catering_system.domain.order_progression_checkpoint import (
+    OrderProgressionCheckpoint,
+)
 from catering_system.domain.order_progression_facts import OrderProgressionFacts
-from catering_system.domain.order_progression_reason_fingerprint import OrderProgressionReasonFingerprint
-from catering_system.domain.order_progression_readiness_flags import OrderProgressionReadinessFlags
+from catering_system.domain.order_progression_reason_fingerprint import (
+    OrderProgressionReasonFingerprint,
+)
+from catering_system.domain.order_progression_readiness_flags import (
+    OrderProgressionReadinessFlags,
+)
 from catering_system.domain.order_progression_severity import OrderProgressionSeverity
 
 
@@ -36,7 +42,12 @@ class OrderProgressionComposedDerivedReviewSummary:
         """facts_count = number of True values among the four B23 boolean fact fields."""
         facts_count = sum(
             1
-            for v in (facts.has_reasons, facts.is_blocked, facts.is_consistent, facts.is_eligible)
+            for v in (
+                facts.has_reasons,
+                facts.is_blocked,
+                facts.is_consistent,
+                facts.is_eligible,
+            )
             if v
         )
         return cls(

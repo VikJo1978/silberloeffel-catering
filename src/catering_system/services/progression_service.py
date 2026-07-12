@@ -13,21 +13,39 @@ from catering_system.domain.order_progression_composed_derived_review_summary im
 from catering_system.domain.order_progression_bundle import OrderProgressionBundle
 from catering_system.domain.order_progression_export import OrderProgressionExport
 from catering_system.domain.order_progression_facts import OrderProgressionFacts
-from catering_system.domain.order_progression_reason_codes import OrderProgressionReasonCodes
-from catering_system.domain.order_progression_reason_fingerprint import OrderProgressionReasonFingerprint
-from catering_system.domain.order_progression_reason_presence import OrderProgressionReasonPresence
-from catering_system.domain.order_progression_readiness_flags import OrderProgressionReadinessFlags
+from catering_system.domain.order_progression_reason_codes import (
+    OrderProgressionReasonCodes,
+)
+from catering_system.domain.order_progression_reason_fingerprint import (
+    OrderProgressionReasonFingerprint,
+)
+from catering_system.domain.order_progression_reason_presence import (
+    OrderProgressionReasonPresence,
+)
+from catering_system.domain.order_progression_readiness_flags import (
+    OrderProgressionReadinessFlags,
+)
 from catering_system.domain.order_progression_badges import OrderProgressionBadges
 from catering_system.domain.order_progression_severity import OrderProgressionSeverity
-from catering_system.domain.order_progression_state_signature import OrderProgressionStateSignature
-from catering_system.domain.order_progression_status_label import OrderProgressionStatusLabel
-from catering_system.domain.order_progression_text_summary import format_order_progression_export_text
-from catering_system.domain.order_progression_checkpoint import OrderProgressionCheckpoint
+from catering_system.domain.order_progression_state_signature import (
+    OrderProgressionStateSignature,
+)
+from catering_system.domain.order_progression_status_label import (
+    OrderProgressionStatusLabel,
+)
+from catering_system.domain.order_progression_text_summary import (
+    format_order_progression_export_text,
+)
+from catering_system.domain.order_progression_checkpoint import (
+    OrderProgressionCheckpoint,
+)
 from catering_system.domain.order_progression_consistency_check import (
     OrderProgressionConsistencyCheck,
     evaluate_order_progression_consistency,
 )
-from catering_system.domain.order_progression_review_summary import OrderProgressionReviewSummary
+from catering_system.domain.order_progression_review_summary import (
+    OrderProgressionReviewSummary,
+)
 from catering_system.domain.order_progression_decision import OrderProgressionDecision
 from catering_system.domain.order_progression_view import OrderProgressionView
 from catering_system.domain.progression_blockers import (
@@ -47,15 +65,21 @@ class ProgressionService:
     def __init__(self, order_repository: OrderRepository) -> None:
         self._order_repository = order_repository
 
-    def evaluate_inquiry_to_order_progression(self, inquiry: Inquiry) -> ProgressionEvaluation:
+    def evaluate_inquiry_to_order_progression(
+        self, inquiry: Inquiry
+    ) -> ProgressionEvaluation:
         """B7: explicit read for inquiry→order gate (same facts as B5)."""
         return evaluate_inquiry_to_order_progression(inquiry)
 
-    def evaluate_candidate_version_progression(self, order_id: str) -> ProgressionEvaluation:
+    def evaluate_candidate_version_progression(
+        self, order_id: str
+    ) -> ProgressionEvaluation:
         """B7: candidate-based progression blocked when candidate missing or not resolvable."""
         order = self._order_repository.get_order(order_id)
         if order is None:
-            return ProgressionEvaluation(blocked=True, reasons=(REASON_ORDER_NOT_FOUND,))
+            return ProgressionEvaluation(
+                blocked=True, reasons=(REASON_ORDER_NOT_FOUND,)
+            )
         cid = order.candidate_order_version_id
         if not cid:
             return ProgressionEvaluation(
@@ -93,7 +117,9 @@ class ProgressionService:
             reasons=ev.reasons,
         )
 
-    def evaluate_order_progression_decision(self, order_id: str) -> OrderProgressionDecision:
+    def evaluate_order_progression_decision(
+        self, order_id: str
+    ) -> OrderProgressionDecision:
         """B9: office-side eligibility — derived from candidate presence/resolution and B7 blocked evaluation."""
         ev = self.evaluate_candidate_version_progression(order_id)
         order = self._order_repository.get_order(order_id)
@@ -107,7 +133,9 @@ class ProgressionService:
             candidate_order_version_id=cid,
         )
 
-    def get_order_progression_checkpoint(self, order_id: str) -> OrderProgressionCheckpoint | None:
+    def get_order_progression_checkpoint(
+        self, order_id: str
+    ) -> OrderProgressionCheckpoint | None:
         """B10: on-demand snapshot from B8 view + B9 decision only; None if order unknown."""
         view = self.get_order_progression_view(order_id)
         if view is None:
@@ -127,7 +155,9 @@ class ProgressionService:
             eligible_for_progression_review=decision.eligible_for_progression_review,
         )
 
-    def get_order_progression_review_summary(self, order_id: str) -> OrderProgressionReviewSummary | None:
+    def get_order_progression_review_summary(
+        self, order_id: str
+    ) -> OrderProgressionReviewSummary | None:
         """B11: compact inspection summary from B10 checkpoint only; None if order unknown."""
         cp = self.get_order_progression_checkpoint(order_id)
         if cp is None:
@@ -142,7 +172,9 @@ class ProgressionService:
             reasons=cp.reasons,
         )
 
-    def get_order_progression_consistency_check(self, order_id: str) -> OrderProgressionConsistencyCheck | None:
+    def get_order_progression_consistency_check(
+        self, order_id: str
+    ) -> OrderProgressionConsistencyCheck | None:
         """B12: agreement across B8 view, B9 decision, B10 checkpoint, B11 summary; None if order unknown."""
         view = self.get_order_progression_view(order_id)
         if view is None:
@@ -153,7 +185,9 @@ class ProgressionService:
         assert cp is not None and sm is not None
         return evaluate_order_progression_consistency(order_id, view, decision, cp, sm)
 
-    def get_order_progression_bundle(self, order_id: str) -> OrderProgressionBundle | None:
+    def get_order_progression_bundle(
+        self, order_id: str
+    ) -> OrderProgressionBundle | None:
         """B13: one read-only bundle of B8 view, B9 decision, B10 checkpoint, B11 summary, B12 consistency; None if order unknown."""
         view = self.get_order_progression_view(order_id)
         if view is None:
@@ -172,7 +206,9 @@ class ProgressionService:
             consistency_check=cc,
         )
 
-    def get_order_progression_export(self, order_id: str) -> OrderProgressionExport | None:
+    def get_order_progression_export(
+        self, order_id: str
+    ) -> OrderProgressionExport | None:
         """B14: flat export from B13 bundle only; None if order unknown."""
         b = self.get_order_progression_bundle(order_id)
         if b is None:
@@ -186,42 +222,54 @@ class ProgressionService:
             return None
         return format_order_progression_export_text(ex)
 
-    def get_order_progression_reason_codes(self, order_id: str) -> OrderProgressionReasonCodes | None:
+    def get_order_progression_reason_codes(
+        self, order_id: str
+    ) -> OrderProgressionReasonCodes | None:
         """B18: order_id + reason_count + reasons from B14 export only; None if order unknown."""
         ex = self.get_order_progression_export(order_id)
         if ex is None:
             return None
         return OrderProgressionReasonCodes.from_export(ex)
 
-    def get_order_progression_status_label(self, order_id: str) -> OrderProgressionStatusLabel | None:
+    def get_order_progression_status_label(
+        self, order_id: str
+    ) -> OrderProgressionStatusLabel | None:
         """B19: order_id + derived status_label from B14 export only; None if order unknown."""
         ex = self.get_order_progression_export(order_id)
         if ex is None:
             return None
         return OrderProgressionStatusLabel.from_export(ex)
 
-    def get_order_progression_badges(self, order_id: str) -> OrderProgressionBadges | None:
+    def get_order_progression_badges(
+        self, order_id: str
+    ) -> OrderProgressionBadges | None:
         """B20: order_id + derived badge tuple from B14 export only; None if order unknown."""
         ex = self.get_order_progression_export(order_id)
         if ex is None:
             return None
         return OrderProgressionBadges.from_export(ex)
 
-    def get_order_progression_severity(self, order_id: str) -> OrderProgressionSeverity | None:
+    def get_order_progression_severity(
+        self, order_id: str
+    ) -> OrderProgressionSeverity | None:
         """B21: order_id + derived severity from B14 export only; None if order unknown."""
         ex = self.get_order_progression_export(order_id)
         if ex is None:
             return None
         return OrderProgressionSeverity.from_export(ex)
 
-    def get_order_progression_state_signature(self, order_id: str) -> OrderProgressionStateSignature | None:
+    def get_order_progression_state_signature(
+        self, order_id: str
+    ) -> OrderProgressionStateSignature | None:
         """B22: order_id + derived state_signature from B14 export only; None if order unknown."""
         ex = self.get_order_progression_export(order_id)
         if ex is None:
             return None
         return OrderProgressionStateSignature.from_export(ex)
 
-    def get_order_progression_facts(self, order_id: str) -> OrderProgressionFacts | None:
+    def get_order_progression_facts(
+        self, order_id: str
+    ) -> OrderProgressionFacts | None:
         """B23: order_id + derived boolean facts from B14 export only; None if order unknown."""
         ex = self.get_order_progression_export(order_id)
         if ex is None:
@@ -266,5 +314,9 @@ class ProgressionService:
         rfp = self.get_order_progression_reason_fingerprint(order_id)
         rf = self.get_order_progression_readiness_flags(order_id)
         facts = self.get_order_progression_facts(order_id)
-        assert sv is not None and rfp is not None and rf is not None and facts is not None
-        return OrderProgressionComposedDerivedReviewSummary.compose(cp, sv, rfp, rf, facts)
+        assert (
+            sv is not None and rfp is not None and rf is not None and facts is not None
+        )
+        return OrderProgressionComposedDerivedReviewSummary.compose(
+            cp, sv, rfp, rf, facts
+        )

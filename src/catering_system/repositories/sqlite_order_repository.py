@@ -9,12 +9,12 @@ from __future__ import annotations
 import sqlite3
 from datetime import date, datetime
 from pathlib import Path
-from typing import cast
 
-from catering_system.domain.inquiry import PlanningMode, validate_planning_mode
+from catering_system.domain.inquiry import validate_planning_mode
 from catering_system.domain.order import Order, OrderVersion
+from catering_system.repositories.sqlite_migrations import apply_migrations
 
-_SCHEMA = """
+_CREATE_ORDERS = """
 CREATE TABLE IF NOT EXISTS orders (
     order_id TEXT PRIMARY KEY,
     source_inquiry_id TEXT NOT NULL,
@@ -23,7 +23,10 @@ CREATE TABLE IF NOT EXISTS orders (
     candidate_order_version_id TEXT,
     effective_order_version_id TEXT,
     cancelled_at TEXT
-);
+)
+"""
+
+_CREATE_ORDER_VERSIONS = """
 CREATE TABLE IF NOT EXISTS order_versions (
     order_version_id TEXT PRIMARY KEY,
     order_id TEXT NOT NULL,
@@ -35,15 +38,143 @@ CREATE TABLE IF NOT EXISTS order_versions (
     guest_count_estimate INTEGER,
     planning_mode TEXT NOT NULL,
     kitchen_print_confirmed_at TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_order_versions_order_id
-    ON order_versions (order_id, version_number);
+)
 """
 
 _UNIQUE_VERSION_NUMBER_INDEX = """
 CREATE UNIQUE INDEX IF NOT EXISTS uq_order_versions_order_version_number
     ON order_versions (order_id, version_number);
 """
+
+_INVARIANT_TRIGGERS = (
+    """CREATE TRIGGER IF NOT EXISTS trg_order_version_owner_insert
+    BEFORE INSERT ON order_versions
+    WHEN NOT EXISTS (SELECT 1 FROM orders WHERE order_id = NEW.order_id)
+    BEGIN SELECT RAISE(ABORT, 'order_version owner does not exist'); END""",
+    """CREATE TRIGGER IF NOT EXISTS trg_order_version_owner_update
+    BEFORE UPDATE OF order_id ON order_versions
+    WHEN NOT EXISTS (SELECT 1 FROM orders WHERE order_id = NEW.order_id)
+    BEGIN SELECT RAISE(ABORT, 'order_version owner does not exist'); END""",
+    """CREATE TRIGGER IF NOT EXISTS trg_order_references_insert
+    BEFORE INSERT ON orders
+    WHEN (NEW.candidate_order_version_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM order_versions
+            WHERE order_version_id = NEW.candidate_order_version_id
+              AND order_id = NEW.order_id))
+      OR (NEW.effective_order_version_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM order_versions
+            WHERE order_version_id = NEW.effective_order_version_id
+              AND order_id = NEW.order_id))
+    BEGIN SELECT RAISE(ABORT, 'order version reference is not owned'); END""",
+    """CREATE TRIGGER IF NOT EXISTS trg_order_references_update
+    BEFORE UPDATE OF candidate_order_version_id, effective_order_version_id ON orders
+    WHEN (NEW.candidate_order_version_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM order_versions
+            WHERE order_version_id = NEW.candidate_order_version_id
+              AND order_id = NEW.order_id))
+      OR (NEW.effective_order_version_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM order_versions
+            WHERE order_version_id = NEW.effective_order_version_id
+              AND order_id = NEW.order_id))
+    BEGIN SELECT RAISE(ABORT, 'order version reference is not owned'); END""",
+)
+
+_INVARIANT_MUTATION_TRIGGERS = (
+    """CREATE TRIGGER IF NOT EXISTS trg_order_owner_delete
+    BEFORE DELETE ON orders
+    WHEN EXISTS (SELECT 1 FROM order_versions WHERE order_id = OLD.order_id)
+    BEGIN SELECT RAISE(ABORT, 'order still owns versions'); END""",
+    """CREATE TRIGGER IF NOT EXISTS trg_order_id_update
+    BEFORE UPDATE OF order_id ON orders
+    WHEN NEW.order_id <> OLD.order_id
+      AND EXISTS (SELECT 1 FROM order_versions WHERE order_id = OLD.order_id)
+    BEGIN SELECT RAISE(ABORT, 'order still owns versions'); END""",
+    """CREATE TRIGGER IF NOT EXISTS trg_referenced_order_version_delete
+    BEFORE DELETE ON order_versions
+    WHEN EXISTS (
+        SELECT 1 FROM orders
+        WHERE candidate_order_version_id = OLD.order_version_id
+           OR effective_order_version_id = OLD.order_version_id)
+    BEGIN SELECT RAISE(ABORT, 'order version is referenced'); END""",
+    """CREATE TRIGGER IF NOT EXISTS trg_referenced_order_version_update
+    BEFORE UPDATE OF order_version_id, order_id ON order_versions
+    WHEN EXISTS (
+        SELECT 1 FROM orders
+        WHERE (candidate_order_version_id = OLD.order_version_id
+            OR effective_order_version_id = OLD.order_version_id)
+          AND (NEW.order_version_id <> OLD.order_version_id
+            OR NEW.order_id <> orders.order_id))
+    BEGIN SELECT RAISE(ABORT, 'order version is referenced'); END""",
+)
+
+
+def _migration_1_create_tables(connection: sqlite3.Connection) -> None:
+    connection.execute(_CREATE_ORDERS)
+    connection.execute(_CREATE_ORDER_VERSIONS)
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_order_versions_order_id "
+        "ON order_versions (order_id, version_number)"
+    )
+
+
+def _migration_2_add_cancelled_at(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(orders)").fetchall()
+    }
+    if "cancelled_at" not in columns:
+        connection.execute("ALTER TABLE orders ADD COLUMN cancelled_at TEXT")
+
+
+def _migration_3_unique_version_numbers(connection: sqlite3.Connection) -> None:
+    duplicate = connection.execute(
+        "SELECT order_id, version_number FROM order_versions "
+        "GROUP BY order_id, version_number HAVING COUNT(*) > 1 LIMIT 1"
+    ).fetchone()
+    if duplicate is not None:
+        raise ValueError(
+            "cannot enforce unique order version numbers: duplicate "
+            f"version_number {duplicate[1]} for order {duplicate[0]!r}"
+        )
+    connection.execute(_UNIQUE_VERSION_NUMBER_INDEX)
+
+
+def _migration_4_order_invariants(connection: sqlite3.Connection) -> None:
+    orphan = connection.execute(
+        "SELECT v.order_version_id FROM order_versions v "
+        "LEFT JOIN orders o ON o.order_id = v.order_id "
+        "WHERE o.order_id IS NULL LIMIT 1"
+    ).fetchone()
+    invalid_reference = connection.execute(
+        "SELECT o.order_id FROM orders o "
+        "LEFT JOIN order_versions c ON c.order_version_id = o.candidate_order_version_id "
+        "LEFT JOIN order_versions e ON e.order_version_id = o.effective_order_version_id "
+        "WHERE (o.candidate_order_version_id IS NOT NULL "
+        "AND (c.order_version_id IS NULL OR c.order_id <> o.order_id)) "
+        "OR (o.effective_order_version_id IS NOT NULL "
+        "AND (e.order_version_id IS NULL OR e.order_id <> o.order_id)) LIMIT 1"
+    ).fetchone()
+    if orphan is not None:
+        raise ValueError(f"orphan order version {orphan[0]!r}")
+    if invalid_reference is not None:
+        raise ValueError(f"invalid order version reference on {invalid_reference[0]!r}")
+    for trigger in _INVARIANT_TRIGGERS:
+        connection.execute(trigger)
+
+
+def _migration_5_protect_invariant_mutations(
+    connection: sqlite3.Connection,
+) -> None:
+    for trigger in _INVARIANT_MUTATION_TRIGGERS:
+        connection.execute(trigger)
+
+
+_MIGRATIONS = (
+    (1, "create_order_tables", _migration_1_create_tables),
+    (2, "add_cancelled_at", _migration_2_add_cancelled_at),
+    (3, "unique_version_numbers", _migration_3_unique_version_numbers),
+    (4, "order_invariant_triggers", _migration_4_order_invariants),
+    (5, "protect_invariant_mutations", _migration_5_protect_invariant_mutations),
+)
 
 
 def _dt(value: str) -> datetime:
@@ -53,23 +184,11 @@ def _dt(value: str) -> datetime:
 class SQLiteOrderRepository:
     def __init__(self, db_path: str | Path) -> None:
         self._conn = sqlite3.connect(str(db_path))
-        self._conn.executescript(_SCHEMA)
-        # STORNO pack §4: defensive in-place migration for pre-Storno databases.
-        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(orders)").fetchall()}
-        if "cancelled_at" not in cols:
-            self._conn.execute("ALTER TABLE orders ADD COLUMN cancelled_at TEXT")
-        duplicate = self._conn.execute(
-            "SELECT order_id, version_number FROM order_versions "
-            "GROUP BY order_id, version_number HAVING COUNT(*) > 1 LIMIT 1"
-        ).fetchone()
-        if duplicate is not None:
+        try:
+            apply_migrations(self._conn, "orders", _MIGRATIONS)
+        except Exception:
             self._conn.close()
-            raise ValueError(
-                "cannot enforce unique order version numbers: duplicate "
-                f"version_number {duplicate[1]} for order {duplicate[0]!r}"
-            )
-        self._conn.execute(_UNIQUE_VERSION_NUMBER_INDEX)
-        self._conn.commit()
+            raise
 
     def close(self) -> None:
         self._conn.close()
@@ -224,6 +343,6 @@ class SQLiteOrderRepository:
             time_window_text=row[5],
             location_text=row[6],
             guest_count_estimate=row[7],
-            planning_mode=cast(PlanningMode, validate_planning_mode(row[8])),
+            planning_mode=validate_planning_mode(row[8]),
             kitchen_print_confirmed_at=_dt(row[9]) if row[9] is not None else None,
         )

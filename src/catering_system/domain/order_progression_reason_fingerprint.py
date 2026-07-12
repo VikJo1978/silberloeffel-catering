@@ -22,7 +22,9 @@ class OrderProgressionReasonFingerprint:
     reason_fingerprint: str
 
     @classmethod
-    def from_export(cls, ex: OrderProgressionExport) -> OrderProgressionReasonFingerprint:
+    def from_export(
+        cls, ex: OrderProgressionExport
+    ) -> OrderProgressionReasonFingerprint:
         return cls(
             order_id=ex.order_id,
             reason_fingerprint=derive_order_progression_reason_fingerprint(ex),

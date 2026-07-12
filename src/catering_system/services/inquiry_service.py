@@ -68,6 +68,16 @@ def _normalize_intake(value: str | None) -> str | None:
     return trimmed or None
 
 
+def _normalize_intake_update(
+    value: str | None | object, current: str | None
+) -> str | None:
+    if value is _UNSET:
+        return current
+    if value is not None and not isinstance(value, str):
+        raise TypeError("intake context fields must be str, None, or omitted")
+    return _normalize_intake(value)
+
+
 class InquiryService:
     def __init__(
         self,
@@ -185,9 +195,7 @@ class InquiryService:
                     call_verification_status  # type: ignore[arg-type]
                 )
         except (ValueError, TypeError):
-            _log.warning(
-                "update_inquiry validation failed inquiry_id=%s", inquiry_id
-            )
+            _log.warning("update_inquiry validation failed inquiry_id=%s", inquiry_id)
             raise
 
         updated = replace(
@@ -200,7 +208,9 @@ class InquiryService:
             time_window_text=time_window_text
             if time_window_text is not _UNSET
             else current.time_window_text,  # type: ignore[arg-type]
-            location_text=location_text if location_text is not _UNSET else current.location_text,  # type: ignore[arg-type]
+            location_text=location_text
+            if location_text is not _UNSET
+            else current.location_text,  # type: ignore[arg-type]
             guest_count_estimate=guest_count_estimate
             if guest_count_estimate is not _UNSET
             else current.guest_count_estimate,  # type: ignore[arg-type]
@@ -209,18 +219,18 @@ class InquiryService:
             if call_verification_required is not _UNSET
             else current.call_verification_required,  # type: ignore[arg-type]
             call_verification_status=next_cvs,
-            intake_subject=_normalize_intake(intake_subject)
-            if intake_subject is not _UNSET
-            else current.intake_subject,  # type: ignore[arg-type]
-            intake_message=_normalize_intake(intake_message)
-            if intake_message is not _UNSET
-            else current.intake_message,  # type: ignore[arg-type]
-            intake_summary=_normalize_intake(intake_summary)
-            if intake_summary is not _UNSET
-            else current.intake_summary,  # type: ignore[arg-type]
-            intake_external_ref=_normalize_intake(intake_external_ref)
-            if intake_external_ref is not _UNSET
-            else current.intake_external_ref,  # type: ignore[arg-type]
+            intake_subject=_normalize_intake_update(
+                intake_subject, current.intake_subject
+            ),
+            intake_message=_normalize_intake_update(
+                intake_message, current.intake_message
+            ),
+            intake_summary=_normalize_intake_update(
+                intake_summary, current.intake_summary
+            ),
+            intake_external_ref=_normalize_intake_update(
+                intake_external_ref, current.intake_external_ref
+            ),
         )
         self._repository.update(updated)
         _log.info("inquiry updated inquiry_id=%s", inquiry_id)

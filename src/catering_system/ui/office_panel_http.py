@@ -30,13 +30,16 @@ from catering_system.ui.office_panel import (
 )
 
 _CSRF_CONTEXT = b"catering-office-panel-csrf-v1"
+_MAX_FORM_BODY_BYTES = 256 * 1024
+
+
+class FormBodyTooLargeError(ValueError):
+    pass
 
 
 def csrf_token_for_password(password: str) -> str:
     """Derive a stable form token without exposing the Basic Auth password."""
-    return hmac.new(
-        password.encode("utf-8"), _CSRF_CONTEXT, hashlib.sha256
-    ).hexdigest()
+    return hmac.new(password.encode("utf-8"), _CSRF_CONTEXT, hashlib.sha256).hexdigest()
 
 
 def make_office_panel_handler(
@@ -56,7 +59,24 @@ def make_office_panel_handler(
         server_version = "OfficePanel/1.0"
 
         def _authorized(self) -> bool:
-            return self.headers.get("Authorization") == expected
+            return hmac.compare_digest(self.headers.get("Authorization", ""), expected)
+
+        def _security_headers(self) -> None:
+            self.send_header("Cache-Control", "no-store")
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'none'; style-src 'unsafe-inline' "
+                "https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
+                "img-src data:; form-action 'self'; base-uri 'none'; "
+                "frame-ancestors 'none'",
+            )
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "DENY")
+
+        def end_headers(self) -> None:
+            self._security_headers()
+            super().end_headers()
 
         def _deny(self) -> None:
             self.send_response(401)
@@ -98,7 +118,14 @@ def make_office_panel_handler(
             cached = getattr(self, "_form_cache", None)
             if cached is not None:
                 return cached
-            length = int(self.headers.get("Content-Length", "0"))
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except ValueError as exc:
+                raise ValueError("invalid Content-Length") from exc
+            if length < 0:
+                raise ValueError("invalid Content-Length")
+            if length > _MAX_FORM_BODY_BYTES:
+                raise FormBodyTooLargeError("form body too large")
             raw = self.rfile.read(length).decode("utf-8")
             parsed = {
                 key: values[0]
@@ -138,20 +165,20 @@ def make_office_panel_handler(
                 return
             context = self._fetch_page_context()
             if parts == ["anfragen"]:
-                query = parse_qs(parsed.query).get("q", [""])[0]
-                self._html(panel.render_anfragen(query, context=context))
+                search_query = parse_qs(parsed.query).get("q", [""])[0]
+                self._html(panel.render_anfragen(search_query, context=context))
             elif parts == ["auftraege"]:
-                query = parse_qs(parsed.query).get("q", [""])[0]
-                self._html(panel.render_auftraege(query, context=context))
+                search_query = parse_qs(parsed.query).get("q", [""])[0]
+                self._html(panel.render_auftraege(search_query, context=context))
             elif parts == ["proposal-preview"]:
                 self._html(render_proposal_preview_form(context=context))
             elif parts == ["inquiry", "new"]:
-                query = parse_qs(parsed.query)
+                form_defaults = parse_qs(parsed.query)
                 self._html(
                     panel.render_inquiry_form(
-                        phone=query.get("phone", [""])[0],
-                        event_date=query.get("event_date", [""])[0],
-                        guest_count_estimate=query.get(
+                        phone=form_defaults.get("phone", [""])[0],
+                        event_date=form_defaults.get("event_date", [""])[0],
+                        guest_count_estimate=form_defaults.get(
                             "guest_count_estimate", [""]
                         )[0],
                         context=context,
@@ -181,7 +208,15 @@ def make_office_panel_handler(
             if not self._authorized():
                 self._deny()
                 return
-            submitted_token = self._form().get("_csrf_token", "")
+            try:
+                form = self._form()
+            except FormBodyTooLargeError as exc:
+                self._error_page(str(exc), status=413)
+                return
+            except (UnicodeDecodeError, ValueError) as exc:
+                self._error_page(str(exc), status=400)
+                return
+            submitted_token = form.get("_csrf_token", "")
             if not hmac.compare_digest(submitted_token, csrf_token):
                 self._error_page(
                     "Ungültiger oder fehlender CSRF-Sicherheitstoken.", status=403
@@ -202,18 +237,12 @@ def make_office_panel_handler(
             elif len(parts) == 3 and parts[0] == "order":
                 self._order_action(parts[1], parts[2])
             elif parts == ["proposal-preview"]:
-                payload = parse_proposal_payload(
-                    self._form().get("payload_json", "")
-                )
+                payload = parse_proposal_payload(self._form().get("payload_json", ""))
                 self._html(
-                    render_proposal_preview(
-                        payload, context=self._fetch_page_context()
-                    )
+                    render_proposal_preview(payload, context=self._fetch_page_context())
                 )
             elif parts == ["proposal-preview", "prepare"]:
-                payload = parse_proposal_payload(
-                    self._form().get("payload_json", "")
-                )
+                payload = parse_proposal_payload(self._form().get("payload_json", ""))
                 summary_lines = "\n".join(
                     f"{item['name']} × {item['quantity']}"
                     if item.get("quantity") is not None

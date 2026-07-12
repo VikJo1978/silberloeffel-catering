@@ -372,4 +372,3 @@ def test_update_inquiry_logs_warning_when_not_found(
     with pytest.raises(ValueError):
         svc.update_inquiry("missing-id", location_text="x")
     assert "update_inquiry failed: inquiry not found" in caplog.text
-

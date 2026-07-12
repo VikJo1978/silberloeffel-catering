@@ -10,15 +10,27 @@ _SRC = Path(__file__).resolve().parents[2] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from catering_system.domain.inquiry import CALL_VERIFICATION_STATUSES, CRM_PIPELINE, PLANNING_MODES
-from catering_system.domain.slice_a_events import CustomerCallVerified, InquiryCreated, InquiryUpdated
+from catering_system.domain.inquiry import (
+    CALL_VERIFICATION_STATUSES,
+    CRM_PIPELINE,
+    PLANNING_MODES,
+)
+from catering_system.domain.slice_a_events import (
+    CustomerCallVerified,
+    InquiryCreated,
+    InquiryUpdated,
+)
 from catering_system.integration.hubspot_office_intake import (
     HUBSPOT_PRIVATE_APP_TOKEN_ENV,
     HubSpotOfficeInquiryNoop,
     HubSpotOfficeCredentials,
 )
-from catering_system.intake.external_secure_intake_layer import normalize_public_wix_inquiry_payload
-from catering_system.repositories.in_memory_inquiry_repository import InMemoryInquiryRepository
+from catering_system.intake.external_secure_intake_layer import (
+    normalize_public_wix_inquiry_payload,
+)
+from catering_system.repositories.in_memory_inquiry_repository import (
+    InMemoryInquiryRepository,
+)
 from catering_system.services.inquiry_service import InquiryService
 
 

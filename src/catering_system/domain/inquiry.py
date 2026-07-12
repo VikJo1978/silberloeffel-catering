@@ -106,7 +106,9 @@ def validate_customer_linkage(value: dict[str, Any]) -> CustomerLinkage:
                 f"{sorted(ALLOWED_CUSTOMER_LINKAGE_KEYS)}, got key {key!r}"
             )
     if value.get("placeholder") is not None and value.get("placeholder") is not True:
-        raise ValueError("customer_linkage['placeholder'] is only allowed as the literal True")
+        raise ValueError(
+            "customer_linkage['placeholder'] is only allowed as the literal True"
+        )
     for sk in ("customer_id", "contact_id"):
         if sk in value and not isinstance(value[sk], str):
             raise ValueError(f"customer_linkage[{sk!r}] must be a str when present")

@@ -8,7 +8,7 @@ account, and the physical kitchen Lenovo.
 
 ```bash
 git clone <this-repo> && cd silberlöffelcatering
-PYTHONPATH=src python3 -m catering_system.ui.kiosk_server --db /var/lib/catering/core.db --port 8080
+PYTHONPATH=src python3 -m catering_system.ui.kiosk_server --db /var/lib/catering/core.db --port 8082
 ```
 
 The repo uses a `src/` layout, so `PYTHONPATH=src` is required when running from
@@ -18,7 +18,7 @@ plain `python3 -m ...` form works.
 
 - The SQLite file is the Core operational truth store; keep it on the Lenovo's
   local disk (Core-on-Lenovo is a frozen rule) and in the local backup routine.
-- Open `http://<lenovo>:8080/` on the kitchen display; the page refreshes every
+- Open `http://<lenovo>:8082/` on the kitchen display; the page refreshes every
   60 s. The kiosk is read-only by construction — no reverse proxy config can
   make it write.
 - For autostart, wrap the command in a systemd unit or a login item.
@@ -60,6 +60,10 @@ Both services restart on failure and start on boot (both servers run 24/7).
 Changing the panel password later: edit the env file, then
 `sudo systemctl restart catering-office-panel`.
 
+The live port map is `8081` for the LAN-only office panel, `8082` for the
+LAN-only kiosk, and loopback-only `8083` for website intake. Do not expose any
+of these ports directly to the internet.
+
 ## 1c. Core database backup (both servers run 24/7)
 
 Daily cron on the Lenovo — the SQLite file is the operational truth and is
@@ -73,6 +77,12 @@ not re-derivable. Create the target directory once (`mkdir -p
 Copy the backup directory to the office server or an external disk as a second
 location. (EspoCRM on the office server needs its own backup — contacts and
 communication live only there.)
+
+Repositories apply versioned SQLite migrations during startup. Before deploying
+new application code, take an on-demand `.backup` in addition to the scheduled
+copy. Startup aborts if migration history is unknown, incomplete, or conflicts
+with existing order references; do not delete `schema_migrations` or repair it
+manually. Restore the pre-deploy backup if a migration fails.
 
 ## 2. HubSpot office-facing sync
 
@@ -93,16 +103,45 @@ export HUBSPOT_PRIVATE_APP_TOKEN=<token>
    intended. Pipeline/stage mapping is portal configuration — `crm_stage`
    travels as plain text (`core_crm_stage`).
 
-## 3. Cloudflare Worker (External Secure Intake Layer, Slice A §8)
+## 3. Website receiver and Cloudflare Tunnel
+
+The Core receiver must share `/var/lib/catering/core.db` with the other two
+services and listen only on loopback:
+
+```bash
+sudo mkdir -p /etc/catering
+sudo sh -c 'echo "WEBSITE_INTAKE_TOKEN=<long-random-token>" > /etc/catering/website-intake.env'
+sudo chmod 600 /etc/catering/website-intake.env
+```
+
+Review `User`, `WorkingDirectory`, `PYTHONPATH`, and the database path in
+`infra/systemd/catering-website-intake.service`, then install and start it:
+
+```bash
+sudo cp infra/systemd/catering-website-intake.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now catering-website-intake
+curl -i http://127.0.0.1:8083/intake/website-form
+```
+
+The unauthenticated smoke request must be rejected. Configure Cloudflare Tunnel
+to publish only the website-intake hostname/path and forward it to
+`http://127.0.0.1:8083`; never add ingress rules for ports 8081 or 8082. The
+detailed, host-specific checklist is in
+`LENOVO_WEBSITE_INTAKE_CLOUDFLARE_TUNNEL_IMPLEMENTATION_PACK_V1.md`.
+
+## 4. Cloudflare Worker (External Secure Intake Layer, Slice A §8)
 
 ```bash
 cd infra/cloudflare_worker
 npx wrangler deploy worker.js --name catering-intake
 npx wrangler secret put UPSTREAM_TOKEN
-# set UPSTREAM_URL as a plain var in wrangler.toml or the dashboard
+# set UPSTREAM_URL to the Tunnel's public intake URL as a plain Worker variable
 ```
 
 - Point the Wix form's POST at the worker URL.
+- `UPSTREAM_TOKEN` must equal `WEBSITE_INTAKE_TOKEN` on the Lenovo; rotate both
+  together and restart the receiver after changing its environment file.
 - The worker whitelists fields, trims/limits text, requires ISO `event_date`,
   caps body size at 16 KB, and forwards with the server-side bearer token.
   The browser never sees any secret (§8.3), and upstream responses are never
@@ -114,4 +153,5 @@ npx wrangler secret put UPSTREAM_TOKEN
 2. Office flow writing to the same db (inquiry → order → confirm print →
    effective) — entry appears on the kiosk.
 3. HubSpot token + one manual `sync_inquiry_from_core` smoke call.
-4. Worker deploy last; flip the Wix form to the worker URL.
+4. Website receiver on `127.0.0.1:8083`, then the path-restricted Tunnel.
+5. Worker deploy last; flip the Wix form to the worker URL.

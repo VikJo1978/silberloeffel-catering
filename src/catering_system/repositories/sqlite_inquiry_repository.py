@@ -23,8 +23,9 @@ from catering_system.domain.inquiry import (
 from catering_system.repositories.inquiry_repository import (
     DuplicateExternalReferenceError,
 )
+from catering_system.repositories.sqlite_migrations import apply_migrations
 
-_SCHEMA = """
+_CREATE_INQUIRIES = """
 CREATE TABLE IF NOT EXISTS inquiries (
     inquiry_id TEXT PRIMARY KEY,
     event_date TEXT NOT NULL,
@@ -46,7 +47,12 @@ CREATE TABLE IF NOT EXISTS inquiries (
 );
 """
 
-_INTAKE_COLUMNS = ("intake_subject", "intake_message", "intake_summary", "intake_external_ref")
+_INTAKE_COLUMNS = (
+    "intake_subject",
+    "intake_message",
+    "intake_summary",
+    "intake_external_ref",
+)
 
 _WEBSITE_EXTERNAL_REF_INDEX = """
 CREATE UNIQUE INDEX IF NOT EXISTS uq_inquiries_website_external_ref
@@ -57,31 +63,51 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_inquiries_website_external_ref
 """
 
 
+def _migration_1_create_table(connection: sqlite3.Connection) -> None:
+    connection.execute(_CREATE_INQUIRIES)
+
+
+def _migration_2_add_intake_context(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(inquiries)").fetchall()
+    }
+    for column in _INTAKE_COLUMNS:
+        if column not in columns:
+            connection.execute(f"ALTER TABLE inquiries ADD COLUMN {column} TEXT")
+
+
+def _migration_3_unique_website_external_ref(
+    connection: sqlite3.Connection,
+) -> None:
+    duplicate = connection.execute(
+        "SELECT intake_external_ref FROM inquiries "
+        "WHERE inquiry_source = 'website_form' "
+        "AND intake_external_ref IS NOT NULL AND intake_external_ref <> '' "
+        "GROUP BY intake_external_ref HAVING COUNT(*) > 1 LIMIT 1"
+    ).fetchone()
+    if duplicate is not None:
+        raise ValueError(
+            "cannot enforce website intake idempotency: duplicate "
+            f"submission_id {duplicate[0]!r}"
+        )
+    connection.execute(_WEBSITE_EXTERNAL_REF_INDEX)
+
+
+_MIGRATIONS = (
+    (1, "create_inquiries", _migration_1_create_table),
+    (2, "add_intake_context", _migration_2_add_intake_context),
+    (3, "unique_website_external_ref", _migration_3_unique_website_external_ref),
+)
+
+
 class SQLiteInquiryRepository:
     def __init__(self, db_path: str | Path) -> None:
         self._conn = sqlite3.connect(str(db_path))
-        self._conn.executescript(_SCHEMA)
-        # INQUIRY_INTAKE_CONTEXT_FIELDS_IMPLEMENTATION_PACK_V1 §4: defensive
-        # in-place migration for pre-intake-context databases, same pattern as
-        # SQLiteOrderRepository's STORNO cancelled_at column.
-        cols = {r[1] for r in self._conn.execute("PRAGMA table_info(inquiries)").fetchall()}
-        for col in _INTAKE_COLUMNS:
-            if col not in cols:
-                self._conn.execute(f"ALTER TABLE inquiries ADD COLUMN {col} TEXT")
-        duplicate = self._conn.execute(
-            "SELECT intake_external_ref FROM inquiries "
-            "WHERE inquiry_source = 'website_form' "
-            "AND intake_external_ref IS NOT NULL AND intake_external_ref <> '' "
-            "GROUP BY intake_external_ref HAVING COUNT(*) > 1 LIMIT 1"
-        ).fetchone()
-        if duplicate is not None:
+        try:
+            apply_migrations(self._conn, "inquiries", _MIGRATIONS)
+        except Exception:
             self._conn.close()
-            raise ValueError(
-                "cannot enforce website intake idempotency: duplicate "
-                f"submission_id {duplicate[0]!r}"
-            )
-        self._conn.execute(_WEBSITE_EXTERNAL_REF_INDEX)
-        self._conn.commit()
+            raise
 
     def close(self) -> None:
         self._conn.close()

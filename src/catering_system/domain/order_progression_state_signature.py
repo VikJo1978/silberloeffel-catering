@@ -26,4 +26,7 @@ class OrderProgressionStateSignature:
 
     @classmethod
     def from_export(cls, ex: OrderProgressionExport) -> OrderProgressionStateSignature:
-        return cls(order_id=ex.order_id, state_signature=derive_order_progression_state_signature(ex))
+        return cls(
+            order_id=ex.order_id,
+            state_signature=derive_order_progression_state_signature(ex),
+        )

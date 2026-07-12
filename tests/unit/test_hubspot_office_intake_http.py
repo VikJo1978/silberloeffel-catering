@@ -44,7 +44,9 @@ def _sample_inquiry() -> Inquiry:
     )
 
 
-def test_missing_token_raises_before_any_request(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_missing_token_raises_before_any_request(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.delenv(HUBSPOT_PRIVATE_APP_TOKEN_ENV, raising=False)
     with pytest.raises(ValueError, match=HUBSPOT_PRIVATE_APP_TOKEN_ENV):
         HubSpotOfficeInquiryHttp(transport=lambda *a: b"")
@@ -54,7 +56,9 @@ def test_sync_sends_documented_request(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(HUBSPOT_PRIVATE_APP_TOKEN_ENV, "test-token")
     calls: list[tuple[str, str, dict[str, str], bytes]] = []
 
-    def fake_transport(url: str, method: str, headers: dict[str, str], body: bytes) -> bytes:
+    def fake_transport(
+        url: str, method: str, headers: dict[str, str], body: bytes
+    ) -> bytes:
         calls.append((url, method, headers, body))
         return b"{}"
 
@@ -77,7 +81,9 @@ def test_property_mapping_mirrors_frozen_inquiry() -> None:
     inquiry = _sample_inquiry()
     props = inquiry_to_hubspot_properties(inquiry)
     assert props["core_inquiry_id"] == inquiry.inquiry_id
-    assert props["core_crm_stage"] == inquiry.crm_stage  # plain text, no invented stage ids
+    assert (
+        props["core_crm_stage"] == inquiry.crm_stage
+    )  # plain text, no invented stage ids
     assert props["core_event_date"] == "2026-10-01"
     assert props["core_guest_count"] == "25"
     assert props["dealname"] == "Anfrage 2026-10-01 Hamburg"

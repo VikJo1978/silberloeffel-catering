@@ -73,7 +73,9 @@ def test_find_by_source_and_external_ref_returns_none_when_ref_differs() -> None
         _sample_inquiry(), inquiry_source="website_form", intake_external_ref="web-42"
     )
     repo.save(inquiry)
-    assert repo.find_by_source_and_external_ref("website_form", "does-not-exist") is None
+    assert (
+        repo.find_by_source_and_external_ref("website_form", "does-not-exist") is None
+    )
 
 
 def test_find_by_source_and_external_ref_returns_none_when_ref_missing() -> None:

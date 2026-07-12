@@ -66,7 +66,9 @@ def _intake_from_website_form_body(
     if guest_raw is None:
         guest_count_estimate = None
     elif isinstance(guest_raw, bool):
-        raise TypeError("website_form intake: guest_count_estimate must be int or absent")
+        raise TypeError(
+            "website_form intake: guest_count_estimate must be int or absent"
+        )
     elif isinstance(guest_raw, int):
         if not (_MIN_GUEST_COUNT <= guest_raw <= _MAX_GUEST_COUNT):
             raise ValueError(
@@ -75,7 +77,9 @@ def _intake_from_website_form_body(
             )
         guest_count_estimate = guest_raw
     else:
-        raise TypeError("website_form intake: guest_count_estimate must be int or absent")
+        raise TypeError(
+            "website_form intake: guest_count_estimate must be int or absent"
+        )
 
     location_raw = raw.get("location_text")
     if location_raw is None:
@@ -110,19 +114,27 @@ def _intake_from_website_form_body(
             raise TypeError("website_form intake: event_type must be str or absent")
         if event_type:
             subject_parts.append(event_type)
-    intake_subject = _truncate(" — ".join(subject_parts), _MAX_SUBJECT_LEN) if subject_parts else ""
+    intake_subject = (
+        _truncate(" — ".join(subject_parts), _MAX_SUBJECT_LEN) if subject_parts else ""
+    )
 
     # intake_message: contact details + free-form wishes, labeled lines
     # (pack §4/§1.6) — never customer_linkage, never a fake contact field.
     message_lines: list[str] = []
-    for key, label in (("phone", "Telefon"), ("email", "E-Mail"), ("message", "Wunsch")):
+    for key, label in (
+        ("phone", "Telefon"),
+        ("email", "E-Mail"),
+        ("message", "Wunsch"),
+    ):
         v = raw.get(key)
         if v is not None:
             if not isinstance(v, str):
                 raise TypeError(f"website_form intake: {key} must be str or absent")
             if v:
                 message_lines.append(f"{label}: {v}")
-    intake_message = _truncate("\n".join(message_lines), _MAX_MESSAGE_LEN) if message_lines else ""
+    intake_message = (
+        _truncate("\n".join(message_lines), _MAX_MESSAGE_LEN) if message_lines else ""
+    )
 
     # intake_summary: adapter-generated one-liner, never raw user text —
     # same role as the configurator's computed item summary (5d5e007).

@@ -43,14 +43,18 @@ def inquiry_to_hubspot_properties(inquiry: Inquiry) -> dict[str, str]:
         "core_time_window": inquiry.time_window_text,
         "core_location": inquiry.location_text,
         "core_guest_count": (
-            str(inquiry.guest_count_estimate) if inquiry.guest_count_estimate is not None else ""
+            str(inquiry.guest_count_estimate)
+            if inquiry.guest_count_estimate is not None
+            else ""
         ),
         "core_planning_mode": inquiry.planning_mode,
         "core_call_verification_status": inquiry.call_verification_status,
     }
 
 
-def _urllib_transport(url: str, method: str, headers: dict[str, str], body: bytes) -> bytes:
+def _urllib_transport(
+    url: str, method: str, headers: dict[str, str], body: bytes
+) -> bytes:
     req = urllib.request.Request(url, data=body, method=method, headers=headers)
     with urllib.request.urlopen(req, timeout=15) as resp:
         return resp.read()

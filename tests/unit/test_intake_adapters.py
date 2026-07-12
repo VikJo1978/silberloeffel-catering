@@ -201,6 +201,19 @@ def test_invalid_guest_count_rejected_where_applicable() -> None:
             fn(svc, {"event_date": _D, "guest_count_estimate": "12"})
 
 
+def test_boolean_guest_count_rejected_each_channel() -> None:
+    repo = InMemoryInquiryRepository()
+    svc = InquiryService(repo)
+    for fn in (
+        intake_from_wix_form,
+        intake_from_email,
+        intake_from_phone,
+        intake_from_manual,
+    ):
+        with pytest.raises(TypeError, match="guest_count_estimate"):
+            fn(svc, {"event_date": _D, "guest_count_estimate": True})
+
+
 def test_invalid_customer_linkage_rejected() -> None:
     repo = InMemoryInquiryRepository()
     svc = InquiryService(repo)
@@ -392,7 +405,9 @@ def test_website_form_guest_count_boundaries_accepted() -> None:
     repo = InMemoryInquiryRepository()
     svc = InquiryService(repo)
     q_min = intake_from_website_form(svc, {"event_date": _D, "guest_count_estimate": 1})
-    q_max = intake_from_website_form(svc, {"event_date": _D, "guest_count_estimate": 2000})
+    q_max = intake_from_website_form(
+        svc, {"event_date": _D, "guest_count_estimate": 2000}
+    )
     assert q_min.guest_count_estimate == 1
     assert q_max.guest_count_estimate == 2000
 
@@ -485,7 +500,9 @@ def test_website_form_non_string_contact_field_rejected() -> None:
     repo = InMemoryInquiryRepository()
     svc = InquiryService(repo)
     with pytest.raises(TypeError, match="phone"):
-        intake_from_website_form(svc, {"event_date": _D, "phone": ["not", "a", "string"]})
+        intake_from_website_form(
+            svc, {"event_date": _D, "phone": ["not", "a", "string"]}
+        )
 
 
 def test_website_form_adapter_only_calls_create_inquiry_not_update() -> None:

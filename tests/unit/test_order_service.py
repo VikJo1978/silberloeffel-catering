@@ -20,7 +20,9 @@ from catering_system.domain.inquiry import (
     PLANNING_MODES,
 )
 from catering_system.domain.order import Order, OrderVersion
-from catering_system.repositories.in_memory_order_repository import InMemoryOrderRepository
+from catering_system.repositories.in_memory_order_repository import (
+    InMemoryOrderRepository,
+)
 from catering_system.services.order_service import OrderService
 
 _B3_FORBIDDEN_FIELD_NAMES = frozenset(
@@ -59,7 +61,9 @@ def _sample_inquiry() -> Inquiry:
     )
 
 
-def test_convert_inquiry_to_order_blocked_when_verification_required_not_verified() -> None:
+def test_convert_inquiry_to_order_blocked_when_verification_required_not_verified() -> (
+    None
+):
     svc = OrderService(InMemoryOrderRepository())
     for status in ("pending", "failed", "blocked"):
         inquiry = replace(
@@ -71,7 +75,9 @@ def test_convert_inquiry_to_order_blocked_when_verification_required_not_verifie
             svc.convert_inquiry_to_order(inquiry)
 
 
-def test_convert_inquiry_to_order_blocked_when_required_but_not_verified_status() -> None:
+def test_convert_inquiry_to_order_blocked_when_required_but_not_verified_status() -> (
+    None
+):
     """required=True with not_required status is inconsistent — still blocked (not verified)."""
     svc = OrderService(InMemoryOrderRepository())
     inquiry = replace(
@@ -83,7 +89,9 @@ def test_convert_inquiry_to_order_blocked_when_required_but_not_verified_status(
         svc.convert_inquiry_to_order(inquiry)
 
 
-def test_convert_inquiry_to_order_allowed_when_verification_required_and_verified() -> None:
+def test_convert_inquiry_to_order_allowed_when_verification_required_and_verified() -> (
+    None
+):
     svc = OrderService(InMemoryOrderRepository())
     inquiry = replace(
         _sample_inquiry(),
@@ -213,7 +221,10 @@ def test_changing_candidate_preserves_full_version_history() -> None:
         v1.order_version_id,
         v2.order_version_id,
     }
-    assert svc.get_candidate_order_version(order.order_id).order_version_id == v2.order_version_id
+    assert (
+        svc.get_candidate_order_version(order.order_id).order_version_id
+        == v2.order_version_id
+    )
 
 
 def test_candidate_can_differ_from_latest_historical_version() -> None:
@@ -241,7 +252,9 @@ def test_set_candidate_rejects_foreign_version_id() -> None:
     svc = OrderService(InMemoryOrderRepository())
     order, _ = svc.convert_inquiry_to_order(_sample_inquiry())
     with pytest.raises(ValueError, match="not a version of order"):
-        svc.set_candidate_order_version(order.order_id, "00000000-0000-0000-0000-000000000001")
+        svc.set_candidate_order_version(
+            order.order_id, "00000000-0000-0000-0000-000000000001"
+        )
 
 
 def _assert_dataclasses_have_no_b3_forbidden_fields() -> None:

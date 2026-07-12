@@ -54,7 +54,9 @@ class OperationalCoreService:
         if order is None:
             raise ValueError(f"no order with id {order_id!r}")
         if order.cancelled_at is not None:
-            raise ValueError(f"order {order_id!r} is cancelled (Storno); operational commands refused")
+            raise ValueError(
+                f"order {order_id!r} is cancelled (Storno); operational commands refused"
+            )
         ver = self._order_repository.get_order_version(order_version_id)
         if ver is None or ver.order_id != order_id:
             raise ValueError(
@@ -62,7 +64,9 @@ class OperationalCoreService:
             )
         return ver
 
-    def confirm_kitchen_print(self, order_id: str, order_version_id: str) -> OrderVersion:
+    def confirm_kitchen_print(
+        self, order_id: str, order_version_id: str
+    ) -> OrderVersion:
         """ConfirmKitchenPrint (pack §8.4): ownership-checked, idempotent, not revocable.
 
         Does not imply an effective switch and does not touch the candidate version.
@@ -73,12 +77,18 @@ class OperationalCoreService:
         confirmed = replace(ver, kitchen_print_confirmed_at=_utc_now())
         self._order_repository.update_order_version(confirmed)
         _log.info(
-            "confirm_kitchen_print order_id=%s order_version_id=%s", order_id, order_version_id
+            "confirm_kitchen_print order_id=%s order_version_id=%s",
+            order_id,
+            order_version_id,
         )
-        self._emit(KitchenPrintConfirmed(order_id=order_id, order_version_id=order_version_id))
+        self._emit(
+            KitchenPrintConfirmed(order_id=order_id, order_version_id=order_version_id)
+        )
         return confirmed
 
-    def make_order_version_effective(self, order_id: str, order_version_id: str) -> Order:
+    def make_order_version_effective(
+        self, order_id: str, order_version_id: str
+    ) -> Order:
         """MakeOrderVersionEffective (pack §9): gated on confirmed kitchen print.
 
         May target any owned version that satisfies the gate, not only the candidate.
@@ -102,7 +112,9 @@ class OperationalCoreService:
             order_version_id,
         )
         self._emit(
-            OrderVersionMadeEffective(order_id=order_id, order_version_id=order_version_id)
+            OrderVersionMadeEffective(
+                order_id=order_id, order_version_id=order_version_id
+            )
         )
         return updated
 
@@ -134,7 +146,9 @@ class OperationalCoreService:
         ev = evaluate_ready_to_send_from_facts(order, effective)
         if order is None:
             # keep the requested id in the result for unknown orders
-            ev = ReadyToSendEvaluation(order_id=order_id, ready=False, reasons=ev.reasons)
+            ev = ReadyToSendEvaluation(
+                order_id=order_id, ready=False, reasons=ev.reasons
+            )
         return ev
 
     def request_ready_to_send(self, order_id: str) -> ReadyToSendEvaluation:

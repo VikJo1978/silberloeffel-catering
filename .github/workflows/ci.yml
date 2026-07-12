@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install project and development tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install --group dev
+      - name: Lint
+        run: |
+          ruff check src tests
+          ruff format --check src tests
+      - name: Type-check production code
+        run: mypy src/catering_system
+      - name: Test Python and enforce coverage
+        run: |
+          coverage run -m pytest -q
+          coverage report
+      - name: Test Cloudflare Worker sanitizer
+        run: node --test infra/cloudflare_worker/sanitize.test.mjs
