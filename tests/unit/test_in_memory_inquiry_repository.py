@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date, datetime, timezone
 
+import pytest
+
 from catering_system.domain.inquiry import (
     CALL_VERIFICATION_STATUSES,
     CRM_PIPELINE,
@@ -20,6 +22,9 @@ from catering_system.domain.inquiry import (
 )
 from catering_system.repositories.in_memory_inquiry_repository import (
     InMemoryInquiryRepository,
+)
+from catering_system.repositories.inquiry_repository import (
+    DuplicateExternalReferenceError,
 )
 
 
@@ -83,3 +88,27 @@ def test_find_by_source_and_external_ref_returns_none_when_ref_missing() -> None
 def test_find_by_source_and_external_ref_returns_none_when_repo_empty() -> None:
     repo = InMemoryInquiryRepository()
     assert repo.find_by_source_and_external_ref("website_form", "anything") is None
+
+
+def test_duplicate_website_external_ref_is_rejected() -> None:
+    repo = InMemoryInquiryRepository()
+    first = replace(
+        _sample_inquiry(), inquiry_source="website_form", intake_external_ref="web-42"
+    )
+    repo.save(first)
+
+    with pytest.raises(DuplicateExternalReferenceError):
+        repo.save(replace(first, inquiry_id="different-inquiry-id"))
+
+    assert repo.list_all() == [first]
+
+
+def test_save_existing_id_does_not_overwrite() -> None:
+    repo = InMemoryInquiryRepository()
+    inquiry = _sample_inquiry()
+    repo.save(inquiry)
+
+    with pytest.raises(KeyError):
+        repo.save(replace(inquiry, location_text="silently overwritten"))
+
+    assert repo.get_by_id(inquiry.inquiry_id) == inquiry

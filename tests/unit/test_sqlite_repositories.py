@@ -15,6 +15,9 @@ from catering_system.domain.inquiry import (
     Inquiry,
     PLANNING_MODES,
 )
+from catering_system.repositories.inquiry_repository import (
+    DuplicateExternalReferenceError,
+)
 from catering_system.repositories.sqlite_inquiry_repository import SQLiteInquiryRepository
 from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepository
 from catering_system.services.operational_core_service import OperationalCoreService
@@ -176,6 +179,42 @@ def test_find_by_source_and_external_ref_returns_none_when_ref_missing(
     )
     repo.save(inquiry)
     assert repo.find_by_source_and_external_ref("website_form", "web-42") is None
+
+
+def test_duplicate_website_external_ref_is_rejected_atomically(tmp_path: Path) -> None:
+    repo = SQLiteInquiryRepository(tmp_path / "test.db")
+    first = replace(
+        _sample_inquiry(), inquiry_source="website_form", intake_external_ref="web-42"
+    )
+    duplicate = replace(first, inquiry_id="different-inquiry-id")
+    repo.save(first)
+
+    with pytest.raises(DuplicateExternalReferenceError):
+        repo.save(duplicate)
+
+    assert repo.list_all() == [first]
+
+
+def test_same_configurator_external_ref_remains_allowed(tmp_path: Path) -> None:
+    repo = SQLiteInquiryRepository(tmp_path / "test.db")
+    first = replace(
+        _sample_inquiry(), inquiry_source="configurator", intake_external_ref="proposal-1"
+    )
+    second = replace(first, inquiry_id="second-inquiry-id")
+    repo.save(first)
+    repo.save(second)
+    assert len(repo.list_all()) == 2
+
+
+def test_inquiry_save_does_not_overwrite_existing_id(tmp_path: Path) -> None:
+    repo = SQLiteInquiryRepository(tmp_path / "test.db")
+    first = _sample_inquiry()
+    repo.save(first)
+
+    with pytest.raises(sqlite3.IntegrityError):
+        repo.save(replace(first, location_text="silently overwritten"))
+
+    assert repo.get_by_id(first.inquiry_id) == first
 
 
 def test_order_roundtrip_and_version_ordering(tmp_path: Path) -> None:

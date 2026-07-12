@@ -245,6 +245,41 @@ def test_retry_same_submission_id_returns_same_inquiry_id(server) -> None:
     assert len(inquiry_repo.list_all()) == 1
 
 
+def test_duplicate_insert_race_returns_existing_inquiry() -> None:
+    class LookupRaceRepository(InMemoryInquiryRepository):
+        hide_next_match = False
+
+        def find_by_source_and_external_ref(
+            self, inquiry_source: str, intake_external_ref: str
+        ):
+            if self.hide_next_match:
+                self.hide_next_match = False
+                return None
+            return super().find_by_source_and_external_ref(
+                inquiry_source, intake_external_ref
+            )
+
+    inquiry_repo = LookupRaceRepository()
+    srv = create_website_intake_server(
+        inquiry_repo, _TOKEN, host="127.0.0.1", port=0
+    )
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    host, port = srv.server_address[:2]
+    base = f"http://{host}:{port}"
+    try:
+        _status1, body1, _raw1 = _post(base, _VALID_PAYLOAD)
+        inquiry_repo.hide_next_match = True
+        status2, body2, _raw2 = _post(base, _VALID_PAYLOAD)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status2 == 202
+    assert body2["inquiry_id"] == body1["inquiry_id"]
+    assert len(inquiry_repo.list_all()) == 1
+
+
 def test_retry_with_different_payload_same_submission_id_still_no_duplicate(
     server,
 ) -> None:

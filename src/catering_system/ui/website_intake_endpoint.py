@@ -20,7 +20,10 @@ from datetime import date
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from catering_system.intake.website_form_adapter import intake_from_website_form
-from catering_system.repositories.inquiry_repository import InquiryRepository
+from catering_system.repositories.inquiry_repository import (
+    DuplicateExternalReferenceError,
+    InquiryRepository,
+)
 from catering_system.services.inquiry_service import InquiryService
 
 _log = logging.getLogger(__name__)
@@ -113,6 +116,27 @@ def make_website_intake_handler(
                     return
             try:
                 inquiry = intake_from_website_form(service, payload)
+            except DuplicateExternalReferenceError:
+                # Another receiver/process may have inserted this submission
+                # after the optimistic lookup above. The repository's unique
+                # constraint is authoritative; replay the same accepted result.
+                assert isinstance(submission_id, str) and submission_id
+                existing = inquiry_repository.find_by_source_and_external_ref(
+                    "website_form", submission_id
+                )
+                if existing is None:
+                    _log.error("website intake: duplicate key not resolvable")
+                    self._json(500, {"error": "internal error"})
+                    return
+                _log.info(
+                    "website intake: concurrent duplicate submission_id, "
+                    "returning existing inquiry_id=%s",
+                    existing.inquiry_id,
+                )
+                self._json(
+                    202, {"accepted": True, "inquiry_id": existing.inquiry_id}
+                )
+                return
             except (ValueError, TypeError) as exc:
                 _log.warning("website intake: rejected (%s)", type(exc).__name__)
                 self._json(400, {"error": "invalid website_form payload"})

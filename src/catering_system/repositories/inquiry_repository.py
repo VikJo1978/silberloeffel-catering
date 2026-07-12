@@ -7,6 +7,10 @@ from typing import Protocol
 from catering_system.domain.inquiry import Inquiry
 
 
+class DuplicateExternalReferenceError(ValueError):
+    """A source-scoped external idempotency key already exists."""
+
+
 class InquiryRepository(Protocol):
     def save(self, inquiry: Inquiry) -> None: ...
 

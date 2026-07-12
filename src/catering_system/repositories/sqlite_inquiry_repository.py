@@ -20,6 +20,9 @@ from catering_system.domain.inquiry import (
     validate_customer_linkage,
     validate_planning_mode,
 )
+from catering_system.repositories.inquiry_repository import (
+    DuplicateExternalReferenceError,
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS inquiries (
@@ -45,6 +48,14 @@ CREATE TABLE IF NOT EXISTS inquiries (
 
 _INTAKE_COLUMNS = ("intake_subject", "intake_message", "intake_summary", "intake_external_ref")
 
+_WEBSITE_EXTERNAL_REF_INDEX = """
+CREATE UNIQUE INDEX IF NOT EXISTS uq_inquiries_website_external_ref
+    ON inquiries (inquiry_source, intake_external_ref)
+    WHERE inquiry_source = 'website_form'
+      AND intake_external_ref IS NOT NULL
+      AND intake_external_ref <> '';
+"""
+
 
 class SQLiteInquiryRepository:
     def __init__(self, db_path: str | Path) -> None:
@@ -57,36 +68,35 @@ class SQLiteInquiryRepository:
         for col in _INTAKE_COLUMNS:
             if col not in cols:
                 self._conn.execute(f"ALTER TABLE inquiries ADD COLUMN {col} TEXT")
+        duplicate = self._conn.execute(
+            "SELECT intake_external_ref FROM inquiries "
+            "WHERE inquiry_source = 'website_form' "
+            "AND intake_external_ref IS NOT NULL AND intake_external_ref <> '' "
+            "GROUP BY intake_external_ref HAVING COUNT(*) > 1 LIMIT 1"
+        ).fetchone()
+        if duplicate is not None:
+            self._conn.close()
+            raise ValueError(
+                "cannot enforce website intake idempotency: duplicate "
+                f"submission_id {duplicate[0]!r}"
+            )
+        self._conn.execute(_WEBSITE_EXTERNAL_REF_INDEX)
         self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()
 
     def save(self, inquiry: Inquiry) -> None:
-        self._conn.execute(
-            "INSERT OR REPLACE INTO inquiries VALUES "
-            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                inquiry.inquiry_id,
-                inquiry.event_date.isoformat(),
-                inquiry.created_at.isoformat(),
-                inquiry.updated_at.isoformat(),
-                inquiry.inquiry_source,
-                inquiry.crm_stage,
-                json.dumps(inquiry.customer_linkage, sort_keys=True),
-                inquiry.time_window_text,
-                inquiry.location_text,
-                inquiry.guest_count_estimate,
-                inquiry.planning_mode,
-                1 if inquiry.call_verification_required else 0,
-                inquiry.call_verification_status,
-                inquiry.intake_subject,
-                inquiry.intake_message,
-                inquiry.intake_summary,
-                inquiry.intake_external_ref,
-            ),
-        )
-        self._conn.commit()
+        try:
+            with self._conn:
+                self._conn.execute(
+                    "INSERT INTO inquiries VALUES "
+                    "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    self._values(inquiry),
+                )
+        except sqlite3.IntegrityError as exc:
+            self._raise_duplicate_external_ref(inquiry, exc)
+            raise
 
     def get_by_id(self, inquiry_id: str) -> Inquiry | None:
         row = self._conn.execute(
@@ -124,9 +134,62 @@ class SQLiteInquiryRepository:
         )
 
     def update(self, inquiry: Inquiry) -> None:
-        if self.get_by_id(inquiry.inquiry_id) is None:
-            raise KeyError(inquiry.inquiry_id)
-        self.save(inquiry)
+        try:
+            with self._conn:
+                updated = self._conn.execute(
+                    """
+                    UPDATE inquiries SET
+                        event_date = ?, created_at = ?, updated_at = ?,
+                        inquiry_source = ?, crm_stage = ?, customer_linkage = ?,
+                        time_window_text = ?, location_text = ?,
+                        guest_count_estimate = ?, planning_mode = ?,
+                        call_verification_required = ?, call_verification_status = ?,
+                        intake_subject = ?, intake_message = ?, intake_summary = ?,
+                        intake_external_ref = ?
+                    WHERE inquiry_id = ?
+                    """,
+                    self._values(inquiry)[1:] + (inquiry.inquiry_id,),
+                ).rowcount
+                if updated != 1:
+                    raise KeyError(inquiry.inquiry_id)
+        except sqlite3.IntegrityError as exc:
+            self._raise_duplicate_external_ref(inquiry, exc)
+            raise
+
+    def _raise_duplicate_external_ref(
+        self, inquiry: Inquiry, cause: sqlite3.IntegrityError
+    ) -> None:
+        if inquiry.inquiry_source != "website_form" or not inquiry.intake_external_ref:
+            return
+        existing = self.find_by_source_and_external_ref(
+            inquiry.inquiry_source, inquiry.intake_external_ref
+        )
+        if existing is not None and existing.inquiry_id != inquiry.inquiry_id:
+            raise DuplicateExternalReferenceError(
+                "website_form submission_id already exists"
+            ) from cause
+
+    @staticmethod
+    def _values(inquiry: Inquiry) -> tuple:
+        return (
+            inquiry.inquiry_id,
+            inquiry.event_date.isoformat(),
+            inquiry.created_at.isoformat(),
+            inquiry.updated_at.isoformat(),
+            inquiry.inquiry_source,
+            inquiry.crm_stage,
+            json.dumps(inquiry.customer_linkage, sort_keys=True),
+            inquiry.time_window_text,
+            inquiry.location_text,
+            inquiry.guest_count_estimate,
+            inquiry.planning_mode,
+            1 if inquiry.call_verification_required else 0,
+            inquiry.call_verification_status,
+            inquiry.intake_subject,
+            inquiry.intake_message,
+            inquiry.intake_summary,
+            inquiry.intake_external_ref,
+        )
 
     def find_by_source_and_external_ref(
         self, inquiry_source: str, intake_external_ref: str
