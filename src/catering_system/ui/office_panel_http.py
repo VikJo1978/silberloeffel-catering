@@ -7,6 +7,8 @@ owns only Basic Auth, request parsing, route dispatch and the HTTPServer wiring.
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -27,6 +29,15 @@ from catering_system.ui.office_panel import (
     resolve_missed_call,
 )
 
+_CSRF_CONTEXT = b"catering-office-panel-csrf-v1"
+
+
+def csrf_token_for_password(password: str) -> str:
+    """Derive a stable form token without exposing the Basic Auth password."""
+    return hmac.new(
+        password.encode("utf-8"), _CSRF_CONTEXT, hashlib.sha256
+    ).hexdigest()
+
 
 def make_office_panel_handler(
     inquiry_repo: InquiryRepository,
@@ -39,6 +50,7 @@ def make_office_panel_handler(
 ) -> type[BaseHTTPRequestHandler]:
     panel = OfficePanel(inquiry_repo, order_repo, kiosk_url)
     expected = "Basic " + base64.b64encode(f"office:{password}".encode()).decode()
+    csrf_token = csrf_token_for_password(password)
 
     class OfficePanelHandler(BaseHTTPRequestHandler):
         server_version = "OfficePanel/1.0"
@@ -68,7 +80,8 @@ def make_office_panel_handler(
             return OfficePageContext(
                 rueckruf_count=fetch_rueckruf_count(
                     auerswald_url, auerswald_user, auerswald_password
-                )
+                ),
+                csrf_token=csrf_token,
             )
 
         def _error_page(self, message: str, status: int = 400) -> None:
@@ -82,12 +95,17 @@ def make_office_panel_handler(
             )
 
         def _form(self) -> dict[str, str]:
+            cached = getattr(self, "_form_cache", None)
+            if cached is not None:
+                return cached
             length = int(self.headers.get("Content-Length", "0"))
             raw = self.rfile.read(length).decode("utf-8")
-            return {
+            parsed = {
                 key: values[0]
                 for key, values in parse_qs(raw, keep_blank_values=True).items()
             }
+            self._form_cache = parsed
+            return parsed
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
             pass
@@ -103,7 +121,8 @@ def make_office_panel_handler(
                     auerswald_url, auerswald_user, auerswald_password
                 )
                 context = OfficePageContext(
-                    rueckruf_count=len(items) if items else None
+                    rueckruf_count=len(items) if items else None,
+                    csrf_token=csrf_token,
                 )
                 self._html(render_rueckruf(items, error, context=context))
                 return
@@ -112,7 +131,8 @@ def make_office_panel_handler(
                     auerswald_url, auerswald_user, auerswald_password
                 )
                 context = OfficePageContext(
-                    rueckruf_count=len(items) if items else None
+                    rueckruf_count=len(items) if items else None,
+                    csrf_token=csrf_token,
                 )
                 self._html(panel.render_queue(items, context=context))
                 return
@@ -160,6 +180,12 @@ def make_office_panel_handler(
         def do_POST(self) -> None:  # noqa: N802
             if not self._authorized():
                 self._deny()
+                return
+            submitted_token = self._form().get("_csrf_token", "")
+            if not hmac.compare_digest(submitted_token, csrf_token):
+                self._error_page(
+                    "Ungültiger oder fehlender CSRF-Sicherheitstoken.", status=403
+                )
                 return
             parts = [part for part in urlparse(self.path).path.split("/") if part]
             try:

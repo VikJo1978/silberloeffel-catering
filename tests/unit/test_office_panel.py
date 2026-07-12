@@ -22,9 +22,11 @@ from catering_system.ui.office_panel import (
     parse_proposal_payload,
     render_proposal_preview_form,
 )
+from catering_system.ui.office_panel_http import csrf_token_for_password
 
 _PASSWORD = "test-pw"
 _AUTH = "Basic " + base64.b64encode(f"office:{_PASSWORD}".encode()).decode()
+_CSRF_TOKEN = csrf_token_for_password(_PASSWORD)
 
 
 @pytest.fixture()
@@ -48,9 +50,22 @@ def _get(url: str, *, auth: bool = True) -> tuple[int, str]:
         return resp.status, resp.read().decode("utf-8")
 
 
-def _post(url: str, data: dict[str, str], *, auth: bool = True) -> tuple[int, str, str]:
+def _post(
+    url: str,
+    data: dict[str, str],
+    *,
+    auth: bool = True,
+    csrf: bool = True,
+) -> tuple[int, str, str]:
     """Returns (status, final_url, body); urllib follows the 303 into a GET."""
-    req = urllib.request.Request(url, data=urllib.parse.urlencode(data).encode(), method="POST")
+    payload = dict(data)
+    if csrf:
+        payload.setdefault("_csrf_token", _CSRF_TOKEN)
+    req = urllib.request.Request(
+        url,
+        data=urllib.parse.urlencode(payload).encode(),
+        method="POST",
+    )
     if auth:
         req.add_header("Authorization", _AUTH)
     with urllib.request.urlopen(req) as resp:
@@ -99,6 +114,65 @@ def test_post_requires_auth(panel: str) -> None:
     with pytest.raises(urllib.error.HTTPError) as exc:
         _post(f"{panel}/inquiry/new", {"event_date": "2026-10-01"}, auth=False)
     assert exc.value.code == 401
+
+
+def test_post_requires_valid_csrf_token(panel: str) -> None:
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _post(
+            f"{panel}/inquiry/new",
+            {"event_date": "2026-10-01", "location_text": "CSRF-NO-MUTATION"},
+            csrf=False,
+        )
+    assert exc.value.code == 403
+
+    _status, body = _get(f"{panel}/anfragen")
+    assert "CSRF-NO-MUTATION" not in body
+
+
+def test_post_rejects_wrong_csrf_token(panel: str) -> None:
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _post(
+            f"{panel}/inquiry/new",
+            {"event_date": "2026-10-01", "_csrf_token": "wrong"},
+        )
+    assert exc.value.code == 403
+
+
+def _assert_all_post_forms_have_csrf(body: str) -> None:
+    forms = re.findall(
+        r'<form\b[^>]*method="post"[^>]*>.*?</form>', body, flags=re.DOTALL
+    )
+    assert forms
+    expected = f'name="_csrf_token" value="{_CSRF_TOKEN}"'
+    assert all(expected in form for form in forms)
+
+
+def test_http_rendered_post_forms_include_csrf_token(panel: str) -> None:
+    _status, new_inquiry_page = _get(f"{panel}/inquiry/new")
+    _assert_all_post_forms_have_csrf(new_inquiry_page)
+
+    inquiry_id = _create_inquiry(panel)
+    _status, inquiry_page = _get(f"{panel}/inquiry/{inquiry_id}")
+    _assert_all_post_forms_have_csrf(inquiry_page)
+
+    order_id = _convert(panel, inquiry_id)
+    _status, order_page = _get(f"{panel}/order/{order_id}")
+    _assert_all_post_forms_have_csrf(order_page)
+
+    payload = json.dumps(
+        {
+            "schema_version": "proposal_payload_v1",
+            "source": "fingerfood-configurator",
+            "title": "CSRF preview",
+            "event_date": "2026-10-01",
+            "guest_count": 10,
+            "selected_items": [],
+        }
+    )
+    _status, _url, preview_page = _post(
+        f"{panel}/proposal-preview", {"payload_json": payload}
+    )
+    _assert_all_post_forms_have_csrf(preview_page)
 
 
 def test_wrong_password_rejected(panel: str) -> None:

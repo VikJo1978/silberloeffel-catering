@@ -145,9 +145,19 @@ class OfficePageContext:
     """Request-local display data shared by the page shell and body renderer."""
 
     rueckruf_count: int | None = None
+    csrf_token: str = ""
 
 
 _EMPTY_PAGE_CONTEXT = OfficePageContext()
+
+
+def _csrf_input(context: OfficePageContext) -> str:
+    if not context.csrf_token:
+        return ""
+    return (
+        '<input type="hidden" name="_csrf_token" '
+        f'value="{_e(context.csrf_token)}">'
+    )
 
 
 def _page(
@@ -325,6 +335,7 @@ def render_rueckruf(
             f"<td>{contact}</td>"
             "<td>"
             '<form class="inline" method="post" action="/rueckruf/resolve">'
+            f"{_csrf_input(context)}"
             f'<input type="hidden" name="call_id" value="{_e(it.get("call_id", ""))}">'
             "<button>Erledigt</button></form>"
             "</td></tr>"
@@ -424,6 +435,7 @@ def render_proposal_preview_form(
         "nur den Inhalt der .json-Datei. Die Vorschau zeigt die Daten nur an: es wird "
         "nichts gespeichert und kein Vorgang angelegt.</p>"
         '<form method="post" action="/proposal-preview">'
+        f"{_csrf_input(context)}"
         '<p><textarea name="payload_json" rows="14" '
         'style="width:100%;box-sizing:border-box;font-family:monospace"></textarea></p>'
         "<p><button type=\"submit\">Vorschau anzeigen</button></p></form>"
@@ -472,6 +484,7 @@ def render_proposal_preview(
 <h2>Positionen (Vorschlag)</h2>
 <table><tr><th>Name</th><th>Menge</th><th>Einzelpreis</th><th>Gesamt</th><th>Notiz</th></tr>{item_rows}</table>
 <form method="post" action="/proposal-preview/prepare">
+{_csrf_input(context)}
 <input type="hidden" name="payload_json" value="{_e(prepare_payload_json)}">
 <button type="submit">Anfrage aus Vorschau vorbereiten</button>
 </form>
@@ -500,7 +513,12 @@ class OfficePanel:
         # the Rückrufe integration.
         self.kiosk_url = kiosk_url
 
-    def _next_step_action(self, order: Order) -> str:
+    def _next_step_action(
+        self,
+        order: Order,
+        *,
+        context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
+    ) -> str:
         """UI action-target resolution for existing routes only — not new
         order semantics. Picks the target OrderVersion (candidate_order_
         version_id if set and real, else the highest version_number — a
@@ -530,6 +548,7 @@ class OfficePanel:
             return ""
         return (
             f'<form class="inline" method="post" action="/order/{_e(order.order_id)}/{action}">'
+            f"{_csrf_input(context)}"
             f'<input type="hidden" name="order_version_id" value="{_e(version.order_version_id)}">'
             f"<button>{label}</button></form>"
         )
@@ -631,6 +650,7 @@ class OfficePanel:
                     f"<li>{_e(it.get('date', ''))} {_e(it.get('time', ''))} — "
                     f"{_e(phone)} ({contact}) "
                     '<form class="inline" method="post" action="/rueckruf/resolve">'
+                    f"{_csrf_input(context)}"
                     f'<input type="hidden" name="call_id" value="{_e(it.get("call_id", ""))}">'
                     "<button>Erledigt</button></form> "
                     f'<a href="/inquiry/new?phone={quote(phone)}">Anfrage erfassen</a></li>'
@@ -646,11 +666,13 @@ class OfficePanel:
             if inq.call_verification_required and inq.call_verification_status != "verified":
                 action = (
                     f'<form class="inline" method="post" action="/inquiry/{_e(inq.inquiry_id)}/verify">'
+                    f"{_csrf_input(context)}"
                     "<button>Telefonisch verifiziert</button></form>"
                 )
             else:
                 action = (
                     f'<form class="inline" method="post" action="/inquiry/{_e(inq.inquiry_id)}/convert">'
+                    f"{_csrf_input(context)}"
                     "<button>In Auftrag umwandeln</button></form>"
                 )
             neue_anfragen_rows.append(
@@ -671,7 +693,7 @@ class OfficePanel:
         for o in blockiert[:5]:
             ev = self.core.evaluate_ready_to_send(o.order_id)
             reason = _e(_ready_to_send_blocker_label(ev.reasons[0])) if ev.reasons else "–"
-            action = self._next_step_action(o)
+            action = self._next_step_action(o, context=context)
             auftraege_rows.append(
                 f'<li><a href="/order/{_e(o.order_id)}">{_e(o.order_id[:8])}</a> — {reason} {action}</li>'
             )
@@ -846,7 +868,7 @@ class OfficePanel:
         # Prefill only — every field stays editable and the submitted form
         # values are what create_inquiry sees; hints never override office
         # input and are never written anywhere by themselves.
-        body = phone_hint + f"""<form method="post" action="/inquiry/new"><fieldset>
+        body = phone_hint + f"""<form method="post" action="/inquiry/new">{_csrf_input(context)}<fieldset>
 <p><label>Datum*</label><input type="date" name="event_date" value="{_e(event_date)}" required></p>
 <p><label>Kanal</label><select name="inquiry_source">{src_opts}</select></p>
 <p><label>Zeitfenster</label><input name="time_window_text"></p>
@@ -901,6 +923,7 @@ class OfficePanel:
         if inq.call_verification_required and inq.call_verification_status != "verified":
             verify_btn = (
                 f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/verify">'
+                f"{_csrf_input(context)}"
                 "<button>Telefonisch verifiziert</button></form> "
             )
         existing = [
@@ -920,6 +943,7 @@ class OfficePanel:
         if not active:
             convert += (
                 f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/convert">'
+                f"{_csrf_input(context)}"
                 "<button>In Auftrag umwandeln</button></form>"
             )
         guests = str(inq.guest_count_estimate) if inq.guest_count_estimate is not None else ""
@@ -957,7 +981,7 @@ class OfficePanel:
 <h2>Vorgangsprüfung (Progression)</h2>{prog}
 <p>{verify_btn}{convert}</p>
 <h2>Anfrage bearbeiten</h2>
-<form method="post" action="/inquiry/{_e(inquiry_id)}/update"><fieldset>
+<form method="post" action="/inquiry/{_e(inquiry_id)}/update">{_csrf_input(context)}<fieldset>
 <p><label>Datum</label><input type="date" name="event_date" value="{_e(inq.event_date.isoformat())}"></p>
 <p><label>Zeitfenster</label><input name="time_window_text" value="{_e(inq.time_window_text)}"></p>
 <p><label>Ort</label><input name="location_text" value="{_e(inq.location_text)}"></p>
@@ -1020,12 +1044,14 @@ class OfficePanel:
                 if v.kitchen_print_confirmed_at is None:
                     actions.append(
                         f'<form class="inline" method="post" action="/order/{_e(order_id)}/print-confirm">'
+                        f"{_csrf_input(context)}"
                         f'<input type="hidden" name="order_version_id" value="{_e(v.order_version_id)}">'
                         "<button>Druck bestätigen</button></form>"
                     )
                 if v.order_version_id != order.effective_order_version_id:
                     actions.append(
                         f'<form class="inline" method="post" action="/order/{_e(order_id)}/effective">'
+                        f"{_csrf_input(context)}"
                         f'<input type="hidden" name="order_version_id" value="{_e(v.order_version_id)}">'
                         "<button>Wirksam machen</button></form>"
                     )
@@ -1051,11 +1077,11 @@ class OfficePanel:
         if not cancelled:
             actions_block = f"""
 <p>
-<form class="inline" method="post" action="/order/{_e(order_id)}/ready"><button>Freigabe anfordern</button></form>
-<form class="inline" method="post" action="/order/{_e(order_id)}/cancel"><button>Auftrag stornieren</button></form>
+<form class="inline" method="post" action="/order/{_e(order_id)}/ready">{_csrf_input(context)}<button>Freigabe anfordern</button></form>
+<form class="inline" method="post" action="/order/{_e(order_id)}/cancel">{_csrf_input(context)}<button>Auftrag stornieren</button></form>
 </p>
 <h2>Neue Version</h2>
-<form method="post" action="/order/{_e(order_id)}/version"><fieldset>
+<form method="post" action="/order/{_e(order_id)}/version">{_csrf_input(context)}<fieldset>
 <p><label>Datum*</label><input type="date" name="event_date" required></p>
 <p><label>Zeitfenster</label><input name="time_window_text"></p>
 <p><label>Ort</label><input name="location_text"></p>
