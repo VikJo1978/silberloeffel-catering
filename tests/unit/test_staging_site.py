@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import socket
 import sqlite3
 import threading
 import urllib.error
@@ -127,6 +128,17 @@ def test_private_submission_list_is_not_exposed(staging_server) -> None:
     with pytest.raises(urllib.error.HTTPError) as error:
         urllib.request.urlopen(f"{base}/api/inquiries")
     assert error.value.code == 404
+
+
+def test_stalled_client_does_not_block_other_visitors(staging_server) -> None:
+    base, _db_path = staging_server
+    host, port_text = base.removeprefix("http://").split(":")
+    stalled_client = socket.create_connection((host, int(port_text)), timeout=1)
+    try:
+        with urllib.request.urlopen(f"{base}/healthz", timeout=1) as response:
+            assert response.status == 200
+    finally:
+        stalled_client.close()
 
 
 def test_wrong_content_type_and_large_body_are_rejected(staging_server) -> None:

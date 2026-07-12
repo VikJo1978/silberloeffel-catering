@@ -14,7 +14,7 @@ import time
 import uuid
 from collections import defaultdict, deque
 from datetime import date, datetime, timezone
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
@@ -275,7 +275,9 @@ def make_staging_handler(
     return StagingHandler
 
 
-class StagingHTTPServer(HTTPServer):
+class StagingHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+
     def __init__(self, address: tuple[str, int], db_path: str | Path) -> None:
         self.repository = StagingInquiryRepository(db_path)
         super().__init__(address, make_staging_handler(self.repository))
