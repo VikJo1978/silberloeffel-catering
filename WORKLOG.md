@@ -1,3 +1,13 @@
+# Legacy chronological worklog
+
+> **Status:** historical execution record. It is preserved for context but is
+> no longer the current project status page. Use
+> [`docs/current-status.md`](docs/current-status.md) for live facts,
+> [`CHANGELOG.md`](CHANGELOG.md) for releases, and
+> [`docs/README.md`](docs/README.md) for maintained documentation. New entries
+> should be added here only when chronological implementation archaeology is
+> genuinely useful.
+
 WORKLOG.md
 
 0. Purpose
@@ -1854,7 +1864,7 @@ Must not be changed
 
 ⸻
 
-Entry 056
+Entry 056a
 
 Date: 2026-07-07 — Sidebar Rückruf-Badge (task indicator, not a stat)
 Scope: src/catering_system/ui/office_panel.py — _page(), fetch_rueckruf_count(), do_GET
@@ -1909,7 +1919,7 @@ Must not be changed
 
 ⸻
 
-Entry 056
+Entry 056b
 
 Date: 2026-07-07 — Office panel: safe UX labels + attention grouping
 Scope: src/catering_system/ui/office_panel.py — display-only label mapping,
