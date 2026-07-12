@@ -15,6 +15,7 @@ needed.
 | Staging | [VPS runbook](runbooks/vps-staging.md) | Temporary site at the public IP |
 | Data safety | [Backup and restore](runbooks/backup-restore.md) | SQLite backup, verification, recovery |
 | Integration | [Website intake API](api/website-intake.md) | Payloads, responses, authentication |
+| Integration | [Kiosk order feed API](api/kiosk-order-feed.md) | Per-date courier feed contract |
 | Users | [Office panel guide](user/office-panel.md) | Daily office workflow and gates |
 | Decisions | [Decision register](decisions/README.md) | Durable architectural decisions |
 | Releases | [Changelog](../CHANGELOG.md) | User-visible and operational changes |

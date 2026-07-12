@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import urllib.error
 import urllib.request
@@ -30,7 +31,9 @@ _WEEK_YEAR = 2026
 _WEEK = 40  # contains 2026-10-01
 
 
-def _inquiry(event_date: date, location: str = "Hamburg") -> Inquiry:
+def _inquiry(
+    event_date: date, location: str = "Hamburg", guest_count: int | None = 25
+) -> Inquiry:
     now = datetime.now(timezone.utc)
     return Inquiry(
         inquiry_id="11111111-1111-1111-1111-111111111111",
@@ -42,18 +45,22 @@ def _inquiry(event_date: date, location: str = "Hamburg") -> Inquiry:
         customer_linkage={},
         time_window_text="mittags",
         location_text=location,
-        guest_count_estimate=25,
+        guest_count_estimate=guest_count,
         planning_mode=PLANNING_MODES[0],
         call_verification_required=False,
         call_verification_status=CALL_VERIFICATION_STATUSES[0],
     )
 
 
-def _repo_with_effective_order(location: str = "Hamburg") -> InMemoryOrderRepository:
+def _repo_with_effective_order(
+    location: str = "Hamburg", guest_count: int | None = 25
+) -> InMemoryOrderRepository:
     repo = InMemoryOrderRepository()
     osvc = OrderService(repo)
     core = OperationalCoreService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_inquiry(date(2026, 10, 1), location))
+    order, v1 = osvc.convert_inquiry_to_order(
+        _inquiry(date(2026, 10, 1), location, guest_count)
+    )
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
     return repo
@@ -170,8 +177,6 @@ def test_kiosk_serves_sqlite_like_on_lenovo(tmp_path) -> None:
 
 
 def test_order_feed_happy_path_exact_shape(kiosk_url: str) -> None:
-    import json
-
     with urllib.request.urlopen(f"{kiosk_url}/api/order-feed?date=2026-10-01") as resp:
         assert resp.status == 200
         assert resp.headers["Content-Type"] == "application/json; charset=utf-8"
@@ -194,22 +199,17 @@ def test_order_feed_happy_path_exact_shape(kiosk_url: str) -> None:
 
 
 def test_order_feed_empty_date_returns_empty_orders(kiosk_url: str) -> None:
-    import json
-
     with urllib.request.urlopen(f"{kiosk_url}/api/order-feed?date=2026-10-08") as resp:
         document = json.loads(resp.read().decode("utf-8"))
     assert document == {"date": "2026-10-08", "orders": []}
 
 
-def test_order_feed_null_guest_count_passes_through() -> None:
+def test_order_feed_null_guest_count_passes_through_real_service() -> None:
+    """An unknown guest count flows inquiry → order → service → JSON as null."""
     from catering_system.ui.kiosk_server import render_order_feed_json
-    import json
 
-    repo = _repo_with_effective_order()
+    repo = _repo_with_effective_order(guest_count=None)
     entries = WochenuebersichtService(repo).get_day_overview(date(2026, 10, 1))
-    from dataclasses import replace
-
-    entries = tuple(replace(e, guest_count_estimate=None) for e in entries)
     document = json.loads(render_order_feed_json(date(2026, 10, 1), entries))
     assert document["orders"][0]["guest_count_estimate"] is None
 
@@ -267,6 +267,10 @@ def test_order_feed_carries_kiosk_security_headers(kiosk_url: str) -> None:
         assert resp.headers["X-Content-Type-Options"] == "nosniff"
         assert resp.headers["X-Frame-Options"] == "DENY"
         assert resp.headers["Referrer-Policy"] == "no-referrer"
+        assert resp.headers["Content-Security-Policy"] == (
+            "default-src 'none'; style-src 'unsafe-inline'; "
+            "base-uri 'none'; frame-ancestors 'none'"
+        )
 
 
 def test_html_route_unchanged_by_feed(kiosk_url: str) -> None:

@@ -31,7 +31,7 @@ provider's secret store. `.env.example` lists names only.
 | Surface | Required exposure |
 |---|---|
 | Office panel `8081` | private LAN/Tailscale only |
-| Kitchen kiosk `8082` | private LAN only |
+| Kitchen kiosk `8082` | private LAN/Tailscale only |
 | Website intake `8083` | Lenovo loopback only |
 | VPS staging `8080` | temporary public HTTP; fake data only |
 

@@ -87,7 +87,7 @@ flowchart TD
 | Surface | Exposure | Authentication | Writes production? |
 |---|---|---|---|
 | Office panel | LAN/Tailscale only | HTTP Basic + CSRF on writes | Yes |
-| Kitchen kiosk | LAN only | Network boundary | No |
+| Kitchen kiosk | LAN/Tailscale only | Trusted network boundary | No |
 | Website receiver | loopback only | Bearer token from Worker | Inquiry only |
 | Cloudflare Worker | public | Server-side upstream secret | Via receiver |
 | VPS staging | public IP, HTTP | None; test data only | No |

@@ -104,7 +104,8 @@ def render_order_feed_json(
     """Pure renderer: per-date entries → courier order feed document (pack §3).
 
     Exactly the courier app's CoreOrderSummary slice; version numbers,
-    planning mode, and anything customer-identifying stay out."""
+    planning mode, and direct customer identity and contact fields stay out.
+    The event address itself remains sensitive operational data."""
     document = {
         "date": feed_date.isoformat(),
         "orders": [

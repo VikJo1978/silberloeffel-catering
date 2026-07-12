@@ -5,6 +5,13 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
 
 ## Unreleased
 
+- Added a read-only JSON order feed to the kitchen kiosk
+  (`GET /api/order-feed?date=YYYY-MM-DD`) for the separate courier app, with
+  a strict query contract and the same release gates as the Wochenübersicht
+  (frozen in `docs/proposals/KIOSK_ORDER_FEED_PACK_V1.md`).
+- Corrected kiosk exposure wording in the architecture guide, security
+  policy, and production runbook: the kiosk is reachable on the LAN and over
+  Tailscale, not "LAN only".
 - Reorganized project documentation into maintained architecture, API,
   operations, user, security, and decision guides.
 - Repaired the production backup schedule by moving it to the private,

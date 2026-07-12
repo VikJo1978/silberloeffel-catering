@@ -19,7 +19,7 @@ reconstructable from CRM or staging; protect it before every deployment.
 | Service | Port | Exposure | Writes Core |
 |---|---:|---|---|
 | `catering-office-panel` | 8081 | LAN/Tailscale | yes |
-| `catering-kiosk` | 8082 | LAN | no |
+| `catering-kiosk` | 8082 | LAN/Tailscale | no |
 | `catering-website-intake` | 8083 | loopback only | Inquiry only |
 
 ## Connect and inspect

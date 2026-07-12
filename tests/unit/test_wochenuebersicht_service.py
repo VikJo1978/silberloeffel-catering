@@ -158,6 +158,27 @@ def test_day_overview_excludes_cancelled_and_unreleased_orders() -> None:
     assert week.get_day_overview(date(2026, 10, 1)) == ()
 
 
+def test_day_overview_excludes_foreign_effective_version() -> None:
+    """Defensive ownership gate: an order whose effective reference names
+    another order's version must not appear. The repository rejects such a
+    reference through its API, so the corruption is planted directly in the
+    store to prove the service-side check stands on its own."""
+    from dataclasses import replace
+
+    repo, osvc, core, week = _setup()
+    victim = _make_effective_order(osvc, core, date(2026, 10, 1))
+    donor = _make_effective_order(osvc, core, date(2026, 10, 1))
+    donor_order = repo.get_order(donor)
+    assert donor_order is not None and donor_order.effective_order_version_id
+    tampered = replace(
+        repo.get_order(victim),
+        effective_order_version_id=donor_order.effective_order_version_id,
+    )
+    repo._orders[victim] = tampered  # bypass validation: simulate corrupted store
+    entries = week.get_day_overview(date(2026, 10, 1))
+    assert [e.order_id for e in entries] == [donor]
+
+
 def test_day_overview_is_the_date_filtered_subset_of_the_week() -> None:
     _repo, osvc, core, week = _setup()
     for day in (1, 1, 2):
