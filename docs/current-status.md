@@ -39,9 +39,10 @@ Staging facts:
 
 ## Quality baseline
 
-- Python tests: **398 passed**
+- Python tests: **403 passed**
 - coverage gate: **90% minimum**; last local result above the gate
-- last full-project coverage: **92.5%**
+- last full-project coverage: **93.1%**
+- website intake receiver coverage: **99.2%**
 - Ruff: clean
 - Mypy: clean
 - Cloudflare Worker sanitizer tests: clean

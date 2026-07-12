@@ -9,6 +9,7 @@ or proving nothing beyond it is reachable.
 from __future__ import annotations
 
 import json
+import socket
 import sys
 import threading
 import urllib.error
@@ -22,6 +23,9 @@ from catering_system.repositories.in_memory_inquiry_repository import (
 )
 from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
+)
+from catering_system.repositories.inquiry_repository import (
+    DuplicateExternalReferenceError,
 )
 from catering_system.ui import website_intake_endpoint
 from catering_system.ui.website_intake_endpoint import create_website_intake_server
@@ -66,6 +70,24 @@ def _post(
         except ValueError:
             parsed = {}
         return exc.code, parsed, raw
+
+
+def _raw_post_with_content_length(base: str, content_length: str) -> int:
+    host, port_text = base.removeprefix("http://").split(":")
+    request = (
+        "POST /intake/website-form HTTP/1.1\r\n"
+        f"Host: {host}:{port_text}\r\n"
+        f"Authorization: Bearer {_TOKEN}\r\n"
+        "Content-Type: application/json\r\n"
+        f"Content-Length: {content_length}\r\n"
+        "Connection: close\r\n\r\n{}"
+    ).encode()
+    with socket.create_connection((host, int(port_text)), timeout=2) as connection:
+        connection.sendall(request)
+        response = bytearray()
+        while chunk := connection.recv(4096):
+            response.extend(chunk)
+    return int(bytes(response).split(b" ", 2)[1])
 
 
 _VALID_PAYLOAD = {
@@ -232,6 +254,23 @@ def test_unsupported_content_type_rejected(server) -> None:
     assert order_repo.list_orders() == []
 
 
+@pytest.mark.parametrize(
+    ("content_length", "expected_status"),
+    [("not-an-integer", 400), ("-1", 400), (str(32 * 1024 + 1), 413)],
+)
+def test_malformed_or_oversized_content_length_is_rejected(
+    server, content_length: str, expected_status: int
+) -> None:
+    base, inquiry_repo, _order_repo = server
+    assert _raw_post_with_content_length(base, content_length) == expected_status
+    assert inquiry_repo.list_all() == []
+
+
+def test_event_date_parser_leaves_invalid_values_for_adapter_validation() -> None:
+    assert website_intake_endpoint._parse_event_date("not-a-date") == "not-a-date"
+    assert website_intake_endpoint._parse_event_date(20260712) == 20260712
+
+
 def test_minimal_payload_creates_inquiry_without_optional_fields(server) -> None:
     base, inquiry_repo, order_repo = server
     status, body, _raw = _post(base, {"event_date": "2026-09-20"})
@@ -302,6 +341,32 @@ def test_duplicate_insert_race_returns_existing_inquiry() -> None:
     assert status2 == 202
     assert body2["inquiry_id"] == body1["inquiry_id"]
     assert len(inquiry_repo.list_all()) == 1
+
+
+def test_unresolvable_duplicate_insert_race_fails_closed() -> None:
+    class UnresolvableDuplicateRepository(InMemoryInquiryRepository):
+        def save(self, inquiry) -> None:
+            raise DuplicateExternalReferenceError("simulated unresolved race")
+
+        def find_by_source_and_external_ref(
+            self, inquiry_source: str, intake_external_ref: str
+        ):
+            return None
+
+    inquiry_repo = UnresolvableDuplicateRepository()
+    srv = create_website_intake_server(inquiry_repo, _TOKEN, host="127.0.0.1", port=0)
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    host, port = srv.server_address[:2]
+    try:
+        status, body, _raw = _post(f"http://{host}:{port}", _VALID_PAYLOAD)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    assert status == 500
+    assert body == {"error": "internal error"}
+    assert inquiry_repo.list_all() == []
 
 
 def test_retry_with_different_payload_same_submission_id_still_no_duplicate(

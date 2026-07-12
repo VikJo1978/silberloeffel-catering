@@ -23,6 +23,8 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
   `.claude/` directory to prevent accidental commits.
 - Added CLI-bootstrap coverage for the website intake receiver and aligned the
   kiosk/office systemd templates with the verified live Lenovo paths.
+- Raised website intake receiver coverage to 99.2% with raw malformed-length,
+  oversized-body, invalid-date, and unresolved-idempotency-race tests.
 - Fast-forwarded the Lenovo production checkout to `ce4d8e3` after successful
   CI; no service restart was needed because the running production modules were
   unchanged.
