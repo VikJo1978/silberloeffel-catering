@@ -9,6 +9,7 @@ or proving nothing beyond it is reachable.
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -22,6 +23,7 @@ from catering_system.repositories.in_memory_inquiry_repository import (
 from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
 )
+from catering_system.ui import website_intake_endpoint
 from catering_system.ui.website_intake_endpoint import create_website_intake_server
 
 _TOKEN = "test-website-intake-token"
@@ -345,3 +347,80 @@ def test_duplicate_path_creates_no_order_or_orderversion(server) -> None:
     _post(base, _VALID_PAYLOAD)  # the duplicate/idempotent-replay request
     assert order_repo.list_orders() == []
     assert order_repo._versions == {}  # noqa: SLF001
+
+
+def test_main_refuses_to_start_without_token(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("WEBSITE_INTAKE_TOKEN", raising=False)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["website-intake", "--db", str(tmp_path / "core.db")],
+    )
+
+    with pytest.raises(SystemExit, match="refuses to start without a token"):
+        website_intake_endpoint.main()
+
+
+def test_main_builds_repository_and_serves_with_cli_options(
+    monkeypatch, tmp_path, capsys
+) -> None:
+    captured: dict[str, object] = {}
+    fake_repository = object()
+
+    class FakeServer:
+        def serve_forever(self) -> None:
+            captured["served"] = True
+
+    def build_repository(path: str):
+        captured["db"] = path
+        return fake_repository
+
+    def build_server(repository, token: str, host: str, port: int):
+        captured.update(
+            repository=repository,
+            token=token,
+            host=host,
+            port=port,
+        )
+        return FakeServer()
+
+    from catering_system.repositories import sqlite_inquiry_repository
+
+    monkeypatch.setattr(
+        sqlite_inquiry_repository,
+        "SQLiteInquiryRepository",
+        build_repository,
+    )
+    monkeypatch.setattr(
+        website_intake_endpoint,
+        "create_website_intake_server",
+        build_server,
+    )
+    db_path = str(tmp_path / "core.db")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "website-intake",
+            "--db",
+            db_path,
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "9083",
+            "--token",
+            "cli-test-token",
+        ],
+    )
+
+    website_intake_endpoint.main()
+
+    assert captured == {
+        "db": db_path,
+        "repository": fake_repository,
+        "token": "cli-test-token",
+        "host": "127.0.0.1",
+        "port": 9083,
+        "served": True,
+    }
+    assert "http://127.0.0.1:9083/intake/website-form" in capsys.readouterr().out

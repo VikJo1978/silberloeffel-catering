@@ -37,8 +37,9 @@ Staging facts:
 
 ## Quality baseline
 
-- Python tests: **395 passed**
+- Python tests: **398 passed**
 - coverage gate: **90% minimum**; last local result above the gate
+- last full-project coverage: **92.5%**
 - Ruff: clean
 - Mypy: clean
 - Cloudflare Worker sanitizer tests: clean
@@ -63,13 +64,6 @@ Recovery-key protection verified on 2026-07-12:
 The real Silberlöffel site is still managed externally. The intake receiver is
 active on Lenovo, but the final public domain/Cloudflare path is not configured.
 The VPS page is a temporary design and form-development environment only.
-
-### Medium — repository systemd templates differ from the live Lenovo units
-
-The kiosk and office templates under `infra/systemd/` use placeholder
-`/opt/catering` paths. The live units correctly use `/home/viktor/...`.
-Deployments must follow the production runbook and review the rendered unit
-before restart.
 
 ## Next milestones
 

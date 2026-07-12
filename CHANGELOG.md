@@ -21,6 +21,8 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
   password stored separately.
 - Stopped hardcoding the test count in README and ignored the operator-owned
   `.claude/` directory to prevent accidental commits.
+- Added CLI-bootstrap coverage for the website intake receiver and aligned the
+  kiosk/office systemd templates with the verified live Lenovo paths.
 
 ## 2026-07-12
 

@@ -1,5 +1,4 @@
-# Kitchen kiosk (read-only Wochenübersicht display) — install per DEPLOYMENT.md §1b.
-# Replace /opt/catering with the actual repo path and 'catering' with the actual user.
+# Kitchen kiosk (read-only Wochenübersicht display) — live Lenovo paths.
 
 [Unit]
 Description=Catering kitchen kiosk (read-only)
@@ -7,10 +6,10 @@ After=network.target
 
 [Service]
 Type=simple
-User=catering
-WorkingDirectory=/opt/catering
-Environment=PYTHONPATH=/opt/catering/src
-ExecStart=/usr/bin/python3 -m catering_system.ui.kiosk_server --db /var/lib/catering/core.db --port 8082
+User=viktor
+WorkingDirectory=/home/viktor/projects/silberloeffel-catering
+Environment=PYTHONPATH=/home/viktor/projects/silberloeffel-catering/src
+ExecStart=/usr/bin/python3 -m catering_system.ui.kiosk_server --db /home/viktor/catering-runtime/core.db --port 8082
 Restart=on-failure
 RestartSec=3
 

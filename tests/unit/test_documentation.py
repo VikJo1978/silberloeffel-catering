@@ -41,3 +41,12 @@ def test_historical_packs_live_in_the_archive() -> None:
     assert list(_ROOT.glob("*_PACK_V1.md")) == []
     assert (_ROOT / "docs/archive/packs/README.md").is_file()
     assert len(list((_ROOT / "docs/archive/packs").glob("*_PACK_V1.md"))) >= 20
+
+
+def test_lenovo_systemd_templates_match_documented_live_paths() -> None:
+    for name in ("catering-kiosk.service", "catering-office-panel.service"):
+        unit = (_ROOT / "infra/systemd" / name).read_text()
+        assert "User=viktor" in unit
+        assert "WorkingDirectory=/home/viktor/projects/silberloeffel-catering" in unit
+        assert "--db /home/viktor/catering-runtime/core.db" in unit
+        assert "/opt/catering" not in unit
