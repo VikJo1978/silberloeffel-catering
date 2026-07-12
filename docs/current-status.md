@@ -1,6 +1,6 @@
 # Current status
 
-Last verified: **2026-07-12, Europe/Berlin**.
+Last verified: **2026-07-13, Europe/Berlin**.
 
 ## Live environments
 
@@ -19,9 +19,11 @@ Production facts:
 - database: `/home/viktor/catering-runtime/core.db`
 - daily backups: `/home/viktor/catering-runtime/backups`
 - production checkout: clean fast-forward of `origin/main`, last verified on
-  2026-07-12; use `git log -1 --oneline` for the current hash
-- services were not restarted for documentation/test/template-only checkout
-  syncs; their runtime modules have not changed since `ad9bafc`
+  2026-07-13; use `git log -1 --oneline` for the current hash
+- kitchen kiosk restarted successfully after the order-feed deployment;
+  office panel and website intake were not restarted
+- kiosk order feed: read-only `GET /api/order-feed?date=YYYY-MM-DD`, private
+  LAN/Tailscale only; deployment smoke checks returned `200`/`400` as expected
 - `PRAGMA quick_check`: `ok`
 - daily backup cron: 03:15, 14-day retention, `umask 077`
 - manual cron-equivalent backup verified on 2026-07-12: `ok`, mode `600`
@@ -41,9 +43,9 @@ Staging facts:
 
 ## Quality baseline
 
-- Python tests: **408 passed**
+- Python tests: **431 passed**
 - coverage gate: **90% minimum**; last local result above the gate
-- last full-project coverage: **93.0%**
+- last full-project coverage: **93.1%**
 - website intake receiver coverage: **99.2%**
 - Ruff: clean
 - Mypy: clean

@@ -75,7 +75,8 @@ test count instead of duplicating a number here.
 ## Non-negotiable boundaries
 
 - The Lenovo SQLite database is the production operational truth.
-- The office panel is a LAN-only write surface and must never be public.
+- The office panel is a private LAN/Tailscale write surface and must never be
+  public.
 - The kitchen kiosk is read-only.
 - The website receiver exposes one token-protected intake route only.
 - The VPS staging database is separate and never forwards to production.

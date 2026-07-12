@@ -3,7 +3,7 @@
 The kitchen kiosk exposes one read-only JSON route so the separate courier
 app (Tourenplanung) can list the released orders of a given date. The courier
 app talks only to the kiosk; Core keeps exactly one reader. Frozen contract:
-[KIOSK_ORDER_FEED_PACK_V1](../proposals/KIOSK_ORDER_FEED_PACK_V1.md).
+[KIOSK_ORDER_FEED_PACK_V1](../archive/packs/KIOSK_ORDER_FEED_PACK_V1.md).
 
 ## Route
 

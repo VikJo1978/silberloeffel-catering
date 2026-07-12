@@ -1,8 +1,8 @@
-# Office panel (LAN-only write surface) — live Lenovo paths.
+# Office panel (private LAN/Tailscale write surface) — live Lenovo paths.
 # The password lives ONLY in /etc/catering/office-panel.env (chmod 600), never here.
 
 [Unit]
-Description=Catering office panel (write surface, LAN-only)
+Description=Catering office panel (write surface, private LAN/Tailscale)
 After=network.target
 
 [Service]
