@@ -11,6 +11,11 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
   user-owned runtime directory and enforcing owner-only files with `umask 077`.
 - Created and verified a cron-equivalent backup against production row counts
   while all three services remained active.
+- Added GPG-encrypted off-host backups from Lenovo to a restricted VPS account,
+  SHA-256 verification, local/remote retention, and a daily `03:25` schedule.
+- Completed a restore drill by downloading the VPS ciphertext to the Mac,
+  decrypting with a Mac-only recovery key, and verifying SQLite integrity and
+  production row counts.
 
 ## 2026-07-12
 

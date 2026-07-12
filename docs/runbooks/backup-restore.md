@@ -59,16 +59,102 @@ Record the backup filename and deployed Git commit together.
 
 ## Off-host copy
 
-A backup on the same Lenovo does not protect against disk loss. At least one
-verified copy must live on a different machine or encrypted storage. Do not put
-the production database in GitHub or on the public staging VPS.
+A backup on the same Lenovo does not protect against disk loss. The off-host
+pipeline encrypts the verified local copy before sending it to the VPS.
+
+### Design
+
+| Component | Location | Contains |
+|---|---|---|
+| recovery private key | Mac `~/.config/silberloeffel-backup/gnupg` | decrypt capability |
+| encryption public key | Lenovo `~/.gnupg-catering-backup` | encrypt capability only |
+| transport private key | Lenovo `~/.ssh/catering_backup_vps` | forced backup commands only |
+| encrypted local cache | Lenovo `~/catering-runtime/offsite-encrypted` | `.db.gpg`, 14 days |
+| encrypted off-host files | VPS `/var/lib/catering-backup/files` | `.db.gpg`, 30 days |
+
+Recovery key fingerprint:
+
+```text
+4B5A 450E DBA6 8B78 D9E5 19C2 A5C4 DE7E 0D83 6610
+```
+
+The VPS account `catering-backup` uses an SSH forced command. Its key may only:
+
+- upload a correctly named encrypted file;
+- return that file's SHA-256 checksum;
+- prune encrypted files older than 30 days.
+
+An attempted shell command must fail with exit status `64`. The receiver also
+caps each upload at 256 MiB; a truncated upload cannot pass checksum validation.
+
+### Schedule
+
+```cron
+25 3 * * * /home/viktor/catering-runtime/bin/catering-offsite-backup.sh >> /home/viktor/catering-runtime/offsite-backup.log 2>&1
+```
+
+The sender checks the local SQLite backup, encrypts it with GPG, uploads it,
+compares local and remote SHA-256, and only then reports success.
+
+### Verified restore drill
+
+On 2026-07-12 an encrypted file was uploaded to the VPS, downloaded back to the
+Mac, decrypted with the dedicated recovery key, and opened with SQLite:
+
+- encrypted VPS owner/mode: `catering-backup:catering-backup`, `600`;
+- `PRAGMA quick_check`: `ok`;
+- row counts: 3 inquiries, 1 order, 1 order version;
+- temporary plaintext on Mac removed after verification;
+- all Lenovo production services remained active.
+
+### Recovery-key protection
+
+The private key must never be copied to Lenovo, VPS, GitHub, or ordinary cloud
+storage. Ensure the entire Mac directory below has a second encrypted backup:
+
+```text
+/Users/viktorjohanson/.config/silberloeffel-backup/gnupg
+```
+
+Without it the encrypted off-host database cannot be recovered.
+
+### Manual off-host run
+
+```bash
+/home/viktor/catering-runtime/bin/catering-offsite-backup.sh
+tail -20 /home/viktor/catering-runtime/offsite-backup.log
+```
+
+The command must end with `off-site backup verified` and a SHA-256 value.
+
+### Restore from VPS on the Mac
+
+Use a temporary private directory, retrieve the selected `.gpg` file through
+the administrator SSH account, decrypt, verify, and remove the plaintext after
+the drill:
+
+```bash
+restore_dir=$(mktemp -d /tmp/catering-offsite-restore.XXXXXX)
+scp root@185.16.60.69:/var/lib/catering-backup/files/core-YYYY-MM-DD.db.gpg \
+  "$restore_dir/backup.db.gpg"
+GNUPGHOME="$HOME/.config/silberloeffel-backup/gnupg" \
+  gpg --output "$restore_dir/restored.db" \
+  --decrypt "$restore_dir/backup.db.gpg"
+sqlite3 "$restore_dir/restored.db" 'PRAGMA quick_check;'
+find "$restore_dir" -type f -delete
+rmdir "$restore_dir"
+```
+
+For a real production restore, continue with
+[Restore production](#restore-production). Do not upload or commit the decrypted
+file.
 
 Minimum weekly check:
 
 - newest local backup age;
-- newest off-host backup age;
+- newest off-host encrypted backup age;
 - non-zero size;
-- `PRAGMA quick_check = ok` on a copied file;
+- a periodic decrypt-and-`quick_check` drill;
 - restore procedure still understood by two people or documented access.
 
 ## Restore production

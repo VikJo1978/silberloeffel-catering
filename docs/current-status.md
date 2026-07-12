@@ -22,6 +22,8 @@ Production facts:
 - `PRAGMA quick_check`: `ok`
 - daily backup cron: 03:15, 14-day retention, `umask 077`
 - manual cron-equivalent backup verified on 2026-07-12: `ok`, mode `600`
+- encrypted off-host upload cron: 03:25 to VPS, 30-day retention
+- off-host restore drill verified on 2026-07-12: `ok`, row counts `3/1/1`
 
 Staging facts:
 
@@ -35,7 +37,7 @@ Staging facts:
 
 ## Quality baseline
 
-- Python tests: **392 passed**
+- Python tests: **395 passed**
 - coverage gate: **90% minimum**; last local result above the gate
 - Ruff: clean
 - Mypy: clean
@@ -44,11 +46,12 @@ Staging facts:
 
 ## Operational risks
 
-### High — no verified off-host backup yet
+### High — recovery private key needs a second protected copy
 
-The local scheduled backup was repaired and proven, but it remains on the same
-Lenovo disk as the production database. Disk loss would remove both. Add an
-encrypted, verified copy on a different machine or storage provider.
+Encrypted off-host backup and restore are proven. Its private recovery key is
+deliberately present only on the Mac, not Lenovo or VPS. Confirm that
+`~/.config/silberloeffel-backup/gnupg` is covered by an encrypted personal
+backup; losing that directory would make the VPS copies undecryptable.
 
 ### High — production is not yet connected to the public website
 
@@ -65,7 +68,7 @@ before restart.
 
 ## Next milestones
 
-1. Add and prove an encrypted off-host production backup.
+1. Confirm a protected second copy of the GPG recovery key.
 2. Obtain access to the real Silberlöffel website.
 3. Configure a TLS-protected public intake path through Cloudflare.
 4. Port the approved staging form into the real site.

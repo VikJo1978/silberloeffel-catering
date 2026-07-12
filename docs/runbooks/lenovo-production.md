@@ -13,6 +13,7 @@ reconstructable from CRM or staging; protect it before every deployment.
 | Repository | `/home/viktor/projects/silberloeffel-catering` |
 | Core database | `/home/viktor/catering-runtime/core.db` |
 | Daily backups | `/home/viktor/catering-runtime/backups` |
+| Off-host sender | `/home/viktor/catering-runtime/bin/catering-offsite-backup.sh` |
 | Environment files | `/etc/catering/*.env` |
 
 | Service | Port | Exposure | Writes Core |

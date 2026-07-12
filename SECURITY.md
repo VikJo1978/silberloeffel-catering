@@ -41,6 +41,10 @@ Worker/Tunnel intake path. Never proxy office or kiosk routes.
 ## Data handling
 
 - Production `core.db` stays on Lenovo and encrypted off-host backups.
+- The off-host GPG private key stays on the Mac only; Lenovo receives its
+  public encryption key and VPS stores ciphertext only.
+- The Lenovo-to-VPS transport key is restricted by an SSH forced-command
+  allowlist and cannot start a shell.
 - Do not copy production data to staging, GitHub, test fixtures, or screenshots.
 - Redact contact information from logs and issue reports.
 - The public Worker never returns the Lenovo response body.
