@@ -36,13 +36,14 @@ Staging facts:
 - public preview: [http://185.16.60.69:8080/](http://185.16.60.69:8080/)
 - 10-user smoke load: 40/40 requests returned `200`; slowest response was
   approximately `0.153 s`
+- staging inquiry viewer: read-only `/admin`, loopback/SSH-tunnel only
 - no domain and no TLS; fake data only
 
 ## Quality baseline
 
-- Python tests: **403 passed**
+- Python tests: **408 passed**
 - coverage gate: **90% minimum**; last local result above the gate
-- last full-project coverage: **93.1%**
+- last full-project coverage: **93.0%**
 - website intake receiver coverage: **99.2%**
 - Ruff: clean
 - Mypy: clean

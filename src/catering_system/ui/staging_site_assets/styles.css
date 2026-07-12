@@ -88,6 +88,23 @@ input:focus, select:focus, textarea:focus { border-color: var(--sage); box-shado
 
 footer { padding: 28px clamp(22px, 5vw, 72px); display: flex; justify-content: space-between; gap: 20px; border-top: 1px solid var(--line); color: var(--muted); background: var(--card); font-size: 12px; }
 
+.admin-body { min-height: 100vh; background: #e9ece7; }
+.admin-shell { width: min(980px, calc(100% - 36px)); margin: 0 auto; padding: 70px 0 100px; overflow: visible; }
+.admin-shell h1 { margin: 0; font-family: Georgia, serif; font-size: clamp(44px, 7vw, 76px); font-weight: 400; letter-spacing: -.04em; }
+.admin-intro { margin: 18px 0 42px; color: var(--muted); }
+.admin-list { display: grid; gap: 18px; }
+.admin-card { padding: clamp(22px, 4vw, 38px); border: 1px solid var(--line); background: var(--card); box-shadow: 0 16px 45px rgba(45,55,48,.06); }
+.admin-card-heading { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; padding-bottom: 22px; border-bottom: 1px solid var(--line); }
+.admin-card-heading strong { display: block; font-family: Georgia, serif; font-size: 30px; font-weight: 400; }
+.admin-card-heading span { display: block; margin-top: 5px; color: var(--sage); font-size: 13px; }
+.admin-card-heading code { color: var(--muted); }
+.admin-card dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 30px; margin: 26px 0; }
+.admin-card dl div { min-width: 0; }
+.admin-card dt { margin-bottom: 5px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.admin-card dd { margin: 0; overflow-wrap: anywhere; }
+.admin-card > p { margin: 0; padding-top: 20px; border-top: 1px solid var(--line); line-height: 1.6; white-space: pre-wrap; }
+.admin-empty { padding: 35px; border: 1px solid var(--line); background: var(--card); }
+
 @media (max-width: 920px) {
   .site-header nav { display: none; }
   .intro-section, .taste-section { grid-template-columns: 1fr; gap: 35px; }
@@ -104,4 +121,5 @@ footer { padding: 28px clamp(22px, 5vw, 72px); display: flex; justify-content: s
   form { padding: 25px 20px; }
   .submit-button { width: 100%; min-width: 0; }
   footer { flex-direction: column; }
+  .admin-card dl { grid-template-columns: 1fr; }
 }

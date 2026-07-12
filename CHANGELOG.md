@@ -25,6 +25,8 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
   kiosk/office systemd templates with the verified live Lenovo paths.
 - Raised website intake receiver coverage to 99.2% with raw malformed-length,
   oversized-body, invalid-date, and unresolved-idempotency-race tests.
+- Added a read-only, HTML-escaped staging inquiry viewer that returns `404`
+  publicly and is accessible only through a VPS SSH tunnel.
 - Fast-forwarded the Lenovo production checkout through final audit commit
   `08034ba` after successful CI; no service restart was needed because the
   running production modules were unchanged.

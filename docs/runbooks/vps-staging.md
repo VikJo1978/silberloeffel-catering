@@ -81,6 +81,35 @@ Verify the public URL from a different machine after local health succeeds.
 4. Confirm a green `Gespeichert` message and a test ID.
 5. Verify service health again.
 
+## Private inquiry viewer
+
+The read-only `/admin` page is intentionally loopback-only. A public request
+must receive `404`; do not add Basic Auth over the current plaintext HTTP
+connection.
+
+Open an SSH tunnel from the Mac:
+
+```bash
+ssh -i ~/.ssh/id_ed25519 -N \
+  -L 18080:127.0.0.1:8080 root@185.16.60.69
+```
+
+While that command is running, open:
+
+[http://127.0.0.1:18080/admin](http://127.0.0.1:18080/admin)
+
+The page shows the latest 100 staging submissions and escapes every stored
+field before rendering. It has no delete or production-forward action.
+
+Verify the public denial separately:
+
+```bash
+curl -o /dev/null -sS -w '%{http_code}\n' \
+  http://185.16.60.69:8080/admin
+```
+
+Expected: `404`.
+
 ## Concurrency regression
 
 The server uses `ThreadingHTTPServer`. A stalled browser connection must not
@@ -122,6 +151,7 @@ Do not print full rows if anyone may have entered real contact data by mistake.
 | form returns 429 | wait for the one-minute per-IP rate window |
 | form returns 400 | validate date, name, contact method, and guest count |
 | service cannot write DB | verify owner `catering-staging` on `/var/lib/catering-staging` |
+| admin returns 404 locally | open it through the SSH tunnel, not the public IP |
 
 ## Retirement
 

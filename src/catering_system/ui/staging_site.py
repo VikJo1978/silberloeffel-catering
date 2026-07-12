@@ -7,6 +7,8 @@ submissions are stored in their own SQLite database on the staging host.
 from __future__ import annotations
 
 import argparse
+import html
+import ipaddress
 import json
 import sqlite3
 import threading
@@ -51,6 +53,21 @@ _TEXT_LIMITS = {
     "message": 5000,
 }
 
+_INQUIRY_COLUMNS = (
+    "submission_id",
+    "created_at",
+    "event_date",
+    "time_window_text",
+    "location_text",
+    "guest_count_estimate",
+    "company",
+    "name",
+    "email",
+    "phone",
+    "event_type",
+    "message",
+)
+
 
 class StagingInquiryRepository:
     def __init__(self, db_path: str | Path) -> None:
@@ -84,6 +101,14 @@ class StagingInquiryRepository:
                     inquiry["message"],
                 ),
             )
+
+    def list_recent(self, limit: int = 100) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM staging_inquiries ORDER BY created_at DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+        return [dict(zip(_INQUIRY_COLUMNS, row, strict=True)) for row in rows]
 
 
 class SubmissionRateLimiter:
@@ -179,6 +204,61 @@ def validate_staging_payload(payload: object) -> dict[str, Any]:
     }
 
 
+def is_loopback_client(address: str) -> bool:
+    try:
+        return ipaddress.ip_address(address).is_loopback
+    except ValueError:
+        return False
+
+
+def render_staging_admin(inquiries: list[dict[str, Any]]) -> bytes:
+    def value(inquiry: dict[str, Any], field: str, fallback: str = "—") -> str:
+        raw = inquiry.get(field)
+        return html.escape(str(raw)) if raw not in (None, "") else fallback
+
+    cards = "".join(
+        f"""
+        <article class="admin-card">
+          <div class="admin-card-heading">
+            <div><strong>{value(inquiry, "event_date")}</strong>
+              <span>{value(inquiry, "event_type", "Testanfrage")}</span></div>
+            <code>{value(inquiry, "submission_id")[:8]}</code>
+          </div>
+          <dl>
+            <div><dt>Name</dt><dd>{value(inquiry, "name")}</dd></div>
+            <div><dt>Firma</dt><dd>{value(inquiry, "company")}</dd></div>
+            <div><dt>Kontakt</dt><dd>{value(inquiry, "email")} · {value(inquiry, "phone")}</dd></div>
+            <div><dt>Ort / Zeit</dt><dd>{value(inquiry, "location_text")} · {value(inquiry, "time_window_text")}</dd></div>
+            <div><dt>Gäste</dt><dd>{value(inquiry, "guest_count_estimate")}</dd></div>
+            <div><dt>Gespeichert</dt><dd>{value(inquiry, "created_at")}</dd></div>
+          </dl>
+          <p>{value(inquiry, "message", "Keine Wünsche angegeben.")}</p>
+        </article>
+        """
+        for inquiry in inquiries
+    )
+    if not cards:
+        cards = '<p class="admin-empty">Noch keine Testanfragen gespeichert.</p>'
+    page = f"""<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Silberlöffel — Staging-Anfragen</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body class="admin-body">
+  <main class="admin-shell">
+    <p class="step">Nur über SSH-Tunnel erreichbar</p>
+    <h1>Staging-Anfragen</h1>
+    <p class="admin-intro">Die letzten {len(inquiries)} Testanfragen aus der isolierten VPS-Datenbank.</p>
+    <section class="admin-list">{cards}</section>
+  </main>
+</body>
+</html>"""
+    return page.encode("utf-8")
+
+
 def make_staging_handler(
     repository: StagingInquiryRepository,
     rate_limiter: SubmissionRateLimiter | None = None,
@@ -229,6 +309,15 @@ def make_staging_handler(
                 self._asset("app.js", "text/javascript; charset=utf-8")
             elif self.path == "/healthz":
                 self._json(200, {"status": "ok", "environment": "staging"})
+            elif self.path == "/admin":
+                if not is_loopback_client(self.client_address[0]):
+                    self.send_error(404)
+                    return
+                self._send(
+                    200,
+                    "text/html; charset=utf-8",
+                    render_staging_admin(repository.list_recent()),
+                )
             else:
                 self.send_error(404)
 

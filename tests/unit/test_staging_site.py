@@ -13,6 +13,7 @@ import pytest
 from catering_system.ui.staging_site import (
     SubmissionRateLimiter,
     create_staging_server,
+    is_loopback_client,
     validate_staging_payload,
 )
 
@@ -128,6 +129,32 @@ def test_private_submission_list_is_not_exposed(staging_server) -> None:
     with pytest.raises(urllib.error.HTTPError) as error:
         urllib.request.urlopen(f"{base}/api/inquiries")
     assert error.value.code == 404
+
+
+def test_admin_page_is_loopback_only_and_escapes_stored_text(staging_server) -> None:
+    base, _db_path = staging_server
+    status, _body = _post(
+        base,
+        {**_VALID, "name": "<script>alert(1)</script>", "message": "A & B"},
+    )
+    assert status == 201
+
+    with urllib.request.urlopen(f"{base}/admin") as response:
+        page = response.read().decode()
+
+    assert response.status == 200
+    assert "Staging-Anfragen" in page
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
+    assert "A &amp; B" in page
+    assert "<script>alert(1)</script>" not in page
+
+
+@pytest.mark.parametrize(
+    ("address", "expected"),
+    [("127.0.0.1", True), ("::1", True), ("185.16.60.69", False), ("bad", False)],
+)
+def test_loopback_client_classification(address: str, expected: bool) -> None:
+    assert is_loopback_client(address) is expected
 
 
 def test_stalled_client_does_not_block_other_visitors(staging_server) -> None:
