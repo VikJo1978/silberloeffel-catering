@@ -18,9 +18,10 @@ Production facts:
 - repository: `/home/viktor/projects/silberloeffel-catering`
 - database: `/home/viktor/catering-runtime/core.db`
 - daily backups: `/home/viktor/catering-runtime/backups`
-- production checkout revision verified on 2026-07-12: `ce4d8e3`
-- services were not restarted for that checkout sync; their runtime modules
-  have not changed since the previously running `ad9bafc`
+- production checkout: clean fast-forward of `origin/main`, last verified on
+  2026-07-12; use `git log -1 --oneline` for the current hash
+- services were not restarted for documentation/test/template-only checkout
+  syncs; their runtime modules have not changed since `ad9bafc`
 - `PRAGMA quick_check`: `ok`
 - daily backup cron: 03:15, 14-day retention, `umask 077`
 - manual cron-equivalent backup verified on 2026-07-12: `ok`, mode `600`
