@@ -166,6 +166,115 @@ def test_kiosk_serves_sqlite_like_on_lenovo(tmp_path) -> None:
         server.server_close()
 
 
+# --- /api/order-feed (KIOSK_ORDER_FEED_PACK_V1) ---
+
+
+def test_order_feed_happy_path_exact_shape(kiosk_url: str) -> None:
+    import json
+
+    with urllib.request.urlopen(f"{kiosk_url}/api/order-feed?date=2026-10-01") as resp:
+        assert resp.status == 200
+        assert resp.headers["Content-Type"] == "application/json; charset=utf-8"
+        document = json.loads(resp.read().decode("utf-8"))
+    assert set(document) == {"date", "orders"}
+    assert document["date"] == "2026-10-01"
+    assert len(document["orders"]) == 1
+    order = document["orders"][0]
+    assert set(order) == {
+        "order_id",
+        "event_date",
+        "time_window_text",
+        "location_text",
+        "guest_count_estimate",
+    }
+    assert order["event_date"] == "2026-10-01"
+    assert order["time_window_text"] == "mittags"
+    assert order["location_text"] == "Hamburg"
+    assert order["guest_count_estimate"] == 25
+
+
+def test_order_feed_empty_date_returns_empty_orders(kiosk_url: str) -> None:
+    import json
+
+    with urllib.request.urlopen(f"{kiosk_url}/api/order-feed?date=2026-10-08") as resp:
+        document = json.loads(resp.read().decode("utf-8"))
+    assert document == {"date": "2026-10-08", "orders": []}
+
+
+def test_order_feed_null_guest_count_passes_through() -> None:
+    from catering_system.ui.kiosk_server import render_order_feed_json
+    import json
+
+    repo = _repo_with_effective_order()
+    entries = WochenuebersichtService(repo).get_day_overview(date(2026, 10, 1))
+    from dataclasses import replace
+
+    entries = tuple(replace(e, guest_count_estimate=None) for e in entries)
+    document = json.loads(render_order_feed_json(date(2026, 10, 1), entries))
+    assert document["orders"][0]["guest_count_estimate"] is None
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "",  # missing date
+        "date=",  # empty date
+        "date=2026-10-01&date=2026-10-02",  # duplicated date
+        "date=2026-10-01&foo=bar",  # unknown extra parameter
+        "date=2026-7-4",  # not zero-padded
+        "date=20261001",  # compact ISO rejected
+        "date=2026-10-01T00:00",  # datetime shape
+        "date=2026-10-01x",  # trailing junk
+        "date=2026-02-30",  # impossible calendar date
+    ],
+)
+def test_order_feed_strict_query_contract_rejects(kiosk_url: str, query: str) -> None:
+    url = f"{kiosk_url}/api/order-feed"
+    if query:
+        url = f"{url}?{query}"
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(url)
+    assert exc.value.code == 400
+
+
+def test_order_feed_post_rejected_read_only(kiosk_url: str) -> None:
+    req = urllib.request.Request(
+        f"{kiosk_url}/api/order-feed?date=2026-10-01", data=b"x=1", method="POST"
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(req)
+    assert exc.value.code == 405
+
+
+@pytest.mark.parametrize("method", ["HEAD", "OPTIONS"])
+def test_order_feed_head_and_options_stay_unsupported(
+    kiosk_url: str, method: str
+) -> None:
+    """Pack §3/§6: http.server has no do_HEAD/do_OPTIONS here — the existing
+    501 is documented and deliberately unchanged; a future change must be a
+    conscious one."""
+    req = urllib.request.Request(
+        f"{kiosk_url}/api/order-feed?date=2026-10-01", method=method
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        urllib.request.urlopen(req)
+    assert exc.value.code == 501
+
+
+def test_order_feed_carries_kiosk_security_headers(kiosk_url: str) -> None:
+    with urllib.request.urlopen(f"{kiosk_url}/api/order-feed?date=2026-10-01") as resp:
+        assert resp.headers["Cache-Control"] == "no-store"
+        assert resp.headers["X-Content-Type-Options"] == "nosniff"
+        assert resp.headers["X-Frame-Options"] == "DENY"
+        assert resp.headers["Referrer-Policy"] == "no-referrer"
+
+
+def test_html_route_unchanged_by_feed(kiosk_url: str) -> None:
+    with urllib.request.urlopen(f"{kiosk_url}/?year={_WEEK_YEAR}&week={_WEEK}") as resp:
+        assert resp.status == 200
+        assert resp.headers["Content-Type"].startswith("text/html")
+
+
 def test_kiosk_module_has_no_write_surface() -> None:
     """Pack §3: the kiosk never calls a repository write."""
     from pathlib import Path

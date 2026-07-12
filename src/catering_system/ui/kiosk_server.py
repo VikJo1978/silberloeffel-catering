@@ -8,11 +8,16 @@ from __future__ import annotations
 
 import argparse
 import html
+import json
+import re
 from datetime import date
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from catering_system.domain.wochenuebersicht import Wochenuebersicht
+from catering_system.domain.wochenuebersicht import (
+    Wochenuebersicht,
+    WochenuebersichtEntry,
+)
 from catering_system.repositories.order_repository import OrderRepository
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
 
@@ -74,6 +79,48 @@ th {{ background: #eee; }}
 """
 
 
+_FEED_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def parse_order_feed_date(query: str) -> date | None:
+    """KIOSK_ORDER_FEED_PACK_V1 §3: exactly one parameter, `date`, exactly one
+    strict YYYY-MM-DD value naming a real calendar date — anything else is None
+    (→ 400). Unknown extra parameters are rejected, not ignored."""
+    params = parse_qs(query, keep_blank_values=True)
+    if set(params) != {"date"} or len(params["date"]) != 1:
+        return None
+    raw = params["date"][0]
+    if not _FEED_DATE_RE.fullmatch(raw):
+        return None
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        return None
+
+
+def render_order_feed_json(
+    feed_date: date, entries: tuple[WochenuebersichtEntry, ...]
+) -> bytes:
+    """Pure renderer: per-date entries → courier order feed document (pack §3).
+
+    Exactly the courier app's CoreOrderSummary slice; version numbers,
+    planning mode, and anything customer-identifying stay out."""
+    document = {
+        "date": feed_date.isoformat(),
+        "orders": [
+            {
+                "order_id": e.order_id,
+                "event_date": e.event_date.isoformat(),
+                "time_window_text": e.time_window_text,
+                "location_text": e.location_text,
+                "guest_count_estimate": e.guest_count_estimate,
+            }
+            for e in entries
+        ],
+    }
+    return json.dumps(document, ensure_ascii=False).encode("utf-8")
+
+
 def _requested_week(query: str) -> tuple[int, int]:
     params = parse_qs(query)
     today = date.today().isocalendar()
@@ -107,6 +154,20 @@ def make_kiosk_handler(
 
         def do_GET(self) -> None:  # noqa: N802 (http.server API)
             parsed = urlparse(self.path)
+            if parsed.path == "/api/order-feed":
+                feed_date = parse_order_feed_date(parsed.query)
+                if feed_date is None:
+                    self.send_error(400, "date must be one strict YYYY-MM-DD value")
+                    return
+                payload = render_order_feed_json(
+                    feed_date, service.get_day_overview(feed_date)
+                )
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
             if parsed.path != "/":
                 self.send_error(404)
                 return

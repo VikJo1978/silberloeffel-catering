@@ -137,3 +137,49 @@ def test_overview_read_is_pure() -> None:
     before = repo.get_order(oid)
     week.get_week_overview(_WEEK_YEAR, _WEEK)
     assert repo.get_order(oid) == before
+
+
+# --- get_day_overview (KIOSK_ORDER_FEED_PACK_V1 §4) ---
+
+
+def test_day_overview_includes_only_the_requested_date() -> None:
+    _repo, osvc, core, week = _setup()
+    match = _make_effective_order(osvc, core, date(2026, 10, 1))
+    _make_effective_order(osvc, core, date(2026, 10, 2))  # same ISO week
+    entries = week.get_day_overview(date(2026, 10, 1))
+    assert [e.order_id for e in entries] == [match]
+
+
+def test_day_overview_excludes_cancelled_and_unreleased_orders() -> None:
+    _repo, osvc, core, week = _setup()
+    cancelled = _make_effective_order(osvc, core, date(2026, 10, 1))
+    core.cancel_order(cancelled)
+    osvc.convert_inquiry_to_order(_inquiry(date(2026, 10, 1)))  # no effective version
+    assert week.get_day_overview(date(2026, 10, 1)) == ()
+
+
+def test_day_overview_is_the_date_filtered_subset_of_the_week() -> None:
+    _repo, osvc, core, week = _setup()
+    for day in (1, 1, 2):
+        _make_effective_order(osvc, core, date(2026, 10, day))
+    whole_week = week.get_week_overview(_WEEK_YEAR, _WEEK).entries
+    for day in (date(2026, 10, 1), date(2026, 10, 2), date(2026, 10, 3)):
+        expected = tuple(e for e in whole_week if e.event_date == day)
+        assert week.get_day_overview(day) == expected
+
+
+def test_day_overview_ordering_is_deterministic() -> None:
+    _repo, osvc, core, week = _setup()
+    _make_effective_order(osvc, core, date(2026, 10, 1))
+    _make_effective_order(osvc, core, date(2026, 10, 1))
+    entries = week.get_day_overview(date(2026, 10, 1))
+    keys = [(e.time_window_text, e.order_id) for e in entries]
+    assert keys == sorted(keys)
+
+
+def test_day_overview_read_is_pure() -> None:
+    repo, osvc, core, week = _setup()
+    oid = _make_effective_order(osvc, core, date(2026, 10, 1))
+    before = repo.get_order(oid)
+    week.get_day_overview(date(2026, 10, 1))
+    assert repo.get_order(oid) == before
