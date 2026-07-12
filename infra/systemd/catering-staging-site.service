@@ -1,0 +1,23 @@
+# Isolated public staging site on the VPS. It never writes to production Core.
+
+[Unit]
+Description=Catering inquiry-form staging site
+After=network.target
+
+[Service]
+Type=simple
+User=catering-staging
+Group=catering-staging
+WorkingDirectory=/opt/catering-staging-site
+ExecStart=/usr/bin/python3 /opt/catering-staging-site/staging_site.py --db /var/lib/catering-staging/staging.db --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/catering-staging
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

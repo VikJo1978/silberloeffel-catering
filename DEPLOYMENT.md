@@ -147,6 +147,35 @@ npx wrangler secret put UPSTREAM_TOKEN
   The browser never sees any secret (§8.3), and upstream responses are never
   relayed to the public caller.
 
+## 5. Isolated VPS website preview
+
+The staging site is deliberately separate from the Lenovo and production Core.
+It uses `/var/lib/catering-staging/staging.db`, has no production token, and
+cannot forward inquiries. Until a domain and HTTPS are configured, use only
+invented test contact data.
+
+Copy `staging_site.py`, its sibling `staging_site_assets/` directory, and
+`infra/systemd/catering-staging-site.service` to the VPS. Then install them as
+root:
+
+```bash
+useradd --system --home /var/lib/catering-staging \
+  --shell /usr/sbin/nologin catering-staging
+install -d -o root -g root -m 755 /opt/catering-staging-site
+install -d -o catering-staging -g catering-staging -m 750 \
+  /var/lib/catering-staging
+cp staging_site.py /opt/catering-staging-site/
+cp -R staging_site_assets /opt/catering-staging-site/
+cp catering-staging-site.service /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now catering-staging-site
+curl -fsS http://127.0.0.1:8080/healthz
+```
+
+The current preview listens on public port `8080`. Confirm the provider firewall
+allows that TCP port, then open `http://<vps-ip>:8080/`. Before using real contact
+data, place it behind a domain with HTTPS and add an appropriate privacy notice.
+
 ## Order of bring-up
 
 1. Kiosk on Lenovo against a fresh SQLite db (verify empty week renders).
@@ -155,3 +184,4 @@ npx wrangler secret put UPSTREAM_TOKEN
 3. HubSpot token + one manual `sync_inquiry_from_core` smoke call.
 4. Website receiver on `127.0.0.1:8083`, then the path-restricted Tunnel.
 5. Worker deploy last; flip the Wix form to the worker URL.
+6. VPS staging is independent and may be deployed or removed at any time.

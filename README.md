@@ -15,6 +15,8 @@ office and kitchen HTTP surfaces.
   and proposal preview live in separate modules.
 - `ui/kiosk_server.py` is read-only; `ui/website_intake_endpoint.py` exposes one
   token-protected write route for the Cloudflare Worker.
+- `ui/staging_site.py` serves the portable public-site prototype and stores test
+  submissions in a separate SQLite database; it never writes to production Core.
 
 The many `order_progression_*` records are deliberate, pure projections from
 the frozen Slice B contracts. They do not add independent state or extra write
@@ -44,12 +46,22 @@ Run the read-only kiosk separately:
 .venv/bin/python -m catering_system.ui.kiosk_server --db core.db --port 8082
 ```
 
+Run the isolated website preview locally:
+
+```bash
+.venv/bin/python -m catering_system.ui.staging_site \
+  --db staging.db --host 127.0.0.1 --port 8080
+```
+
+Open `http://127.0.0.1:8080/`. Use fake data only: the staging form is intended
+for design and integration tests and does not forward submissions to Core.
+
 SQLite migrations run automatically when a repository opens the database. Back
 up a production database before deploying a new version; migration validation
 fails startup rather than silently accepting an unknown or inconsistent schema.
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for the Lenovo/systemd, backup, website
-receiver, and Cloudflare Tunnel procedure.
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the Lenovo/systemd, VPS staging, backup,
+website receiver, and Cloudflare Tunnel procedure.
 
 ## Quality checks
 

@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Silberlöffel — Anfrage (Staging)</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="Silberlöffel Startseite">
+      <span class="brand-mark">S</span>
+      <span><strong>Silberlöffel</strong><small>Event Catering Service</small></span>
+    </a>
+    <nav aria-label="Hauptnavigation">
+      <a href="#leistungen">Leistungen</a>
+      <a href="#ueber-uns">Über uns</a>
+      <a href="#ablauf">Ablauf</a>
+      <a href="#anfrage">Anfrage</a>
+    </nav>
+    <span class="staging-pill">STAGING · keine Produktionsdaten</span>
+  </header>
+
+  <main>
+    <section class="hero">
+      <p class="eyebrow">Catering, das zu Ihrem Anlass passt</p>
+      <h1>Erzählen Sie uns<br>von Ihrem Event.</h1>
+      <p class="hero-copy">Ein paar Eckdaten genügen. Diese Testumgebung speichert
+        Ihre Eingabe ausschließlich auf dem Entwicklungsserver.</p>
+      <div class="hero-actions">
+        <a class="primary-link" href="#anfrage">Catering anfragen <span>→</span></a>
+        <a class="secondary-link" href="#leistungen">Leistungen entdecken</a>
+      </div>
+      <div class="hero-facts" aria-label="Vorteile">
+        <span>Persönliche Beratung</span><span>Individuelle Planung</span><span>Hamburg &amp; Umgebung</span>
+      </div>
+    </section>
+
+    <section class="intro-section" id="ueber-uns">
+      <div>
+        <p class="step">Silberlöffel Event Catering</p>
+        <h2>Gastlichkeit, die in Erinnerung bleibt.</h2>
+      </div>
+      <div class="intro-copy">
+        <p>Von der ersten Idee bis zum letzten Handgriff entwickeln wir Catering,
+          das zum Anlass, zu den Gästen und zur Atmosphäre passt.</p>
+        <p>Persönlich geplant, zuverlässig umgesetzt und mit einem sicheren Gespür
+          für Geschmack, Timing und Details.</p>
+      </div>
+    </section>
+
+    <section class="services-section" id="leistungen">
+      <div class="section-heading">
+        <p class="step">Was wir gestalten</p>
+        <h2>Catering für besondere Momente</h2>
+      </div>
+      <div class="service-grid">
+        <article class="service-card service-card-dark">
+          <span>01</span><h3>Business &amp; Corporate</h3>
+          <p>Empfänge, Meetings, Tagungen und Firmenfeste — professionell,
+            pünktlich und passend zu Ihrer Marke.</p>
+        </article>
+        <article class="service-card service-card-warm">
+          <span>02</span><h3>Private Feiern</h3>
+          <p>Geburtstage, Jubiläen und Familienfeste mit einer persönlichen
+            Menüidee und entspannter Gastgeberrolle.</p>
+        </article>
+        <article class="service-card service-card-light">
+          <span>03</span><h3>Hochzeiten &amp; Empfänge</h3>
+          <p>Vom stilvollen Empfang bis zum gemeinsamen Dinner — individuell
+            geplant und aufmerksam begleitet.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="taste-section">
+      <div class="taste-visual" aria-hidden="true"><span>Fein</span><span>Frisch</span><span>Festlich</span></div>
+      <div class="taste-copy">
+        <p class="step">Unser Anspruch</p>
+        <h2>Ein Konzept statt eines Standardmenüs.</h2>
+        <p>Wir denken Speisen, Präsentation und Ablauf gemeinsam. So entsteht ein
+          stimmiges Erlebnis — vom ersten Glas bis zum letzten Dessert.</p>
+        <ul><li>Saisonale und sorgfältig ausgewählte Zutaten</li><li>Flexible Menü- und Buffetkonzepte</li><li>Klare Planung und persönliche Abstimmung</li></ul>
+      </div>
+    </section>
+
+    <section class="process-section" id="ablauf">
+      <div class="section-heading">
+        <p class="step">So arbeiten wir</p>
+        <h2>Von der Anfrage zum Event</h2>
+      </div>
+      <div class="process-grid">
+        <article><strong>01</strong><h3>Erzählen</h3><p>Sie senden uns Datum, Anlass, Gästezahl und erste Wünsche.</p></article>
+        <article><strong>02</strong><h3>Planen</h3><p>Wir klären die Details und entwickeln einen passenden Vorschlag.</p></article>
+        <article><strong>03</strong><h3>Genießen</h3><p>Am Veranstaltungstag greifen Küche, Service und Ablauf ineinander.</p></article>
+      </div>
+    </section>
+
+    <section class="form-section" id="anfrage">
+      <div class="section-heading">
+        <p class="step">01 — Ihre Anfrage</p>
+        <h2>Die wichtigsten Eckdaten</h2>
+        <p>Pflichtfelder sind mit * markiert. E-Mail oder Telefon genügt als Kontaktweg.</p>
+      </div>
+
+      <form id="inquiry-form">
+        <label class="bot-field" aria-hidden="true">Website
+          <input name="website" tabindex="-1" autocomplete="off">
+        </label>
+        <fieldset>
+          <legend>Anlass</legend>
+          <div class="field-grid">
+            <label>Datum *<input type="date" name="event_date" required></label>
+            <label>Art des Events
+              <select name="event_type">
+                <option value="">Bitte wählen</option>
+                <option>Business Event</option><option>Hochzeit</option>
+                <option>Geburtstag</option><option>Empfang</option><option>Sonstiges</option>
+              </select>
+            </label>
+            <label>Zeitfenster<input name="time_window_text" maxlength="500" placeholder="z. B. 18:00–23:00"></label>
+            <label>Gäste (ca.)<input type="number" name="guest_count_estimate" min="1" max="5000" inputmode="numeric"></label>
+            <label class="wide">Ort<input name="location_text" maxlength="500" placeholder="Location oder Stadtteil"></label>
+          </div>
+        </fieldset>
+
+        <fieldset>
+          <legend>Kontakt</legend>
+          <div class="field-grid">
+            <label>Name *<input name="name" maxlength="500" autocomplete="name" required></label>
+            <label>Firma<input name="company" maxlength="500" autocomplete="organization"></label>
+            <label>E-Mail<input type="email" name="email" maxlength="500" autocomplete="email"></label>
+            <label>Telefon<input name="phone" maxlength="500" autocomplete="tel"></label>
+          </div>
+          <p class="hint">Bitte mindestens E-Mail oder Telefon angeben.</p>
+        </fieldset>
+
+        <fieldset>
+          <legend>Wünsche</legend>
+          <label>Was dürfen wir für Sie planen?
+            <textarea name="message" maxlength="5000" rows="6" placeholder="Menüwünsche, Allergien, Ablauf oder besondere Ideen …"></textarea>
+          </label>
+        </fieldset>
+
+        <div id="form-status" class="form-status" role="status" aria-live="polite"></div>
+        <button class="submit-button" type="submit">Testanfrage speichern <span>→</span></button>
+        <p class="privacy-note">Nur Staging: keine Weiterleitung an Lenovo, CRM oder den echten Cateringbetrieb.</p>
+      </form>
+    </section>
+
+  </main>
+
+  <footer><span>Silberlöffel Event Catering Service · Hamburg</span><span>Staging-Vorschau · Kontaktdaten folgen</span></footer>
+</body>
+</html>
