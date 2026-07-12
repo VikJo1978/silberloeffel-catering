@@ -118,6 +118,13 @@ storage. Ensure the entire Mac directory below has a second encrypted backup:
 
 Without it the encrypted off-host database cannot be recovered.
 
+Verified on 2026-07-12: an AES-256 recovery archive was created, decrypted into
+a temporary isolated keyring, and matched to fingerprint
+`4B5A450EDBA68B78D9E519C2A5C4DE7E0D836610`. The owner confirmed an off-device
+email copy. Its independent random password is stored in macOS Keychain under
+`Silberloeffel Recovery Archive 2026-07-12`; the password is not stored in the
+email, repository, Lenovo, or VPS.
+
 ### Manual off-host run
 
 ```bash

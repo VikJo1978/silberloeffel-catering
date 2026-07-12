@@ -8,6 +8,7 @@ htmlcov/
 .venv/
 venv/
 .env
+.claude/
 *.db
 *.sqlite
 *.sqlite3

@@ -68,8 +68,9 @@ Run the isolated website preview:
 node --test infra/cloudflare_worker/sanitize.test.mjs
 ```
 
-GitHub Actions runs the same checks. The current baseline is 390 Python tests
-with coverage above the enforced 90% threshold.
+GitHub Actions runs the same checks and enforces coverage above 90%. See
+[Current status](docs/current-status.md) or the latest CI run for the current
+test count instead of duplicating a number here.
 
 ## Non-negotiable boundaries
 

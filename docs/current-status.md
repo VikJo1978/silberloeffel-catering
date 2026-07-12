@@ -44,14 +44,19 @@ Staging facts:
 - Cloudflare Worker sanitizer tests: clean
 - CI: GitHub Actions on every push and pull request
 
+## Verified recovery controls
+
+Recovery-key protection verified on 2026-07-12:
+
+- working private key remains on the Mac only;
+- a separately password-protected AES-256 recovery archive was created and
+  restore-tested;
+- the owner confirmed an off-device email copy;
+- the archive password is stored separately in macOS Keychain and was cleared
+  from the clipboard;
+- no private key or archive password is present in Git, Lenovo, or VPS.
+
 ## Operational risks
-
-### High — recovery private key needs a second protected copy
-
-Encrypted off-host backup and restore are proven. Its private recovery key is
-deliberately present only on the Mac, not Lenovo or VPS. Confirm that
-`~/.config/silberloeffel-backup/gnupg` is covered by an encrypted personal
-backup; losing that directory would make the VPS copies undecryptable.
 
 ### High — production is not yet connected to the public website
 
@@ -68,8 +73,7 @@ before restart.
 
 ## Next milestones
 
-1. Confirm a protected second copy of the GPG recovery key.
-2. Obtain access to the real Silberlöffel website.
-3. Configure a TLS-protected public intake path through Cloudflare.
-4. Port the approved staging form into the real site.
-5. Perform an end-to-end test from public form to office panel.
+1. Obtain access to the real Silberlöffel website.
+2. Configure a TLS-protected public intake path through Cloudflare.
+3. Port the approved staging form into the real site.
+4. Perform an end-to-end test from public form to office panel.

@@ -16,6 +16,11 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
 - Completed a restore drill by downloading the VPS ciphertext to the Mac,
   decrypting with a Mac-only recovery key, and verifying SQLite integrity and
   production row counts.
+- Created and restore-tested an independently password-protected AES-256
+  recovery-key archive; the owner confirmed an off-device copy with its
+  password stored separately.
+- Stopped hardcoding the test count in README and ignored the operator-owned
+  `.claude/` directory to prevent accidental commits.
 
 ## 2026-07-12
 
