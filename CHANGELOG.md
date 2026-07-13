@@ -9,6 +9,8 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
   staging form now exercises an already-connected office queue, the Lenovo
   courier checkout is recorded at `18b3633`, and replacement-site work is
   explicitly deferred by the owner.
+- Updated the CI bootstrap actions to their current Node.js 24-compatible
+  major versions, removing GitHub's Node.js 20 deprecation warning.
 - Added and activated a fail-closed staging-to-Core Inquiry bridge: the VPS backend
   forwards namespaced fake submissions through an exact loopback URL over a
   restricted reverse-SSH tunnel, with a server-only bearer, redirect refusal,
