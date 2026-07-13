@@ -294,3 +294,93 @@ def test_kiosk_module_has_no_write_surface() -> None:
         ".update(",
     ):
         assert forbidden not in source
+
+
+# --- pickup signal wiring (KIOSK_PICKUP_SIGNAL_PACK_V1) ---
+
+
+def test_kiosk_page_has_no_signal_artifacts_when_dormant(kiosk_url: str) -> None:
+    """Dormant mode: no section, no muted line — the page is exactly the
+    pre-feature page (the fixture passes no refresher)."""
+    with urllib.request.urlopen(f"{kiosk_url}/?year={_WEEK_YEAR}&week={_WEEK}") as r:
+        body = r.read().decode("utf-8")
+    assert "Abholungen" not in body
+    assert "Kurier-App" not in body
+
+
+def test_kiosk_page_shows_pickup_section_from_fresh_cache() -> None:
+    from datetime import date as date_type
+
+    from catering_system.ui.pickup_signal import (
+        OverduePickup,
+        PickupItem,
+        PickupSignalDocument,
+        PickupSignalRefresher,
+        berlin_today,
+    )
+
+    document = PickupSignalDocument(
+        date=berlin_today(),
+        total_count=1,
+        truncated=False,
+        pickups=(
+            OverduePickup(
+                location_text="Musterstraße 1, Hamburg",
+                event_date=date_type(2026, 7, 10),
+                items=(PickupItem("Platten", 5),),
+                courier_name="Max",
+            ),
+        ),
+    )
+    refresher = PickupSignalRefresher(
+        "http://unused",
+        "unused",
+        fetch=lambda *a: document,
+        log=lambda line: None,
+    )
+    refresher.refresh_once()
+
+    repo = _repo_with_effective_order()
+    server = create_kiosk_server(repo, "127.0.0.1", 0, pickup_signal=refresher)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    try:
+        with urllib.request.urlopen(f"http://{host}:{port}/") as resp:
+            body = resp.read().decode("utf-8")
+        assert "Abholungen — Geschirr steht noch beim Kunden" in body
+        assert "Musterstraße 1, Hamburg" in body
+        assert "Platten ×5" in body
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_kiosk_refuses_half_configured_pickup_signal(tmp_path) -> None:
+    """URL without token (and vice versa) must be a startup error — the
+    feature cannot be enabled unauthenticated (pack §5.1)."""
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ)
+    env["PICKUP_SIGNAL_URL"] = "http://127.0.0.1:1/api/overdue-pickups"
+    env.pop("PICKUP_SIGNAL_TOKEN", None)
+    env["PYTHONPATH"] = "src"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "catering_system.ui.kiosk_server",
+            "--db",
+            str(tmp_path / "x.db"),
+            "--port",
+            "0",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode != 0
+    assert "PICKUP_SIGNAL_TOKEN" in result.stderr

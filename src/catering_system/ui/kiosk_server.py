@@ -20,6 +20,10 @@ from catering_system.domain.wochenuebersicht import (
 )
 from catering_system.repositories.order_repository import OrderRepository
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
+from catering_system.ui.pickup_signal import (
+    PickupSignalRefresher,
+    render_pickup_signal_section,
+)
 
 _WEEKDAYS_DE = (
     "Montag",
@@ -32,8 +36,15 @@ _WEEKDAYS_DE = (
 )
 
 
-def render_wochenuebersicht_html(view: Wochenuebersicht) -> str:
-    """Pure renderer: Wochenübersicht read model → kitchen-display HTML."""
+def render_wochenuebersicht_html(
+    view: Wochenuebersicht, pickup_section: str = ""
+) -> str:
+    """Pure renderer: Wochenübersicht read model → kitchen-display HTML.
+
+    `pickup_section` is a pre-rendered, pre-escaped HTML fragment from
+    pickup_signal.render_pickup_signal_section; empty when the signal
+    feature is dormant (page stays byte-identical to before the feature).
+    """
     rows: list[str] = []
     for e in view.entries:
         weekday = _WEEKDAYS_DE[e.event_date.weekday()]
@@ -74,6 +85,7 @@ th {{ background: #eee; }}
 <tr><th>Tag</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th><th>Version</th></tr>
 {body}
 </table>
+{pickup_section}
 </body>
 </html>
 """
@@ -135,6 +147,7 @@ def _requested_week(query: str) -> tuple[int, int]:
 
 def make_kiosk_handler(
     order_repository: OrderRepository,
+    pickup_signal: PickupSignalRefresher | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     service = WochenuebersichtService(order_repository)
 
@@ -173,7 +186,14 @@ def make_kiosk_handler(
                 self.send_error(404)
                 return
             year, week = _requested_week(parsed.query)
-            page = render_wochenuebersicht_html(service.get_week_overview(year, week))
+            pickup_section = (
+                render_pickup_signal_section(pickup_signal.snapshot())
+                if pickup_signal is not None
+                else ""
+            )
+            page = render_wochenuebersicht_html(
+                service.get_week_overview(year, week), pickup_section
+            )
             payload = page.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -196,28 +216,61 @@ def make_kiosk_handler(
 
 
 def create_kiosk_server(
-    order_repository: OrderRepository, host: str = "0.0.0.0", port: int = 8080
+    order_repository: OrderRepository,
+    host: str = "0.0.0.0",
+    port: int = 8080,
+    pickup_signal: PickupSignalRefresher | None = None,
 ) -> HTTPServer:
     # Single-threaded on purpose: the shared sqlite3 connection must stay on the
     # thread that serves requests (bring-up bug, WORKLOG Entry 048). A read-only
-    # display with one client does not need request threading.
-    return HTTPServer((host, port), make_kiosk_handler(order_repository))
+    # display with one client does not need request threading. The pickup-signal
+    # refresher is a separate thread but touches no SQLite.
+    return HTTPServer((host, port), make_kiosk_handler(order_repository, pickup_signal))
 
 
 def main() -> None:
+    import os
+
     parser = argparse.ArgumentParser(description="Read-only kitchen kiosk display")
     parser.add_argument("--db", required=True, help="Path to the Core SQLite database")
     parser.add_argument("--port", type=int, default=8080)
     parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument(
+        "--pickup-signal-url",
+        default=os.environ.get("PICKUP_SIGNAL_URL", ""),
+        help="Courier-app overdue-pickup feed URL (loopback in production). "
+        "The bearer token comes ONLY from the PICKUP_SIGNAL_TOKEN environment "
+        "variable — never from an argument (pack §5.1). Empty + empty token: "
+        "the feature is dormant.",
+    )
     args = parser.parse_args()
+
+    signal_url = args.pickup_signal_url
+    signal_token = os.environ.get("PICKUP_SIGNAL_TOKEN", "")
+    if bool(signal_url) != bool(signal_token):
+        raise SystemExit(
+            "pickup signal needs PICKUP_SIGNAL_URL and PICKUP_SIGNAL_TOKEN "
+            "together; refusing to start half-configured"
+        )
+    pickup_signal = (
+        PickupSignalRefresher(signal_url, signal_token) if signal_url else None
+    )
 
     from catering_system.repositories.sqlite_order_repository import (
         SQLiteOrderRepository,
     )
 
-    server = create_kiosk_server(SQLiteOrderRepository(args.db), args.host, args.port)
+    server = create_kiosk_server(
+        SQLiteOrderRepository(args.db), args.host, args.port, pickup_signal
+    )
+    if pickup_signal is not None:
+        pickup_signal.start()
     print(f"Kitchen kiosk (read-only) on http://{args.host}:{args.port}/")
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        if pickup_signal is not None:
+            pickup_signal.stop()
 
 
 if __name__ == "__main__":

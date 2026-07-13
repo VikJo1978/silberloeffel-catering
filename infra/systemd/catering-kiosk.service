@@ -9,6 +9,9 @@ Type=simple
 User=viktor
 WorkingDirectory=/home/viktor/projects/silberloeffel-catering
 Environment=PYTHONPATH=/home/viktor/projects/silberloeffel-catering/src
+# Root-owned, mode 600. Holds PICKUP_SIGNAL_URL and PICKUP_SIGNAL_TOKEN —
+# both empty until the courier app is live on this host (pack §6).
+EnvironmentFile=-/etc/catering/kiosk.env
 ExecStart=/usr/bin/python3 -m catering_system.ui.kiosk_server --db /home/viktor/catering-runtime/core.db --port 8082
 Restart=on-failure
 RestartSec=3
