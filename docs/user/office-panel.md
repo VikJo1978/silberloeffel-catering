@@ -40,6 +40,17 @@ by the office panel. Until the staging URL has HTTPS, treat every such record as
 test data. A website Inquiry remains blocked from conversion until the office
 has completed the displayed telephone-verification step.
 
+## Prepare an offer from an inquiry
+
+When the separate configurator is deployed and linked, the Inquiry detail page
+shows **Angebot mit Anfragedaten vorbereiten**. It opens an editable offer draft
+with the known company/contact/event values already filled in.
+
+Review every imported value. This action creates no Order, does not satisfy
+verification, does not send anything to the customer, and does not make the
+offer operational truth. If the guest count was unknown, the configurator keeps
+its editable default instead of inventing a Core fact.
+
 ## Convert an inquiry to an order
 
 Conversion is available only when the inquiry's verification gate is satisfied.

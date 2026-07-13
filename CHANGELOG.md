@@ -18,6 +18,11 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
   browser-side contact-pair validation, a bounded request timeout, preserved
   retry state and entered values on failure, and stable German error messages
   now have their own JavaScript CI tests.
+- Added a dormant, read-only Inquiry-to-offer prefill handoff: the office panel
+  can open the separate configurator with known contact and event values in an
+  editable draft, without creating an Order or writing proposal data into Core.
+- Preserved both company and contact name in future website Inquiry context;
+  previously the short subject kept the company while the name was lost.
 - Added and activated a fail-closed staging-to-Core Inquiry bridge: the VPS backend
   forwards namespaced fake submissions through an exact loopback URL over a
   restricted reverse-SSH tunnel, with a server-only bearer, redirect refusal,

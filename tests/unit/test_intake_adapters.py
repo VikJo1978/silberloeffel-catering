@@ -329,6 +329,7 @@ def test_website_form_happy_path_uses_create_inquiry_and_source() -> None:
                 "location_text": "Musterstraße 1, München",
                 "time_window_text": "abends",
                 "company": "Musterfirma GmbH",
+                "name": "Herr Beispiel",
                 "event_type": "Firmenfeier",
                 "phone": "0151 2345678",
                 "email": "info@musterfirma.de",
@@ -344,7 +345,12 @@ def test_website_form_happy_path_uses_create_inquiry_and_source() -> None:
     assert q.time_window_text == "abends"
     assert q.intake_subject == "Musterfirma GmbH — Firmenfeier"
     assert q.intake_message == (
-        "Telefon: 0151 2345678\nE-Mail: info@musterfirma.de\nWunsch: Bitte Rückruf vor Lieferung."
+        "Firma: Musterfirma GmbH\n"
+        "Name: Herr Beispiel\n"
+        "Veranstaltungsart: Firmenfeier\n"
+        "Telefon: 0151 2345678\n"
+        "E-Mail: info@musterfirma.de\n"
+        "Wunsch: Bitte Rückruf vor Lieferung."
     )
     assert q.intake_summary == f"Website-Anfrage — 25 Personen, {_D.isoformat()}"
     assert q.intake_external_ref == "web-42"
@@ -359,6 +365,7 @@ def test_website_form_uses_name_when_company_absent() -> None:
     svc = InquiryService(repo)
     q = intake_from_website_form(svc, {"event_date": _D, "name": "Frau Muster"})
     assert q.intake_subject == "Frau Muster"
+    assert q.intake_message == "Name: Frau Muster"
 
 
 def test_website_form_no_contact_info_still_creates_inquiry() -> None:

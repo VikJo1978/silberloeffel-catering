@@ -79,16 +79,26 @@ Form staging facts:
 - Core forwarding health: `core_forwarding: true`; receiver, reverse tunnel,
   and staging services were all active after the E2E proof
 - no domain and no TLS; fake data only
+- form UX hardening is live: contact-pair precheck, 12-second timeout, stable
+  German errors, and retry-safe preservation of entered values are deployed
+
+Offer workflow development:
+
+- the accepted `Inquiry → Angebot` direction is a read-only prefill into the
+  separate configurator; no prices, offer drafts, or automatic customer sends
+  become Core truth
+- the handoff remains dormant until the configurator is deployed and
+  `CONFIGURATOR_URL` is set on the office panel
 
 ## Quality baseline
 
-- Python tests: **491 passed**
+- Python tests: **500 passed**
 - coverage gate: **90% minimum**; last local result above the gate
 - last full-project coverage: **92.6%**
 - website intake receiver coverage: **99.2%**
 - Ruff: clean
 - Mypy: clean
-- Cloudflare Worker sanitizer tests: clean
+- staging-form browser tests and Cloudflare Worker sanitizer tests: clean
 - CI: GitHub Actions on every push and pull request
 
 ## Verified recovery controls

@@ -32,6 +32,10 @@ from catering_system.ui.office_panel_proposal import (
     render_proposal_preview,
     render_proposal_preview_form,
 )
+from catering_system.ui.office_panel_offer_prefill import (
+    build_offer_prefill_url,
+    normalize_configurator_url,
+)
 from catering_system.ui.office_panel_views import (
     CALL_VERIFICATION_STATUS_LABELS,
     PROGRESSION_BLOCKER_LABELS,
@@ -192,6 +196,7 @@ class OfficePanel:
         inquiry_repo: InquiryRepository,
         order_repo: OrderRepository,
         kiosk_url: str = "",
+        configurator_url: str = "",
     ) -> None:
         self._inquiries = inquiry_repo
         self._orders = order_repo
@@ -207,6 +212,10 @@ class OfficePanel:
         # it). Empty -> no link shown, same graceful-degrade convention as
         # the Rückrufe integration.
         self.kiosk_url = kiosk_url
+        # Optional read-only handoff to the separate proposal-phase editor.
+        # The payload travels in a URL fragment (never an HTTP request) and
+        # opening it performs no Core write.
+        self.configurator_url = normalize_configurator_url(configurator_url)
 
     def _next_step_action(
         self,
@@ -708,6 +717,17 @@ class OfficePanel:
             if inq.inquiry_source == "website_form"
             else ""
         )
+        offer_prefill = ""
+        if self.configurator_url:
+            offer_url = build_offer_prefill_url(self.configurator_url, inq)
+            offer_prefill = (
+                "<h2>Angebot</h2>"
+                f'<p><a href="{_e(offer_url)}"><strong>Angebot mit '
+                "Anfragedaten vorbereiten →</strong></a></p>"
+                '<p class="subtitle">Füllt nur einen bearbeitbaren '
+                "Angebotsentwurf vor. Kein Auftrag, keine Freigabe und keine "
+                "Nachricht an den Kunden.</p>"
+            )
         body = (
             website_banner
             + f"""<table>
@@ -721,6 +741,7 @@ class OfficePanel:
 {intake_rows}</table>
 <h2>Vorgangsprüfung (Progression)</h2>{prog}
 <p>{verify_btn}{convert}</p>
+{offer_prefill}
 <h2>Anfrage bearbeiten</h2>
 <form method="post" action="/inquiry/{_e(inquiry_id)}/update">{_csrf_input(context)}<fieldset>
 <p><label>Datum</label><input type="date" name="event_date" value="{_e(inq.event_date.isoformat())}"></p>
@@ -869,6 +890,7 @@ def make_office_panel_handler(
     auerswald_user: str = "",
     auerswald_password: str = "",
     kiosk_url: str = "",
+    configurator_url: str = "",
 ) -> type[BaseHTTPRequestHandler]:
     """Compatibility wrapper; HTTP routing lives in office_panel_http."""
     from catering_system.ui.office_panel_http import (
@@ -883,6 +905,7 @@ def make_office_panel_handler(
         auerswald_user,
         auerswald_password,
         kiosk_url,
+        configurator_url,
     )
 
 
@@ -896,6 +919,7 @@ def create_office_panel_server(
     auerswald_user: str = "",
     auerswald_password: str = "",
     kiosk_url: str = "",
+    configurator_url: str = "",
 ) -> HTTPServer:
     """Compatibility wrapper; server construction lives in office_panel_http."""
     from catering_system.ui.office_panel_http import (
@@ -912,6 +936,7 @@ def create_office_panel_server(
         auerswald_user,
         auerswald_password,
         kiosk_url,
+        configurator_url,
     )
 
 
@@ -949,6 +974,12 @@ def main() -> None:
         help="Base URL of the separate kitchen kiosk (or set KIOSK_URL) — "
         "single source of truth for the optional 'full week' deep link, optional",
     )
+    parser.add_argument(
+        "--configurator-url",
+        default=os.environ.get("CONFIGURATOR_URL", ""),
+        help="Base URL of the separate offer configurator (or set "
+        "CONFIGURATOR_URL); empty keeps Inquiry-to-offer prefill dormant",
+    )
     args = parser.parse_args()
     if not args.password:
         raise SystemExit(
@@ -973,6 +1004,7 @@ def main() -> None:
         args.auerswald_user,
         args.auerswald_password,
         args.kiosk_url,
+        args.configurator_url,
     )
     print(f"Office panel on http://{args.host}:{args.port}/ (user: office)")
     server.serve_forever()

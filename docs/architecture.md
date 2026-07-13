@@ -9,6 +9,7 @@ flowchart LR
     Receiver --> Core[("Core SQLite\nLenovo · core.db")]
 
     Office["Office panel\nLAN · :8081"] --> Core
+    Office -. "versioned read-only prefill\nURL fragment" .-> Configurator["Offer configurator\nproposal-phase editor"]
     Core --> Kiosk["Kitchen kiosk\nread-only · :8082"]
     Courier["Courier app\nLAN/Tailscale · :8090"] --> CourierDB[("Courier SQLite\ncourier.db")]
     Courier -->|"GET order feed"| Kiosk
@@ -37,6 +38,11 @@ The courier app is also a separate bounded system with its own database. It
 never reads or writes Core directly: it reads released order summaries from
 the kiosk, while the kiosk reads outstanding equipment returns from the
 courier app. Both cross-system routes are read-only.
+
+The optional Inquiry-to-offer handoff copies known Core Inquiry values into the
+separate configurator's editable in-memory draft. Its versioned envelope travels
+in a URL fragment, which the configurator validates and immediately removes.
+This creates no Order and gives no proposal data operational authority.
 
 ## Layers
 

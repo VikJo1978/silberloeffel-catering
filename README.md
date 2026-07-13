@@ -66,6 +66,7 @@ Run the isolated website preview:
 .venv/bin/mypy src/catering_system
 .venv/bin/coverage run -m pytest -q
 .venv/bin/coverage report
+node --test infra/staging-form/app.test.cjs
 node --test infra/cloudflare_worker/sanitize.test.mjs
 ```
 

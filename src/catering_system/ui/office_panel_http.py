@@ -50,8 +50,9 @@ def make_office_panel_handler(
     auerswald_user: str = "",
     auerswald_password: str = "",
     kiosk_url: str = "",
+    configurator_url: str = "",
 ) -> type[BaseHTTPRequestHandler]:
-    panel = OfficePanel(inquiry_repo, order_repo, kiosk_url)
+    panel = OfficePanel(inquiry_repo, order_repo, kiosk_url, configurator_url)
     expected = "Basic " + base64.b64encode(f"office:{password}".encode()).decode()
     csrf_token = csrf_token_for_password(password)
 
@@ -325,6 +326,7 @@ def create_office_panel_server(
     auerswald_user: str = "",
     auerswald_password: str = "",
     kiosk_url: str = "",
+    configurator_url: str = "",
 ) -> HTTPServer:
     """Create the intentionally single-threaded office HTTP server."""
     return HTTPServer(
@@ -337,5 +339,6 @@ def create_office_panel_server(
             auerswald_user,
             auerswald_password,
             kiosk_url,
+            configurator_url,
         ),
     )

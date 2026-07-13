@@ -123,7 +123,7 @@ browser submission starts and reuse it for retries.
 | Public information | Inquiry field |
 |---|---|
 | company/name + event type | `intake_subject` |
-| phone, email, message | labelled lines in `intake_message` |
+| company, name, event type, phone, email, message | labelled lines in `intake_message` |
 | guest count + date | generated `intake_summary` |
 | submission ID | `intake_external_ref` |
 | channel | `inquiry_source = website_form` |
@@ -131,6 +131,10 @@ browser submission starts and reuse it for retries.
 
 Public contact fields are not invented as structured customer linkage. They
 remain intake context until office verification.
+
+Keeping both company and name in the labelled context is intentional: the
+short subject prefers the company, while the office offer-prefill handoff still
+needs the contact person's name.
 
 ## Staging form API
 

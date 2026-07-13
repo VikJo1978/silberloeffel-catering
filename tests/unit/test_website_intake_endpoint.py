@@ -96,6 +96,7 @@ _VALID_PAYLOAD = {
     "location_text": "Musterstraße 1, München",
     "time_window_text": "abends",
     "company": "Musterfirma GmbH",
+    "name": "Herr Beispiel",
     "event_type": "Firmenfeier",
     "phone": "0151 2345678",
     "email": "info@musterfirma.de",
@@ -121,6 +122,9 @@ def test_valid_post_creates_exactly_one_inquiry(server) -> None:
     assert q.location_text == "Musterstraße 1, München"
     assert q.time_window_text == "abends"
     assert q.intake_subject == "Musterfirma GmbH — Firmenfeier"
+    assert "Firma: Musterfirma GmbH" in q.intake_message
+    assert "Name: Herr Beispiel" in q.intake_message
+    assert "Veranstaltungsart: Firmenfeier" in q.intake_message
     assert "Telefon: 0151 2345678" in q.intake_message
     assert "E-Mail: info@musterfirma.de" in q.intake_message
     assert "Wunsch: Bitte Rückruf vor Lieferung." in q.intake_message

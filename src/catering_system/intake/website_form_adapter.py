@@ -118,10 +118,15 @@ def _intake_from_website_form_body(
         _truncate(" — ".join(subject_parts), _MAX_SUBJECT_LEN) if subject_parts else ""
     )
 
-    # intake_message: contact details + free-form wishes, labeled lines
-    # (pack §4/§1.6) — never customer_linkage, never a fake contact field.
+    # intake_message: complete labelled public-form context. Keeping both
+    # company and name here avoids losing the contact name when the shorter
+    # intake_subject prefers the company. These remain intake context, never
+    # customer_linkage or invented structured Core customer fields.
     message_lines: list[str] = []
     for key, label in (
+        ("company", "Firma"),
+        ("name", "Name"),
+        ("event_type", "Veranstaltungsart"),
         ("phone", "Telefon"),
         ("email", "E-Mail"),
         ("message", "Wunsch"),
