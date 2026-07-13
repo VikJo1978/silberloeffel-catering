@@ -5,20 +5,20 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
 
 ## Unreleased
 
-- Implemented the kiosk pickup-signal display (frozen in
-  `docs/proposals/KIOSK_PICKUP_SIGNAL_PACK_V1.md`): a background refresher
+- Implemented and activated the kiosk pickup-signal display (archived in
+  `docs/archive/packs/KIOSK_PICKUP_SIGNAL_PACK_V1.md`): a background refresher
   reads the courier app's authenticated `/api/overdue-pickups` feed into a
   cache and the kiosk shows open equipment returns under the week table.
-  Ships **dormant** — without `PICKUP_SIGNAL_URL` and `PICKUP_SIGNAL_TOKEN`
-  no request is made and the page is byte-identical (pinned by a golden
-  test). The dormant kiosk side was deployed to the Lenovo on 2026-07-13;
-  courier-app was subsequently deployed as an enabled user service on port
-  `8090` and both directions passed an isolated end-to-end smoke test. Only
-  the privileged production-kiosk env/unit activation remains pending.
+  The courier app runs as an enabled user service on port `8090`; the
+  production kiosk uses a root-owned mode-`600` environment file and loopback
+  URL. Activation on 2026-07-13 passed authenticated refresh, `200`/`401`
+  route gates, process-secret, service-health, and both-database integrity
+  checks. Without both variables the feature remains safely dormant and its
+  HTML remains byte-identical, as pinned by a golden test.
 - Published courier-app with its full history to the private
   `VikJo1978/courier-app` repository and added an independent GitHub Actions
-  quality gate; Lenovo was advanced to the same source revision without a
-  service restart.
+  quality gate; registered and verified a dedicated read-only Lenovo deploy
+  key and advanced the host to the same source revision.
 - Added a read-only JSON order feed to the kitchen kiosk
   (`GET /api/order-feed?date=YYYY-MM-DD`) for the separate courier app, with
   a strict query contract and the same release gates as the Wochenübersicht

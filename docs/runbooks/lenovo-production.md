@@ -70,17 +70,16 @@ stored only on the Lenovo.
 
 Source is published in the private `VikJo1978/courier-app` repository. Lenovo
 uses the dedicated key `/home/viktor/.ssh/courier_app_github` for read-only
-deploy access; register its `.pub` half as a GitHub deploy key with write
+deploy access. Its public half is registered as a GitHub deploy key with write
 access disabled. The repository-local `core.sshCommand` pins that identity so
 updates do not depend on a personal account key.
 
-The kiosk can display open equipment returns read from the courier app
-(`docs/proposals/KIOSK_PICKUP_SIGNAL_PACK_V1.md`). The feature is **dormant
-by default**: deploying the kiosk without `/etc/catering/kiosk.env` (or with
-both variables empty) changes nothing — no request is made and the page is
-byte-identical to the pre-feature output. Deploy first, activate later.
-
-The courier app is live; production-kiosk activation still requires `sudo`:
+The kiosk displays open equipment returns read from the courier app (current
+contract: `docs/api/kiosk-pickup-signal.md`; frozen implementation record:
+`docs/archive/packs/KIOSK_PICKUP_SIGNAL_PACK_V1.md`). It is active in
+production. The paired configuration lives in the root-owned, mode-`600`
+`/etc/catering/kiosk.env`; without both variables the feature remains dormant,
+and a half-filled configuration is rejected at startup.
 
 The recommended path is the tracked one-shot script. It backs up the current
 unit and env, installs the paired secret without printing it, restarts only the
@@ -91,6 +90,11 @@ rolls back automatically if any gate fails:
 cd /home/viktor/projects/silberloeffel-catering
 sudo infra/deploy/activate-kiosk-pickup-signal.sh
 ```
+
+The production activation completed on 2026-07-13 with
+`ACTIVATION_OK kiosk=200 signal_unauth=401`. Re-running the script is reserved
+for deliberate credential rotation or recovery because it replaces the paired
+kiosk environment and restarts the kiosk.
 
 The equivalent manual steps are retained below for recovery and audit:
 

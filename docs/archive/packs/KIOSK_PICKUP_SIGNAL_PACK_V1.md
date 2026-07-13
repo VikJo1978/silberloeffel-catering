@@ -1,11 +1,10 @@
 # KIOSK_PICKUP_SIGNAL_PACK_V1 — kiosk shows overdue pickups from the courier app
 
-Status: FROZEN — round-3 verdict "architecture approved, freeze after
-mechanical fixes", all round-3 items incorporated (§10), 2026-07-13.
-Implementation follows this pack; changes to it require a new review round.
-The courier-app token fixes demanded in rounds 2–3 are code, not pack, and
-are committed locally there (`1e5509a`, `8eb1627`; that repository has no
-remote).
+Status: IMPLEMENTED, DEPLOYED AND ARCHIVED — frozen after the round-3 verdict,
+implemented in both repositories, and activated on the Lenovo on 2026-07-13.
+Changes to this contract require a new review round. Production verification
+confirmed the authenticated refresh, `200`/`401` route gates, healthy Core and
+courier databases, and a root-owned mode-`600` kiosk environment file.
 
 ## 1. Purpose and scope
 
@@ -323,7 +322,7 @@ Round 3, 2026-07-13, verdict: architecture approved, freeze after mechanical
 fixes; independent test run confirmed 124 passed. All items addressed:
 
 1. **Migration-4 backfill defect fixed as migration 5** in the courier app
-   (commit `8eb1627`, committed locally — that repository has no remote):
+   (commit `8eb1627`, later published with the repository):
    `event_date` restored from `expires_at` (its calendar day under the old
    23:59:59 scheme, day-minus-one under the next-midnight scheme), because
    `date(created_at)` breaks on advance-minted tokens and SQLite's timezone
@@ -338,5 +337,5 @@ fixes; independent test run confirmed 124 passed. All items addressed:
    200-character cap extended to `courier_name`; stable third sort key
    `assignment_id`, server-side only (§3).
 4. **Document inaccuracies fixed**: the 256-KiB estimate now says tens of
-   maximal entries, and `1e5509a` is described as committed locally, not
-   shipped (§1, §3).
+   maximal entries. At review time `1e5509a` was local-only; the implementation
+   was subsequently published with the courier repository (§1, §3).

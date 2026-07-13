@@ -25,22 +25,23 @@ Production facts:
   office panel and website intake were not restarted
 - kiosk order feed: read-only `GET /api/order-feed?date=YYYY-MM-DD`, private
   LAN/Tailscale only; deployment smoke checks returned `200`/`400` as expected
-- kiosk pickup-signal client: deployed **dormant** on 2026-07-13; no
-  `/etc/catering/kiosk.env` is installed, no courier-app request is made, and
-  the kiosk HTML hash remained byte-identical across the restart; activation
-  waits only for the root-owned kiosk env file and live unit-template update
+- kiosk pickup signal: **active** since 2026-07-13. The kiosk reads the courier
+  app over loopback, the authenticated refresher logged its first success, and
+  the live process has the expected main thread plus refresher thread
+- kiosk signal configuration: `/etc/catering/kiosk.env`, owner `root:root`,
+  mode `600`; the bearer is absent from the kiosk process arguments
 - courier app test deployment: `/home/viktor/projects/courier-app` at local
   commit `2a9e2d3`, own database `/home/viktor/courier-runtime/courier.db`,
   user unit `catering-courier-app.service`, enabled with `Linger=yes`; the
   checkout and database were clean/healthy and the service had zero restarts
 - courier app source: private `VikJo1978/courier-app`, branch `main`; the full
-  local history, Lenovo unit template, runbook notes, and CI workflow are
-  published. Lenovo has a dedicated read-only deploy key awaiting registration
-- courier route smoke: chef auth `401`/`200`, signal auth `401`/`200`, bad
-  authenticated query `400`, security headers and content length verified;
-  an isolated kiosk instance completed an authenticated refresh while the
-  production kiosk PID remained unchanged
-- `PRAGMA quick_check`: `ok`
+  history, Lenovo unit template, runbook notes, and CI workflow are published.
+  Lenovo's dedicated read-only deploy key is registered and a clean fetch of
+  `origin/main` was verified
+- live integration smoke: kiosk HTML `200`, valid/invalid order feed
+  `200`/`400`, unauthenticated/authenticated pickup signal `401`/`200`, and
+  exactly one initial `pickup signal refresh succeeded` transition
+- `PRAGMA quick_check`: `ok` for both Core and courier databases
 - daily backup cron: 03:15, 14-day retention, `umask 077`
 - manual cron-equivalent backup verified on 2026-07-12: `ok`, mode `600`
 - encrypted off-host upload cron: 03:25 to VPS, 30-day retention
@@ -82,14 +83,6 @@ Recovery-key protection verified on 2026-07-12:
 
 ## Operational risks
 
-### Medium — pickup signal still needs one privileged activation step
-
-Both HTTP endpoints are running and both directions were verified with an
-isolated kiosk client, but the production kiosk consumer remains dormant.
-Installing the tracked kiosk systemd unit and the paired root-owned environment
-file requires working Lenovo `sudo` credentials. No user-owned fallback or
-service-replacement race is used.
-
 ### High — production is not yet connected to the public website
 
 The real Silberlöffel site is still managed externally. The intake receiver is
@@ -98,9 +91,7 @@ The VPS page is a temporary design and form-development environment only.
 
 ## Next milestones
 
-1. Install the kiosk unit/env with `sudo` and activate the pickup signal.
-2. Register Lenovo's read-only deploy key and verify courier-app CI.
-3. Obtain access to the real Silberlöffel website.
-4. Configure a TLS-protected public intake path through Cloudflare.
-5. Port the approved staging form into the real site.
-6. Perform an end-to-end test from public form to office panel.
+1. Obtain access to the real Silberlöffel website.
+2. Configure a TLS-protected public intake path through Cloudflare.
+3. Port the approved staging form into the real site.
+4. Perform an end-to-end test from public form to office panel.

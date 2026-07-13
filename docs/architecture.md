@@ -10,6 +10,9 @@ flowchart LR
 
     Office["Office panel\nLAN · :8081"] --> Core
     Core --> Kiosk["Kitchen kiosk\nread-only · :8082"]
+    Courier["Courier app\nLAN/Tailscale · :8090"] --> CourierDB[("Courier SQLite\ncourier.db")]
+    Courier -->|"GET order feed"| Kiosk
+    Kiosk -->|"GET pickup signal"| Courier
 
     StagingBrowser["Temporary staging visitor"] --> Staging["VPS staging site\npublic · :8080"]
     Staging --> StagingDB[("Separate staging.db")]
@@ -20,6 +23,11 @@ flowchart LR
 
 The staging branch is intentionally disconnected from production. A test form
 submission cannot become a production Inquiry.
+
+The courier app is also a separate bounded system with its own database. It
+never reads or writes Core directly: it reads released order summaries from
+the kiosk, while the kiosk reads outstanding equipment returns from the
+courier app. Both cross-system routes are read-only.
 
 ## Layers
 
@@ -74,7 +82,8 @@ flowchart TD
 
 ## Persistence and migrations
 
-- Production uses one SQLite file shared by the three Lenovo services.
+- Core production uses one SQLite file shared by the office, kiosk, and intake
+  services. The courier app has a separate SQLite file and migration history.
 - Repositories apply ordered, component-specific migrations at startup.
 - Migration history is stored in `schema_migrations`.
 - Startup rejects unknown, incomplete, or name-mismatched migration history.
@@ -88,6 +97,7 @@ flowchart TD
 |---|---|---|---|
 | Office panel | LAN/Tailscale only | HTTP Basic + CSRF on writes | Yes |
 | Kitchen kiosk | LAN/Tailscale only | Trusted network boundary | No |
+| Courier app | LAN/Tailscale only | Basic auth, capability links, machine bearer | Courier DB only |
 | Website receiver | loopback only | Bearer token from Worker | Inquiry only |
 | Cloudflare Worker | public | Server-side upstream secret | Via receiver |
 | VPS staging | public IP, HTTP | None; test data only | No |
