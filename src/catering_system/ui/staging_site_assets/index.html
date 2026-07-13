@@ -130,10 +130,10 @@
           <div class="field-grid">
             <label>Name *<input name="name" maxlength="500" autocomplete="name" required></label>
             <label>Firma<input name="company" maxlength="500" autocomplete="organization"></label>
-            <label>E-Mail<input type="email" name="email" maxlength="500" autocomplete="email"></label>
-            <label>Telefon<input name="phone" maxlength="500" autocomplete="tel"></label>
+            <label>E-Mail<input type="email" name="email" maxlength="500" autocomplete="email" aria-describedby="contact-hint"></label>
+            <label>Telefon<input name="phone" maxlength="500" autocomplete="tel" inputmode="tel" aria-describedby="contact-hint"></label>
           </div>
-          <p class="hint">Bitte mindestens E-Mail oder Telefon angeben.</p>
+          <p class="hint" id="contact-hint">Bitte mindestens E-Mail oder Telefon angeben.</p>
         </fieldset>
 
         <fieldset>

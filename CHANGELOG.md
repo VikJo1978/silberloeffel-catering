@@ -14,6 +14,10 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
 - Recorded ADR-010: keep the synchronous, truthful-`502` intake path during
   fake-data testing, but require a restart-safe SQLite delivery buffer and an
   outage-recovery E2E proof before accepting real customer submissions.
+- Hardened the temporary inquiry form without changing the surrounding site:
+  browser-side contact-pair validation, a bounded request timeout, preserved
+  retry state and entered values on failure, and stable German error messages
+  now have their own JavaScript CI tests.
 - Added and activated a fail-closed staging-to-Core Inquiry bridge: the VPS backend
   forwards namespaced fake submissions through an exact loopback URL over a
   restricted reverse-SSH tunnel, with a server-only bearer, redirect refusal,

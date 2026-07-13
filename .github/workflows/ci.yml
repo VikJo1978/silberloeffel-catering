@@ -34,5 +34,7 @@ jobs:
         run: |
           coverage run -m pytest -q
           coverage report
-      - name: Test Cloudflare Worker sanitizer
-        run: node --test infra/cloudflare_worker/sanitize.test.mjs
+      - name: Test browser and Worker JavaScript
+        run: |
+          node --test infra/staging-form/app.test.cjs
+          node --test infra/cloudflare_worker/sanitize.test.mjs

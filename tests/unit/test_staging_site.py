@@ -76,6 +76,8 @@ def test_landing_page_and_health_are_served_with_security_headers(
         assert response.status == 200
         assert "Silberlöffel" in page
         assert "inquiry-form" in page
+        assert 'id="contact-hint"' in page
+        assert page.count('aria-describedby="contact-hint"') == 2
         assert response.headers["X-Frame-Options"] == "DENY"
         assert "frame-ancestors 'none'" in response.headers["Content-Security-Policy"]
 

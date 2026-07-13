@@ -155,6 +155,10 @@ Additional rules:
 - hidden honeypot field;
 - eight submissions per source IP per minute;
 - browser-generated retry key becomes a `vps-staging-…` external reference;
+- browser checks the required contact pair before sending and keeps all entered
+  values plus the same retry key after network, timeout, or upstream failure;
+- browser requests time out after 12 seconds and show stable German messages
+  instead of proxy/JSON parser details;
 - isolated success is `201`; Core-forwarded success is `202`;
 - upstream failure is a generic `502` and is not stored as a local success.
 
