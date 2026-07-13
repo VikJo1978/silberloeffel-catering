@@ -82,6 +82,18 @@ byte-identical to the pre-feature output. Deploy first, activate later.
 
 The courier app is live; production-kiosk activation still requires `sudo`:
 
+The recommended path is the tracked one-shot script. It backs up the current
+unit and env, installs the paired secret without printing it, restarts only the
+kiosk, requires the fixed refresh-success log plus `200`/`401` smoke codes, and
+rolls back automatically if any gate fails:
+
+```bash
+cd /home/viktor/projects/silberloeffel-catering
+sudo infra/deploy/activate-kiosk-pickup-signal.sh
+```
+
+The equivalent manual steps are retained below for recovery and audit:
+
 1. Create the kiosk environment file — root-owned, mode `600`, loopback URL,
    and a token paired with the courier app's `KIOSK_SIGNAL_TOKEN`. The token
    value must never appear in argv, shell history, documentation, or logs.
