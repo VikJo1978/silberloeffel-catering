@@ -30,9 +30,12 @@ Production facts:
   the kiosk HTML hash remained byte-identical across the restart; activation
   waits only for the root-owned kiosk env file and live unit-template update
 - courier app test deployment: `/home/viktor/projects/courier-app` at local
-  commit `c716b21`, own database `/home/viktor/courier-runtime/courier.db`,
+  commit `2a9e2d3`, own database `/home/viktor/courier-runtime/courier.db`,
   user unit `catering-courier-app.service`, enabled with `Linger=yes`; the
   checkout and database were clean/healthy and the service had zero restarts
+- courier app source: private `VikJo1978/courier-app`, branch `main`; the full
+  local history, Lenovo unit template, runbook notes, and CI workflow are
+  published. Lenovo has a dedicated read-only deploy key awaiting registration
 - courier route smoke: chef auth `401`/`200`, signal auth `401`/`200`, bad
   authenticated query `400`, security headers and content length verified;
   an isolated kiosk instance completed an authenticated refresh while the
@@ -96,7 +99,7 @@ The VPS page is a temporary design and form-development environment only.
 ## Next milestones
 
 1. Install the kiosk unit/env with `sudo` and activate the pickup signal.
-2. Create the private GitHub remote for courier-app and push `main`.
+2. Register Lenovo's read-only deploy key and verify courier-app CI.
 3. Obtain access to the real Silberlöffel website.
 4. Configure a TLS-protected public intake path through Cloudflare.
 5. Port the approved staging form into the real site.

@@ -68,6 +68,12 @@ Never print, paste, or pass `/home/viktor/courier-runtime/courier.env` in
 argv. The chef password and signal bearer are intentionally generated and
 stored only on the Lenovo.
 
+Source is published in the private `VikJo1978/courier-app` repository. Lenovo
+uses the dedicated key `/home/viktor/.ssh/courier_app_github` for read-only
+deploy access; register its `.pub` half as a GitHub deploy key with write
+access disabled. The repository-local `core.sshCommand` pins that identity so
+updates do not depend on a personal account key.
+
 The kiosk can display open equipment returns read from the courier app
 (`docs/proposals/KIOSK_PICKUP_SIGNAL_PACK_V1.md`). The feature is **dormant
 by default**: deploying the kiosk without `/etc/catering/kiosk.env` (or with

@@ -15,6 +15,10 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
   courier-app was subsequently deployed as an enabled user service on port
   `8090` and both directions passed an isolated end-to-end smoke test. Only
   the privileged production-kiosk env/unit activation remains pending.
+- Published courier-app with its full history to the private
+  `VikJo1978/courier-app` repository and added an independent GitHub Actions
+  quality gate; Lenovo was advanced to the same source revision without a
+  service restart.
 - Added a read-only JSON order feed to the kitchen kiosk
   (`GET /api/order-feed?date=YYYY-MM-DD`) for the separate courier app, with
   a strict query contract and the same release gates as the Wochenübersicht
