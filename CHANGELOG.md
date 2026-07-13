@@ -5,11 +5,17 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
 
 ## Unreleased
 
-- Added an optional, fail-closed staging-to-Core Inquiry bridge: the VPS backend
+- Added and activated a fail-closed staging-to-Core Inquiry bridge: the VPS backend
   forwards namespaced fake submissions through an exact loopback URL over a
   restricted reverse-SSH tunnel, with a server-only bearer, redirect refusal,
   strict `202` acknowledgement, and idempotent retry keys. It never reads Core
-  or creates Orders; real customer data still waits for HTTPS.
+  or creates Orders; real customer data still waits for HTTPS. The live E2E
+  proof sent the same fake retry key twice and produced exactly one Inquiry and
+  one staging audit row, with healthy databases and no public tunnel listener.
+- Made the website-intake activation readiness check bounded and retry-aware so
+  normal HTTP-listener startup latency cannot cause a false rollback; the
+  receiver still rolls back automatically if it does not return fail-closed
+  `401` within the readiness window.
 - Implemented and activated the kiosk pickup-signal display (archived in
   `docs/archive/packs/KIOSK_PICKUP_SIGNAL_PACK_V1.md`): a background refresher
   reads the courier app's authenticated `/api/overdue-pickups` feed into a

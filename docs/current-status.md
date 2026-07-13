@@ -10,7 +10,7 @@ Last verified: **2026-07-13, Europe/Berlin**.
 | Lenovo `debiancatering` | Kitchen kiosk | LAN/Tailscale, port `8082` | active |
 | Lenovo `debiancatering` | Courier app (test) | LAN/Tailscale, port `8090` | active |
 | Lenovo `debiancatering` | Website intake | `127.0.0.1:8083` | active |
-| VPS `185.16.60.69` | Form and intake staging | public HTTP, port `8080` | active, Core bridge pending deployment |
+| VPS `185.16.60.69` | Form and intake staging | public HTTP, port `8080` | active, Core bridge enabled for fake data |
 
 Production facts:
 
@@ -42,6 +42,17 @@ Production facts:
   `200`/`400`, unauthenticated/authenticated pickup signal `401`/`200`, and
   exactly one initial `pickup signal refresh succeeded` transition
 - `PRAGMA quick_check`: `ok` for both Core and courier databases
+- staging-to-Core bridge: **active** since 2026-07-13 for invented test data.
+  The VPS backend reaches the loopback-only website-intake receiver through a
+  restricted reverse-SSH tunnel; the browser receives neither endpoint nor
+  bearer
+- bridge E2E proof: two public submissions with the same namespaced retry key
+  both returned `202` with `forwarded_to_core: true`, while Core and the VPS
+  staging database each contained exactly one row; both databases returned
+  `PRAGMA quick_check: ok`
+- bridge exposure and secret checks: receiver `127.0.0.1:8083`, VPS tunnel
+  `127.0.0.1:18083`, no wildcard tunnel listener, both environment files
+  `root:root` mode `600`, handoff consumed, and no bearer in process arguments
 - daily backup cron: 03:15, 14-day retention, `umask 077`
 - manual cron-equivalent backup verified on 2026-07-12: `ok`, mode `600`
 - encrypted off-host upload cron: 03:25 to VPS, 30-day retention
@@ -58,13 +69,15 @@ Form staging facts:
 - 10-user smoke load: 40/40 requests returned `200`; slowest response was
   approximately `0.153 s`
 - staging inquiry viewer: read-only `/admin`, loopback/SSH-tunnel only
+- Core forwarding health: `core_forwarding: true`; receiver, reverse tunnel,
+  and staging services were all active after the E2E proof
 - no domain and no TLS; fake data only
 
 ## Quality baseline
 
-- Python tests: **479 passed**
+- Python tests: **490 passed**
 - coverage gate: **90% minimum**; last local result above the gate
-- last full-project coverage: **93.1%**
+- last full-project coverage: **92.6%**
 - website intake receiver coverage: **99.2%**
 - Ruff: clean
 - Mypy: clean
@@ -93,8 +106,6 @@ waits for the domain, TLS, privacy text, and the final protected public path.
 
 ## Next milestones
 
-1. Deploy the restricted VPS → Lenovo intake bridge.
-2. Submit one marked fake request and prove exactly one Core Inquiry exists.
-3. Connect and test the office workflow against the resulting Inquiry queue.
-4. Build the replacement customer website on the proven intake path.
-5. Obtain domain control, add TLS/Cloudflare, and perform the launch test.
+1. Connect and test the office workflow against the resulting Inquiry queue.
+2. Build the replacement customer website on the proven intake path.
+3. Obtain domain control, add TLS/Cloudflare, and perform the launch test.

@@ -144,8 +144,9 @@ sudo infra/deploy/activate-staging-core-intake.sh
 
 Expected: `ACTIVATION_OK receiver_unauth=401`. The script backs up the previous
 receiver environment, rotates the bearer, restarts only the website-intake
-receiver, verifies fail-closed auth, and consumes the handoff file. It restores
-the previous environment automatically on failure.
+receiver, waits up to 15 seconds for its HTTP listener, verifies fail-closed
+auth, and consumes the handoff file. It restores the previous environment
+automatically on failure.
 
 ### 3. Activate staging forwarding
 
@@ -171,6 +172,11 @@ Submit one clearly marked fake request through `:8080/api/inquiries`. Expect
 `202` and `forwarded_to_core: true`. On Lenovo verify by namespaced external
 reference and count only; do not print contact payloads. Repeating the same
 browser retry key must return success while the Core count remains exactly one.
+
+The bridge was activated and this proof completed successfully on 2026-07-13:
+both repeated fake submissions returned `202`, Core and staging each contained
+one row for the retry key, both SQLite quick checks returned `ok`, and the
+reverse listener remained bound only to `127.0.0.1:18083`.
 
 Rollback is immediate: remove both values from the VPS environment (or remove
 the file) and restart staging for isolated mode; stop the tunnel user service;
