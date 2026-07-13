@@ -35,6 +35,11 @@ password through the agreed private credential channel.
 Website contact information appears as labelled intake context. It is not yet a
 verified structured customer record.
 
+The staging website writes these records into the same Core Inquiry queue used
+by the office panel. Until the staging URL has HTTPS, treat every such record as
+test data. A website Inquiry remains blocked from conversion until the office
+has completed the displayed telephone-verification step.
+
 ## Convert an inquiry to an order
 
 Conversion is available only when the inquiry's verification gate is satisfied.

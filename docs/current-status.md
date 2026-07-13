@@ -53,6 +53,13 @@ Production facts:
 - bridge exposure and secret checks: receiver `127.0.0.1:8083`, VPS tunnel
   `127.0.0.1:18083`, no wildcard tunnel listener, both environment files
   `root:root` mode `600`, handoff consumed, and no bearer in process arguments
+- office workflow proof: the live panel is active, requires authentication,
+  and reads `/home/viktor/catering-runtime/core.db`; the bridge E2E row appears
+  as a new `website_form` Inquiry with required verification still `pending`
+  and no linked Order. On a SQLite backup copy, the same row rendered in the
+  office queue, remained blocked before verification, then completed the
+  `pending → verified → OrderVersion 1` workflow. Production stayed at zero
+  linked Orders for the test Inquiry
 - daily backup cron: 03:15, 14-day retention, `umask 077`
 - manual cron-equivalent backup verified on 2026-07-12: `ok`, mode `600`
 - encrypted off-host upload cron: 03:25 to VPS, 30-day retention
@@ -75,7 +82,7 @@ Form staging facts:
 
 ## Quality baseline
 
-- Python tests: **490 passed**
+- Python tests: **491 passed**
 - coverage gate: **90% minimum**; last local result above the gate
 - last full-project coverage: **92.6%**
 - website intake receiver coverage: **99.2%**
@@ -106,6 +113,5 @@ waits for the domain, TLS, privacy text, and the final protected public path.
 
 ## Next milestones
 
-1. Connect and test the office workflow against the resulting Inquiry queue.
-2. Build the replacement customer website on the proven intake path.
-3. Obtain domain control, add TLS/Cloudflare, and perform the launch test.
+1. Build the replacement customer website on the proven intake path.
+2. Obtain domain control, add TLS/Cloudflare, and perform the launch test.

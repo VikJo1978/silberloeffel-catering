@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
+from catering_system.intake.website_form_adapter import intake_from_website_form
 from catering_system.repositories.in_memory_inquiry_repository import (
     InMemoryInquiryRepository,
 )
@@ -1756,6 +1757,45 @@ def test_prepare_then_submit_does_not_change_wochenuebersicht() -> None:
 # -- website_form Office UX (WEBSITE_FORM_INQUIRY_OFFICE_UX_PACK_V1) --------
 # Kanal/Betreff list columns, shared source label helper, website_form-only
 # detail banner, extended search. No verification/action-flow changes.
+
+
+def test_website_intake_to_office_verification_and_conversion_workflow() -> None:
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    office = OfficePanel(inquiry_repo, order_repo)
+    inquiry = intake_from_website_form(
+        office.inquiry_service,
+        {
+            "event_date": date(2026, 10, 1),
+            "location_text": "E2E Testort",
+            "guest_count_estimate": 10,
+            "company": "E2E TEST — KEIN KUNDE",
+            "email": "e2e@example.test",
+            "submission_id": "office-workflow-e2e",
+        },
+    )
+
+    queue = office.render_queue(None)
+    detail = office.render_inquiry(inquiry.inquiry_id)
+    assert inquiry.inquiry_id[:8] in queue
+    assert detail is not None
+    assert "Website-Anfrage" in detail
+    assert "Telefonisch verifiziert" in detail
+    assert office.progression.evaluate_inquiry_to_order_progression(inquiry).blocked
+    assert order_repo.list_orders() == []
+
+    office.inquiry_service.verify_customer_by_call(inquiry.inquiry_id)
+    verified = inquiry_repo.get_by_id(inquiry.inquiry_id)
+    assert verified is not None
+    assert verified.call_verification_status == "verified"
+    assert not office.progression.evaluate_inquiry_to_order_progression(
+        verified
+    ).blocked
+
+    order, version = office.order_service.convert_inquiry_to_order(verified)
+    assert order.source_inquiry_id == inquiry.inquiry_id
+    assert version.version_number == 1
+    assert [saved.order_id for saved in order_repo.list_orders()] == [order.order_id]
 
 
 def test_list_shows_website_form_kanal_label(panel: str) -> None:

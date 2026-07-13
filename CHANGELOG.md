@@ -16,6 +16,11 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
   normal HTTP-listener startup latency cannot cause a false rollback; the
   receiver still rolls back automatically if it does not return fail-closed
   `401` within the readiness window.
+- Verified the staging-to-office workflow against the live E2E Inquiry without
+  mutating production: the authenticated office service reads the same Core
+  database, shows the website Inquiry as pending verification, and has no
+  linked Order. A database backup copy completed the guarded
+  `pending → verified → OrderVersion 1` path, now covered by a regression test.
 - Implemented and activated the kiosk pickup-signal display (archived in
   `docs/archive/packs/KIOSK_PICKUP_SIGNAL_PACK_V1.md`): a background refresher
   reads the courier app's authenticated `/api/overdue-pickups` feed into a
