@@ -43,8 +43,11 @@ def render_wochenuebersicht_html(
 
     `pickup_section` is a pre-rendered, pre-escaped HTML fragment from
     pickup_signal.render_pickup_signal_section; empty when the signal
-    feature is dormant (page stays byte-identical to before the feature).
+    feature is dormant. The insertion is fully conditional so the dormant
+    page stays byte-identical to the pre-feature output (pinned by a golden
+    test).
     """
+    pickup_block = f"\n{pickup_section}" if pickup_section else ""
     rows: list[str] = []
     for e in view.entries:
         weekday = _WEEKDAYS_DE[e.event_date.weekday()]
@@ -84,8 +87,7 @@ th {{ background: #eee; }}
 <table>
 <tr><th>Tag</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th><th>Version</th></tr>
 {body}
-</table>
-{pickup_section}
+</table>{pickup_block}
 </body>
 </html>
 """

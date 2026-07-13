@@ -384,3 +384,36 @@ def test_kiosk_refuses_half_configured_pickup_signal(tmp_path) -> None:
     )
     assert result.returncode != 0
     assert "PICKUP_SIGNAL_TOKEN" in result.stderr
+
+
+def test_dormant_page_is_byte_identical_golden() -> None:
+    """Review 2026-07-13: the dormant kiosk page must be exactly the
+    pre-feature output — pinned literally, not by word absence."""
+    view = WochenuebersichtService(InMemoryOrderRepository()).get_week_overview(
+        _WEEK_YEAR, _WEEK
+    )
+    expected = """<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="refresh" content="60">
+<title>Wochenübersicht KW 40/2026</title>
+<style>
+body { font-family: sans-serif; font-size: 1.4rem; margin: 2rem; }
+h1 { font-size: 2rem; }
+table { border-collapse: collapse; width: 100%; }
+th, td { border: 1px solid #444; padding: 0.6rem 1rem; text-align: left; }
+th { background: #eee; }
+</style>
+</head>
+<body>
+<h1>Wochenübersicht — KW 40/2026</h1>
+<table>
+<tr><th>Tag</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th><th>Version</th></tr>
+<tr><td colspan="5">Keine Lieferungen in dieser Woche</td></tr>
+</table>
+</body>
+</html>
+"""
+    assert render_wochenuebersicht_html(view) == expected
+    assert render_wochenuebersicht_html(view, "") == expected

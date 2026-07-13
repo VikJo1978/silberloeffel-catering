@@ -100,19 +100,78 @@ def test_parse_rejects_malformed_and_overlimit(raw: bytes) -> None:
     assert parse_pickup_signal(raw) is None
 
 
-def test_parse_clips_oversized_strings_defensively() -> None:
-    noisy = dict(
-        _GOOD_PICKUP,
-        location_text="L" * 500,
-        courier_name="C" * 500,
-        items=[{"name": "N" * 500, "quantity": 1}],
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        {"location_text": "L" * 201},  # over-length is malformed, not clipped
+        {"courier_name": "C" * 201},
+        {"items": [{"name": "N" * 201, "quantity": 1}]},
+        {"location_text": 7},  # exact JSON types, no coercion
+        {"event_date": "2026-7-4"},
+        {"event_date": 20260704},
+        {"items": [{"name": "N", "quantity": 2.9}]},  # float must not truncate
+        {"items": [{"name": "N", "quantity": True}]},  # bool is not a count
+        {"items": [{"name": "N", "quantity": -1}]},
+        {"courier_name": 5},
+    ],
+)
+def test_parse_rejects_type_violations(mutation: dict) -> None:
+    assert (
+        parse_pickup_signal(_document_bytes([dict(_GOOD_PICKUP, **mutation)])) is None
     )
-    document = parse_pickup_signal(_document_bytes([noisy]))
-    assert document is not None
-    pickup = document.pickups[0]
-    assert len(pickup.location_text) == 200
-    assert pickup.courier_name is not None and len(pickup.courier_name) == 200
-    assert len(pickup.items[0].name) == 200
+
+
+@pytest.mark.parametrize(
+    ("total_count", "truncated"),
+    [
+        ("1", False),  # string count: '"false"-style' coercion must not pass
+        (-1, False),
+        (True, False),  # bool is an int subclass but not a count
+        (2, False),  # untruncated must list everything it counts
+        (0, True),  # truncated may under-report the list, never the count
+        (1, "false"),  # string "false" is truthy, not a bool
+    ],
+)
+def test_parse_rejects_inconsistent_envelope(total_count, truncated) -> None:
+    raw = json.dumps(
+        {
+            "date": "2026-07-13",
+            "total_count": total_count,
+            "truncated": truncated,
+            "pickups": [_GOOD_PICKUP],
+        }
+    ).encode("utf-8")
+    assert parse_pickup_signal(raw) is None
+
+
+def test_render_clips_oversized_values_defensively() -> None:
+    """The parser rejects over-length values; the renderer keeps its own
+    guard for any other document source. Each value is clipped on its own —
+    a joined items line is never clipped as a whole."""
+    from catering_system.ui.pickup_signal import (
+        OverduePickup,
+        PickupItem,
+        PickupSignalDocument,
+    )
+
+    document = PickupSignalDocument(
+        date=_DAY,
+        total_count=1,
+        truncated=False,
+        pickups=(
+            OverduePickup(
+                location_text="L" * 500,
+                event_date=date(2026, 7, 10),
+                items=(PickupItem("N" * 500, 1), PickupItem("Zweites", None)),
+                courier_name="C" * 500,
+            ),
+        ),
+    )
+    html = render_pickup_signal_section(document)
+    assert "L" * 200 in html and "L" * 201 not in html
+    assert "N" * 200 in html and "N" * 201 not in html
+    assert "C" * 200 in html and "C" * 201 not in html
+    assert "Zweites" in html  # later item survives per-value clipping
 
 
 # --- fetch over live HTTP ----------------------------------------------------
@@ -323,3 +382,86 @@ def test_render_truncated_shows_prominent_warning() -> None:
     assert document is not None
     html = render_pickup_signal_section(document)
     assert "Abholliste unvollständig — 77 offene Rückläufe insgesamt" in html
+
+
+def test_fetch_refuses_redirects_and_never_forwards_the_bearer() -> None:
+    """urllib re-sends Authorization to redirect targets; a 302 must fail the
+    round and the second server must never see a request at all."""
+    target_hits: list[str | None] = []
+
+    class Target(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 (http.server API)
+            target_hits.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+            pass
+
+    target = HTTPServer(("127.0.0.1", 0), Target)
+    threading.Thread(target=target.serve_forever, daemon=True).start()
+    t_host, t_port = target.server_address[:2]
+
+    class Redirector(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 (http.server API)
+            self.send_response(302)
+            self.send_header("Location", f"http://{t_host}:{t_port}/stolen")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+            pass
+
+    redirector = HTTPServer(("127.0.0.1", 0), Redirector)
+    threading.Thread(target=redirector.serve_forever, daemon=True).start()
+    r_host, r_port = redirector.server_address[:2]
+    try:
+        result = fetch_pickup_signal(f"http://{r_host}:{r_port}/api", "secret-token")
+        assert result is None
+        assert target_hits == []  # the bearer never traveled anywhere
+    finally:
+        redirector.shutdown()
+        redirector.server_close()
+        target.shutdown()
+        target.server_close()
+
+
+def test_refresher_survives_fetch_exception_and_logs_recovery() -> None:
+    """An unexpected exception is one failed round, not a dead thread:
+    exception → success must produce the recovery log line."""
+    lines: list[str] = []
+    clock = _Clock()
+    calls = {"n": 0}
+
+    def exploding_then_good(url: str, token: str, timeout: float):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("boom")
+        return _doc()
+
+    refresher = PickupSignalRefresher(
+        "http://unused",
+        "unused",
+        fetch=exploding_then_good,
+        monotonic=clock,
+        today=lambda: _DAY,
+        log=lines.append,
+    )
+    refresher.refresh_once()  # must not raise
+    assert refresher.snapshot() is None
+    refresher.refresh_once()
+    assert refresher.snapshot() is not None
+    assert lines == ["pickup signal refresh succeeded"]
+
+
+@pytest.mark.parametrize("status", [201, 204])
+def test_fetch_accepts_only_exactly_200(status: int) -> None:
+    """Any other 2xx is not the contract's success and must fail the round."""
+    server, url = _serve(_document_bytes([_GOOD_PICKUP]), status)
+    try:
+        assert fetch_pickup_signal(url, "t") is None
+    finally:
+        server.shutdown()
+        server.server_close()

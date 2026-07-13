@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import html
 import json
+import re
 import threading
 import time
 import urllib.error
@@ -56,62 +57,118 @@ class PickupSignalDocument:
     pickups: tuple[OverduePickup, ...]
 
 
-def _clip(text: str) -> str:
-    return text[:_MAX_TEXT_CHARS]
+class _Malformed(Exception):
+    pass
+
+
+_ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _strict_date(value: object) -> date:
+    if not isinstance(value, str) or not _ISO_DATE_RE.fullmatch(value):
+        raise _Malformed
+    return date.fromisoformat(value)
+
+
+def _strict_text(value: object) -> str:
+    """A JSON string within the contract cap. Over-length is malformed here,
+    not clipped — clipping is the renderer's separate defensive guard."""
+    if not isinstance(value, str) or len(value) > _MAX_TEXT_CHARS:
+        raise _Malformed
+    return value
+
+
+def _strict_count(value: object) -> int:
+    # bool is an int subclass in Python; "true" must not pass as a count.
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise _Malformed
+    return value
 
 
 def parse_pickup_signal(raw: bytes) -> PickupSignalDocument | None:
-    """Contract-strict parse (pack §3). None for anything malformed or
-    over-limit — the caller treats that exactly like an unreachable feed.
-    Display truncation guards apply here even if the serving side misbehaves.
-    """
+    """Contract-strict parse (pack §3): exact JSON types, no coercion. None
+    for anything malformed or over-limit — the caller treats that exactly
+    like an unreachable feed."""
     if len(raw) > _MAX_BODY_BYTES:
         return None
     try:
         document = json.loads(raw.decode("utf-8"))
+        truncated = document["truncated"]
+        if not isinstance(truncated, bool):
+            raise _Malformed
+        raw_pickups = document["pickups"]
+        if not isinstance(raw_pickups, list):
+            raise _Malformed
         pickups = []
-        for entry in document["pickups"]:
+        for entry in raw_pickups:
+            if not isinstance(entry, dict):
+                raise _Malformed
             items = entry["items"]
             if not isinstance(items, list) or len(items) > _MAX_ITEMS_PER_PICKUP:
-                return None
+                raise _Malformed
+            parsed_items = []
+            for item in items:
+                if not isinstance(item, dict):
+                    raise _Malformed
+                quantity = item["quantity"]
+                parsed_items.append(
+                    PickupItem(
+                        name=_strict_text(item["name"]),
+                        quantity=(
+                            _strict_count(quantity) if quantity is not None else None
+                        ),
+                    )
+                )
             courier_name = entry["courier_name"]
             pickups.append(
                 OverduePickup(
-                    location_text=_clip(str(entry["location_text"])),
-                    event_date=date.fromisoformat(entry["event_date"]),
-                    items=tuple(
-                        PickupItem(
-                            name=_clip(str(item["name"])),
-                            quantity=(
-                                int(item["quantity"])
-                                if item["quantity"] is not None
-                                else None
-                            ),
-                        )
-                        for item in items
-                    ),
+                    location_text=_strict_text(entry["location_text"]),
+                    event_date=_strict_date(entry["event_date"]),
+                    items=tuple(parsed_items),
                     courier_name=(
-                        _clip(str(courier_name)) if courier_name is not None else None
+                        _strict_text(courier_name) if courier_name is not None else None
                     ),
                 )
             )
+        total_count = _strict_count(document["total_count"])
+        # Consistency: an untruncated document lists everything it counts;
+        # a truncated one may only under-report the list, never the count.
+        if not truncated and total_count != len(pickups):
+            raise _Malformed
+        if truncated and total_count < len(pickups):
+            raise _Malformed
         return PickupSignalDocument(
-            date=date.fromisoformat(document["date"]),
-            total_count=int(document["total_count"]),
-            truncated=bool(document["truncated"]),
+            date=_strict_date(document["date"]),
+            total_count=total_count,
+            truncated=truncated,
             pickups=tuple(pickups),
         )
-    except (KeyError, TypeError, ValueError, UnicodeDecodeError):
+    except (_Malformed, KeyError, TypeError, ValueError, UnicodeDecodeError):
         return None
+
+
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    """urllib re-sends the Authorization header to the redirect target; the
+    bearer must never travel to a URL we did not configure. Any 3xx becomes
+    an HTTPError and the round fails."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        return None
+
+
+_OPENER = urllib.request.build_opener(_RefuseRedirects)
 
 
 def fetch_pickup_signal(
     url: str, token: str, timeout_seconds: float = 1.0
 ) -> PickupSignalDocument | None:
-    """One authenticated GET; never raises, never logs payloads or the token."""
+    """One authenticated GET, redirects refused, exactly HTTP 200 accepted;
+    never raises, never logs payloads or the token."""
     request = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        with _OPENER.open(request, timeout=timeout_seconds) as response:
+            if response.status != 200:
+                return None
             raw = response.read(_MAX_BODY_BYTES + 1)
     except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         return None
@@ -170,7 +227,10 @@ class PickupSignalRefresher:
                 return
 
     def refresh_once(self) -> None:
-        document = self._fetch(self._url, self._token, self._timeout)
+        try:
+            document = self._fetch(self._url, self._token, self._timeout)
+        except Exception:  # noqa: BLE001 -- one bad round must never kill the
+            document = None  # thread; the signal has to survive to retry
         if document is not None and document.date != self._today():
             document = None  # pack §5.2: foreign-day payload is malformed
         if document is None:
@@ -202,7 +262,13 @@ class PickupSignalRefresher:
 
 
 def _e(text: object) -> str:
-    return html.escape(str(text))
+    # Defensive display clip lives here (parser already rejects over-length
+    # values; this guards the renderer against any other document source).
+    return html.escape(_clip(str(text)))
+
+
+def _clip(text: str) -> str:
+    return text[:_MAX_TEXT_CHARS]
 
 
 def _german_date(day: date) -> str:
@@ -217,13 +283,20 @@ def render_pickup_signal_section(document: PickupSignalDocument | None) -> str:
     types, never echoed.
     """
     if document is None:
-        return '<p class="signal-blind">Abholungen: Kurier-App nicht erreichbar</p>'
+        return (
+            '<p class="signal-blind" style="color:#767676;font-size:1rem">'
+            "Abholungen: Kurier-App nicht erreichbar</p>"
+        )
     if not document.pickups and not document.truncated:
         return ""  # an empty reminder is noise on a kitchen display
     rows = []
     for pickup in document.pickups:
+        # Escape-and-clip each value on its own; the joined line must not be
+        # clipped as a whole or legitimate trailing items would vanish.
         items = ", ".join(
-            f"{item.name} ×{item.quantity}" if item.quantity is not None else item.name
+            f"{_e(item.name)} ×{item.quantity}"
+            if item.quantity is not None
+            else _e(item.name)
             for item in pickup.items
         )
         courier = pickup.courier_name if pickup.courier_name is not None else "–"
@@ -231,15 +304,17 @@ def render_pickup_signal_section(document: PickupSignalDocument | None) -> str:
             "<tr>"
             f"<td>{_e(_german_date(pickup.event_date))}</td>"
             f"<td>{_e(pickup.location_text)}</td>"
-            f"<td>{_e(items)}</td>"
+            f"<td>{items}</td>"
             f"<td>{_e(courier)}</td>"
             "</tr>"
         )
     warning = ""
     if document.truncated:
         warning = (
-            '<p class="signal-warning"><strong>Abholliste unvollständig — '
-            f"{document.total_count} offene Rückläufe insgesamt</strong></p>"
+            '<p class="signal-warning" '
+            'style="color:#b00020;font-size:1.6rem;font-weight:bold">'
+            "Abholliste unvollständig — "
+            f"{document.total_count} offene Rückläufe insgesamt</p>"
         )
     return (
         "<h2>Abholungen — Geschirr steht noch beim Kunden</h2>"
