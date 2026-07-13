@@ -75,8 +75,17 @@ Activation (only once the courier app runs on this host):
    A half-filled file (URL without token or vice versa) is a startup error
    by design — the kiosk refuses to run the feature unauthenticated.
 
-2. The unit already references the file (`EnvironmentFile=-/etc/catering/kiosk.env`);
-   after installing or editing the unit itself run `sudo systemctl daemon-reload`.
+2. The repository unit template references the file
+   (`EnvironmentFile=-/etc/catering/kiosk.env`). Before activation, compare
+   it with the effective live unit and install the template if needed, then
+   reload systemd:
+
+   ```bash
+   systemctl cat catering-kiosk
+   sudo install -m 644 infra/systemd/catering-kiosk.service \
+     /etc/systemd/system/catering-kiosk.service
+   sudo systemctl daemon-reload
+   ```
 
 3. Restart only the kiosk and smoke-test by status codes and the fixed
    success log line — never by dumping response bodies:

@@ -24,6 +24,10 @@ Production facts:
   office panel and website intake were not restarted
 - kiosk order feed: read-only `GET /api/order-feed?date=YYYY-MM-DD`, private
   LAN/Tailscale only; deployment smoke checks returned `200`/`400` as expected
+- kiosk pickup-signal client: deployed **dormant** on 2026-07-13; no
+  `/etc/catering/kiosk.env` is installed, no courier-app request is made, and
+  the kiosk HTML hash remained byte-identical across the restart; activation
+  waits for the courier app and the live unit-template update
 - `PRAGMA quick_check`: `ok`
 - daily backup cron: 03:15, 14-day retention, `umask 077`
 - manual cron-equivalent backup verified on 2026-07-12: `ok`, mode `600`
@@ -43,7 +47,7 @@ Staging facts:
 
 ## Quality baseline
 
-- Python tests: **431 passed**
+- Python tests: **479 passed**
 - coverage gate: **90% minimum**; last local result above the gate
 - last full-project coverage: **93.1%**
 - website intake receiver coverage: **99.2%**
