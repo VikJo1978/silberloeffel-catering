@@ -48,7 +48,25 @@ journalctl -u catering-office-panel -n 100 --no-pager
 Never paste `/etc/catering/*.env` contents into chat, tickets, documentation,
 or logs.
 
-## Kiosk pickup signal (dormant until activated)
+## Courier app and kiosk pickup signal
+
+The courier app test instance runs as the enabled user unit
+`catering-courier-app.service` on port `8090`. Its checkout is
+`/home/viktor/projects/courier-app`; state and the mode-`600` environment file
+live under `/home/viktor/courier-runtime`. `Linger=yes` keeps the user manager
+alive across logout and starts the enabled unit after reboot. Verify it with:
+
+```bash
+systemctl --user is-enabled catering-courier-app
+systemctl --user is-active catering-courier-app
+loginctl show-user viktor -p Linger
+curl -s -o /dev/null -w '%{http_code}\n' \
+  http://127.0.0.1:8090/api/overdue-pickups  # 401 without bearer
+```
+
+Never print, paste, or pass `/home/viktor/courier-runtime/courier.env` in
+argv. The chef password and signal bearer are intentionally generated and
+stored only on the Lenovo.
 
 The kiosk can display open equipment returns read from the courier app
 (`docs/proposals/KIOSK_PICKUP_SIGNAL_PACK_V1.md`). The feature is **dormant
@@ -56,20 +74,25 @@ by default**: deploying the kiosk without `/etc/catering/kiosk.env` (or with
 both variables empty) changes nothing — no request is made and the page is
 byte-identical to the pre-feature output. Deploy first, activate later.
 
-Activation (only once the courier app runs on this host):
+The courier app is live; production-kiosk activation still requires `sudo`:
 
 1. Create the kiosk environment file — root-owned, mode `600`, loopback URL,
    and a token paired with the courier app's `KIOSK_SIGNAL_TOKEN`. The token
-   value must never appear in argv, shell history, documentation, or logs;
-   write it into the two env files directly with an editor:
+   value must never appear in argv, shell history, documentation, or logs.
+   Copy it directly between files without printing it:
 
    ```bash
-   sudo touch /etc/catering/kiosk.env
+   sudo /bin/sh -c '
+     set -eu
+     umask 077
+     token=$(sed -n "s/^KIOSK_SIGNAL_TOKEN=//p" \
+       /home/viktor/courier-runtime/courier.env)
+     test -n "$token"
+     printf "PICKUP_SIGNAL_URL=http://127.0.0.1:8090/api/overdue-pickups\nPICKUP_SIGNAL_TOKEN=%s\n" \
+       "$token" > /etc/catering/kiosk.env
+   '
    sudo chown root:root /etc/catering/kiosk.env
    sudo chmod 600 /etc/catering/kiosk.env
-   sudoedit /etc/catering/kiosk.env
-   # PICKUP_SIGNAL_URL=http://127.0.0.1:8090/api/overdue-pickups
-   # PICKUP_SIGNAL_TOKEN=<same value as the courier app's KIOSK_SIGNAL_TOKEN>
    ```
 
    A half-filled file (URL without token or vice versa) is a startup error

@@ -8,6 +8,7 @@ Last verified: **2026-07-13, Europe/Berlin**.
 |---|---|---|---|
 | Lenovo `debiancatering` | Office panel | LAN/Tailscale, port `8081` | active |
 | Lenovo `debiancatering` | Kitchen kiosk | LAN/Tailscale, port `8082` | active |
+| Lenovo `debiancatering` | Courier app (test) | LAN/Tailscale, port `8090` | active |
 | Lenovo `debiancatering` | Website intake | `127.0.0.1:8083` | active |
 | VPS `185.16.60.69` | Temporary staging site | public HTTP, port `8080` | active |
 
@@ -27,7 +28,15 @@ Production facts:
 - kiosk pickup-signal client: deployed **dormant** on 2026-07-13; no
   `/etc/catering/kiosk.env` is installed, no courier-app request is made, and
   the kiosk HTML hash remained byte-identical across the restart; activation
-  waits for the courier app and the live unit-template update
+  waits only for the root-owned kiosk env file and live unit-template update
+- courier app test deployment: `/home/viktor/projects/courier-app` at local
+  commit `c716b21`, own database `/home/viktor/courier-runtime/courier.db`,
+  user unit `catering-courier-app.service`, enabled with `Linger=yes`; the
+  checkout and database were clean/healthy and the service had zero restarts
+- courier route smoke: chef auth `401`/`200`, signal auth `401`/`200`, bad
+  authenticated query `400`, security headers and content length verified;
+  an isolated kiosk instance completed an authenticated refresh while the
+  production kiosk PID remained unchanged
 - `PRAGMA quick_check`: `ok`
 - daily backup cron: 03:15, 14-day retention, `umask 077`
 - manual cron-equivalent backup verified on 2026-07-12: `ok`, mode `600`
@@ -70,6 +79,14 @@ Recovery-key protection verified on 2026-07-12:
 
 ## Operational risks
 
+### Medium — pickup signal still needs one privileged activation step
+
+Both HTTP endpoints are running and both directions were verified with an
+isolated kiosk client, but the production kiosk consumer remains dormant.
+Installing the tracked kiosk systemd unit and the paired root-owned environment
+file requires working Lenovo `sudo` credentials. No user-owned fallback or
+service-replacement race is used.
+
 ### High — production is not yet connected to the public website
 
 The real Silberlöffel site is still managed externally. The intake receiver is
@@ -78,7 +95,9 @@ The VPS page is a temporary design and form-development environment only.
 
 ## Next milestones
 
-1. Obtain access to the real Silberlöffel website.
-2. Configure a TLS-protected public intake path through Cloudflare.
-3. Port the approved staging form into the real site.
-4. Perform an end-to-end test from public form to office panel.
+1. Install the kiosk unit/env with `sudo` and activate the pickup signal.
+2. Create the private GitHub remote for courier-app and push `main`.
+3. Obtain access to the real Silberlöffel website.
+4. Configure a TLS-protected public intake path through Cloudflare.
+5. Port the approved staging form into the real site.
+6. Perform an end-to-end test from public form to office panel.
