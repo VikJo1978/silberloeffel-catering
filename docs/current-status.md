@@ -31,7 +31,7 @@ Production facts:
 - kiosk signal configuration: `/etc/catering/kiosk.env`, owner `root:root`,
   mode `600`; the bearer is absent from the kiosk process arguments
 - courier app test deployment: `/home/viktor/projects/courier-app` at local
-  commit `2a9e2d3`, own database `/home/viktor/courier-runtime/courier.db`,
+  commit `18b3633`, own database `/home/viktor/courier-runtime/courier.db`,
   user unit `catering-courier-app.service`, enabled with `Linger=yes`; the
   checkout and database were clean/healthy and the service had zero restarts
 - courier app source: private `VikJo1978/courier-app`, branch `main`; the full
@@ -71,8 +71,8 @@ Form staging facts:
 - application: `/opt/catering-staging-site`
 - database: `/var/lib/catering-staging/staging.db`
 - public preview: [http://185.16.60.69:8080/](http://185.16.60.69:8080/)
-- immediate purpose: validate inquiry acceptance end to end before the office
-  is connected; the replacement website design comes later
+- immediate purpose: exercise the already-verified staging-to-Core-to-office
+  Inquiry workflow; replacement website work is currently deferred by the owner
 - 10-user smoke load: 40/40 requests returned `200`; slowest response was
   approximately `0.153 s`
 - staging inquiry viewer: read-only `/admin`, loopback/SSH-tunnel only
@@ -112,6 +112,9 @@ test bridge is enabled it must receive invented data only. Real customer data
 waits for the domain, TLS, privacy text, and the final protected public path.
 
 ## Next milestones
+
+No website implementation is active. The owner deferred replacement-site work
+on 2026-07-13. When that work resumes:
 
 1. Build the replacement customer website on the proven intake path.
 2. Obtain domain control, add TLS/Cloudflare, and perform the launch test.

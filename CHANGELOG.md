@@ -5,6 +5,10 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
 
 ## Unreleased
 
+- Corrected the operational status after the office-workflow proof: the
+  staging form now exercises an already-connected office queue, the Lenovo
+  courier checkout is recorded at `18b3633`, and replacement-site work is
+  explicitly deferred by the owner.
 - Added and activated a fail-closed staging-to-Core Inquiry bridge: the VPS backend
   forwards namespaced fake submissions through an exact loopback URL over a
   restricted reverse-SSH tunnel, with a server-only bearer, redirect refusal,
