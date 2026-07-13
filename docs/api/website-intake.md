@@ -132,7 +132,7 @@ browser submission starts and reuse it for retries.
 Public contact fields are not invented as structured customer linkage. They
 remain intake context until office verification.
 
-## Temporary staging API
+## Staging form API
 
 Endpoint:
 
@@ -140,17 +140,28 @@ Endpoint:
 POST http://185.16.60.69:8080/api/inquiries
 ```
 
-This endpoint has no authentication and no TLS. It stores only in
-`/var/lib/catering-staging/staging.db`; it never calls Lenovo. Additional rules:
+This endpoint has no browser authentication and no TLS. It always validates
+against the public-form limits and stores an audit copy in
+`/var/lib/catering-staging/staging.db` after acceptance. In isolated mode it
+stops there. When the paired server-side `STAGING_CORE_INTAKE_URL` and
+`STAGING_CORE_INTAKE_TOKEN` are configured, it first forwards through the
+normal Lenovo receiver over the loopback-only reverse SSH tunnel.
+
+Additional rules:
 
 - at least `name` and one of `email`/`phone`;
-- guest count 1–5000;
+- guest count 1–2000;
 - 16 KiB body;
 - hidden honeypot field;
 - eight submissions per source IP per minute;
-- successful status `201` with a staging `submission_id`.
+- browser-generated retry key becomes a `vps-staging-…` external reference;
+- isolated success is `201`; Core-forwarded success is `202`;
+- upstream failure is a generic `502` and is not stored as a local success.
 
-It is not a production API and must receive fake data only.
+The bearer and upstream URL never reach browser JavaScript. The forwarder
+refuses redirects and non-loopback URLs and accepts only the receiver's strict
+`202` JSON acknowledgement. This remains a fake-data test channel until HTTPS
+and privacy requirements are complete.
 
 ## Secret rotation
 

@@ -1,0 +1,21 @@
+[Unit]
+Description=Loopback-only reverse SSH tunnel from VPS staging to Core intake
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/ssh -NT \
+    -i /home/viktor/.ssh/catering_intake_vps \
+    -o BatchMode=yes \
+    -o ExitOnForwardFailure=yes \
+    -o ServerAliveInterval=30 \
+    -o ServerAliveCountMax=3 \
+    -o StrictHostKeyChecking=yes \
+    -R 127.0.0.1:18083:127.0.0.1:8083 \
+    catering-intake@185.16.60.69
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -34,6 +34,7 @@ provider's secret store. `.env.example` lists names only.
 | Kitchen kiosk `8082` | private LAN/Tailscale only |
 | Website intake `8083` | Lenovo loopback only |
 | VPS staging `8080` | temporary public HTTP; fake data only |
+| VPS staging intake forward `18083` | VPS loopback only; restricted reverse SSH |
 
 The production public website must reach Lenovo only through the Cloudflare
 Worker/Tunnel intake path. Never proxy office or kiosk routes.
@@ -50,12 +51,17 @@ Worker/Tunnel intake path. Never proxy office or kiosk routes.
 - The public Worker never returns the Lenovo response body.
 - Staging submissions are disposable and must use fake contact data until TLS
   and a privacy notice are in place.
+- The optional staging-to-Core test bridge may create namespaced Inquiries only
+  through the normal bearer-protected receiver. It has no Core read path and no
+  Order capability.
 
 ## Application controls
 
 - Office panel uses HTTP Basic authentication and CSRF tokens for POST actions.
 - Public production intake uses field allowlisting, body limits, bearer-token
   authentication between Worker and receiver, and idempotency keys.
+- Staging forwarding accepts only the exact loopback receiver URL, refuses
+  redirects, and treats anything except a valid `202` response as failure.
 - SQLite migrations validate history and fail closed.
 - Repository constraints prevent invalid OrderVersion ownership and duplicate
   external website references.

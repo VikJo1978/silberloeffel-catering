@@ -13,7 +13,7 @@ review that updates architecture, tests, runbooks, and this register.
 | ADR-006 | Kitchen print precedes effective selection | The effective version must correspond to a confirmed physical handoff |
 | ADR-007 | Office panel is private | It is a write surface protected by network boundary, Basic auth, and CSRF |
 | ADR-008 | Public intake is narrow | Worker validation and one token-protected receiver route minimize exposure |
-| ADR-009 | Staging is isolated | Public design tests must not mutate production or hold production secrets |
+| ADR-009 | Staging persistence stays isolated; a narrow test-intake bridge is allowed | Exercise real Inquiry intake before domain/office launch without copying Core or exposing SQLite |
 
 ## ADR-001 — Core on Lenovo
 
@@ -38,6 +38,25 @@ The public browser sends no secret. Cloudflare terminates public traffic,
 whitelists fields, and adds the upstream token. Lenovo accepts exactly one
 receiver route on loopback. The receiver can create an Inquiry but exposes no
 office or order action.
+
+## ADR-009 — Staging persistence and test intake
+
+The VPS keeps its own disposable database and never receives a Core copy or a
+database credential. The owner approved one explicit exception to complete
+form testing before the office and domain are connected: the staging backend
+may create fake-data Inquiries through the existing website receiver.
+
+Consequences:
+
+- the browser still receives no secret and never calls Lenovo directly;
+- the VPS calls only an exact loopback URL reached through a restricted
+  reverse-SSH forward; neither `8083` nor the forwarded port is public;
+- every external reference is prefixed `vps-staging-` and retries are
+  idempotent;
+- a root-owned environment file holds the narrow receiver bearer;
+- upstream failure is visible as `502` and is never reported as acceptance;
+- disabling either environment variable or the tunnel restores isolated mode;
+- only invented data is permitted until HTTPS and the privacy documents exist.
 
 ## How to add a decision
 

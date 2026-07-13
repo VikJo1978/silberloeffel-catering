@@ -14,15 +14,19 @@ flowchart LR
     Courier -->|"GET order feed"| Kiosk
     Kiosk -->|"GET pickup signal"| Courier
 
-    StagingBrowser["Temporary staging visitor"] --> Staging["VPS staging site\npublic · :8080"]
+    StagingBrowser["Website test visitor"] --> Staging["Replacement website staging\nVPS · public :8080"]
     Staging --> StagingDB[("Separate staging.db")]
+    Staging -. "namespaced test Inquiry\nreverse SSH + bearer" .-> Receiver
 
     style Core fill:#405349,color:#fff
     style StagingDB fill:#c79262,color:#fff
 ```
 
-The staging branch is intentionally disconnected from production. A test form
-submission cannot become a production Inquiry.
+The VPS remains a separate data environment. When the optional test bridge is
+enabled, its backend may create a namespaced, fake-data Inquiry only through
+the same narrow token-authenticated receiver used by the future website. It
+never receives Core data, opens SQLite, or creates an Order. Disabling the
+staging environment pair or the reverse SSH tunnel restores full isolation.
 
 The courier app is also a separate bounded system with its own database. It
 never reads or writes Core directly: it reads released order summaries from
@@ -100,7 +104,8 @@ flowchart TD
 | Courier app | LAN/Tailscale only | Basic auth, capability links, machine bearer | Courier DB only |
 | Website receiver | loopback only | Bearer token from Worker | Inquiry only |
 | Cloudflare Worker | public | Server-side upstream secret | Via receiver |
-| VPS staging | public IP, HTTP | None; test data only | No |
+| VPS staging | public IP, HTTP | None; fake data only | Inquiry only through optional narrow bridge |
+| VPS reverse tunnel `18083` | VPS loopback only | restricted SSH key + receiver bearer | Inquiry only |
 
 See the [decision register](decisions/README.md) for the boundaries that must
 survive future refactoring.

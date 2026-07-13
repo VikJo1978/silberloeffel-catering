@@ -1,4 +1,4 @@
-# Isolated public staging site on the VPS. It never writes to production Core.
+# Public staging site on the VPS. Core forwarding is optional and server-side.
 
 [Unit]
 Description=Catering inquiry-form staging site
@@ -9,6 +9,7 @@ Type=simple
 User=catering-staging
 Group=catering-staging
 WorkingDirectory=/opt/catering-staging-site
+EnvironmentFile=-/etc/catering/staging-site.env
 ExecStart=/usr/bin/python3 /opt/catering-staging-site/staging_site.py --db /var/lib/catering-staging/staging.db --host 0.0.0.0 --port 8080
 Restart=on-failure
 RestartSec=3

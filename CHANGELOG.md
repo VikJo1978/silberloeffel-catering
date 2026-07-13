@@ -5,6 +5,11 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
 
 ## Unreleased
 
+- Added an optional, fail-closed staging-to-Core Inquiry bridge: the VPS backend
+  forwards namespaced fake submissions through an exact loopback URL over a
+  restricted reverse-SSH tunnel, with a server-only bearer, redirect refusal,
+  strict `202` acknowledgement, and idempotent retry keys. It never reads Core
+  or creates Orders; real customer data still waits for HTTPS.
 - Implemented and activated the kiosk pickup-signal display (archived in
   `docs/archive/packs/KIOSK_PICKUP_SIGNAL_PACK_V1.md`): a background refresher
   reads the courier app's authenticated `/api/overdue-pickups` feed into a

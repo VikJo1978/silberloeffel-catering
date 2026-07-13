@@ -3,10 +3,11 @@
 Operational software for receiving catering inquiries, preparing versioned
 orders, controlling kitchen release gates, and showing the current week to the
 kitchen. Python and SQLite are the production runtime; the public staging site
-is deliberately isolated from production data.
+holds no production data and can exercise only the narrow Inquiry intake path.
 
-> **Current state:** production services on the Lenovo are active. The temporary
-> website preview is available at [185.16.60.69:8080](http://185.16.60.69:8080/)
+> **Current state:** production services on the Lenovo are active. The public
+> form-development and intake-test preview is available at
+> [185.16.60.69:8080](http://185.16.60.69:8080/)
 > and must be used with fake data only.
 
 ## Start here
@@ -79,7 +80,9 @@ test count instead of duplicating a number here.
   public.
 - The kitchen kiosk is read-only.
 - The website receiver exposes one token-protected intake route only.
-- The VPS staging database is separate and never forwards to production.
+- The VPS staging database is separate. Optional Core forwarding can create
+  only a namespaced test Inquiry through the token-protected intake receiver;
+  it never reads Core or creates an Order.
 - Contact data and secrets must not appear in logs, commits, screenshots, or
   documentation.
 

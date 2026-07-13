@@ -10,7 +10,7 @@ Last verified: **2026-07-13, Europe/Berlin**.
 | Lenovo `debiancatering` | Kitchen kiosk | LAN/Tailscale, port `8082` | active |
 | Lenovo `debiancatering` | Courier app (test) | LAN/Tailscale, port `8090` | active |
 | Lenovo `debiancatering` | Website intake | `127.0.0.1:8083` | active |
-| VPS `185.16.60.69` | Temporary staging site | public HTTP, port `8080` | active |
+| VPS `185.16.60.69` | Form and intake staging | public HTTP, port `8080` | active, Core bridge pending deployment |
 
 Production facts:
 
@@ -47,12 +47,14 @@ Production facts:
 - encrypted off-host upload cron: 03:25 to VPS, 30-day retention
 - off-host restore drill verified on 2026-07-12: `ok`, row counts `3/1/1`
 
-Staging facts:
+Form staging facts:
 
 - service user: `catering-staging`
 - application: `/opt/catering-staging-site`
 - database: `/var/lib/catering-staging/staging.db`
 - public preview: [http://185.16.60.69:8080/](http://185.16.60.69:8080/)
+- immediate purpose: validate inquiry acceptance end to end before the office
+  is connected; the replacement website design comes later
 - 10-user smoke load: 40/40 requests returned `200`; slowest response was
   approximately `0.153 s`
 - staging inquiry viewer: read-only `/admin`, loopback/SSH-tunnel only
@@ -83,15 +85,16 @@ Recovery-key protection verified on 2026-07-12:
 
 ## Operational risks
 
-### High — production is not yet connected to the public website
+### High — the staging form has no HTTPS
 
-The real Silberlöffel site is still managed externally. The intake receiver is
-active on Lenovo, but the final public domain/Cloudflare path is not configured.
-The VPS page is a temporary design and form-development environment only.
+The VPS form has only a public IP and plaintext HTTP. Even after the narrow Core
+test bridge is enabled it must receive invented data only. Real customer data
+waits for the domain, TLS, privacy text, and the final protected public path.
 
 ## Next milestones
 
-1. Obtain access to the real Silberlöffel website.
-2. Configure a TLS-protected public intake path through Cloudflare.
-3. Port the approved staging form into the real site.
-4. Perform an end-to-end test from public form to office panel.
+1. Deploy the restricted VPS → Lenovo intake bridge.
+2. Submit one marked fake request and prove exactly one Core Inquiry exists.
+3. Connect and test the office workflow against the resulting Inquiry queue.
+4. Build the replacement customer website on the proven intake path.
+5. Obtain domain control, add TLS/Cloudflare, and perform the launch test.

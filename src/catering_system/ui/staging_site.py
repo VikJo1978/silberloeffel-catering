@@ -1,7 +1,9 @@
-"""Isolated staging website for developing the public inquiry form.
+"""Staging website for developing and exercising the public inquiry form.
 
-This process never imports production repositories or forwards to Core. Test
-submissions are stored in their own SQLite database on the staging host.
+By default submissions stay in the VPS SQLite database. When the paired
+server-side Core intake URL and token are configured, validated test
+submissions are forwarded through the narrow website-intake contract before a
+local audit copy is stored. The browser never receives the token or Core URL.
 """
 
 from __future__ import annotations
@@ -10,9 +12,14 @@ import argparse
 import html
 import ipaddress
 import json
+import os
+import re
 import sqlite3
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 from collections import defaultdict, deque
 from datetime import date, datetime, timezone
@@ -24,6 +31,23 @@ _ASSET_DIR = Path(__file__).with_name("staging_site_assets")
 _MAX_BODY_BYTES = 16 * 1024
 _RATE_LIMIT_COUNT = 8
 _RATE_LIMIT_WINDOW_SECONDS = 60.0
+_CORE_RESPONSE_LIMIT = 8 * 1024
+_CORE_ROUTE = "/intake/website-form"
+_SUBMISSION_ID_RE = re.compile(r"[A-Za-z0-9_-]{1,120}")
+
+_CORE_PAYLOAD_FIELDS = (
+    "event_date",
+    "time_window_text",
+    "location_text",
+    "guest_count_estimate",
+    "company",
+    "name",
+    "email",
+    "phone",
+    "event_type",
+    "message",
+    "submission_id",
+)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS staging_inquiries (
@@ -84,7 +108,7 @@ class StagingInquiryRepository:
     def save(self, inquiry: dict[str, Any]) -> None:
         with self._lock, self._connection:
             self._connection.execute(
-                "INSERT INTO staging_inquiries VALUES "
+                "INSERT OR IGNORE INTO staging_inquiries VALUES "
                 "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     inquiry["submission_id"],
@@ -137,6 +161,84 @@ class SubmissionRateLimiter:
             return True
 
 
+class CoreIntakeForwardError(RuntimeError):
+    """The narrow Core receiver did not confirm the submission."""
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args: object, **kwargs: object) -> None:
+        return None
+
+
+def validate_core_intake_url(raw_url: str) -> str:
+    """Require the SSH-forwarded Core receiver to remain on loopback."""
+    try:
+        parsed = urllib.parse.urlsplit(raw_url)
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Core intake URL is invalid") from exc
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname is None
+        or not ipaddress.ip_address(parsed.hostname).is_loopback
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is None
+        or parsed.path != _CORE_ROUTE
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(
+            f"Core intake URL must be an exact loopback HTTP URL for {_CORE_ROUTE}"
+        )
+    return raw_url
+
+
+class CoreIntakeClient:
+    def __init__(self, url: str, token: str, timeout_seconds: float = 3.0) -> None:
+        self._url = validate_core_intake_url(url)
+        if not token:
+            raise ValueError("Core intake token must not be empty")
+        self._token = token
+        self._timeout_seconds = timeout_seconds
+
+    def forward(self, inquiry: dict[str, Any]) -> None:
+        payload = {field: inquiry[field] for field in _CORE_PAYLOAD_FIELDS}
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            self._url,
+            data=body,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {self._token}",
+                "Content-Type": "application/json",
+            },
+        )
+        opener = urllib.request.build_opener(_NoRedirectHandler())
+        try:
+            with opener.open(request, timeout=self._timeout_seconds) as response:
+                if response.status != 202:
+                    raise CoreIntakeForwardError("Core intake did not accept request")
+                raw = response.read(_CORE_RESPONSE_LIMIT + 1)
+        except CoreIntakeForwardError:
+            raise
+        except (OSError, TimeoutError, urllib.error.URLError) as exc:
+            raise CoreIntakeForwardError("Core intake unavailable") from exc
+        if len(raw) > _CORE_RESPONSE_LIMIT:
+            raise CoreIntakeForwardError("Core intake response is too large")
+        try:
+            result = json.loads(raw)
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise CoreIntakeForwardError("Core intake returned invalid JSON") from exc
+        if (
+            not isinstance(result, dict)
+            or result.get("accepted") is not True
+            or not isinstance(result.get("inquiry_id"), str)
+            or not result["inquiry_id"]
+        ):
+            raise CoreIntakeForwardError("Core intake returned an invalid response")
+
+
 def _text(payload: dict[str, Any], field: str, *, required: bool = False) -> str:
     raw = payload.get(field, "")
     if not isinstance(raw, str):
@@ -147,6 +249,17 @@ def _text(payload: dict[str, Any], field: str, *, required: bool = False) -> str
     if len(value) > _TEXT_LIMITS[field]:
         raise ValueError(f"{field} is too long")
     return value
+
+
+def _submission_id(payload: dict[str, Any]) -> str:
+    raw = payload.get("submission_id")
+    if raw in (None, ""):
+        value = str(uuid.uuid4())
+    elif isinstance(raw, str) and _SUBMISSION_ID_RE.fullmatch(raw):
+        value = raw
+    else:
+        raise ValueError("submission_id is invalid")
+    return f"vps-staging-{value}"
 
 
 def validate_staging_payload(payload: object) -> dict[str, Any]:
@@ -185,11 +298,11 @@ def validate_staging_payload(payload: object) -> dict[str, Any]:
             raise ValueError("guest_count_estimate must be an integer") from exc
     else:
         raise ValueError("guest_count_estimate must be an integer")
-    if guest_count is not None and (guest_count < 1 or guest_count > 5000):
-        raise ValueError("guest_count_estimate must be between 1 and 5000")
+    if guest_count is not None and (guest_count < 1 or guest_count > 2000):
+        raise ValueError("guest_count_estimate must be between 1 and 2000")
 
     return {
-        "submission_id": str(uuid.uuid4()),
+        "submission_id": _submission_id(payload),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "event_date": parsed_date.isoformat(),
         "time_window_text": _text(payload, "time_window_text"),
@@ -262,6 +375,7 @@ def render_staging_admin(inquiries: list[dict[str, Any]]) -> bytes:
 def make_staging_handler(
     repository: StagingInquiryRepository,
     rate_limiter: SubmissionRateLimiter | None = None,
+    core_intake_client: CoreIntakeClient | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     limiter = rate_limiter or SubmissionRateLimiter()
 
@@ -308,7 +422,14 @@ def make_staging_handler(
             elif self.path == "/app.js":
                 self._asset("app.js", "text/javascript; charset=utf-8")
             elif self.path == "/healthz":
-                self._json(200, {"status": "ok", "environment": "staging"})
+                self._json(
+                    200,
+                    {
+                        "status": "ok",
+                        "environment": "staging",
+                        "core_forwarding": core_intake_client is not None,
+                    },
+                )
             elif self.path == "/admin":
                 if not is_loopback_client(self.client_address[0]):
                     self.send_error(404)
@@ -348,13 +469,20 @@ def make_staging_handler(
             except (ValueError, UnicodeDecodeError) as exc:
                 self._json(400, {"error": str(exc)})
                 return
+            if core_intake_client is not None:
+                try:
+                    core_intake_client.forward(inquiry)
+                except CoreIntakeForwardError:
+                    self._json(502, {"error": "Core intake temporarily unavailable"})
+                    return
             repository.save(inquiry)
             self._json(
-                201,
+                202 if core_intake_client is not None else 201,
                 {
                     "accepted": True,
                     "environment": "staging",
                     "submission_id": inquiry["submission_id"],
+                    "forwarded_to_core": core_intake_client is not None,
                 },
             )
 
@@ -367,9 +495,19 @@ def make_staging_handler(
 class StagingHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address: tuple[str, int], db_path: str | Path) -> None:
+    def __init__(
+        self,
+        address: tuple[str, int],
+        db_path: str | Path,
+        core_intake_client: CoreIntakeClient | None = None,
+    ) -> None:
         self.repository = StagingInquiryRepository(db_path)
-        super().__init__(address, make_staging_handler(self.repository))
+        super().__init__(
+            address,
+            make_staging_handler(
+                self.repository, core_intake_client=core_intake_client
+            ),
+        )
 
     def server_close(self) -> None:
         super().server_close()
@@ -377,9 +515,12 @@ class StagingHTTPServer(ThreadingHTTPServer):
 
 
 def create_staging_server(
-    db_path: str | Path, host: str = "127.0.0.1", port: int = 8080
+    db_path: str | Path,
+    host: str = "127.0.0.1",
+    port: int = 8080,
+    core_intake_client: CoreIntakeClient | None = None,
 ) -> StagingHTTPServer:
-    return StagingHTTPServer((host, port), db_path)
+    return StagingHTTPServer((host, port), db_path, core_intake_client)
 
 
 def main() -> None:
@@ -388,7 +529,17 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()
-    server = create_staging_server(args.db, args.host, args.port)
+    core_url = os.environ.get("STAGING_CORE_INTAKE_URL", "").strip()
+    core_token = os.environ.get("STAGING_CORE_INTAKE_TOKEN", "")
+    if bool(core_url) != bool(core_token):
+        raise SystemExit(
+            "STAGING_CORE_INTAKE_URL and STAGING_CORE_INTAKE_TOKEN must be "
+            "configured together"
+        )
+    core_client = CoreIntakeClient(core_url, core_token) if core_url else None
+    server = create_staging_server(
+        args.db, args.host, args.port, core_intake_client=core_client
+    )
     print(f"Catering staging site on http://{args.host}:{args.port}/")
     try:
         server.serve_forever()

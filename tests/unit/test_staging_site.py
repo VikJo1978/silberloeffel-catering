@@ -10,12 +10,19 @@ from pathlib import Path
 
 import pytest
 
+from catering_system.repositories.in_memory_inquiry_repository import (
+    InMemoryInquiryRepository,
+)
 from catering_system.ui.staging_site import (
+    CoreIntakeClient,
+    CoreIntakeForwardError,
     SubmissionRateLimiter,
     create_staging_server,
     is_loopback_client,
+    validate_core_intake_url,
     validate_staging_payload,
 )
+from catering_system.ui.website_intake_endpoint import create_website_intake_server
 
 
 @pytest.fixture()
@@ -76,6 +83,7 @@ def test_landing_page_and_health_are_served_with_security_headers(
         assert json.loads(response.read()) == {
             "status": "ok",
             "environment": "staging",
+            "core_forwarding": False,
         }
 
 
@@ -85,6 +93,7 @@ def test_valid_submission_is_stored_only_in_staging_database(staging_server) -> 
     assert status == 201
     assert body["accepted"] is True
     assert body["environment"] == "staging"
+    assert body["forwarded_to_core"] is False
 
     with sqlite3.connect(db_path) as connection:
         row = connection.execute(
@@ -109,6 +118,7 @@ def test_valid_submission_is_stored_only_in_staging_database(staging_server) -> 
         {"email": "", "phone": ""},
         {"email": "invalid"},
         {"guest_count_estimate": 0},
+        {"guest_count_estimate": 2001},
         {"guest_count_estimate": True},
         {"website": "spam.example"},
     ],
@@ -199,3 +209,105 @@ def test_rate_limiter_expires_old_hits() -> None:
 def test_payload_must_be_an_object() -> None:
     with pytest.raises(ValueError, match="object"):
         validate_staging_payload([])
+
+
+def test_submission_id_is_namespaced_and_strict() -> None:
+    inquiry = validate_staging_payload({**_VALID, "submission_id": "retry_42"})
+    assert inquiry["submission_id"] == "vps-staging-retry_42"
+
+    with pytest.raises(ValueError, match="submission_id"):
+        validate_staging_payload({**_VALID, "submission_id": "bad/id"})
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://127.0.0.1:18083/intake/website-form",
+        "http://185.16.60.69:18083/intake/website-form",
+        "http://127.0.0.1:18083/wrong",
+        "http://127.0.0.1:18083/intake/website-form?debug=1",
+        "http://user@127.0.0.1:18083/intake/website-form",
+    ],
+)
+def test_core_intake_url_must_be_exact_loopback(url: str) -> None:
+    with pytest.raises(ValueError, match="loopback"):
+        validate_core_intake_url(url)
+
+
+def test_forwarding_creates_one_core_inquiry_and_one_local_audit_row(
+    tmp_path: Path,
+) -> None:
+    core_repository = InMemoryInquiryRepository()
+    core_server = create_website_intake_server(
+        core_repository, "forward-test-token", host="127.0.0.1", port=0
+    )
+    core_thread = threading.Thread(target=core_server.serve_forever, daemon=True)
+    core_thread.start()
+    core_host, core_port = core_server.server_address[:2]
+    client = CoreIntakeClient(
+        f"http://{core_host}:{core_port}/intake/website-form",
+        "forward-test-token",
+    )
+    local_db = tmp_path / "forwarding.db"
+    staging_server = create_staging_server(
+        local_db, host="127.0.0.1", port=0, core_intake_client=client
+    )
+    staging_thread = threading.Thread(target=staging_server.serve_forever, daemon=True)
+    staging_thread.start()
+    staging_host, staging_port = staging_server.server_address[:2]
+    base = f"http://{staging_host}:{staging_port}"
+    payload = {**_VALID, "submission_id": "same-browser-attempt"}
+    try:
+        first_status, first_body = _post(base, payload)
+        second_status, second_body = _post(base, payload)
+        with urllib.request.urlopen(f"{base}/healthz") as response:
+            health = json.loads(response.read())
+    finally:
+        staging_server.shutdown()
+        staging_thread.join(timeout=2)
+        staging_server.server_close()
+        core_server.shutdown()
+        core_thread.join(timeout=2)
+        core_server.server_close()
+
+    assert first_status == second_status == 202
+    assert first_body["forwarded_to_core"] is True
+    assert second_body["submission_id"] == first_body["submission_id"]
+    assert health["core_forwarding"] is True
+    inquiries = core_repository.list_all()
+    assert len(inquiries) == 1
+    assert inquiries[0].intake_external_ref == "vps-staging-same-browser-attempt"
+    with sqlite3.connect(local_db) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM staging_inquiries"
+        ).fetchone() == (1,)
+
+
+def test_failed_core_forward_is_502_and_is_not_saved_locally(tmp_path: Path) -> None:
+    class FailingClient:
+        def forward(self, inquiry: dict[str, object]) -> None:
+            raise CoreIntakeForwardError("expected test failure")
+
+    db_path = tmp_path / "failed-forward.db"
+    server = create_staging_server(
+        db_path,
+        host="127.0.0.1",
+        port=0,
+        core_intake_client=FailingClient(),  # type: ignore[arg-type]
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    try:
+        status, body = _post(f"http://{host}:{port}", _VALID)
+    finally:
+        server.shutdown()
+        thread.join(timeout=2)
+        server.server_close()
+
+    assert status == 502
+    assert body == {"error": "Core intake temporarily unavailable"}
+    with sqlite3.connect(db_path) as connection:
+        assert connection.execute(
+            "SELECT COUNT(*) FROM staging_inquiries"
+        ).fetchone() == (0,)
