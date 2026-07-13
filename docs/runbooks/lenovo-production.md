@@ -48,6 +48,51 @@ journalctl -u catering-office-panel -n 100 --no-pager
 Never paste `/etc/catering/*.env` contents into chat, tickets, documentation,
 or logs.
 
+## Kiosk pickup signal (dormant until activated)
+
+The kiosk can display open equipment returns read from the courier app
+(`docs/proposals/KIOSK_PICKUP_SIGNAL_PACK_V1.md`). The feature is **dormant
+by default**: deploying the kiosk without `/etc/catering/kiosk.env` (or with
+both variables empty) changes nothing — no request is made and the page is
+byte-identical to the pre-feature output. Deploy first, activate later.
+
+Activation (only once the courier app runs on this host):
+
+1. Create the kiosk environment file — root-owned, mode `600`, loopback URL,
+   and a token paired with the courier app's `KIOSK_SIGNAL_TOKEN`. The token
+   value must never appear in argv, shell history, documentation, or logs;
+   write it into the two env files directly with an editor:
+
+   ```bash
+   sudo touch /etc/catering/kiosk.env
+   sudo chown root:root /etc/catering/kiosk.env
+   sudo chmod 600 /etc/catering/kiosk.env
+   sudoedit /etc/catering/kiosk.env
+   # PICKUP_SIGNAL_URL=http://127.0.0.1:8090/api/overdue-pickups
+   # PICKUP_SIGNAL_TOKEN=<same value as the courier app's KIOSK_SIGNAL_TOKEN>
+   ```
+
+   A half-filled file (URL without token or vice versa) is a startup error
+   by design — the kiosk refuses to run the feature unauthenticated.
+
+2. The unit already references the file (`EnvironmentFile=-/etc/catering/kiosk.env`);
+   after installing or editing the unit itself run `sudo systemctl daemon-reload`.
+
+3. Restart only the kiosk and smoke-test by status codes and the fixed
+   success log line — never by dumping response bodies:
+
+   ```bash
+   sudo systemctl restart catering-kiosk
+   curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8082/   # 200
+   curl -s -o /dev/null -w '%{http_code}\n' \
+     http://127.0.0.1:8090/api/overdue-pickups                       # 401 (no token sent)
+   journalctl -u catering-kiosk --since '5 minutes ago' --no-pager \
+     | grep -c 'pickup signal refresh succeeded'                     # >= 1
+   ```
+
+   The kiosk's own refresher is the authenticated test client; an error-free
+   journal alone proves nothing — the success line must actually appear.
+
 ## Safe deployment
 
 ### 1. Record the starting point

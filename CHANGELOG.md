@@ -5,6 +5,13 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
 
 ## Unreleased
 
+- Implemented the kiosk pickup-signal display (frozen in
+  `docs/proposals/KIOSK_PICKUP_SIGNAL_PACK_V1.md`): a background refresher
+  reads the courier app's authenticated `/api/overdue-pickups` feed into a
+  cache and the kiosk shows open equipment returns under the week table.
+  Ships **dormant** — without `PICKUP_SIGNAL_URL` and `PICKUP_SIGNAL_TOKEN`
+  no request is made and the page is byte-identical (pinned by a golden
+  test). Not deployed to production yet.
 - Added a read-only JSON order feed to the kitchen kiosk
   (`GET /api/order-feed?date=YYYY-MM-DD`) for the separate courier app, with
   a strict query contract and the same release gates as the Wochenübersicht
