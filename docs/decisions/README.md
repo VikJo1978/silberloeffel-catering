@@ -14,6 +14,7 @@ review that updates architecture, tests, runbooks, and this register.
 | ADR-007 | Office panel is private | It is a write surface protected by network boundary, Basic auth, and CSRF |
 | ADR-008 | Public intake is narrow | Worker validation and one token-protected receiver route minimize exposure |
 | ADR-009 | Staging persistence stays isolated; a narrow test-intake bridge is allowed | Exercise real Inquiry intake before domain/office launch without copying Core or exposing SQLite |
+| ADR-010 | Durable intake buffering is deferred but required before real customer traffic | Avoid queue complexity during fake-data testing without accepting lead loss at launch |
 
 ## ADR-001 — Core on Lenovo
 
@@ -57,6 +58,35 @@ Consequences:
 - upstream failure is visible as `502` and is never reported as acceptance;
 - disabling either environment variable or the tunnel restores isolated mode;
 - only invented data is permitted until HTTPS and the privacy documents exist.
+
+## ADR-010 — Deferred durable intake buffer
+
+The current staging bridge is deliberately synchronous. It forwards a validated
+fake submission to Core first, stores the VPS audit copy only after Core returns
+its strict `202`, and returns `502` when Core or the tunnel is unavailable. The
+browser keeps a stable submission ID, so a visible retry is idempotent, but a
+visitor who closes the page after a failure has no server-side delivery
+guarantee.
+
+This is accepted only while the endpoint is a fake-data test surface. A durable
+buffer is a mandatory launch gate before real customer submissions are allowed.
+
+The launch implementation must:
+
+- persist the validated Inquiry payload in the existing VPS SQLite database
+  before returning browser acceptance;
+- deliver it asynchronously to the narrow Core receiver and retry safely with
+  the existing namespaced submission ID;
+- expose pending/delivered/attention state only through the private admin
+  surface and never silently discard an exhausted item;
+- survive process restart and prove `Core unavailable → accepted locally →
+  Core restored → exactly one Inquiry` in an end-to-end test;
+- remain an Inquiry-only boundary: no Core copy, Core reads, or Order creation;
+- use SQLite for the expected volume; Redis, RabbitMQ, or another broker needs
+  a separate scale-driven decision.
+
+Until that gate is implemented, `502` remains the truthful failure response and
+must never be changed to a success-looking status.
 
 ## How to add a decision
 

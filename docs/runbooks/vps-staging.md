@@ -178,6 +178,18 @@ both repeated fake submissions returned `202`, Core and staging each contained
 one row for the retry key, both SQLite quick checks returned `ok`, and the
 reverse listener remained bound only to `127.0.0.1:18083`.
 
+### 5. Current delivery guarantee and launch gate
+
+There is intentionally no background delivery queue in the test bridge. The
+VPS writes its local audit row only after Core returns the strict `202`. If Core
+or the tunnel is unavailable, the request returns `502`; the browser can retry
+with the same stable submission ID, but closing the page ends that retry path.
+
+Do not reinterpret `502` as acceptance and do not use this behavior for real
+customer data. Before public launch, implement ADR-010's SQLite-backed durable
+inbox, restart-safe worker, private delivery-state view, and outage-recovery
+test. A separate message broker is not part of the current plan.
+
 Rollback is immediate: remove both values from the VPS environment (or remove
 the file) and restart staging for isolated mode; stop the tunnel user service;
 restore the saved Lenovo receiver environment only if the bearer itself must be

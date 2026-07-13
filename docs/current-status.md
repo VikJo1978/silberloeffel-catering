@@ -111,10 +111,21 @@ The VPS form has only a public IP and plaintext HTTP. Even after the narrow Core
 test bridge is enabled it must receive invented data only. Real customer data
 waits for the domain, TLS, privacy text, and the final protected public path.
 
+### Accepted for testing — no durable intake buffer yet
+
+The current bridge stores its VPS audit row only after Core accepts the
+Inquiry. If Core or the reverse tunnel is unavailable, the browser receives a
+truthful `502` and may retry with the same idempotency key, but the VPS does not
+promise later delivery. This is acceptable for invented test data only.
+
+Before real customer traffic, implement ADR-010's SQLite-backed durable inbox
+and prove outage recovery with exactly-once Core intake.
+
 ## Next milestones
 
 No website implementation is active. The owner deferred replacement-site work
 on 2026-07-13. When that work resumes:
 
 1. Build the replacement customer website on the proven intake path.
-2. Obtain domain control, add TLS/Cloudflare, and perform the launch test.
+2. Add the ADR-010 durable SQLite intake buffer.
+3. Obtain domain control, add TLS/Cloudflare, and perform the launch test.

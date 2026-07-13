@@ -28,6 +28,11 @@ the same narrow token-authenticated receiver used by the future website. It
 never receives Core data, opens SQLite, or creates an Order. Disabling the
 staging environment pair or the reverse SSH tunnel restores full isolation.
 
+The test bridge is currently synchronous and fail-visible: Core acceptance
+precedes the VPS audit write, and upstream failure returns `502`. ADR-010 keeps
+that simple behavior for fake-data testing but requires a durable SQLite inbox
+before any real customer traffic is allowed.
+
 The courier app is also a separate bounded system with its own database. It
 never reads or writes Core directly: it reads released order summaries from
 the kiosk, while the kiosk reads outstanding equipment returns from the
