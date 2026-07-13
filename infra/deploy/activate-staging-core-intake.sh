@@ -59,11 +59,33 @@ mv -f "$tmp_env" "$env_target"
 tmp_env=
 
 systemctl restart catering-website-intake
-systemctl is-active --quiet catering-website-intake
-status=$(curl -s -o /dev/null -w '%{http_code}' \
-    -X POST -H 'Content-Type: application/json' \
-    --data '{}' http://127.0.0.1:8083/intake/website-form)
-test "$status" = 401
+
+# systemd reports the process as active before the HTTP listener is necessarily
+# ready. Give the receiver a short, bounded readiness window so a normal startup
+# does not trigger rollback. The probe deliberately carries no bearer token.
+status=000
+attempt=1
+while [ "$attempt" -le 15 ]; do
+    if systemctl is-active --quiet catering-website-intake; then
+        status=$(curl -sS -o /dev/null -w '%{http_code}' \
+            --connect-timeout 1 --max-time 2 \
+            -X POST -H 'Content-Type: application/json' \
+            --data '{}' http://127.0.0.1:8083/intake/website-form 2>/dev/null \
+            || true)
+        if [ -z "$status" ]; then
+            status=000
+        fi
+        if [ "$status" = 401 ]; then
+            break
+        fi
+    fi
+    sleep 1
+    attempt=$((attempt + 1))
+done
+if [ "$status" != 401 ]; then
+    printf 'website-intake readiness check failed (status=%s)\n' "$status" >&2
+    exit 1
+fi
 test "$(stat -c %a "$env_target")" = 600
 test "$(stat -c %U:%G "$env_target")" = root:root
 
