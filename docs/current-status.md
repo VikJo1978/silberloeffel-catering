@@ -95,6 +95,11 @@ Offer workflow development:
   become Core truth
 - the handoff remains dormant until the configurator is deployed and
   `CONFIGURATOR_URL` is set on the office panel
+- ADR-012 fixes the future commercial/payment boundary: `Zahlungsart` is agreed
+  in the Angebot (`Vorkasse`, `Rechnung`, or `Bar vor Ort`), transferred only
+  after Angebot acceptance and Order confirmation, and then drives an Office
+  reminder workflow. The Office Panel remains reminder-only; no invoice,
+  accounting, banking, schema, API, or UI implementation exists yet.
 
 ## Local undeployed development baseline
 

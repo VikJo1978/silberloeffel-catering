@@ -16,6 +16,7 @@ review that updates architecture, tests, runbooks, and this register.
 | ADR-009 | Staging persistence stays isolated; a narrow test-intake bridge is allowed | Exercise real Inquiry intake before domain/office launch without copying Core or exposing SQLite |
 | ADR-010 | Durable intake buffering is deferred but required before real customer traffic | Avoid queue complexity during fake-data testing without accepting lead loss at launch |
 | ADR-011 | Core Office API supersedes the panel's in-process Core access | After cutover exactly three Lenovo processes touch `core.db`: Core Office API (read+command), kiosk (read), website-intake receiver (Inquiry create) |
+| ADR-012 | Payment method is agreed in the accepted offer; Office tracks reminders only | Keep commercial terms explicit without turning Office or operational Core into accounting software |
 
 ## ADR-001 — Core on Lenovo
 
@@ -135,6 +136,57 @@ unchanged. Rollback in Phase 1 is stop/disable the API unit. Direct-DB mode is
 retained as an emergency fallback until a separate review verdict authorises its
 deletion after 14 incident-free days (pack §7, Phase 5). Full phasing lives in
 the pack; implementation landed in commits `d50584d`, `6de69bb`, `8dd3b87`.
+
+## ADR-012 — Agreed payment method and reminder-only finance boundary
+
+Context and problem: payment terms belong to the commercial agreement with the
+customer, not to a later office bookkeeping choice. At the same time, this
+system must help the office remember external invoicing and payment deadlines
+without becoming the accounting system or coupling money state to kitchen
+operations.
+
+Decision: `Zahlungsart` is selected in the Angebot as an agreed commercial term
+with exactly these initial choices: `Vorkasse`, `Rechnung`, or `Bar vor Ort`.
+After the customer accepts the Angebot and the office confirms the Order, the
+agreed method is transferred into the Order's future payment-reminder context;
+only then does the corresponding reminder workflow start. Existing or manually
+created Orders without an accepted Angebot may remain `Zahlungsart noch nicht
+gewählt`. Changing the method after Order confirmation changes agreed terms and
+therefore requires a separate, deliberate office action rather than an ordinary
+metadata edit.
+
+The Office Panel does not create a legally significant invoice. It only reminds
+the office to create the invoice in the external accounting program and to
+check the payment deadline or confirm cash received. The configurator may still
+calculate prices and tax for the Angebot; that does not turn the Angebot or the
+Office Panel into the official invoicing system.
+
+Alternatives rejected:
+
+- first choosing the payment method after Order confirmation, because the
+  customer would not have agreed that term in the Angebot;
+- creating invoices, tax documents, or accounting entries in the Office Panel;
+- embedding invoice or payment state in Order, OrderVersion, kitchen-print,
+  effective-version, or `READY_TO_SEND` status;
+- implementing Invoice, Payment, banking, or accounting integrations before a
+  separately reviewed need and contract exist.
+
+Consequences:
+
+- a future accepted-offer handoff must carry the agreed payment method through
+  an explicit, reviewed boundary; this ADR does not authorize that code path;
+- reminder state remains separate from operational truth and must not block or
+  advance kitchen print, effective selection, kiosk visibility, or
+  `READY_TO_SEND`;
+- legacy and manual Orders need a truthful unselected state instead of an
+  invented default;
+- post-confirmation changes require an explicit command and auditability in any
+  future implementation.
+
+Migration and rollback impact: this is a documentation-only decision. It adds
+no schema, API, UI, migration, or runtime behavior. Any implementation requires
+its own reviewed slice with additive backward compatibility; absence of future
+payment-reminder data must continue to mean `Zahlungsart noch nicht gewählt`.
 
 ## How to add a decision
 
