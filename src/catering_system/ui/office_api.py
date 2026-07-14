@@ -30,6 +30,7 @@ from catering_system.domain.inquiry import (
     CRM_PIPELINE,
     validate_crm_stage,
     validate_planning_mode,
+    derive_inquiry_office_state,
 )
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.repositories.core_transaction import (
@@ -229,7 +230,18 @@ class OfficeApi:
         orders_by_inquiry: dict[str, list[Order]] = {}
         for order in orders:
             orders_by_inquiry.setdefault(order.source_inquiry_id, []).append(order)
-        new_inquiries = [i for i in inquiries if i.inquiry_id not in orders_by_inquiry]
+        open_inquiries = []
+        for inquiry in inquiries:
+            state = derive_inquiry_office_state(
+                inquiry,
+                has_order=inquiry.inquiry_id in orders_by_inquiry,
+                has_active_order=any(
+                    order.cancelled_at is None
+                    for order in orders_by_inquiry.get(inquiry.inquiry_id, [])
+                ),
+            )
+            if state.is_open:
+                open_inquiries.append((inquiry, state))
         active = [o for o in orders if o.cancelled_at is None]
         without_print = [
             o
@@ -249,7 +261,9 @@ class OfficeApi:
         week = self.week_service.get_week_overview(iso.year, iso.week)
         return {
             "attention": {
-                "neue_anfragen": len(new_inquiries),
+                # Compatibility key for the local, not-yet-deployed Phase 2
+                # transport. Its value now means truthful open inquiries.
+                "neue_anfragen": len(open_inquiries),
                 "druck_fehlt": len(without_print),
                 "nicht_wirksam": len(not_effective),
                 "versand_blockiert": len(blocked),
@@ -257,7 +271,8 @@ class OfficeApi:
             },
             "week": views.week_view(week),
             "neue_anfragen_top": [
-                views.inquiry_top_row(i) for i in new_inquiries[: views.TOP_ROWS_CAP]
+                views.inquiry_top_row(inquiry, state)
+                for inquiry, state in open_inquiries[: views.TOP_ROWS_CAP]
             ],
             "auftraege_top": [
                 views.order_top_row(
@@ -443,8 +458,23 @@ class OfficeApi:
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict
     ) -> tuple[int, dict[str, object]]:
         inquiry = self._require_inquiry(path_ids["id"])
-        if self._active_order_for_inquiry(inquiry.inquiry_id) is not None:
+        linked_orders = [
+            order
+            for order in self.orders.list_orders()
+            if order.source_inquiry_id == inquiry.inquiry_id
+        ]
+        has_active_order = any(order.cancelled_at is None for order in linked_orders)
+        state = derive_inquiry_office_state(
+            inquiry,
+            has_order=bool(linked_orders),
+            has_active_order=has_active_order,
+        )
+        if has_active_order:
             raise ApiError(409, "already_converted")
+        if inquiry.crm_stage == "Abgelehnt / verloren":
+            raise ApiError(422, "inquiry_rejected")
+        if state.next_action != "convert":
+            raise ApiError(422, "verification_gate_blocked")
         try:
             order, version = self.order_service.convert_inquiry_to_order(inquiry)
         except sqlite3.IntegrityError:
@@ -454,6 +484,10 @@ class OfficeApi:
             raise
         except ValueError as exc:
             raise ApiError(422, "verification_gate_blocked") from exc
+        self.inquiry_service.update_inquiry(
+            inquiry.inquiry_id,
+            crm_stage="Bestätigt / Auftrag",
+        )
         return 201, {
             "order_id": order.order_id,
             "order_version_id": version.order_version_id,

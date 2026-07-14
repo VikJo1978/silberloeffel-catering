@@ -92,6 +92,11 @@ def _seed(db_path: Path) -> dict[str, str]:
         call_verification_status="pending",
     )
     ids["inquiry_website"] = website.inquiry_id
+    rejected = make_inquiry(
+        crm_stage="Abgelehnt / verloren",
+        location_text="Neumünster",
+    )
+    ids["inquiry_rejected"] = rejected.inquiry_id
 
     inquiries.close()
     orders.close()
@@ -253,7 +258,8 @@ def test_queue_view_attention_counts_and_tops(api) -> None:
     status, body, _h = _get(f"{base}/office/v1/queue")
     assert status == 200
     assert set(body) == {"attention", "week", "neue_anfragen_top", "auftraege_top"}
-    # seed world: 3 inquiries without any order; 1 order without print;
+    # seed world: 3 open inquiries plus 1 rejected inquiry without an order;
+    # 1 order without print;
     # 2 not effective (unprinted + none), 2 blocked, 1 cancelled
     assert body["attention"] == {
         "neue_anfragen": 3,
@@ -268,6 +274,7 @@ def test_queue_view_attention_counts_and_tops(api) -> None:
     assert top_actions[ids["inquiry_verify"]] == "verify"
     assert top_actions[ids["inquiry_convertible"]] == "convert"
     assert top_actions[ids["inquiry_website"]] == "verify"
+    assert ids["inquiry_rejected"] not in top_actions
     (blocked_row,) = body["auftraege_top"]
     assert blocked_row["order_id"] == ids["order_unprinted"]
     assert blocked_row["blocker_reason"] == "no_effective_version"
@@ -289,7 +296,7 @@ def test_inquiry_list_rows_and_search(api) -> None:
     status, body, _h = _get(f"{base}/office/v1/inquiries")
     assert status == 200
     assert set(body) == {"inquiries", "total_count", "limit", "offset"}
-    assert body["total_count"] == 6
+    assert body["total_count"] == 7
     by_id = {row["inquiry_id"]: row for row in body["inquiries"]}
     row = by_id[ids["inquiry_printed"]]
     assert row["linked_order_id"] == ids["order_ready"]
@@ -325,7 +332,7 @@ def test_pagination_slices_with_honest_total(api) -> None:
     base, _ids, _db = api
     status, body, _h = _get(f"{base}/office/v1/inquiries?limit=2&offset=4")
     assert status == 200
-    assert body["total_count"] == 6
+    assert body["total_count"] == 7
     assert len(body["inquiries"]) == 2
     assert (body["limit"], body["offset"]) == (2, 4)
 
@@ -353,7 +360,7 @@ def test_inquiry_detail_shape(api) -> None:
     base, ids, _db = api
     status, body, _h = _get(f"{base}/office/v1/inquiries/{ids['inquiry_printed']}")
     assert status == 200
-    assert body["allows_conversion"] is True
+    assert body["allows_conversion"] is False
     assert body["orders"] == [{"order_id": ids["order_ready"], "cancelled_at": None}]
     assert body["orders_truncated"] is False
     assert body["customer_linkage"] == {}
@@ -536,9 +543,21 @@ def test_verify_then_convert_flow_with_gates(api) -> None:
     status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
     assert status == 201
     assert set(body) == {"command_id", "order_id", "order_version_id"}
+    status, detail, _h = _get(f"{base}/office/v1/inquiries/{inquiry_id}")
+    assert status == 200
+    assert detail["crm_stage"] == "Bestätigt / Auftrag"
+    assert detail["allows_conversion"] is False
     # second convert while active: 409
     status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
     assert (status, body["error"]) == (409, "already_converted")
+
+
+def test_rejected_inquiry_cannot_convert(api) -> None:
+    base, ids, _db = api
+    status, body, _h = _post(
+        f"{base}/office/v1/inquiries/{ids['inquiry_rejected']}/convert"
+    )
+    assert (status, body["error"]) == (422, "inquiry_rejected")
 
 
 def test_reconvert_after_storno_via_api(api) -> None:

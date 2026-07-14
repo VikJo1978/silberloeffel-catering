@@ -251,6 +251,8 @@ def test_unverified_inquiry_shows_progression_block_and_convert_fails(
     assert (
         "Rückrufprüfung noch nicht erfüllt" in body
     )  # B7 vocabulary, human label, on inquiry view
+    assert "Telefonisch verifiziert" in body
+    assert "In Auftrag umwandeln" not in body
     with pytest.raises(urllib.error.HTTPError) as exc:
         _post(f"{panel}/inquiry/{iid}/convert", {})
     assert exc.value.code == 400
@@ -264,6 +266,8 @@ def test_verify_then_convert(panel: str) -> None:
     status, body = _get(f"{panel}/order/{oid}")
     assert status == 200
     assert "v1" in body
+    _status, inquiry_body = _get(f"{panel}/inquiry/{iid}")
+    assert "Bestätigt / Auftrag" in inquiry_body
 
 
 def test_converted_inquiry_shows_order_link_instead_of_button(panel: str) -> None:
@@ -272,6 +276,51 @@ def test_converted_inquiry_shows_order_link_instead_of_button(panel: str) -> Non
     _status, body = _get(f"{panel}/inquiry/{iid}")
     assert "Auftrag vorhanden" in body and oid[:8] in body
     assert "In Auftrag umwandeln" not in body
+
+
+def test_rejected_inquiry_is_closed_without_queue_or_actions(panel: str) -> None:
+    iid = _create_inquiry(panel, call_verification_required="1")
+    _post(
+        f"{panel}/inquiry/{iid}/update",
+        {
+            "event_date": "2026-10-01",
+            "time_window_text": "mittags",
+            "location_text": "Hamburg",
+            "guest_count_estimate": "25",
+            "planning_mode": "caterer_suggestion",
+            "crm_stage": "Abgelehnt / verloren",
+        },
+    )
+
+    _status, detail = _get(f"{panel}/inquiry/{iid}")
+    assert "Anfrage wurde abgelehnt" in detail
+    assert "Telefonisch verifiziert" not in detail
+    assert "In Auftrag umwandeln" not in detail
+    _status, dashboard = _get(f"{panel}/")
+    assert _attention_counts(dashboard)["Offene Anfragen prüfen"] == 0
+
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _post(f"{panel}/inquiry/{iid}/convert", {})
+    assert exc.value.code == 400
+
+
+def test_open_queue_shows_actual_crm_stage(panel: str) -> None:
+    iid = _create_inquiry(panel)
+    _post(
+        f"{panel}/inquiry/{iid}/update",
+        {
+            "event_date": "2026-10-01",
+            "time_window_text": "mittags",
+            "location_text": "Hamburg",
+            "guest_count_estimate": "25",
+            "planning_mode": "caterer_suggestion",
+            "crm_stage": "Angebot gesendet / Rückmeldung offen",
+        },
+    )
+
+    _status, dashboard = _get(f"{panel}/")
+    assert "Angebot gesendet / Rückmeldung offen" in dashboard
+    assert f'action="/inquiry/{iid}/convert"' in dashboard
 
 
 # -- intake context (INQUIRY_INTAKE_CONTEXT_FIELDS_IMPLEMENTATION_PACK_V1) --
@@ -777,15 +826,15 @@ def test_queue_shows_attention_bar_and_empty_week(panel: str) -> None:
     status, body = _get(f"{panel}/")
     assert status == 200
     counts = _attention_counts(body)
-    assert counts["Neue Anfragen prüfen"] == 0
+    assert counts["Offene Anfragen prüfen"] == 0
     assert counts["Druckbestätigung fehlt"] == 0
     assert counts["Aufträge noch nicht wirksam"] == 0
     assert counts["Versandfreigabe blockiert"] == 0
     assert "Stornierte Aufträge prüfen" not in body  # no cancelled orders yet
     assert "Diese Woche" in body
     assert "keine wirksamen Aufträge diese Woche" in body
-    assert "Neue Anfragen" in body
-    assert "keine neuen Anfragen." in body
+    assert "Offene Anfragen" in body
+    assert "keine offenen Anfragen." in body
     assert "Aufträge mit nächstem Schritt" in body
     assert "keine offenen Schritte." in body
 
@@ -793,13 +842,13 @@ def test_queue_shows_attention_bar_and_empty_week(panel: str) -> None:
 def test_attention_counts_reflect_new_inquiry_and_unconfirmed_order(panel: str) -> None:
     iid = _create_inquiry(panel)
     _status, body = _get(f"{panel}/")
-    assert _attention_counts(body)["Neue Anfragen prüfen"] == 1
+    assert _attention_counts(body)["Offene Anfragen prüfen"] == 1
 
     oid = _convert(panel, iid)
     _status, body = _get(f"{panel}/")
     counts = _attention_counts(body)
-    # Converting removes it from "Neue Anfragen prüfen" (now has an order)...
-    assert counts["Neue Anfragen prüfen"] == 0
+    # Converting removes it from "Offene Anfragen prüfen" (now has an order)...
+    assert counts["Offene Anfragen prüfen"] == 0
     # ...but the fresh order has no print confirmation, no effective version,
     # and is therefore also READY_TO_SEND-blocked.
     assert counts["Druckbestätigung fehlt"] == 1
@@ -871,7 +920,7 @@ def test_diese_woche_shows_only_effective_orders_in_current_iso_week(
     # Diese Woche now sits above the Blocker section (§3 Arbeitszentrale), so
     # scope the check to that block only, not everything after it on the page.
     diese_woche_html = body.split('id="diese-woche"')[1].split(
-        "<h2>Neue Anfragen</h2>"
+        "<h2>Offene Anfragen</h2>"
     )[0]
     assert other_oid[:8] not in diese_woche_html
 
@@ -1078,7 +1127,7 @@ def test_dashboard_survives_degraded_rueckruf_source() -> None:
         status, body = _get(f"{base}/")
         assert status == 200
         assert "Rückruf nötig" not in body
-        assert "Neue Anfragen" in body
+        assert "Offene Anfragen" in body
         assert "Aufträge mit nächstem Schritt" in body
         assert "Was braucht Aufmerksamkeit?" in body
     finally:
@@ -1130,7 +1179,7 @@ def test_dashboard_queues_capped_at_five_with_alle_anzeigen_link(panel: str) -> 
     for _ in range(7):
         _create_inquiry(panel)
     _status, body = _get(f"{panel}/")
-    assert _attention_counts(body)["Neue Anfragen prüfen"] == 7
+    assert _attention_counts(body)["Offene Anfragen prüfen"] == 7
     assert body.count("<button>In Auftrag umwandeln</button>") == 5
     assert '<a href="/anfragen">Alle anzeigen</a>' in body
     _status, full_body = _get(f"{panel}/anfragen")

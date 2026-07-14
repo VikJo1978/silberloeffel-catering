@@ -8,6 +8,7 @@ from catering_system.domain.inquiry import Inquiry, inquiry_allows_order_convers
 
 # Narrow reason codes for office/Core evaluation only; not production-floor or release semantics.
 REASON_INQUIRY_CALL_VERIFICATION_UNSATISFIED = "inquiry_call_verification_unsatisfied"
+REASON_INQUIRY_REJECTED = "inquiry_rejected"
 REASON_ORDER_NOT_FOUND = "order_not_found"
 REASON_CANDIDATE_ORDER_VERSION_MISSING = "candidate_order_version_missing"
 REASON_CANDIDATE_ORDER_VERSION_NOT_RESOLVABLE = "candidate_order_version_not_resolvable"
@@ -22,9 +23,14 @@ class ProgressionEvaluation:
 
 
 def evaluate_inquiry_to_order_progression(inquiry: Inquiry) -> ProgressionEvaluation:
-    """B7: inquiry → order path blocked when B5 verification gate is not satisfied."""
+    """Derive the inquiry → order blockers from the same facts as the Core gate."""
     if inquiry_allows_order_conversion(inquiry):
         return ProgressionEvaluation(blocked=False, reasons=())
+    if inquiry.crm_stage == "Abgelehnt / verloren":
+        return ProgressionEvaluation(
+            blocked=True,
+            reasons=(REASON_INQUIRY_REJECTED,),
+        )
     return ProgressionEvaluation(
         blocked=True,
         reasons=(REASON_INQUIRY_CALL_VERIFICATION_UNSATISFIED,),

@@ -18,7 +18,7 @@ password through the agreed private credential channel.
 ## Daily start
 
 1. Open **Startseite**.
-2. Work the three queues in order: callbacks, new inquiries, orders with a next
+2. Work the three queues in order: callbacks, open inquiries, orders with a next
    step.
 3. Open **Diese Woche** or the kitchen link to check near-term events.
 4. Investigate any explicit blocker; do not bypass it by editing the database.
@@ -34,6 +34,13 @@ password through the agreed private credential channel.
 
 Website contact information appears as labelled intake context. It is not yet a
 verified structured customer record.
+
+`Offene Anfragen` contains inquiries that have no linked Order and have not
+been rejected. Every row shows its actual CRM stage. The primary action is
+derived rather than guessed: **Telefonisch verifiziert** appears only when the
+call check is required and unsatisfied; **In Auftrag umwandeln** appears only
+when conversion is currently allowed. Rejected and already-converted inquiries
+remain searchable under **Anfragen**, but do not stay in the open queue.
 
 The staging website writes these records into the same Core Inquiry queue used
 by the office panel. Until the staging URL has HTTPS, treat every such record as
@@ -53,11 +60,16 @@ its editable default instead of inventing a Core fact.
 
 ## Convert an inquiry to an order
 
-Conversion is available only when the inquiry's verification gate is satisfied.
+Conversion is available only when the inquiry is not `Abgelehnt / verloren`,
+has no active Order, and its verification gate is satisfied.
 Conversion creates:
 
 - one Order linked to the source Inquiry;
 - immutable OrderVersion 1 containing the operational event snapshot.
+
+The same command changes the Inquiry CRM stage to `Bestätigt / Auftrag`.
+After `Storno`, the preserved cancelled Order stays out of the open queue, but
+the detail page may offer the existing explicit re-conversion path.
 
 If conversion is blocked, correct or verify the Inquiry. Do not create a second
 manual inquiry to work around the gate.

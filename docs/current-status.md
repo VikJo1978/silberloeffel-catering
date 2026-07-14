@@ -109,13 +109,21 @@ Offer workflow development:
 - Slice 3A adds no Office UI, HTTP API, dashboard integration, kitchen agent,
   printer integration, heartbeat or external Lenovo monitoring. None of these
   Phase 3 capabilities is live on Lenovo or Proxmox.
-- No local Phase 2 or Phase 3 commit has been pushed or deployed.
+- The `Truthful open-inquiry queue and conversion gate` slice is implemented in
+  the current local working tree based on `b560d36`: one pure derivation drives
+  direct and remote queue/action behavior; rejected and converted inquiries are
+  absent from `Offene Anfragen`; rejected conversion is a Core gate; successful
+  conversion sets `Bestätigt / Auftrag` in the same direct/API transaction.
+  It adds no call history, notes, follow-up dates, tables or CRM integration.
+- Phase 2, Phase 3 design and Slice 3A are present on `origin/main` through
+  `b560d36`, but none is deployed. The new open-inquiry slice is local and
+  uncommitted; no deploy has been performed.
 
 ## Local undeployed quality baseline
 
-- Python tests: **618 passed**
+- Python tests: **628 passed**
 - coverage gate: **90% minimum**
-- last full-project coverage: **90.4%**
+- last full-project coverage: **90.2%**
 - website intake receiver coverage: **99.2%**
 - Ruff: clean
 - Mypy: clean

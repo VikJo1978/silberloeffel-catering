@@ -48,6 +48,14 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
   and atomic ACK with the existing OrderVersion kitchen-print confirmation.
   This local slice adds no Office UI, HTTP API, kitchen print agent or printer
   integration and has not been deployed.
+- Made the Office inquiry queue and conversion path truthful: the dashboard now
+  shows `Offene Anfragen` with each real CRM stage, excludes rejected and
+  already-converted inquiries, derives the only valid primary action from CRM
+  stage, call verification and linked Orders, rejects conversion of
+  `Abgelehnt / verloren` in Core, and moves a successfully converted Inquiry
+  to `Bestätigt / Auftrag`. Direct and remote Office Panel modes share the same
+  derivation; no call history, notes, follow-up dates, tables or CRM integration
+  were added. Local and undeployed.
 
 - Corrected the operational status after the office-workflow proof: the
   staging form now exercises an already-connected office queue, the Lenovo

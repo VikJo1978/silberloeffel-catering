@@ -2565,3 +2565,45 @@ Must not be changed
 	•	`kitchen_print_confirmed_at` remains the only print fact satisfying the
 	  effective-version gate; no print-job transition selects a version
 	  automatically
+
+
+Entry 064
+
+Date: 2026-07-14 — Truthful open-inquiry queue and conversion gate
+Scope: local implementation based on `b560d36`; no push, deploy, service
+restart, production data, Phase 3B work or new CRM functionality.
+
+Meaning
+	•	Core now has one pure `InquiryOfficeState` derivation from the existing
+	  Inquiry CRM stage, call-verification facts, linked-Order history and active
+	  Order presence. It persists no new status and adds no table
+	•	the Office dashboard is labelled `Offene Anfragen`; it excludes rejected
+	  Inquiries and every Inquiry already converted at least once, shows the
+	  actual CRM stage, and renders only the derived `verify` or `convert` action
+	•	`Abgelehnt / verloren` is now a Core conversion blocker with its own
+	  progression reason. A successful conversion updates the existing Inquiry
+	  to `Bestätigt / Auftrag`
+	•	remote conversion and the stage update remain one idempotent Core Office API
+	  transaction. The production direct-mode composition now uses one shared
+	  SQLite connection and `CoreCommandExecutor`, so Order + OrderVersion 1 and
+	  the Inquiry stage update commit or roll back together there as well
+	•	the existing Storno contract remains: a cancelled historical Order keeps the
+	  Inquiry out of the open dashboard queue, while the detail page may expose
+	  the already-supported explicit re-conversion path because no active Order
+	  exists
+	•	Phase 2 transport keys `neue_anfragen` and `neue_anfragen_top` remain for
+	  compatibility, but carry the truthful open-inquiry semantics. Direct and
+	  remote HTML use the same derivation and the same `Offene Anfragen` wording
+
+Completed
+	•	33 focused direct/API/remote/domain regressions passed after implementation
+	•	full pytest: 628 passed
+	•	full coverage: 90.2% with the project minimum of 90%
+	•	full Ruff check clean; all 100 Python files already formatted after the
+	  changed-file formatting pass
+	•	full mypy clean for 70 source files; `git diff --check` clean before the
+	  documentation closeout
+
+Not included
+	•	no call history, notes, follow-up dates, new tables, CRM integration,
+	  Phase 3B, push or deploy

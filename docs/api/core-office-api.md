@@ -26,7 +26,7 @@ explicit Phase 2 configuration/deploy step (not yet done; see below).
 
 | Route | Purpose |
 |---|---|
-| `GET /office/v1/queue` | dashboard `QueueView`: attention counts, Berlin ISO week (≤100 entries + `total_count`/`truncated`), top-5 inquiry/order rows with next actions |
+| `GET /office/v1/queue` | dashboard `QueueView`: open-inquiry attention count, Berlin ISO week (≤100 entries + `total_count`/`truncated`), top-5 inquiry/order rows with next actions. The compatibility JSON keys remain `neue_anfragen` / `neue_anfragen_top`, but rejected and any already-converted Inquiry are excluded. |
 | `GET /office/v1/inquiries?q=&limit=&offset=` | list rows (`intake_subject`, `linked_order_id`, `orders_total_count`); `limit` ≤100, honest `total_count` |
 | `GET /office/v1/inquiries/{id}` | full detail incl. `allows_conversion`, capped `orders` array, `offer_prefill` payload |
 | `GET /office/v1/orders?q=&limit=&offset=` | rows with `ready`, `blocker_reason`, `next_action` — no N+1 |
@@ -49,7 +49,7 @@ are minimal (IDs + timestamps, no PII); the panel re-reads details via GET.
 | `POST /office/v1/inquiries` | – |
 | `POST /office/v1/inquiries/{id}/update` | `updated_at` |
 | `POST /office/v1/inquiries/{id}/verify` | – (repeat = success) |
-| `POST /office/v1/inquiries/{id}/convert` | server-side: no active order (`409 already_converted`) |
+| `POST /office/v1/inquiries/{id}/convert` | server-side: no active order (`409 already_converted`), not rejected (`422 inquiry_rejected`), verification satisfied; success also sets `Bestätigt / Auftrag` |
 | `POST /office/v1/orders/{id}/versions` | `latest_version_number` |
 | `POST /office/v1/orders/{id}/print-confirm` | – (repeat = success) |
 | `POST /office/v1/orders/{id}/effective` | `current_effective_order_version_id` |
@@ -78,7 +78,8 @@ an oversized body.
 Error codes (stable, never free text): `unauthorized`, `not_found`,
 `invalid_request`, `unsupported_media_type`, `body_too_large`,
 `method_not_allowed`, `command_id_conflict`, `stale_state`,
-`already_converted`, `external_ref_conflict`, `verification_gate_blocked`,
+`already_converted`, `external_ref_conflict`, `inquiry_rejected`,
+`verification_gate_blocked`,
 `order_cancelled`, `kitchen_print_not_confirmed`, `version_not_owned`,
 `core_busy`, `internal`.
 

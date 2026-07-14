@@ -59,6 +59,16 @@ CALL_VERIFICATION_STATUSES: tuple[CallVerificationStatus, ...] = (
 )
 CALL_VERIFICATION_STATUS_SET: frozenset[str] = frozenset(CALL_VERIFICATION_STATUSES)
 
+InquiryOfficeNextAction = Literal["verify", "convert"]
+
+
+@dataclass(frozen=True)
+class InquiryOfficeState:
+    """Pure office workflow projection; never persisted as another status axis."""
+
+    is_open: bool
+    next_action: InquiryOfficeNextAction | None
+
 
 class CustomerLinkage(TypedDict, total=False):
     customer_id: str
@@ -143,7 +153,28 @@ class Inquiry:
 
 
 def inquiry_allows_order_conversion(inquiry: Inquiry) -> bool:
-    """B5: Core gate — conversion allowed when verification not required or already verified."""
+    """Core gate: rejected inquiries cannot convert; required calls need verification."""
+    if inquiry.crm_stage == "Abgelehnt / verloren":
+        return False
     if not inquiry.call_verification_required:
         return True
     return inquiry.call_verification_status == "verified"
+
+
+def derive_inquiry_office_state(
+    inquiry: Inquiry, *, has_order: bool, has_active_order: bool
+) -> InquiryOfficeState:
+    """Derive queue membership and the one truthful primary office action."""
+    if has_active_order and not has_order:
+        raise ValueError("an active order is also an existing order")
+    if inquiry.crm_stage == "Abgelehnt / verloren" or has_active_order:
+        return InquiryOfficeState(is_open=False, next_action=None)
+    is_open = not has_order
+    if (
+        inquiry.call_verification_required
+        and inquiry.call_verification_status != "verified"
+    ):
+        return InquiryOfficeState(is_open=is_open, next_action="verify")
+    if inquiry_allows_order_conversion(inquiry):
+        return InquiryOfficeState(is_open=is_open, next_action="convert")
+    return InquiryOfficeState(is_open=is_open, next_action=None)

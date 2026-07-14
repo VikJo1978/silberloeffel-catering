@@ -32,6 +32,7 @@ from catering_system.ui.office_panel import (
 from catering_system.ui.remote_core_client import RemoteCoreError
 
 if TYPE_CHECKING:
+    from catering_system.repositories.core_transaction import CoreCommandExecutor
     from catering_system.ui.remote_core_client import RemoteCoreClient
 
 _CSRF_CONTEXT = b"catering-office-panel-csrf-v1"
@@ -59,9 +60,15 @@ def make_office_panel_handler(
     configurator_url: str = "",
     *,
     remote: "RemoteCoreClient | None" = None,
+    command_executor: "CoreCommandExecutor | None" = None,
 ) -> type[BaseHTTPRequestHandler]:
     panel = OfficePanel(
-        inquiry_repo, order_repo, kiosk_url, configurator_url, remote=remote
+        inquiry_repo,
+        order_repo,
+        kiosk_url,
+        configurator_url,
+        remote=remote,
+        command_executor=command_executor,
     )
     expected = "Basic " + base64.b64encode(f"office:{password}".encode()).decode()
     csrf_token = csrf_token_for_password(password)
@@ -338,13 +345,7 @@ def make_office_panel_handler(
                 panel.inquiry_service.verify_customer_by_call(inquiry_id)
                 self._redirect(f"/inquiry/{inquiry_id}")
             elif action == "convert":
-                inquiry = inquiry_repo.get_by_id(inquiry_id)
-                if inquiry is None:
-                    self.send_error(404)
-                    return
-                order, _initial_version = panel.order_service.convert_inquiry_to_order(
-                    inquiry
-                )
+                order, _initial_version = panel.convert_inquiry_to_order(inquiry_id)
                 self._redirect(f"/order/{order.order_id}")
             else:
                 self.send_error(404)
@@ -385,6 +386,7 @@ def create_office_panel_server(
     configurator_url: str = "",
     *,
     remote: "RemoteCoreClient | None" = None,
+    command_executor: "CoreCommandExecutor | None" = None,
 ) -> HTTPServer:
     """Create the intentionally single-threaded office HTTP server."""
     return HTTPServer(
@@ -399,5 +401,6 @@ def create_office_panel_server(
             kiosk_url,
             configurator_url,
             remote=remote,
+            command_executor=command_executor,
         ),
     )

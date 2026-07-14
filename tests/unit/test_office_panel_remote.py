@@ -422,6 +422,11 @@ def test_full_write_flow_through_remote_panel(remote_world) -> None:
     )
     assert status == 200
 
+    status, converted_inquiry_html = _get(f"{base}/inquiry/{inquiry_id}")
+    assert status == 200
+    assert "Bestätigt / Auftrag" in converted_inquiry_html
+    assert "In Auftrag umwandeln" not in converted_inquiry_html
+
     status, order_list_html = _get(f"{base}/auftraege?q={inquiry_id[:8]}")
     assert status == 200
     order_id = re.search(r'/order/([0-9a-f-]{36})"', order_list_html).group(1)

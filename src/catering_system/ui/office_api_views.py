@@ -13,7 +13,11 @@ from __future__ import annotations
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
-from catering_system.domain.inquiry import Inquiry, inquiry_allows_order_conversion
+from catering_system.domain.inquiry import (
+    Inquiry,
+    InquiryOfficeState,
+    derive_inquiry_office_state,
+)
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
 from catering_system.domain.wochenuebersicht import Wochenuebersicht
@@ -69,7 +73,12 @@ def inquiry_detail(inquiry: Inquiry, orders: list[Order]) -> dict[str, object]:
     detail["intake_message"] = inquiry.intake_message
     detail["intake_summary"] = inquiry.intake_summary
     detail["intake_external_ref"] = inquiry.intake_external_ref
-    detail["allows_conversion"] = inquiry_allows_order_conversion(inquiry)
+    state = derive_inquiry_office_state(
+        inquiry,
+        has_order=bool(orders),
+        has_active_order=any(order.cancelled_at is None for order in orders),
+    )
+    detail["allows_conversion"] = state.next_action == "convert"
     detail["orders"] = [
         {
             "order_id": o.order_id,
@@ -216,13 +225,11 @@ def week_view(week: Wochenuebersicht) -> dict[str, object]:
     }
 
 
-def inquiry_top_row(inquiry: Inquiry) -> dict[str, object]:
+def inquiry_top_row(inquiry: Inquiry, state: InquiryOfficeState) -> dict[str, object]:
     row = inquiry_summary(inquiry)
-    needs_verification = (
-        inquiry.call_verification_required
-        and inquiry.call_verification_status != "verified"
-    )
-    row["next_action"] = "verify" if needs_verification else "convert"
+    if state.next_action is None:
+        raise ValueError("open inquiry top row requires a next action")
+    row["next_action"] = state.next_action
     return row
 
 

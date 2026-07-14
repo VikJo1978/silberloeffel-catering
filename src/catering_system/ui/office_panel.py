@@ -19,8 +19,13 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote, urlencode
 
-from catering_system.domain.inquiry import CRM_PIPELINE, Inquiry, PLANNING_MODES
-from catering_system.domain.order import Order
+from catering_system.domain.inquiry import (
+    CRM_PIPELINE,
+    PLANNING_MODES,
+    Inquiry,
+    derive_inquiry_office_state,
+)
+from catering_system.domain.order import Order, OrderVersion
 from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.repositories.order_repository import OrderRepository
 from catering_system.services.inquiry_service import InquiryService
@@ -57,6 +62,7 @@ from catering_system.ui.office_panel_views import (
 )
 
 if TYPE_CHECKING:
+    from catering_system.repositories.core_transaction import CoreCommandExecutor
     from catering_system.ui.remote_core_client import RemoteCoreClient
 
 __all__ = [
@@ -203,6 +209,7 @@ class OfficePanel:
         configurator_url: str = "",
         *,
         remote: "RemoteCoreClient | None" = None,
+        command_executor: "CoreCommandExecutor | None" = None,
     ) -> None:
         self._inquiries = inquiry_repo
         self._orders = order_repo
@@ -236,6 +243,7 @@ class OfficePanel:
             self.order_service = remote.order_service  # type: ignore[assignment]
             self.core = remote.core  # type: ignore[assignment]
         self._remote = remote
+        self._command_executor = command_executor
         # Pure-read derivations: safe to run over the remote client's repo-
         # shaped reads in both modes, since they only ever call
         # get_order/get_order_version/list_orders/list_order_versions —
@@ -347,9 +355,18 @@ class OfficePanel:
         # already-accepted concept (progression B7 / operational gate) —
         # this is a summary view, not a new domain concept.
         all_inquiries = self._inquiries.list_all()
-        neue_anfragen = [
-            i for i in all_inquiries if i.inquiry_id not in orders_by_inquiry
-        ]
+        open_inquiries = []
+        for inquiry in all_inquiries:
+            state = derive_inquiry_office_state(
+                inquiry,
+                has_order=inquiry.inquiry_id in orders_by_inquiry,
+                has_active_order=any(
+                    order.cancelled_at is None
+                    for order in orders_by_inquiry.get(inquiry.inquiry_id, [])
+                ),
+            )
+            if state.is_open:
+                open_inquiries.append((inquiry, state))
         active_orders = [o for o in orders if o.cancelled_at is None]
         ohne_druck = [
             o
@@ -387,7 +404,7 @@ class OfficePanel:
             "<h2>Was braucht Aufmerksamkeit?</h2>"
             '<div class="attention">'
             + rueckruf_card
-            + f'<a href="#anfragen"><strong>{len(neue_anfragen)}</strong> Neue Anfragen prüfen</a>'
+            + f'<a href="#anfragen"><strong>{len(open_inquiries)}</strong> Offene Anfragen prüfen</a>'
             f'<a href="#auftraege"><strong>{len(ohne_druck)}</strong> Druckbestätigung fehlt</a>'
             f'<a href="#auftraege"><strong>{len(nicht_wirksam)}</strong> Aufträge noch nicht wirksam</a>'
             f'<a href="#auftraege"><strong>{len(blockiert)}</strong> Versandfreigabe blockiert</a>'
@@ -455,33 +472,32 @@ class OfficePanel:
                 + '<p><a href="/rueckruf">Alle anzeigen</a></p>'
             )
 
-        neue_anfragen_rows = []
-        for inq in neue_anfragen[:5]:
-            if (
-                inq.call_verification_required
-                and inq.call_verification_status != "verified"
-            ):
+        offene_anfragen_rows = []
+        for inq, state in open_inquiries[:5]:
+            if state.next_action == "verify":
                 action = (
                     f'<form class="inline" method="post" action="/inquiry/{_e(inq.inquiry_id)}/verify">'
                     f"{_csrf_input(context)}{self._command_fields()}"
                     "<button>Telefonisch verifiziert</button></form>"
                 )
-            else:
+            elif state.next_action == "convert":
                 action = (
                     f'<form class="inline" method="post" action="/inquiry/{_e(inq.inquiry_id)}/convert">'
                     f"{_csrf_input(context)}{self._command_fields()}"
                     "<button>In Auftrag umwandeln</button></form>"
                 )
-            neue_anfragen_rows.append(
+            else:
+                action = ""
+            offene_anfragen_rows.append(
                 f'<li><a href="/inquiry/{_e(inq.inquiry_id)}">{_e(inq.event_date.isoformat())} · '
-                f"{_e(inq.location_text)}</a> {action}</li>"
+                f"{_e(inq.location_text)}</a> — {_e(inq.crm_stage)} {action}</li>"
             )
-        neue_anfragen_section = (
-            "<h2>Neue Anfragen</h2>"
+        offene_anfragen_section = (
+            "<h2>Offene Anfragen</h2>"
             + (
-                f"<ul>{''.join(neue_anfragen_rows)}</ul>"
-                if neue_anfragen_rows
-                else "<p>keine neuen Anfragen.</p>"
+                f"<ul>{''.join(offene_anfragen_rows)}</ul>"
+                if offene_anfragen_rows
+                else "<p>keine offenen Anfragen.</p>"
             )
             + '<p><a href="/anfragen">Alle anzeigen</a></p>'
         )
@@ -510,7 +526,7 @@ class OfficePanel:
             attention
             + diese_woche
             + rueckruf_section
-            + neue_anfragen_section
+            + offene_anfragen_section
             + auftraege_section
             + '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a></p>'
         )
@@ -546,7 +562,7 @@ class OfficePanel:
             "<h2>Was braucht Aufmerksamkeit?</h2>"
             '<div class="attention">'
             + rueckruf_card
-            + f'<a href="#anfragen"><strong>{attention_view["neue_anfragen"]}</strong> Neue Anfragen prüfen</a>'
+            + f'<a href="#anfragen"><strong>{attention_view["neue_anfragen"]}</strong> Offene Anfragen prüfen</a>'
             f'<a href="#auftraege"><strong>{attention_view["druck_fehlt"]}</strong> Druckbestätigung fehlt</a>'
             f'<a href="#auftraege"><strong>{attention_view["nicht_wirksam"]}</strong> Aufträge noch nicht wirksam</a>'
             f'<a href="#auftraege"><strong>{attention_view["versand_blockiert"]}</strong> Versandfreigabe blockiert</a>'
@@ -634,14 +650,14 @@ class OfficePanel:
                 )
             inquiry_rows.append(
                 f'<li><a href="/inquiry/{_e(inquiry["inquiry_id"])}">{_e(inquiry["event_date"])} · '
-                f"{_e(inquiry['location_text'])}</a> {action}</li>"
+                f"{_e(inquiry['location_text'])}</a> — {_e(inquiry['crm_stage'])} {action}</li>"
             )
-        neue_anfragen_section = (
-            "<h2>Neue Anfragen</h2>"
+        offene_anfragen_section = (
+            "<h2>Offene Anfragen</h2>"
             + (
                 f"<ul>{''.join(inquiry_rows)}</ul>"
                 if inquiry_rows
-                else "<p>keine neuen Anfragen.</p>"
+                else "<p>keine offenen Anfragen.</p>"
             )
             + '<p><a href="/anfragen">Alle anzeigen</a></p>'
         )
@@ -689,7 +705,7 @@ class OfficePanel:
             attention
             + diese_woche
             + rueckruf_section
-            + neue_anfragen_section
+            + offene_anfragen_section
             + auftraege_section
             + '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a></p>'
         )
@@ -910,8 +926,18 @@ class OfficePanel:
                     f"Die API-Detailansicht enthält nicht alle {total_orders} "
                     "verknüpften Aufträge.</p>"
                 )
+        existing = [
+            o for o in self._orders.list_orders() if o.source_inquiry_id == inquiry_id
+        ]
+        state = derive_inquiry_office_state(
+            inq,
+            has_order=bool(existing),
+            has_active_order=any(order.cancelled_at is None for order in existing),
+        )
         ev = self.progression.evaluate_inquiry_to_order_progression(inq)
-        if ev.blocked:
+        if existing:
+            prog = '<p class="ok">Bereits in Auftrag umgewandelt.</p>'
+        elif ev.blocked:
             reasons = "".join(
                 f"<li>{_e(_progression_blocker_label(r))}</li>" for r in ev.reasons
             )
@@ -919,21 +945,12 @@ class OfficePanel:
         else:
             prog = '<p class="ok">Konvertierung möglich.</p>'
         verify_btn = ""
-        if (
-            inq.call_verification_required
-            and inq.call_verification_status != "verified"
-        ):
+        if state.next_action == "verify":
             verify_btn = (
                 f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/verify">'
                 f"{_csrf_input(context)}{self._command_fields()}"
                 "<button>Telefonisch verifiziert</button></form> "
             )
-        existing = [
-            o for o in self._orders.list_orders() if o.source_inquiry_id == inquiry_id
-        ]
-        # Presentation only: only a non-cancelled order suppresses the convert
-        # button — after Storno the office must be able to convert again.
-        active = [o for o in existing if o.cancelled_at is None]
         convert = ""
         if existing:
             links = ", ".join(
@@ -942,7 +959,7 @@ class OfficePanel:
                 for o in existing
             )
             convert += f"<p>Auftrag vorhanden: {links}</p>"
-        if not active:
+        if state.next_action == "convert":
             convert += (
                 f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/convert">'
                 f"{_csrf_input(context)}{self._command_fields()}"
@@ -1033,6 +1050,52 @@ class OfficePanel:
             intake_summary=form.get("intake_summary", ""),
             intake_external_ref=form.get("intake_external_ref", ""),
         )
+
+    def convert_inquiry_to_order(self, inquiry_id: str) -> tuple[Order, OrderVersion]:
+        """Run the truthful gate and stage transition as one direct command.
+
+        Remote mode delegates the same atomic command to Core Office API.
+        """
+
+        def work() -> tuple[Order, OrderVersion]:
+            inquiry = self._inquiries.get_by_id(inquiry_id)
+            if inquiry is None:
+                raise KeyError(inquiry_id)
+            linked_orders = [
+                order
+                for order in self._orders.list_orders()
+                if order.source_inquiry_id == inquiry_id
+            ]
+            has_active_order = any(
+                order.cancelled_at is None for order in linked_orders
+            )
+            state = derive_inquiry_office_state(
+                inquiry,
+                has_order=bool(linked_orders),
+                has_active_order=has_active_order,
+            )
+            if has_active_order:
+                raise ValueError("inquiry already converted")
+            if inquiry.crm_stage == "Abgelehnt / verloren":
+                raise ValueError("rejected inquiry cannot be converted")
+            if state.next_action != "convert":
+                raise ValueError("inquiry conversion gate is not satisfied")
+            order, version = self.order_service.convert_inquiry_to_order(inquiry)
+            if self._remote is None:
+                self.inquiry_service.update_inquiry(
+                    inquiry_id,
+                    crm_stage="Bestätigt / Auftrag",
+                )
+            return order, version
+
+        if self._remote is not None:
+            inquiry = self._inquiries.get_by_id(inquiry_id)
+            if inquiry is None:
+                raise KeyError(inquiry_id)
+            return self.order_service.convert_inquiry_to_order(inquiry)
+        if self._command_executor is not None:
+            return self._command_executor.run(work)
+        return work()
 
     # -- orders ----------------------------------------------------------
 
@@ -1169,6 +1232,7 @@ def make_office_panel_handler(
     configurator_url: str = "",
     *,
     remote: "RemoteCoreClient | None" = None,
+    command_executor: "CoreCommandExecutor | None" = None,
 ) -> type[BaseHTTPRequestHandler]:
     """Compatibility wrapper; HTTP routing lives in office_panel_http."""
     from catering_system.ui.office_panel_http import (
@@ -1185,6 +1249,7 @@ def make_office_panel_handler(
         kiosk_url,
         configurator_url,
         remote=remote,
+        command_executor=command_executor,
     )
 
 
@@ -1201,6 +1266,7 @@ def create_office_panel_server(
     configurator_url: str = "",
     *,
     remote: "RemoteCoreClient | None" = None,
+    command_executor: "CoreCommandExecutor | None" = None,
 ) -> HTTPServer:
     """Compatibility wrapper; server construction lives in office_panel_http."""
     from catering_system.ui.office_panel_http import (
@@ -1219,6 +1285,7 @@ def create_office_panel_server(
         kiosk_url,
         configurator_url,
         remote=remote,
+        command_executor=command_executor,
     )
 
 
@@ -1323,6 +1390,10 @@ def main() -> None:
                 "--db is required in direct mode (or set CORE_OFFICE_API_URL "
                 "and CORE_OFFICE_API_TOKEN for remote mode)"
             )
+        from catering_system.repositories.core_transaction import (
+            CoreCommandExecutor,
+            open_core_connection,
+        )
         from catering_system.repositories.sqlite_inquiry_repository import (
             SQLiteInquiryRepository,
         )
@@ -1330,9 +1401,13 @@ def main() -> None:
             SQLiteOrderRepository,
         )
 
+        connection = open_core_connection(args.db)
+        inquiry_repo = SQLiteInquiryRepository.from_connection(connection)
+        order_repo = SQLiteOrderRepository.from_connection(connection)
+
         server = create_office_panel_server(
-            SQLiteInquiryRepository(args.db),
-            SQLiteOrderRepository(args.db),
+            inquiry_repo,
+            order_repo,
             args.password,
             args.host,
             args.port,
@@ -1341,6 +1416,7 @@ def main() -> None:
             args.auerswald_password,
             args.kiosk_url,
             args.configurator_url,
+            command_executor=CoreCommandExecutor(connection),
         )
         print(f"Office panel on http://{args.host}:{args.port}/ (user: office)")
     server.serve_forever()

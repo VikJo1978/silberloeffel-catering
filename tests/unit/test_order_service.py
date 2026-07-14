@@ -89,6 +89,16 @@ def test_convert_inquiry_to_order_blocked_when_required_but_not_verified_status(
         svc.convert_inquiry_to_order(inquiry)
 
 
+def test_convert_inquiry_to_order_blocked_when_rejected() -> None:
+    repo = InMemoryOrderRepository()
+    inquiry = replace(_sample_inquiry(), crm_stage="Abgelehnt / verloren")
+
+    with pytest.raises(ValueError, match="inquiry_to_order conversion blocked"):
+        OrderService(repo).convert_inquiry_to_order(inquiry)
+
+    assert repo.list_orders() == []
+
+
 def test_convert_inquiry_to_order_allowed_when_verification_required_and_verified() -> (
     None
 ):

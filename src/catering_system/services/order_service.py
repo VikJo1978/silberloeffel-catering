@@ -35,14 +35,15 @@ class OrderService:
         self._order_repository = order_repository
 
     def convert_inquiry_to_order(self, inquiry: Inquiry) -> tuple[Order, OrderVersion]:
-        """ConvertInquiryToOrder — Core ownership; does not mutate or delete the Inquiry.
+        """Create Order + v1 after the Core inquiry conversion gate passes.
 
-        B5: blocked when call verification is required and not verified (pending / failed / blocked).
+        The application command owns the accompanying Inquiry stage update.
         """
         if not inquiry_allows_order_conversion(inquiry):
             raise ValueError(
-                "inquiry_to_order conversion blocked: call verification required and not verified "
+                "inquiry_to_order conversion blocked "
                 f"(inquiry_id={inquiry.inquiry_id!r}, "
+                f"crm_stage={inquiry.crm_stage!r}, "
                 f"call_verification_required={inquiry.call_verification_required!r}, "
                 f"call_verification_status={inquiry.call_verification_status!r})"
             )
