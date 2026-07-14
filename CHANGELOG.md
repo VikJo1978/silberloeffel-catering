@@ -5,6 +5,16 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
 
 ## Unreleased
 
+- Implemented Phase 1 of the frozen Proxmox office pack
+  (`docs/proposals/PROXMOX_OFFICE_SERVER_CORE_API_PACK_V1.md`): a dormant
+  Core Office API on the Lenovo Tailscale address (`8084`) serving the full
+  frozen read/command contract against the existing services, with atomic
+  idempotency (in-`core.db` ledger, one transaction per command), post-commit
+  event dispatch, a 2-second busy timeout mapping to `503 core_busy`, and a
+  partial UNIQUE index closing the double-convert gap while keeping
+  re-conversion after Storno. Not deployed; the office panel keeps its direct
+  database access until Phase 2.
+
 - Corrected the operational status after the office-workflow proof: the
   staging form now exercises an already-connected office queue, the Lenovo
   courier checkout is recorded at `18b3633`, and replacement-site work is

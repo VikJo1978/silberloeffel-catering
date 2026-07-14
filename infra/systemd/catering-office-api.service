@@ -1,0 +1,23 @@
+# Core Office API (PROXMOX_OFFICE_SERVER_CORE_API_PACK_V1, Phase 1) —
+# live Lenovo paths. Dormant deployment: install + enable is safe while the
+# office panel keeps running unchanged; nothing consumes the API until
+# Phase 2 configuration.
+
+[Unit]
+Description=Catering Core Office API (Tailscale-only, bearer-gated)
+After=network.target tailscaled.service
+
+[Service]
+Type=simple
+User=viktor
+WorkingDirectory=/home/viktor/projects/silberloeffel-catering
+Environment=PYTHONPATH=/home/viktor/projects/silberloeffel-catering/src
+# Root-owned, mode 600. Holds OFFICE_API_TOKEN (pack §5) — the token is
+# never an argument and never appears in the process list.
+EnvironmentFile=/etc/catering/office-api.env
+ExecStart=/usr/bin/python3 -m catering_system.ui.office_api --db /home/viktor/catering-runtime/core.db --host 100.109.6.74 --port 8084
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

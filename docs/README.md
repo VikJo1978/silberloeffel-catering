@@ -16,6 +16,7 @@ needed.
 | Data safety | [Backup and restore](runbooks/backup-restore.md) | SQLite backup, verification, recovery |
 | Integration | [Website intake API](api/website-intake.md) | Payloads, responses, authentication |
 | Integration | [Kiosk order feed API](api/kiosk-order-feed.md) | Per-date courier feed contract |
+| Integration | [Core Office API](api/core-office-api.md) | Office panel commands and reads (Phase 1, dormant) |
 | Integration | [Kiosk pickup signal API](api/kiosk-pickup-signal.md) | Open equipment-return feed and kiosk cache |
 | Users | [Office panel guide](user/office-panel.md) | Daily office workflow and gates |
 | Decisions | [Decision register](decisions/README.md) | Durable architectural decisions |

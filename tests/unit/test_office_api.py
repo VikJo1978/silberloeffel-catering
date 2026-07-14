@@ -743,3 +743,33 @@ def test_logs_carry_no_contact_or_location_data(api, caplog) -> None:
     joined = "\n".join(record.getMessage() for record in caplog.records)
     assert "GEHEIMSTRASSE" not in joined
     assert _TOKEN not in joined
+
+
+def test_startup_refuses_to_run_without_token(tmp_path) -> None:
+    """Pack §5: the API cannot be started unauthenticated."""
+    import os
+    import subprocess
+    import sys
+
+    env = dict(os.environ)
+    env.pop("OFFICE_API_TOKEN", None)
+    env["PYTHONPATH"] = "src"
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "catering_system.ui.office_api",
+            "--db",
+            str(tmp_path / "x.db"),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "0",
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode != 0
+    assert "OFFICE_API_TOKEN" in result.stderr

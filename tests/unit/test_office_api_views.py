@@ -179,7 +179,9 @@ def test_detail_caps_and_truncation_flags() -> None:
     from catering_system.domain.ready_to_send import ReadyToSendEvaluation
 
     order_detail = views.order_detail(
-        fresh, versions, ReadyToSendEvaluation(order_id=fresh.order_id, ready=False, reasons=())
+        fresh,
+        versions,
+        ReadyToSendEvaluation(order_id=fresh.order_id, ready=False, reasons=()),
     )
     assert len(order_detail["versions"]) == views.DETAIL_VERSIONS_CAP
     assert order_detail["versions_truncated"] is True
