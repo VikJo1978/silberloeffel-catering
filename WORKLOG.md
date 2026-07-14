@@ -2167,3 +2167,108 @@ Must not be changed
 	  OrderVersion's own fields (print-confirmed, then effective), never
 	  from `evaluate_ready_to_send(...).reasons[0]` directly — that
 	  ordering mismatch is exactly the bug this entry fixed
+
+
+Entry 059
+
+Date: 2026-07-14 — Core Office API, Phase 1 (dormant)
+Scope: PROXMOX_OFFICE_SERVER_CORE_API_PACK_V1 Phase 1 only —
+src/catering_system/repositories/core_transaction.py,
+src/catering_system/repositories/office_api_ledger.py,
+src/catering_system/ui/office_api.py + office_api_views.py, migration edits to
+sqlite_order_repository.py (orders migration 6) and sqlite_inquiry_repository.py;
+infra/systemd/catering-office-api.service, .env.example, docs/api/core-office-api.md,
+CHANGELOG, docs/decisions ADR-011. Tests: tests/unit/test_office_api.py,
+test_office_api_views.py, test_core_transaction.py (44 new). No deployment,
+no push.
+Status: code accepted by local quality gate; external Phase-1 review verdict
+still pending (push held per project workflow)
+
+Meaning
+	•	the office panel's in-process Core access is replaced going forward by
+	  a bearer-gated, Tailscale-only Core Office API on the Lenovo address
+	  `100.109.6.74:8084` (stdlib `http.server`, single-threaded per
+	  Entry 048 sqlite3 affinity). Phase 1 ships it dormant: the panel is
+	  unchanged and nothing consumes the API yet (that is Phase 2's
+	  `RemoteCoreClient`, not this step). Boundary supersession recorded as
+	  ADR-011
+	•	transaction coordinator (core_transaction.py): one owned SQLite
+	  connection shared by inquiry repo, order repo and the command ledger.
+	  `CoreCommandExecutor.run` owns `BEGIN IMMEDIATE`/`COMMIT`/`ROLLBACK`
+	  so a precondition read, the business write and the ledger insert are
+	  one atomic unit — all durable or nothing. Repositories keep their
+	  autocommit behaviour when used standalone (tested); only the
+	  externally-owned mode suppresses it
+	•	deferred events: services `_emit` into a `DeferredEventSink` buffer
+	  during the transaction; the buffer flushes only after a successful
+	  COMMIT and is discarded on rollback — an event escaping a rolled-back
+	  transaction would announce a change that never happened (pack §6.1,
+	  round-3). The fixed `command committed` log line is likewise emitted
+	  only post-COMMIT and carries only opaque ids (permitted per §5); no
+	  contact/address/payload/token ever leaves the process
+	•	idempotency ledger `office_api_commands` lives in `core.db`
+	  (component `office_api`, migration 1, same fail-closed runner as every
+	  Core component). Canonical fingerprint = SHA-256 over
+	  {route_template, path_ids, args, expect, client_id}. Same command_id +
+	  same fingerprint → the recorded minimal §4.4 body verbatim, no
+	  re-evaluation; same command_id + different fingerprint →
+	  `409 command_id_conflict`. Ledger stores IDs/timestamps only, no PII
+	•	double-convert closure: orders migration 6 adds partial UNIQUE
+	  `idx_orders_active_source_inquiry ON orders(source_inquiry_id) WHERE
+	  cancelled_at IS NULL`, with a fail-closed pre-migration duplicate check
+	  (aborts if any inquiry already has >1 active order — precedent:
+	  inquiries migration 3). The convert command also checks for an active
+	  order inside its transaction → `409 already_converted`; the index is
+	  the backstop. Re-conversion after Storno keeps working
+	•	SQLite contention: the API connection sets `busy_timeout` to 2 s
+	  (deliberately below the panel's 5 s command timeout). A
+	  locked/busy error surviving the timeout rolls back and maps to
+	  `503 {"error":"core_busy"}` + `Retry-After: 1`; the panel retries with
+	  the same command_id, safe by the ledger
+	•	transport (§4.0) faithfully implemented: bearer checked first via
+	  `hmac.compare_digest` on every method incl. explicit do_HEAD/do_OPTIONS
+	  (missing and wrong token are the same constant `401` before any
+	  routing/parsing); HEAD suppresses the body but keeps the exact
+	  Content-Length; all responses (errors too) carry
+	  `application/json; charset=utf-8`, correct Content-Length,
+	  `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`; strict
+	  envelope/query parsing (unknown/duplicate keys and params → 400, exact
+	  types, no coercion), 415/413/405/404 per the error map; list orderings,
+	  idempotent-repeat semantics, ready-on-unknown-order and next-action
+	  resolution reproduce the current panel exactly (§3.10 parity)
+
+Completed
+	•	full quality gate green: ruff clean, mypy clean (64 files), pytest
+	  550 passed, coverage 92.6% (fail_under 90). §9 acceptance items each
+	  have a test: auth-first constant-401, HEAD/OPTIONS, transport/envelope
+	  strictness, pagination + honest total_count, embedded-list caps +
+	  truncation flags, QueueView + next-action + Europe/Berlin week +
+	  search parity, idempotency replay/conflict, crash-window
+	  business+ledger atomicity, double-convert index + migration
+	  duplicate pre-check, stale_state preconditions, cancelled-order gates,
+	  lock→503→safe-retry, no-PII logs, token-refusal startup
+	•	packaging: systemd unit `catering-office-api.service` (User=viktor,
+	  live Lenovo paths, root-owned EnvironmentFile mode 600 holding
+	  OFFICE_API_TOKEN — never argv/Git/logs); `.env.example` gains
+	  OFFICE_API_TOKEN; operator summary docs/api/core-office-api.md linked
+	  from the docs index; CHANGELOG Unreleased entry; ADR-011
+
+Open
+	•	external Phase-1 review verdict not yet recorded; push held pending it
+	  (project workflow: pack → review → freeze → code → verdict → push)
+	•	Phase 2+ untouched by design: no `RemoteCoreClient`, no panel remote
+	  mode, no dual-mode contract suite, no Proxmox provisioning, no VPS or
+	  production deploy
+	•	the API `main()` binds `100.109.6.74:8084` — a deploy-time Tailscale
+	  address; it will only bind on the Lenovo. Nothing was deployed
+
+Must not be changed
+	•	Phase 1 stays dormant: the office panel keeps its direct-DB access
+	  until Phase 2; both migrations are additive and harmless to direct mode
+	•	the command ledger stays in `core.db` and is written in the same
+	  transaction as the business change — never a second store, never a
+	  separate commit
+	•	events stay post-COMMIT only; `command committed` stays post-COMMIT
+	  only; no contact/address/payload/token in any log
+	•	no generic CRUD, no SQLite transfer or DB replication to Proxmox; the
+	  configurator never calls Core; the API makes no outbound HTTP
