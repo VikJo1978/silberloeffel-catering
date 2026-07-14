@@ -10,6 +10,7 @@ import base64
 import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
 
 from catering_system.repositories.inquiry_repository import InquiryRepository
@@ -28,9 +29,14 @@ from catering_system.ui.office_panel import (
     render_rueckruf,
     resolve_missed_call,
 )
+from catering_system.ui.remote_core_client import RemoteCoreError
+
+if TYPE_CHECKING:
+    from catering_system.ui.remote_core_client import RemoteCoreClient
 
 _CSRF_CONTEXT = b"catering-office-panel-csrf-v1"
 _MAX_FORM_BODY_BYTES = 256 * 1024
+_UNAVAILABLE_MESSAGE = "Core nicht erreichbar — nichts wurde gespeichert."
 
 
 class FormBodyTooLargeError(ValueError):
@@ -51,8 +57,12 @@ def make_office_panel_handler(
     auerswald_password: str = "",
     kiosk_url: str = "",
     configurator_url: str = "",
+    *,
+    remote: "RemoteCoreClient | None" = None,
 ) -> type[BaseHTTPRequestHandler]:
-    panel = OfficePanel(inquiry_repo, order_repo, kiosk_url, configurator_url)
+    panel = OfficePanel(
+        inquiry_repo, order_repo, kiosk_url, configurator_url, remote=remote
+    )
     expected = "Basic " + base64.b64encode(f"office:{password}".encode()).decode()
     csrf_token = csrf_token_for_password(password)
 
@@ -115,6 +125,27 @@ def make_office_panel_handler(
                 status,
             )
 
+        def _remote_error_page(self, exc: RemoteCoreError) -> None:
+            """Pack §6.5 degradation: an unreachable/malformed Core Office API
+            response must show this exact German message, never an empty or
+            partial page — no read has returned by this point (the exception
+            fired before any render function could build a body), and no
+            write has happened either (§6.1: a command either returns 2xx or
+            never took effect). Genuine remote business rejections (409/422 —
+            not "unavailable") fall back to the same generic error rendering
+            direct-mode ValueErrors already use."""
+            if exc.unavailable:
+                self._html(
+                    _page(
+                        "Fehler",
+                        f'<p class="blocked">{_e(_UNAVAILABLE_MESSAGE)}</p>',
+                        context=self._fetch_page_context(),
+                    ),
+                    503,
+                )
+            else:
+                self._error_page(exc.code, status=exc.status)
+
         def _form(self) -> dict[str, str]:
             cached = getattr(self, "_form_cache", None)
             if cached is not None:
@@ -142,6 +173,13 @@ def make_office_panel_handler(
             if not self._authorized():
                 self._deny()
                 return
+            panel.begin_request()
+            try:
+                self._route_get()
+            except RemoteCoreError as exc:
+                self._remote_error_page(exc)
+
+        def _route_get(self) -> None:
             parsed = urlparse(self.path)
             parts = [part for part in parsed.path.split("/") if part]
             if parts == ["rueckruf"]:
@@ -223,9 +261,12 @@ def make_office_panel_handler(
                     "Ungültiger oder fehlender CSRF-Sicherheitstoken.", status=403
                 )
                 return
+            panel.begin_request(form)
             parts = [part for part in urlparse(self.path).path.split("/") if part]
             try:
                 self._route_post(parts)
+            except RemoteCoreError as exc:
+                self._remote_error_page(exc)
             except (ValueError, KeyError) as exc:
                 self._error_page(str(exc))
 
@@ -327,6 +368,8 @@ def create_office_panel_server(
     auerswald_password: str = "",
     kiosk_url: str = "",
     configurator_url: str = "",
+    *,
+    remote: "RemoteCoreClient | None" = None,
 ) -> HTTPServer:
     """Create the intentionally single-threaded office HTTP server."""
     return HTTPServer(
@@ -340,5 +383,6 @@ def create_office_panel_server(
             auerswald_password,
             kiosk_url,
             configurator_url,
+            remote=remote,
         ),
     )

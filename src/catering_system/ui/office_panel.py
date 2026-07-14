@@ -16,6 +16,7 @@ import urllib.error
 import urllib.request
 from datetime import date
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import TYPE_CHECKING
 from urllib.parse import quote, urlencode
 
 from catering_system.domain.inquiry import CRM_PIPELINE, Inquiry, PLANNING_MODES
@@ -54,6 +55,9 @@ from catering_system.ui.office_panel_views import (
     _verification_label,
     render_print_sheet,
 )
+
+if TYPE_CHECKING:
+    from catering_system.ui.remote_core_client import RemoteCoreClient
 
 __all__ = [
     "CALL_VERIFICATION_STATUS_LABELS",
@@ -197,12 +201,45 @@ class OfficePanel:
         order_repo: OrderRepository,
         kiosk_url: str = "",
         configurator_url: str = "",
+        *,
+        remote: "RemoteCoreClient | None" = None,
     ) -> None:
         self._inquiries = inquiry_repo
         self._orders = order_repo
-        self.inquiry_service = InquiryService(inquiry_repo)
-        self.order_service = OrderService(order_repo)
-        self.core = OperationalCoreService(order_repo)
+        # Phase 2 dual mode (PROXMOX_OFFICE_SERVER_CORE_API_PACK_V1 §7): when
+        # `remote` is given, `inquiry_repo`/`order_repo` are the same
+        # RemoteCoreClient instance, used here only for its repo-shaped reads
+        # (list_all, get_by_id, list_orders, get_order, list_order_versions,
+        # get_order_version — everything render_queue/render_inquiry/
+        # render_order already call directly). Writes must never run
+        # InquiryService/OrderService/OperationalCoreService business logic
+        # against the remote client (that would reproduce Core's business
+        # rules — id minting, defaults, timestamps — on Proxmox); instead we
+        # swap in the client's own command-backed facades, which call the
+        # frozen Core Office API's named commands. Direct mode (remote=None)
+        # is completely unchanged — same objects, same construction, byte-
+        # identical behavior.
+        if remote is None:
+            self.inquiry_service = InquiryService(inquiry_repo)
+            self.order_service = OrderService(order_repo)
+            self.core = OperationalCoreService(order_repo)
+        else:
+            # Structurally duck-typed, not the same concrete class — the
+            # remote facades implement exactly the method surface this
+            # module and office_panel_http.py call (create_inquiry,
+            # update_inquiry, verify_customer_by_call, convert_inquiry_to_
+            # order, create_relevant_order_change_version, evaluate_ready_
+            # to_send, request_ready_to_send, confirm_kitchen_print,
+            # make_order_version_effective, cancel_order), verified by the
+            # remote-mode behavioral test suite.
+            self.inquiry_service = remote.inquiry_service  # type: ignore[assignment]
+            self.order_service = remote.order_service  # type: ignore[assignment]
+            self.core = remote.core  # type: ignore[assignment]
+        self._remote = remote
+        # Pure-read derivations: safe to run over the remote client's repo-
+        # shaped reads in both modes, since they only ever call
+        # get_order/get_order_version/list_orders/list_order_versions —
+        # never a write.
         self.progression = ProgressionService(order_repo)
         self.wochenuebersicht = WochenuebersichtService(order_repo)
         # Single source of truth for the "full week" deep link — the kitchen
@@ -216,6 +253,33 @@ class OfficePanel:
         # The payload travels in a URL fragment (never an HTTP request) and
         # opening it performs no Core write.
         self.configurator_url = normalize_configurator_url(configurator_url)
+
+    def begin_request(self, form: dict[str, str] | None = None) -> None:
+        """No-op in direct mode. In remote mode, resets the RemoteCoreClient's
+        per-request read caches and stashes the submitted form (if any) so the
+        write facades can read back `_command_id`/`_expect_*` hidden fields
+        (pack §6.1/§6.3). The HTTP handler calls this once per request, before
+        any panel render/write method, for both GET (empty form) and POST."""
+        if self._remote is not None:
+            self._remote.begin_request(form)
+
+    def _command_fields(self, expect: dict[str, str] | None = None) -> str:
+        """Hidden idempotency fields for a rendered mutating form. Empty in
+        direct mode — direct-mode HTML must stay byte-identical (pack §7). In
+        remote mode, mints a fresh command_id for this render (baked into the
+        served page, so a resubmission of the SAME loaded form — a double
+        click, or a retry after an indeterminate network failure — always
+        carries the same id and the same preconditions) plus one
+        `_expect_<key>` field per precondition the command route requires."""
+        if self._remote is None:
+            return ""
+        command_id = self._remote.new_page_command_id()
+        fields = f'<input type="hidden" name="_command_id" value="{_e(command_id)}">'
+        for key, value in (expect or {}).items():
+            fields += (
+                f'<input type="hidden" name="_expect_{key}" value="{_e(value)}">'
+            )
+        return fields
 
     def _next_step_action(
         self,
@@ -248,15 +312,17 @@ class OfficePanel:
         )
         if version is None:
             version = max(versions, key=lambda v: v.version_number)
+        expect: dict[str, str] = {}
         if version.kitchen_print_confirmed_at is None:
             label, action = "Druck bestätigen", "print-confirm"
         elif version.order_version_id != order.effective_order_version_id:
             label, action = "Wirksam machen", "effective"
+            expect = {"effective_version_id": order.effective_order_version_id or ""}
         else:
             return ""
         return (
             f'<form class="inline" method="post" action="/order/{_e(order.order_id)}/{action}">'
-            f"{_csrf_input(context)}"
+            f"{_csrf_input(context)}{self._command_fields(expect)}"
             f'<input type="hidden" name="order_version_id" value="{_e(version.order_version_id)}">'
             f"<button>{label}</button></form>"
         )
@@ -395,13 +461,13 @@ class OfficePanel:
             ):
                 action = (
                     f'<form class="inline" method="post" action="/inquiry/{_e(inq.inquiry_id)}/verify">'
-                    f"{_csrf_input(context)}"
+                    f"{_csrf_input(context)}{self._command_fields()}"
                     "<button>Telefonisch verifiziert</button></form>"
                 )
             else:
                 action = (
                     f'<form class="inline" method="post" action="/inquiry/{_e(inq.inquiry_id)}/convert">'
-                    f"{_csrf_input(context)}"
+                    f"{_csrf_input(context)}{self._command_fields()}"
                     "<button>In Auftrag umwandeln</button></form>"
                 )
             neue_anfragen_rows.append(
@@ -606,7 +672,7 @@ class OfficePanel:
         # input and are never written anywhere by themselves.
         body = (
             phone_hint
-            + f"""<form method="post" action="/inquiry/new">{_csrf_input(context)}<fieldset>
+            + f"""<form method="post" action="/inquiry/new">{_csrf_input(context)}{self._command_fields()}<fieldset>
 <p><label>Datum*</label><input type="date" name="event_date" value="{_e(event_date)}" required></p>
 <p><label>Kanal</label><select name="inquiry_source">{src_opts}</select></p>
 <p><label>Zeitfenster</label><input name="time_window_text"></p>
@@ -667,7 +733,7 @@ class OfficePanel:
         ):
             verify_btn = (
                 f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/verify">'
-                f"{_csrf_input(context)}"
+                f"{_csrf_input(context)}{self._command_fields()}"
                 "<button>Telefonisch verifiziert</button></form> "
             )
         existing = [
@@ -687,7 +753,7 @@ class OfficePanel:
         if not active:
             convert += (
                 f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/convert">'
-                f"{_csrf_input(context)}"
+                f"{_csrf_input(context)}{self._command_fields()}"
                 "<button>In Auftrag umwandeln</button></form>"
             )
         guests = (
@@ -743,7 +809,7 @@ class OfficePanel:
 <p>{verify_btn}{convert}</p>
 {offer_prefill}
 <h2>Anfrage bearbeiten</h2>
-<form method="post" action="/inquiry/{_e(inquiry_id)}/update">{_csrf_input(context)}<fieldset>
+<form method="post" action="/inquiry/{_e(inquiry_id)}/update">{_csrf_input(context)}{self._command_fields({"updated_at": inq.updated_at.isoformat()})}<fieldset>
 <p><label>Datum</label><input type="date" name="event_date" value="{_e(inq.event_date.isoformat())}"></p>
 <p><label>Zeitfenster</label><input name="time_window_text" value="{_e(inq.time_window_text)}"></p>
 <p><label>Ort</label><input name="location_text" value="{_e(inq.location_text)}"></p>
@@ -807,7 +873,7 @@ class OfficePanel:
                 if v.kitchen_print_confirmed_at is None:
                     actions.append(
                         f'<form class="inline" method="post" action="/order/{_e(order_id)}/print-confirm">'
-                        f"{_csrf_input(context)}"
+                        f"{_csrf_input(context)}{self._command_fields()}"
                         f'<input type="hidden" name="order_version_id" value="{_e(v.order_version_id)}">'
                         "<button>Druck bestätigen</button></form>"
                     )
@@ -815,6 +881,7 @@ class OfficePanel:
                     actions.append(
                         f'<form class="inline" method="post" action="/order/{_e(order_id)}/effective">'
                         f"{_csrf_input(context)}"
+                        f"{self._command_fields({'effective_version_id': order.effective_order_version_id or ''})}"
                         f'<input type="hidden" name="order_version_id" value="{_e(v.order_version_id)}">'
                         "<button>Wirksam machen</button></form>"
                     )
@@ -838,13 +905,16 @@ class OfficePanel:
         header = '<p class="cancelled">STORNIERT</p>' if cancelled else ""
         actions_block = ""
         if not cancelled:
+            latest_version_number = max(
+                (v.version_number for v in versions), default=0
+            )
             actions_block = f"""
 <p>
-<form class="inline" method="post" action="/order/{_e(order_id)}/ready">{_csrf_input(context)}<button>Freigabe anfordern</button></form>
-<form class="inline" method="post" action="/order/{_e(order_id)}/cancel">{_csrf_input(context)}<button>Auftrag stornieren</button></form>
+<form class="inline" method="post" action="/order/{_e(order_id)}/ready">{_csrf_input(context)}{self._command_fields()}<button>Freigabe anfordern</button></form>
+<form class="inline" method="post" action="/order/{_e(order_id)}/cancel">{_csrf_input(context)}{self._command_fields({"updated_at": order.updated_at.isoformat()})}<button>Auftrag stornieren</button></form>
 </p>
 <h2>Neue Version</h2>
-<form method="post" action="/order/{_e(order_id)}/version">{_csrf_input(context)}<fieldset>
+<form method="post" action="/order/{_e(order_id)}/version">{_csrf_input(context)}{self._command_fields({"latest_version_number": str(latest_version_number)})}<fieldset>
 <p><label>Datum*</label><input type="date" name="event_date" required></p>
 <p><label>Zeitfenster</label><input name="time_window_text"></p>
 <p><label>Ort</label><input name="location_text"></p>
@@ -891,6 +961,8 @@ def make_office_panel_handler(
     auerswald_password: str = "",
     kiosk_url: str = "",
     configurator_url: str = "",
+    *,
+    remote: "RemoteCoreClient | None" = None,
 ) -> type[BaseHTTPRequestHandler]:
     """Compatibility wrapper; HTTP routing lives in office_panel_http."""
     from catering_system.ui.office_panel_http import (
@@ -906,6 +978,7 @@ def make_office_panel_handler(
         auerswald_password,
         kiosk_url,
         configurator_url,
+        remote=remote,
     )
 
 
@@ -920,6 +993,8 @@ def create_office_panel_server(
     auerswald_password: str = "",
     kiosk_url: str = "",
     configurator_url: str = "",
+    *,
+    remote: "RemoteCoreClient | None" = None,
 ) -> HTTPServer:
     """Compatibility wrapper; server construction lives in office_panel_http."""
     from catering_system.ui.office_panel_http import (
@@ -937,6 +1012,7 @@ def create_office_panel_server(
         auerswald_password,
         kiosk_url,
         configurator_url,
+        remote=remote,
     )
 
 
@@ -944,7 +1020,20 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Office panel (LAN-only write surface)"
     )
-    parser.add_argument("--db", required=True, help="Path to the Core SQLite database")
+    parser.add_argument(
+        "--db",
+        default="",
+        help="Path to the Core SQLite database (direct mode only; omit when "
+        "CORE_OFFICE_API_URL/CORE_OFFICE_API_TOKEN select remote mode)",
+    )
+    parser.add_argument(
+        "--core-office-api-url",
+        default=os.environ.get("CORE_OFFICE_API_URL", ""),
+        help="Base URL of the frozen Core Office API (or set "
+        "CORE_OFFICE_API_URL) — Phase 2 remote mode: set together with "
+        "CORE_OFFICE_API_TOKEN (env only, never a flag) to run the panel "
+        "without ever opening core.db",
+    )
     parser.add_argument("--port", type=int, default=8081)
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument(
@@ -987,26 +1076,67 @@ def main() -> None:
             "(--password or OFFICE_PANEL_PASSWORD): it is a write surface (pack §7)"
         )
 
-    from catering_system.repositories.sqlite_inquiry_repository import (
-        SQLiteInquiryRepository,
-    )
-    from catering_system.repositories.sqlite_order_repository import (
-        SQLiteOrderRepository,
-    )
+    # Phase 2 dual mode (pack §7): CORE_OFFICE_API_URL and CORE_OFFICE_API_TOKEN
+    # must be set together (remote mode) or both left empty (direct mode) — a
+    # half-configured pair is refused before anything else opens: no core.db,
+    # no socket bound. The token is env-only, never a CLI flag, so it never
+    # appears in argv/process listings (matching the Core Office API server's
+    # own OFFICE_API_TOKEN convention).
+    core_api_url = args.core_office_api_url
+    core_api_token = os.environ.get("CORE_OFFICE_API_TOKEN", "")
+    if bool(core_api_url) != bool(core_api_token):
+        raise SystemExit(
+            "CORE_OFFICE_API_URL and CORE_OFFICE_API_TOKEN must be set together "
+            "(remote mode) or both left empty (direct mode)"
+        )
 
-    server = create_office_panel_server(
-        SQLiteInquiryRepository(args.db),
-        SQLiteOrderRepository(args.db),
-        args.password,
-        args.host,
-        args.port,
-        args.auerswald_url,
-        args.auerswald_user,
-        args.auerswald_password,
-        args.kiosk_url,
-        args.configurator_url,
-    )
-    print(f"Office panel on http://{args.host}:{args.port}/ (user: office)")
+    if core_api_url:
+        from catering_system.ui.remote_core_client import RemoteCoreClient
+
+        remote = RemoteCoreClient(core_api_url, core_api_token)
+        server = create_office_panel_server(
+            remote,
+            remote,
+            args.password,
+            args.host,
+            args.port,
+            args.auerswald_url,
+            args.auerswald_user,
+            args.auerswald_password,
+            args.kiosk_url,
+            args.configurator_url,
+            remote=remote,
+        )
+        print(
+            f"Office panel on http://{args.host}:{args.port}/ (user: office) "
+            f"— remote mode against {core_api_url}"
+        )
+    else:
+        if not args.db:
+            raise SystemExit(
+                "--db is required in direct mode (or set CORE_OFFICE_API_URL "
+                "and CORE_OFFICE_API_TOKEN for remote mode)"
+            )
+        from catering_system.repositories.sqlite_inquiry_repository import (
+            SQLiteInquiryRepository,
+        )
+        from catering_system.repositories.sqlite_order_repository import (
+            SQLiteOrderRepository,
+        )
+
+        server = create_office_panel_server(
+            SQLiteInquiryRepository(args.db),
+            SQLiteOrderRepository(args.db),
+            args.password,
+            args.host,
+            args.port,
+            args.auerswald_url,
+            args.auerswald_user,
+            args.auerswald_password,
+            args.kiosk_url,
+            args.configurator_url,
+        )
+        print(f"Office panel on http://{args.host}:{args.port}/ (user: office)")
     server.serve_forever()
 
 
