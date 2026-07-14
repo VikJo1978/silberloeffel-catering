@@ -7,6 +7,7 @@ the frozen Order/OrderVersion field set (incl. the two OPERATIONAL_CORE §7 fiel
 from __future__ import annotations
 
 import sqlite3
+from contextlib import nullcontext
 from datetime import date, datetime
 from pathlib import Path
 
@@ -168,12 +169,36 @@ def _migration_5_protect_invariant_mutations(
         connection.execute(trigger)
 
 
+def _migration_6_unique_active_source_inquiry(
+    connection: sqlite3.Connection,
+) -> None:
+    """PROXMOX_OFFICE_SERVER_CORE_API_PACK_V1 §6.2: at most one ACTIVE order
+    per inquiry. Deliberately partial — re-conversion after Storno is
+    existing, wanted behavior, so cancelled orders never conflict. Fails
+    closed on pre-existing duplicates (precedent: inquiries migration 3)."""
+    duplicate = connection.execute(
+        "SELECT source_inquiry_id FROM orders WHERE cancelled_at IS NULL "
+        "GROUP BY source_inquiry_id HAVING COUNT(*) > 1 LIMIT 1"
+    ).fetchone()
+    if duplicate is not None:
+        raise ValueError(
+            "cannot enforce one active order per inquiry: inquiry "
+            f"{duplicate[0]!r} has more than one non-cancelled order; "
+            "resolve manually before migrating"
+        )
+    connection.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_active_source_inquiry "
+        "ON orders (source_inquiry_id) WHERE cancelled_at IS NULL"
+    )
+
+
 _MIGRATIONS = (
     (1, "create_order_tables", _migration_1_create_tables),
     (2, "add_cancelled_at", _migration_2_add_cancelled_at),
     (3, "unique_version_numbers", _migration_3_unique_version_numbers),
     (4, "order_invariant_triggers", _migration_4_order_invariants),
     (5, "protect_invariant_mutations", _migration_5_protect_invariant_mutations),
+    (6, "unique_active_source_inquiry", _migration_6_unique_active_source_inquiry),
 )
 
 
@@ -184,11 +209,29 @@ def _dt(value: str) -> datetime:
 class SQLiteOrderRepository:
     def __init__(self, db_path: str | Path) -> None:
         self._conn = sqlite3.connect(str(db_path))
+        self._manage_transactions = True
         try:
             apply_migrations(self._conn, "orders", _MIGRATIONS)
         except Exception:
             self._conn.close()
             raise
+
+    @classmethod
+    def from_connection(cls, connection: sqlite3.Connection) -> SQLiteOrderRepository:
+        """Externally-managed transaction mode (PROXMOX pack §6.1): the
+        caller owns BEGIN/COMMIT/ROLLBACK on the shared connection; write
+        methods here must not auto-commit. Migrations still apply."""
+        repo = cls.__new__(cls)
+        repo._conn = connection
+        repo._manage_transactions = False
+        apply_migrations(connection, "orders", _MIGRATIONS)
+        return repo
+
+    def _write_scope(self):  # noqa: ANN202
+        # `with self._write_scope():` commits on exit — correct standalone, fatal
+        # inside an externally-owned transaction (it would commit half a
+        # command). nullcontext leaves control with the coordinator.
+        return self._conn if self._manage_transactions else nullcontext()
 
     def close(self) -> None:
         self._conn.close()
@@ -199,7 +242,7 @@ class SQLiteOrderRepository:
         """Create the aggregate root and v1 in one SQLite transaction."""
         if version.order_id != order.order_id or version.version_number != 1:
             raise ValueError("initial version must be v1 of the supplied order")
-        with self._conn:
+        with self._write_scope():
             self._conn.execute(
                 "INSERT INTO orders VALUES (?, ?, ?, ?, ?, ?, ?)",
                 self._order_values(order),
@@ -226,7 +269,7 @@ class SQLiteOrderRepository:
         )
 
     def update_order(self, order: Order) -> None:
-        with self._conn:
+        with self._write_scope():
             updated = self._update_order_row(order)
             if updated != 1:
                 raise KeyError(order.order_id)
@@ -250,7 +293,7 @@ class SQLiteOrderRepository:
         """Append a version and update its aggregate root in one transaction."""
         if version.order_id != order.order_id or version.version_number < 1:
             raise ValueError("version must belong to the supplied order")
-        with self._conn:
+        with self._write_scope():
             updated = self._update_order_row(order)
             if updated != 1:
                 raise KeyError(order.order_id)
@@ -260,7 +303,7 @@ class SQLiteOrderRepository:
             )
 
     def update_order_version(self, version: OrderVersion) -> None:
-        with self._conn:
+        with self._write_scope():
             updated = self._conn.execute(
                 """
                 UPDATE order_versions SET

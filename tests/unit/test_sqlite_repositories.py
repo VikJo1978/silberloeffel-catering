@@ -375,6 +375,7 @@ def test_component_migrations_are_recorded_once(tmp_path: Path) -> None:
         ("orders", 3),
         ("orders", 4),
         ("orders", 5),
+        ("orders", 6),  # PROXMOX pack §6.2: unique active source inquiry
     ]
 
 

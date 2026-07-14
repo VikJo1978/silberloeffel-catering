@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import nullcontext
 from datetime import date, datetime
 from pathlib import Path
 from typing import cast
@@ -103,18 +104,35 @@ _MIGRATIONS = (
 class SQLiteInquiryRepository:
     def __init__(self, db_path: str | Path) -> None:
         self._conn = sqlite3.connect(str(db_path))
+        self._manage_transactions = True
         try:
             apply_migrations(self._conn, "inquiries", _MIGRATIONS)
         except Exception:
             self._conn.close()
             raise
 
+    @classmethod
+    def from_connection(cls, connection: sqlite3.Connection) -> SQLiteInquiryRepository:
+        """Externally-managed transaction mode (PROXMOX pack §6.1): the
+        caller owns BEGIN/COMMIT/ROLLBACK on the shared connection; write
+        methods here must not auto-commit. Migrations still apply."""
+        repo = cls.__new__(cls)
+        repo._conn = connection
+        repo._manage_transactions = False
+        apply_migrations(connection, "inquiries", _MIGRATIONS)
+        return repo
+
+    def _write_scope(self):  # noqa: ANN202
+        # `with self._conn:` commits on exit — correct standalone, fatal
+        # inside an externally-owned transaction.
+        return self._conn if self._manage_transactions else nullcontext()
+
     def close(self) -> None:
         self._conn.close()
 
     def save(self, inquiry: Inquiry) -> None:
         try:
-            with self._conn:
+            with self._write_scope():
                 self._conn.execute(
                     "INSERT INTO inquiries VALUES "
                     "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -161,7 +179,7 @@ class SQLiteInquiryRepository:
 
     def update(self, inquiry: Inquiry) -> None:
         try:
-            with self._conn:
+            with self._write_scope():
                 updated = self._conn.execute(
                     """
                     UPDATE inquiries SET
