@@ -2607,3 +2607,36 @@ Completed
 Not included
 	•	no call history, notes, follow-up dates, new tables, CRM integration,
 	  Phase 3B, push or deploy
+
+
+Entry 065
+
+Date: 2026-07-14 — Office workflow P0 invariants
+Scope: local follow-up to `67e2990`; no push, deploy, production data, Phase 3B
+or unrelated UX changes.
+
+Meaning
+	•	an Inquiry with an active linked Order may use only the compatible CRM
+	  stage `Bestätigt / Auftrag`. The direct Core command boundary rejects a
+	  crafted incompatible update before writing; the remote Core Office API
+	  rejects it atomically as `422 active_order_crm_stage_conflict`
+	•	the shared Inquiry page renders that active-Order stage as a fixed value
+	  rather than offering incompatible choices. Cancelled-only Order history is
+	  deliberately unaffected, preserving the existing reconversion contract
+	•	the Order page exposes `Wirksam machen` only for a version whose existing
+	  `kitchen_print_confirmed_at` fact is present. Before that, `Druck
+	  bestätigen` is the sole next action; the existing Core effective-version
+	  gate remains defense in depth
+	•	direct and remote panel regressions cover both invariants. Remote mode keeps
+	  business enforcement in Core API rather than duplicating the rule on the
+	  Proxmox-side client
+
+Completed
+	•	relevant direct/API/remote/domain regressions passed
+	•	full pytest: 633 passed
+	•	full coverage: 90.4% with the project minimum of 90%
+	•	full Ruff check clean; all 100 Python files formatted
+	•	full mypy clean for 70 source files
+
+Not included
+	•	no other office UX findings, Phase 3B, push or deploy

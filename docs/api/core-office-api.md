@@ -47,7 +47,7 @@ are minimal (IDs + timestamps, no PII); the panel re-reads details via GET.
 | Route | `expect` precondition |
 |---|---|
 | `POST /office/v1/inquiries` | – |
-| `POST /office/v1/inquiries/{id}/update` | `updated_at` |
+| `POST /office/v1/inquiries/{id}/update` | `updated_at`; with an active linked Order, only `Bestätigt / Auftrag` is compatible (`422 active_order_crm_stage_conflict`) |
 | `POST /office/v1/inquiries/{id}/verify` | – (repeat = success) |
 | `POST /office/v1/inquiries/{id}/convert` | server-side: no active order (`409 already_converted`), not rejected (`422 inquiry_rejected`), verification satisfied; success also sets `Bestätigt / Auftrag` |
 | `POST /office/v1/orders/{id}/versions` | `latest_version_number` |
@@ -78,8 +78,8 @@ an oversized body.
 Error codes (stable, never free text): `unauthorized`, `not_found`,
 `invalid_request`, `unsupported_media_type`, `body_too_large`,
 `method_not_allowed`, `command_id_conflict`, `stale_state`,
-`already_converted`, `external_ref_conflict`, `inquiry_rejected`,
-`verification_gate_blocked`,
+`already_converted`, `external_ref_conflict`,
+`active_order_crm_stage_conflict`, `inquiry_rejected`, `verification_gate_blocked`,
 `order_cancelled`, `kitchen_print_not_confirmed`, `version_not_owned`,
 `core_busy`, `internal`.
 

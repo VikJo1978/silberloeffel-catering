@@ -24,13 +24,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import TypeVar
 from urllib.parse import parse_qsl, urlparse
 
 from catering_system.domain.inquiry import (
     CRM_PIPELINE,
+    derive_inquiry_office_state,
+    inquiry_crm_stage_is_compatible_with_active_order,
     validate_crm_stage,
     validate_planning_mode,
-    derive_inquiry_office_state,
 )
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.repositories.core_transaction import (
@@ -68,6 +70,7 @@ _MAX_BODY_BYTES = 64 * 1024
 _MAX_RESPONSE_BYTES = 512 * 1024  # pack §4.0 hard response cap
 _MAX_Q_CHARS = 200
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_EnumValue = TypeVar("_EnumValue", bound=str)
 
 
 class ApiError(Exception):
@@ -158,7 +161,7 @@ def _v_int(value: object) -> int:
     return value
 
 
-def _v_enum(value: object, validator: Callable[[str], str]) -> str:
+def _v_enum(value: object, validator: Callable[[str], _EnumValue]) -> _EnumValue:
     if not isinstance(value, str):
         raise _invalid()
     try:
@@ -415,11 +418,16 @@ class OfficeApi:
         current = self._require_inquiry(path_ids["id"])
         if _v_datetime(expect["updated_at"]) != current.updated_at:
             raise ApiError(409, "stale_state")
+        crm_stage = _v_enum(args["crm_stage"], validate_crm_stage)
+        if self._active_order_for_inquiry(current.inquiry_id) is not None and not (
+            inquiry_crm_stage_is_compatible_with_active_order(crm_stage)
+        ):
+            raise ApiError(422, "active_order_crm_stage_conflict")
         try:
             updated = self.inquiry_service.update_inquiry(
                 current.inquiry_id,
                 event_date=_v_date(args["event_date"]),
-                crm_stage=_v_enum(args["crm_stage"], validate_crm_stage),
+                crm_stage=crm_stage,
                 time_window_text=_v_str(args["time_window_text"], 500),
                 location_text=_v_str(args["location_text"], 500),
                 guest_count_estimate=_v_guest_count(args["guest_count_estimate"]),

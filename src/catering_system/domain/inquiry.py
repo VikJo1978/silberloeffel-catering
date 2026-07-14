@@ -38,6 +38,7 @@ CRM_PIPELINE: tuple[CrmStage, ...] = (
     "Abgelehnt / verloren",
 )
 CRM_STAGE_SET: frozenset[str] = frozenset(CRM_PIPELINE)
+ACTIVE_ORDER_CRM_STAGE: CrmStage = "Bestätigt / Auftrag"
 
 PlanningMode = Literal["caterer_suggestion", "self_select"]
 PLANNING_MODES: tuple[PlanningMode, ...] = ("caterer_suggestion", "self_select")
@@ -159,6 +160,11 @@ def inquiry_allows_order_conversion(inquiry: Inquiry) -> bool:
     if not inquiry.call_verification_required:
         return True
     return inquiry.call_verification_status == "verified"
+
+
+def inquiry_crm_stage_is_compatible_with_active_order(stage: CrmStage) -> bool:
+    """An active linked order requires the inquiry's confirmed-order stage."""
+    return stage == ACTIVE_ORDER_CRM_STAGE
 
 
 def derive_inquiry_office_state(

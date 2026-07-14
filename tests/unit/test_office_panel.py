@@ -276,6 +276,31 @@ def test_converted_inquiry_shows_order_link_instead_of_button(panel: str) -> Non
     _status, body = _get(f"{panel}/inquiry/{iid}")
     assert "Auftrag vorhanden" in body and oid[:8] in body
     assert "In Auftrag umwandeln" not in body
+    assert '<select name="crm_stage">' not in body
+    assert '<input type="hidden" name="crm_stage" value="Bestätigt / Auftrag">' in body
+
+
+def test_active_order_rejects_incompatible_inquiry_stage_update(panel: str) -> None:
+    iid = _create_inquiry(panel)
+    oid = _convert(panel, iid)
+
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _post(
+            f"{panel}/inquiry/{iid}/update",
+            {
+                "event_date": "2026-10-01",
+                "time_window_text": "mittags",
+                "location_text": "Hamburg",
+                "guest_count_estimate": "25",
+                "planning_mode": "caterer_suggestion",
+                "crm_stage": "Abgelehnt / verloren",
+            },
+        )
+    assert exc.value.code == 400
+
+    _status, body = _get(f"{panel}/inquiry/{iid}")
+    assert "Bestätigt / Auftrag" in body
+    assert "Auftrag vorhanden" in body and oid[:8] in body
 
 
 def test_rejected_inquiry_is_closed_without_queue_or_actions(panel: str) -> None:
@@ -523,6 +548,22 @@ def test_effective_before_print_rejected(panel: str) -> None:
         _post(f"{panel}/order/{oid}/effective", {"order_version_id": vid})
     assert exc.value.code == 400
     assert "kitchen print not confirmed" in exc.value.read().decode("utf-8")
+
+
+def test_order_page_offers_effective_only_after_print_confirmation(panel: str) -> None:
+    iid = _create_inquiry(panel)
+    oid = _convert(panel, iid)
+    _status, body = _get(f"{panel}/order/{oid}")
+    vid = body.split('name="order_version_id" value="')[1].split('"')[0]
+    assert f'action="/order/{oid}/print-confirm"' in body
+    assert f'action="/order/{oid}/effective"' not in body
+    assert "Wirksam machen" not in body
+
+    _post(f"{panel}/order/{oid}/print-confirm", {"order_version_id": vid})
+    _status, body = _get(f"{panel}/order/{oid}")
+    assert f'action="/order/{oid}/print-confirm"' not in body
+    assert f'action="/order/{oid}/effective"' in body
+    assert "Wirksam machen" in body
 
 
 def test_full_release_flow(panel: str) -> None:

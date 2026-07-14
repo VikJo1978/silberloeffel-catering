@@ -20,10 +20,13 @@ from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote, urlencode
 
 from catering_system.domain.inquiry import (
+    ACTIVE_ORDER_CRM_STAGE,
     CRM_PIPELINE,
     PLANNING_MODES,
     Inquiry,
     derive_inquiry_office_state,
+    inquiry_crm_stage_is_compatible_with_active_order,
+    validate_crm_stage,
 )
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.repositories.inquiry_repository import InquiryRepository
@@ -929,10 +932,11 @@ class OfficePanel:
         existing = [
             o for o in self._orders.list_orders() if o.source_inquiry_id == inquiry_id
         ]
+        has_active_order = any(order.cancelled_at is None for order in existing)
         state = derive_inquiry_office_state(
             inq,
             has_order=bool(existing),
-            has_active_order=any(order.cancelled_at is None for order in existing),
+            has_active_order=has_active_order,
         )
         ev = self.progression.evaluate_inquiry_to_order_progression(inq)
         if existing:
@@ -1003,6 +1007,12 @@ class OfficePanel:
                 "Angebotsentwurf vor. Kein Auftrag, keine Freigabe und keine "
                 "Nachricht an den Kunden.</p>"
             )
+        crm_stage_field = (
+            f'{_e(ACTIVE_ORDER_CRM_STAGE)}<input type="hidden" name="crm_stage" '
+            f'value="{_e(ACTIVE_ORDER_CRM_STAGE)}">'
+            if has_active_order
+            else _crm_stage_select(inq.crm_stage)
+        )
         body = (
             inquiry_truncation_warning
             + website_banner
@@ -1025,7 +1035,7 @@ class OfficePanel:
 <p><label>Ort</label><input name="location_text" value="{_e(inq.location_text)}"></p>
 <p><label>Gäste (ca.)</label><input name="guest_count_estimate" value="{_e(guests)}"></p>
 <p><label>Planungsmodus</label>{_planning_mode_select(inq.planning_mode)}</p>
-<p><label>CRM-Stufe</label>{_crm_stage_select(inq.crm_stage)}</p>
+<p><label>CRM-Stufe</label>{crm_stage_field}</p>
 <p class="subtitle">Intake-Kontext — keine Auftrags-/Küchenfreigabe.</p>
 <p><label>Betreff</label><input name="intake_subject" value="{_e(inq.intake_subject or "")}"></p>
 <p><label>Nachricht</label><textarea name="intake_message" rows="4">{_e(inq.intake_message or "")}</textarea></p>
@@ -1037,6 +1047,17 @@ class OfficePanel:
         return _page(f"Anfrage {inq.inquiry_id[:8]}", body, context=context)
 
     def update_inquiry(self, inquiry_id: str, form: dict[str, str]) -> None:
+        crm_stage = validate_crm_stage(form.get("crm_stage", CRM_PIPELINE[0]))
+        has_active_order = any(
+            order.source_inquiry_id == inquiry_id and order.cancelled_at is None
+            for order in self._orders.list_orders()
+        )
+        if (
+            self._remote is None
+            and has_active_order
+            and not inquiry_crm_stage_is_compatible_with_active_order(crm_stage)
+        ):
+            raise ValueError("active order requires Bestätigt / Auftrag CRM stage")
         self.inquiry_service.update_inquiry(
             inquiry_id,
             event_date=date.fromisoformat(form["event_date"]),
@@ -1044,7 +1065,7 @@ class OfficePanel:
             location_text=form.get("location_text", ""),
             guest_count_estimate=_opt_int(form.get("guest_count_estimate", "")),
             planning_mode=form.get("planning_mode", PLANNING_MODES[0]),
-            crm_stage=form.get("crm_stage", CRM_PIPELINE[0]),
+            crm_stage=crm_stage,
             intake_subject=form.get("intake_subject", ""),
             intake_message=form.get("intake_message", ""),
             intake_summary=form.get("intake_summary", ""),
@@ -1139,7 +1160,10 @@ class OfficePanel:
                         f'<input type="hidden" name="order_version_id" value="{_e(v.order_version_id)}">'
                         "<button>Druck bestätigen</button></form>"
                     )
-                if v.order_version_id != order.effective_order_version_id:
+                if (
+                    v.kitchen_print_confirmed_at is not None
+                    and v.order_version_id != order.effective_order_version_id
+                ):
                     actions.append(
                         f'<form class="inline" method="post" action="/order/{_e(order_id)}/effective">'
                         f"{_csrf_input(context)}"

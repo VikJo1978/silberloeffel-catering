@@ -109,21 +109,25 @@ Offer workflow development:
 - Slice 3A adds no Office UI, HTTP API, dashboard integration, kitchen agent,
   printer integration, heartbeat or external Lenovo monitoring. None of these
   Phase 3 capabilities is live on Lenovo or Proxmox.
-- The `Truthful open-inquiry queue and conversion gate` slice is implemented in
-  the current local working tree based on `b560d36`: one pure derivation drives
+- The `Truthful open-inquiry queue and conversion gate` slice is committed
+  locally at `67e2990`: one pure derivation drives
   direct and remote queue/action behavior; rejected and converted inquiries are
   absent from `Offene Anfragen`; rejected conversion is a Core gate; successful
   conversion sets `Bestätigt / Auftrag` in the same direct/API transaction.
   It adds no call history, notes, follow-up dates, tables or CRM integration.
+- Two follow-up Office workflow P0 fixes are complete in the current local
+  working tree: an active Order locks its Inquiry to `Bestätigt / Auftrag` in
+  Core and removes incompatible UI choices, and `Wirksam machen` appears only
+  after kitchen-print confirmation. Direct and remote paths are covered.
 - Phase 2, Phase 3 design and Slice 3A are present on `origin/main` through
-  `b560d36`, but none is deployed. The new open-inquiry slice is local and
-  uncommitted; no deploy has been performed.
+  `b560d36`, but none is deployed. The open-inquiry slice and its P0 follow-up
+  are local only; no deploy has been performed.
 
 ## Local undeployed quality baseline
 
-- Python tests: **628 passed**
+- Python tests: **633 passed**
 - coverage gate: **90% minimum**
-- last full-project coverage: **90.2%**
+- last full-project coverage: **90.4%**
 - website intake receiver coverage: **99.2%**
 - Ruff: clean
 - Mypy: clean

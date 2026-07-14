@@ -8,8 +8,10 @@ from datetime import date, datetime, timezone
 import pytest
 
 from catering_system.domain.inquiry import (
+    CrmStage,
     Inquiry,
     derive_inquiry_office_state,
+    inquiry_crm_stage_is_compatible_with_active_order,
 )
 
 
@@ -94,3 +96,17 @@ def test_active_order_requires_existing_order_fact() -> None:
             has_order=False,
             has_active_order=True,
         )
+
+
+@pytest.mark.parametrize(
+    ("stage", "compatible"),
+    [
+        ("Bestätigt / Auftrag", True),
+        ("Neue Anfrage", False),
+        ("Abgelehnt / verloren", False),
+    ],
+)
+def test_active_order_crm_stage_compatibility(
+    stage: CrmStage, compatible: bool
+) -> None:
+    assert inquiry_crm_stage_is_compatible_with_active_order(stage) is compatible

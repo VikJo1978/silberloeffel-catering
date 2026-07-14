@@ -547,6 +547,24 @@ def test_verify_then_convert_flow_with_gates(api) -> None:
     assert status == 200
     assert detail["crm_stage"] == "Bestätigt / Auftrag"
     assert detail["allows_conversion"] is False
+    status, body, _h = _post(
+        f"{base}/office/v1/inquiries/{inquiry_id}/update",
+        args={
+            "event_date": detail["event_date"],
+            "crm_stage": "Abgelehnt / verloren",
+            "time_window_text": detail["time_window_text"],
+            "location_text": detail["location_text"],
+            "guest_count_estimate": detail["guest_count_estimate"],
+            "planning_mode": detail["planning_mode"],
+        },
+        expect={"updated_at": detail["updated_at"]},
+    )
+    assert (status, body["error"]) == (422, "active_order_crm_stage_conflict")
+    status, detail_after_rejection, _h = _get(
+        f"{base}/office/v1/inquiries/{inquiry_id}"
+    )
+    assert status == 200
+    assert detail_after_rejection["crm_stage"] == "Bestätigt / Auftrag"
     # second convert while active: 409
     status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
     assert (status, body["error"]) == (409, "already_converted")

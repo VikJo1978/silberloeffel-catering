@@ -56,6 +56,12 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
   to `Bestätigt / Auftrag`. Direct and remote Office Panel modes share the same
   derivation; no call history, notes, follow-up dates, tables or CRM integration
   were added. Local and undeployed.
+- Closed two local Office workflow P0 gaps: while an active linked Order exists,
+  Core now permits only the Inquiry stage `Bestätigt / Auftrag` and both panel
+  modes remove incompatible CRM choices; an Order version now exposes `Wirksam
+  machen` only after kitchen-print confirmation, leaving `Druck bestätigen` as
+  the sole next action beforehand. Direct and remote regressions are covered;
+  still not deployed.
 
 - Corrected the operational status after the office-workflow proof: the
   staging form now exercises an already-connected office queue, the Lenovo

@@ -114,6 +114,7 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
     415: frozenset({"unsupported_media_type"}),
     422: frozenset(
         {
+            "active_order_crm_stage_conflict",
             "inquiry_rejected",
             "verification_gate_blocked",
             "order_cancelled",

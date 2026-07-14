@@ -426,6 +426,37 @@ def test_full_write_flow_through_remote_panel(remote_world) -> None:
     assert status == 200
     assert "Bestätigt / Auftrag" in converted_inquiry_html
     assert "In Auftrag umwandeln" not in converted_inquiry_html
+    assert '<select name="crm_stage">' not in converted_inquiry_html
+    assert (
+        '<input type="hidden" name="crm_stage" value="Bestätigt / Auftrag">'
+        in converted_inquiry_html
+    )
+    locked_update_form = re.search(
+        r'(<form method="post" action="/inquiry/[^\"]*/update".*</form>)',
+        converted_inquiry_html,
+        re.DOTALL,
+    ).group(0)
+    status, error_html = _post_form(
+        f"{base}/inquiry/{inquiry_id}/update",
+        {
+            "_csrf_token": _CSRF_TOKEN,
+            "_command_id": _extract_hidden(locked_update_form, "_command_id"),
+            "_expect_updated_at": _extract_hidden(
+                locked_update_form, "_expect_updated_at"
+            ),
+            "event_date": "2026-11-11",
+            "time_window_text": "abends",
+            "location_text": "Rostock-Ost",
+            "guest_count_estimate": "40",
+            "planning_mode": "caterer_suggestion",
+            "crm_stage": "Abgelehnt / verloren",
+        },
+    )
+    assert status == 422
+    assert "active_order_crm_stage_conflict" in error_html
+    status, converted_inquiry_html = _get(f"{base}/inquiry/{inquiry_id}")
+    assert status == 200
+    assert "Bestätigt / Auftrag" in converted_inquiry_html
 
     status, order_list_html = _get(f"{base}/auftraege?q={inquiry_id[:8]}")
     assert status == 200
@@ -433,6 +464,9 @@ def test_full_write_flow_through_remote_panel(remote_world) -> None:
 
     status, order_html = _get(f"{base}/order/{order_id}")
     assert status == 200
+    assert f'action="/order/{order_id}/print-confirm"' in order_html
+    assert f'action="/order/{order_id}/effective"' not in order_html
+    assert "Wirksam machen" not in order_html
     version_id_match = re.search(r'name="order_version_id" value="([^"]+)"', order_html)
     assert version_id_match
     version_id = version_id_match.group(1)
@@ -451,6 +485,8 @@ def test_full_write_flow_through_remote_panel(remote_world) -> None:
     status, order_html = _get(f"{base}/order/{order_id}")
     assert status == 200
     assert "Druck bestätigt" in order_html
+    assert f'action="/order/{order_id}/effective"' in order_html
+    assert "Wirksam machen" in order_html
 
     ready_command_id = _extract_hidden(
         re.search(
