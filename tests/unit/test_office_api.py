@@ -773,3 +773,124 @@ def test_startup_refuses_to_run_without_token(tmp_path) -> None:
     )
     assert result.returncode != 0
     assert "OFFICE_API_TOKEN" in result.stderr
+
+
+# --- round-4 reviewer gaps: response cap, strict validation, intake merge ----
+
+
+def test_read_over_response_cap_is_500_internal(api) -> None:
+    """Pack §4.0: a read whose body would exceed the 512 KiB cap fails closed
+    with `500 internal` rather than emitting an oversized payload. Simulates a
+    legacy Core row with a long text the API's input caps never bounded."""
+    base, ids, db = api
+    inquiry_id = ids["inquiry_convertible"]
+    # under the cap first: the normal detail read succeeds
+    status, _body, _h = _get(f"{base}/office/v1/inquiries/{inquiry_id}")
+    assert status == 200
+    oversized = "x" * (600 * 1024)
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "UPDATE inquiries SET intake_message = ? WHERE inquiry_id = ?",
+        (oversized, inquiry_id),
+    )
+    conn.commit()
+    conn.close()
+    status, body, _h = _get(f"{base}/office/v1/inquiries/{inquiry_id}")
+    assert (status, body["error"]) == (500, "internal")
+
+
+def test_command_id_and_version_refs_must_be_uuid4(api) -> None:
+    """Pack §4.3: command_id is a uuid4; every Core-minted id is uuid4, so a
+    well-formed but non-v4 uuid is rejected before routing/replay."""
+    base, ids, _db = api
+    url = f"{base}/office/v1/inquiries"
+    non_v4 = str(uuid.uuid1())  # valid uuid, version 1
+    status, body, _h = _post(url, args=_CREATE_ARGS, command_id=non_v4)
+    assert (status, body["error"]) == (400, "invalid_request")
+    # a proper uuid4 still works
+    status, _b, _h = _post(url, args=_CREATE_ARGS, command_id=str(uuid.uuid4()))
+    assert status == 201
+    # the print-data version reference is held to the same rule
+    order_id = ids["order_ready"]
+    status, body, _h = _get(
+        f"{base}/office/v1/orders/{order_id}/print-data?version={non_v4}"
+    )
+    assert (status, body["error"]) == (400, "invalid_request")
+    # and an order_version_id command arg
+    status, body, _h = _post(
+        f"{base}/office/v1/orders/{order_id}/print-confirm",
+        args={"order_version_id": non_v4},
+    )
+    assert (status, body["error"]) == (400, "invalid_request")
+
+
+def test_expect_datetime_must_be_utc_aware(api) -> None:
+    """Pack §4.1: timestamps are ISO-8601 UTC with offset. A naive value or a
+    non-UTC offset is a 400, checked before the stale-state comparison."""
+    base, ids, _db = api
+    inquiry_id = ids["inquiry_convertible"]
+    args = {
+        "event_date": "2026-10-02",
+        "crm_stage": "Neue Anfrage",
+        "time_window_text": "abends",
+        "location_text": "Hamburg-Altona",
+        "guest_count_estimate": 30,
+        "planning_mode": "caterer_suggestion",
+    }
+    for bad in ("2026-07-14T10:00:00", "2026-07-14T10:00:00+02:00"):
+        status, body, _h = _post(
+            f"{base}/office/v1/inquiries/{inquiry_id}/update",
+            args=args,
+            expect={"updated_at": bad},
+        )
+        assert (status, body["error"]) == (400, "invalid_request"), bad
+
+
+def test_update_intake_merge_preserve_clear_reject_null(api) -> None:
+    """Reviewer rule: on update an omitted intake field keeps its stored value,
+    an empty string clears it, and an explicit `null` is a 400 (no coercion)."""
+    base, ids, _db = api
+    inquiry_id = ids["inquiry_convertible"]  # seeded intake_subject
+    base_args = {
+        "event_date": "2026-10-02",
+        "crm_stage": "Neue Anfrage",
+        "time_window_text": "abends",
+        "location_text": "Hamburg-Altona",
+        "guest_count_estimate": 30,
+        "planning_mode": "caterer_suggestion",
+    }
+
+    def detail() -> dict:
+        _s, d, _h = _get(f"{base}/office/v1/inquiries/{inquiry_id}")
+        return d
+
+    before = detail()
+    assert before["intake_subject"] == "Sommerfest Catering"
+
+    # omit intake_subject -> preserved
+    status, _b, _h = _post(
+        f"{base}/office/v1/inquiries/{inquiry_id}/update",
+        args=base_args,
+        expect={"updated_at": before["updated_at"]},
+    )
+    assert status == 200
+    kept = detail()
+    assert kept["intake_subject"] == "Sommerfest Catering"
+
+    # explicit "" -> cleared
+    status, _b, _h = _post(
+        f"{base}/office/v1/inquiries/{inquiry_id}/update",
+        args=dict(base_args, intake_subject=""),
+        expect={"updated_at": kept["updated_at"]},
+    )
+    assert status == 200
+    cleared = detail()
+    assert not cleared["intake_subject"]
+
+    # explicit null -> 400, nothing written
+    status, body, _h = _post(
+        f"{base}/office/v1/inquiries/{inquiry_id}/update",
+        args=dict(base_args, intake_subject=None),
+        expect={"updated_at": cleared["updated_at"]},
+    )
+    assert (status, body["error"]) == (400, "invalid_request")

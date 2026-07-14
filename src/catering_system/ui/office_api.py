@@ -22,7 +22,7 @@ import sqlite3
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qsl, urlparse
 
@@ -64,6 +64,7 @@ _log = logging.getLogger(__name__)
 
 CLIENT_ID = "office-panel"  # per-client token identity (pack §6.1)
 _MAX_BODY_BYTES = 64 * 1024
+_MAX_RESPONSE_BYTES = 512 * 1024  # pack §4.0 hard response cap
 _MAX_Q_CHARS = 200
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
@@ -110,12 +111,6 @@ def _v_str(value: object, max_len: int) -> str:
     return value
 
 
-def _v_optional_str(value: object, max_len: int) -> str:
-    if value is None:
-        return ""
-    return _v_str(value, max_len)
-
-
 def _v_bool(value: object) -> bool:
     if not isinstance(value, bool):
         raise _invalid()
@@ -135,9 +130,15 @@ def _v_datetime(value: object) -> datetime:
     if not isinstance(value, str):
         raise _invalid()
     try:
-        return datetime.fromisoformat(value)
+        parsed = datetime.fromisoformat(value)
     except ValueError as exc:
         raise _invalid() from exc
+    # pack §4.1: timestamps are ISO-8601 UTC with offset — a naive value or a
+    # non-UTC offset is a type violation, not silently accepted (utcoffset() is
+    # None for naive datetimes, so this rejects both).
+    if parsed.utcoffset() != timedelta(0):
+        raise _invalid()
+    return parsed
 
 
 def _v_guest_count(value: object) -> int | None:
@@ -169,9 +170,13 @@ def _v_uuid(value: object) -> str:
     if not isinstance(value, str):
         raise _invalid()
     try:
-        uuid.UUID(value)
+        parsed = uuid.UUID(value)
     except ValueError as exc:
         raise _invalid() from exc
+    # pack §4.3: command_id is a uuid4; every Core-minted id is uuid4 too, so
+    # requiring version 4 tightens the contract without rejecting any real id.
+    if parsed.version != 4:
+        raise _invalid()
     return value
 
 
@@ -180,8 +185,21 @@ def _exact_keys(mapping: dict[str, object], keys: set[str]) -> None:
         raise _invalid()
 
 
-def _optional_intake(args: dict[str, object], key: str, cap: int) -> str:
-    return _v_optional_str(args.get(key, ""), cap)
+_ABSENT = object()
+
+
+def _v_intake(
+    args: dict[str, object], key: str, cap: int, keep: str | None
+) -> str | None:
+    """Optional intake string arg (pack §4.4). An omitted key returns `keep`
+    — "" on create (the pack default), the current stored value on update so
+    an unsent field is preserved, never wiped. An explicit JSON `null` or any
+    non-string is a type violation → 400 (exact types, no coercion); an empty
+    string is a deliberate clear."""
+    value = args.get(key, _ABSENT)
+    if value is _ABSENT:
+        return keep
+    return _v_str(value, cap)
 
 
 # --- API core ----------------------------------------------------------------
@@ -364,10 +382,10 @@ class OfficeApi:
                 planning_mode=_v_enum(args["planning_mode"], validate_planning_mode),
                 call_verification_required=required,
                 call_verification_status=("pending" if required else "not_required"),
-                intake_subject=_optional_intake(args, "intake_subject", 1000),
-                intake_message=_optional_intake(args, "intake_message", 5000),
-                intake_summary=_optional_intake(args, "intake_summary", 2000),
-                intake_external_ref=_optional_intake(args, "intake_external_ref", 200),
+                intake_subject=_v_intake(args, "intake_subject", 1000, ""),
+                intake_message=_v_intake(args, "intake_message", 5000, ""),
+                intake_summary=_v_intake(args, "intake_summary", 2000, ""),
+                intake_external_ref=_v_intake(args, "intake_external_ref", 200, ""),
             )
         except DuplicateExternalReferenceError as exc:
             raise ApiError(409, "external_ref_conflict") from exc
@@ -391,10 +409,18 @@ class OfficeApi:
                 location_text=_v_str(args["location_text"], 500),
                 guest_count_estimate=_v_guest_count(args["guest_count_estimate"]),
                 planning_mode=_v_enum(args["planning_mode"], validate_planning_mode),
-                intake_subject=_optional_intake(args, "intake_subject", 1000),
-                intake_message=_optional_intake(args, "intake_message", 5000),
-                intake_summary=_optional_intake(args, "intake_summary", 2000),
-                intake_external_ref=_optional_intake(args, "intake_external_ref", 200),
+                intake_subject=_v_intake(
+                    args, "intake_subject", 1000, current.intake_subject
+                ),
+                intake_message=_v_intake(
+                    args, "intake_message", 5000, current.intake_message
+                ),
+                intake_summary=_v_intake(
+                    args, "intake_summary", 2000, current.intake_summary
+                ),
+                intake_external_ref=_v_intake(
+                    args, "intake_external_ref", 200, current.intake_external_ref
+                ),
             )
         except DuplicateExternalReferenceError as exc:
             raise ApiError(409, "external_ref_conflict") from exc
@@ -702,6 +728,13 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             suppress_body: bool = False,
         ) -> None:
             payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            # pack §4.0: hard 512 KiB response cap. Pagination and embedded-list
+            # caps keep it constructively unreachable, but long legacy Core texts
+            # could still bloat a read past it — fail closed rather than emit an
+            # oversized body. Checked before any byte is sent, so the caller's
+            # try/except turns it into a clean 500 internal.
+            if len(payload) > _MAX_RESPONSE_BYTES:
+                raise ApiError(500, "internal")
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
