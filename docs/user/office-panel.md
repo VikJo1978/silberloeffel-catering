@@ -8,16 +8,21 @@ password through the agreed private credential channel.
 
 | Page | Purpose |
 |---|---|
-| Startseite | top action queues and current priorities |
-| Rückrufe | missed-call list from the optional Auerswald sync service |
+| Arbeitszentrale | top action queues and current priorities |
 | Anfragen | searchable list of all inquiries |
 | Aufträge | searchable list of all orders and next steps |
+| Diese Woche | current-week section on the Arbeitszentrale |
+| Rückrufliste | missed-call list from the optional Auerswald sync service |
 | Neue Anfrage | manual inquiry entry |
-| Proposal preview | review configurator payload before creating an inquiry |
+| Angebots-Import | review configurator payload before creating an inquiry |
+
+On desktop, the section navigation remains visible in the left sidebar. On
+narrow screens it becomes a horizontally scrollable navigation above the page.
+Both variants and every workflow action remain usable without JavaScript.
 
 ## Daily start
 
-1. Open **Startseite**.
+1. Open **Arbeitszentrale**.
 2. Work the three queues in order: callbacks, open inquiries, orders with a next
    step.
 3. Open **Diese Woche** or the kitchen link to check near-term events.

@@ -3,8 +3,10 @@
 Live deployment last verified: **2026-07-13, Europe/Berlin**.
 
 Local undeployed development last verified: **2026-07-14, Europe/Berlin**.
-The reviewed implementation HEAD is `707eb5d`; the status-only documentation
-commit that follows it does not change application behavior.
+The reviewed implementation HEAD is `4e42112`; the status-only documentation
+commit that follows it does not change application behavior. The Office Panel
+UI v2 implementation pack is committed separately at `4507938`. Neither commit
+changes the live/deployed baseline below.
 
 ## Live/deployed baseline
 
@@ -115,22 +117,33 @@ Offer workflow development:
   absent from `Offene Anfragen`; rejected conversion is a Core gate; successful
   conversion sets `Bestätigt / Auftrag` in the same direct/API transaction.
   It adds no call history, notes, follow-up dates, tables or CRM integration.
-- Two follow-up Office workflow P0 fixes are complete in the current local
-  working tree: an active Order locks its Inquiry to `Bestätigt / Auftrag` in
-  Core and removes incompatible UI choices, and `Wirksam machen` appears only
-  after kitchen-print confirmation. Direct and remote paths are covered.
-- Phase 2, Phase 3 design and Slice 3A are present on `origin/main` through
-  `b560d36`, but none is deployed. The open-inquiry slice and its P0 follow-up
-  are local only; no deploy has been performed.
+- Two follow-up Office workflow P0 fixes are committed at `20566dd`: an active
+  Order locks its Inquiry to `Bestätigt / Auftrag` in Core and removes
+  incompatible UI choices, and `Wirksam machen` appears only after
+  kitchen-print confirmation. Direct and remote paths are covered.
+- Phase 2, Phase 3 design and Slice 3A, the open-inquiry slice and its P0
+  follow-up are present on `origin/main` through `20566dd`, but none is
+  deployed.
+- The Office Panel UI v2 implementation pack and UI2A foundation/shared shell
+  are complete and committed locally. UI2A adds
+  repo-owned styling and inline icons, explicit active navigation, and desktop
+  plus horizontal mobile navigation that works without JavaScript. Core,
+  routes, actions and individual screen layouts are unchanged.
+- UI2A has not been pushed or deployed. The Lenovo Office Panel
+  remains on its existing deployed UI and direct-`core.db` mode; no Proxmox
+  Office Panel contains UI2A.
+- UI2B and Phase 3B have not started.
 
 ## Local undeployed quality baseline
 
-- Python tests: **633 passed**
+- Python tests: **643 passed**
 - coverage gate: **90% minimum**
 - last full-project coverage: **90.4%**
 - website intake receiver coverage: **99.2%**
-- Ruff: clean
-- Mypy: clean
+- Ruff: clean; format check reported **101 files already formatted**
+- Mypy: clean for **71 source files**
+- Office Panel UI2A browser smoke: 1280/820/620/320 px, no body overflow,
+  no-JS mobile navigation and table-local scrolling verified
 - staging-form browser tests and Cloudflare Worker sanitizer tests: clean
 - CI: GitHub Actions on every push and pull request
 

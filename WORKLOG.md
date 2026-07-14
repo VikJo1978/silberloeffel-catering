@@ -2640,3 +2640,48 @@ Completed
 
 Not included
 	•	no other office UX findings, Phase 3B, push or deploy
+
+
+Entry 066
+
+Date: 2026-07-14 — Office Panel UI v2 / UI2A foundation and shell
+Scope: local, committed presentation implementation at `4e42112`.
+No push, deploy, UI2B, Phase 3B, Core or production-data changes.
+
+Meaning
+	•	the Office Panel UI v2 implementation pack is committed separately at
+	  `4507938`. UI2A adds the repo-owned `office_panel_shell.py` with the
+	  reviewed v2 tokens, compatibility CSS for the existing body renderers and
+	  one inline SVG symbol sprite
+	•	`_page()` now requires an explicit `active_section`; it does not infer
+	  navigation from translated page titles. The shared shell uses semantic
+	  `<nav>` and `<main>` landmarks and marks the active section with
+	  `aria-current="page"`
+	•	the desktop sidebar and horizontally scrollable mobile navigation work
+	  without JavaScript. Existing tables scroll locally on narrow screens
+	  without causing body overflow
+	•	Google Fonts were removed. The generated Office Panel HTML/CSS has no
+	  external font dependency, and CSP no longer permits
+	  `fonts.googleapis.com` or `fonts.gstatic.com`
+	•	the existing server-rendered bodies and forms retain CSRF, Basic Auth,
+	  escaping, security headers and, in remote mode, `_command_id` plus the
+	  exact `_expect_*` preconditions. Direct and remote presentation parity is
+	  preserved
+	•	Core, schema, repositories, API, routes, Office workflow and every
+	  Core-derived action remain unchanged. UI2B and Phase 3B were not started
+
+Completed
+	•	full Claude gate: 643 tests passed; coverage 90.4% with the project
+	  minimum of 90%; Ruff check clean; Ruff format reported 101 files already
+	  formatted; mypy clean for 71 source files; documentation tests 3 passed;
+	  `git diff --check` clean
+	•	independent Codex review: 123 direct Office Panel tests and 16
+	  remote/parity tests passed; browser smoke against a temporary SQLite
+	  database passed at 1280, 820, 620 and 320 px; no body overflow was found;
+	  mobile navigation and table-local scrolling remained usable with
+	  JavaScript disabled
+	•	the independent review required no follow-up corrections
+
+Not included
+	•	the implementation pack and UI2A are committed locally but are not pushed
+	  or deployed. Neither the Lenovo nor a Proxmox Office Panel contains UI2A

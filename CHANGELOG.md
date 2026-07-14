@@ -62,6 +62,11 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
   machen` only after kitchen-print confirmation, leaving `Druck bestätigen` as
   the sole next action beforehand. Direct and remote regressions are covered;
   still not deployed.
+- Added the local Office Panel UI v2 foundation and shared shell with repo-owned
+  styling, inline SVG icons, explicit active-navigation state and responsive
+  navigation that works without JavaScript. External Google Fonts and their CSP
+  origins were removed. Core workflow, API behavior and individual screen
+  layouts are unchanged; UI2A is committed locally and is not deployed.
 
 - Corrected the operational status after the office-workflow proof: the
   staging form now exercises an already-connected office queue, the Lenovo
