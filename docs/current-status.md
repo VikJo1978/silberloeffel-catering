@@ -1,8 +1,12 @@
 # Current status
 
-Last verified: **2026-07-13, Europe/Berlin**.
+Live deployment last verified: **2026-07-13, Europe/Berlin**.
 
-## Live environments
+Local undeployed development last verified: **2026-07-14, Europe/Berlin**.
+The reviewed implementation HEAD is `707eb5d`; the status-only documentation
+commit that follows it does not change application behavior.
+
+## Live/deployed baseline
 
 | Environment | Component | Address/binding | State |
 |---|---|---|---|
@@ -90,11 +94,28 @@ Offer workflow development:
 - the handoff remains dormant until the configurator is deployed and
   `CONFIGURATOR_URL` is set on the office panel
 
-## Quality baseline
+## Local undeployed development baseline
 
-- Python tests: **500 passed**
-- coverage gate: **90% minimum**; last local result above the gate
-- last full-project coverage: **92.6%**
+- Phase 2 (`RemoteCoreClient` and Office Panel direct/remote dual mode) is
+  complete locally but has not been deployed. The live Lenovo Office Panel
+  continues to use its existing direct `core.db` mode; no Proxmox cutover has
+  occurred.
+- Phase 3 design is complete locally in
+  `PHASE_3_PRINT_ACK_ATTENTION_PACK_V1.md` (`ce499a2`).
+- Phase 3 Slice 3A is complete locally at implementation HEAD `707eb5d`: Core
+  kitchen print jobs are an append-only attempt history with additive immutable
+  facts, with persisted deadlines, tracked reprints, pure state derivation and
+  atomic ACK with the existing OrderVersion confirmation fact.
+- Slice 3A adds no Office UI, HTTP API, dashboard integration, kitchen agent,
+  printer integration, heartbeat or external Lenovo monitoring. None of these
+  Phase 3 capabilities is live on Lenovo or Proxmox.
+- No local Phase 2 or Phase 3 commit has been pushed or deployed.
+
+## Local undeployed quality baseline
+
+- Python tests: **618 passed**
+- coverage gate: **90% minimum**
+- last full-project coverage: **90.4%**
 - website intake receiver coverage: **99.2%**
 - Ruff: clean
 - Mypy: clean

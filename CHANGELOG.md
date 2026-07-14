@@ -42,6 +42,12 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
   a failure-prone post-commit reread; and unavailable Auerswald data on
   Proxmox is labelled “Rückruf-Liste: nur vor Ort verfügbar”. Phase 2 remains
   local and undeployed.
+- Added the Phase 3 print-ACK attention design and Core Slice 3A kitchen print
+  job facts: an append-only attempt history with additive immutable facts,
+  persisted acceptance/ACK deadlines, tracked reprints, pure state derivation,
+  and atomic ACK with the existing OrderVersion kitchen-print confirmation.
+  This local slice adds no Office UI, HTTP API, kitchen print agent or printer
+  integration and has not been deployed.
 
 - Corrected the operational status after the office-workflow proof: the
   staging form now exercises an already-connected office queue, the Lenovo

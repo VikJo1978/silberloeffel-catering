@@ -2513,3 +2513,55 @@ Must not be changed
 	  redirected GET is a separate request
 	•	truncation must never be silent, and hidden preconditions must use
 	  honest total counts rather than the visible capped array length
+
+
+Entry 063
+
+Date: 2026-07-14 — Phase 3 print ACK attention design and Core Slice 3A
+Scope: design pack commit `ce499a2` and Core implementation commit `707eb5d`.
+Local development only; no push, deploy, service restart, or production data.
+
+Meaning
+	•	`PHASE_3_PRINT_ACK_ATTENTION_PACK_V1.md` defines reliable Office
+	  attention when kitchen print confirmation is missing, while keeping
+	  technical delivery facts separate from the existing domain confirmation
+	•	Slice 3A adds `KitchenPrintJob` as an append-only attempt history with
+	  additive immutable facts: every first print and reprint is its own durable
+	  attempt linked to one exact `OrderVersion`; acceptance, rejection,
+	  persisted deadlines, acknowledgement and supersession are separate facts;
+	  no general status enum is stored
+	•	Core derives current job state purely from those facts, Core UTC time and
+	  Order cancellation. The 30-second acceptance and 5-minute ACK defaults are
+	  named, injectable and explicitly provisional rather than frozen SLA
+	•	acknowledging an accepted, non-rejected, non-superseded job and setting
+	  the existing `OrderVersion.kitchen_print_confirmed_at` fact use one
+	  timestamp and one atomic repository transaction; repeat ACK keeps the
+	  original facts
+	•	the confirmation-before-effective gate is unchanged: technical acceptance
+	  alone cannot make a version `wirksam`, and effective selection remains a
+	  separate explicit Core command
+	•	the existing manual kitchen-print confirmation remains compatible and
+	  idempotent. Migration creates no synthetic jobs for historical confirmed
+	  versions and adds no column to `orders` or `order_versions`
+
+Completed
+	•	full quality gate after Slice 3A implementation: 618 tests passed,
+	  coverage 90.4% (minimum 90%), Ruff clean and mypy clean
+	•	after terminology was tightened to “append-only attempt history with
+	  additive immutable facts”, targeted verification passed: 20 relevant
+	  tests, Ruff clean, 8 Python files already formatted, mypy clean for the 5
+	  Slice 3A source files, and `git diff --check` clean
+
+Open
+	•	no Office UI, HTTP API, dashboard integration, kitchen agent, physical
+	  printer integration, heartbeat, Lenovo external monitoring, push or deploy
+	  is included; none of Phase 3 is available on Lenovo or Proxmox
+	•	Phase 3 Slice 3B has not started
+
+Must not be changed
+	•	the model is an append-only attempt history with additive immutable facts,
+	  not insert-only rows: an existing attempt row may receive a new lifecycle
+	  fact, but a recorded fact cannot be rewritten or removed
+	•	`kitchen_print_confirmed_at` remains the only print fact satisfying the
+	  effective-version gate; no print-job transition selects a version
+	  automatically
