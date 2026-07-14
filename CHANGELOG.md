@@ -14,6 +14,10 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
   partial UNIQUE index closing the double-convert gap while keeping
   re-conversion after Storno. Not deployed; the office panel keeps its direct
   database access until Phase 2.
+- Recorded ADR-011: the Core Office API supersedes the office panel's in-process
+  Core access; after cutover exactly three Lenovo processes touch `core.db` —
+  the Core Office API (read+command), the kiosk (read), and the website-intake
+  receiver (Inquiry create). Archived kiosk packs stay untouched.
 
 - Corrected the operational status after the office-workflow proof: the
   staging form now exercises an already-connected office queue, the Lenovo

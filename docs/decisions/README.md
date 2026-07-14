@@ -15,6 +15,7 @@ review that updates architecture, tests, runbooks, and this register.
 | ADR-008 | Public intake is narrow | Worker validation and one token-protected receiver route minimize exposure |
 | ADR-009 | Staging persistence stays isolated; a narrow test-intake bridge is allowed | Exercise real Inquiry intake before domain/office launch without copying Core or exposing SQLite |
 | ADR-010 | Durable intake buffering is deferred but required before real customer traffic | Avoid queue complexity during fake-data testing without accepting lead loss at launch |
+| ADR-011 | Core Office API supersedes the panel's in-process Core access | After cutover exactly three Lenovo processes touch `core.db`: Core Office API (read+command), kiosk (read), website-intake receiver (Inquiry create) |
 
 ## ADR-001 — Core on Lenovo
 
@@ -87,6 +88,53 @@ The launch implementation must:
 
 Until that gate is implemented, `502` remains the truthful failure response and
 must never be changed to a success-looking status.
+
+## ADR-011 — Core Office API boundary supersession
+
+Context and problem: the frozen kiosk packs stated "Core keeps exactly one
+reader: the kiosk." That rule governed *additional* consumers of `core.db`. The
+office move puts the office panel and configurator on a Proxmox VM that must
+never reach `core.db` directly, so the panel can no longer open the database
+in-process.
+
+Decision: the Core Office API (`docs/proposals/PROXMOX_OFFICE_SERVER_CORE_API_PACK_V1.md`,
+frozen at commit `38930bf`) replaces the panel's in-process database access. It
+is a bearer-gated, Tailscale-only service on the Lenovo address `100.109.6.74:8084`
+exposing named business reads and commands that map onto the existing Inquiry,
+Order, and operational services — no generic CRUD, no SQLite transfer, JSON
+contracts only. After the Phase-5 cutover the only Lenovo processes touching
+`core.db` are exactly:
+
+- Core Office API — reads and business commands on behalf of the office panel;
+- kiosk — read-only;
+- website-intake receiver — Inquiry creation only.
+
+The office panel stays the only human surface issuing Core commands (ADR-007);
+the configurator never touches Core.
+
+Alternatives rejected:
+
+- keeping the panel's in-process access after the office server moves to Proxmox
+  (would require `core.db` on or replicated to a non-kitchen host, violating
+  ADR-001);
+- a generic CRUD or database-replication bridge (rejected in favour of named
+  commands, atomic idempotency, and JSON-only contracts).
+
+Consequences:
+
+- archived kiosk packs stay untouched; their "one reader" wording is scoped to
+  additional consumers and is not contradicted by this supersession;
+- the API is Tailscale-only, never public, with a per-client bearer;
+- command atomicity is enforced by an in-`core.db` idempotency ledger written in
+  the same transaction as the business change, with post-commit-only events.
+
+Migration and rollback impact: Phase 1 deploys the API dormant — both `core.db`
+migrations (the `office_api` ledger and the `orders` partial UNIQUE index) are
+additive and harmless to the existing direct-DB mode, and the office panel is
+unchanged. Rollback in Phase 1 is stop/disable the API unit. Direct-DB mode is
+retained as an emergency fallback until a separate review verdict authorises its
+deletion after 14 incident-free days (pack §7, Phase 5). Full phasing lives in
+the pack; implementation landed in commits `d50584d`, `6de69bb`, `8dd3b87`.
 
 ## How to add a decision
 
