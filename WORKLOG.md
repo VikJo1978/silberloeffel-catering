@@ -2272,3 +2272,59 @@ Must not be changed
 	  only; no contact/address/payload/token in any log
 	•	no generic CRUD, no SQLite transfer or DB replication to Proxmox; the
 	  configurator never calls Core; the API makes no outbound HTTP
+
+
+Entry 060
+
+Date: 2026-07-14 — Core Office API Phase 1: reviewer round-4 corrections
+Scope: src/catering_system/ui/office_api.py (validation + response cap only),
+tests/unit/test_office_api.py (+4 regression tests), docs/api/core-office-api.md,
+CHANGELOG. No schema/service/migration change; no push.
+Status: local quality gate green; external Phase-1 verdict still pending
+
+Meaning — four contract gaps the green suite did not catch, found in review:
+	•	response 512 KiB cap (pack §4.0) was declared but not enforced. A
+	  legacy Core row with a long text (the API's input caps bound only new
+	  writes) could form a read body over the cap. `_respond` now measures
+	  the JSON before sending and, above 512 KiB, fails closed with
+	  `500 internal` — checked pre-send so the caller's handler emits a clean
+	  error, no partial/oversized body. Command responses are minimal and
+	  cannot trip it
+	•	uuid validation accepted any UUID; pack §4.3 requires uuid4 for
+	  command_id, and every Core-minted id is uuid4, so `_v_uuid` now rejects
+	  non-v4 (command_id, order_version_id args, print-data version) — no
+	  real id is refused
+	•	`expect` timestamps accepted naive/non-UTC values; pack §4.1 fixes
+	  ISO-8601 UTC-with-offset. `_v_datetime` now rejects a missing or
+	  non-zero offset (utcoffset() != 0) → `400`, before the stale-state
+	  compare. Verified both compared domain timestamps (inquiry + order
+	  updated_at) are tz-aware UTC, so the tighter check never crashes the
+	  comparison
+	•	update wiped intake fields when they were omitted (absent → "" →
+	  overwrite). Reviewer rule adopted: on update an omitted intake field
+	  keeps its stored value (passed through the service's existing _UNSET-
+	  style partial update), an explicit "" clears, an explicit `null` is
+	  `400` (exact types, no coercion). The null→"" coercion helper
+	  (`_v_optional_str`) was removed; create keeps default "" for absent,
+	  and now also rejects explicit `null`
+
+Completed
+	•	ruff clean, mypy clean (64 files), pytest 554 passed (550 + 4 new
+	  regressions: over-cap read → 500; non-v4 uuid → 400 across command_id /
+	  version param / order_version_id arg; naive & +02:00 expect → 400;
+	  update intake preserve/clear/reject-null), coverage 92.7%
+	  (office_api.py 91.4%)
+
+Open
+	•	external Phase-1 verdict still pending; push still held per the project
+	  workflow (pack → review → freeze → code → verdict → push)
+
+Must not be changed
+	•	these are behaviour tightenings of the frozen contract, not new
+	  surface: no route, shape, or service semantics changed; input-cap
+	  numbers (1000/5000/2000/200, 64 KiB body, 100 list, 50/200/100 caps)
+	  are untouched
+	•	`_v_datetime` must keep rejecting naive/non-UTC `expect` values;
+	  `_v_uuid` must keep requiring version 4; update must keep the
+	  preserve/clear/reject-null intake merge — each is exactly a round-4
+	  fix with its own regression test

@@ -66,6 +66,14 @@ Contention: the API waits up to 2 s on a locked database, then answers
 `503 {"error":"core_busy"}` with `Retry-After: 1` and guarantees nothing was
 written; the client retries with the **same** `command_id`.
 
+Validation (strict, no coercion): `command_id` and every id/version
+reference must be a **uuid4**; `expect` timestamps must be ISO-8601 **UTC
+with offset** (naive or non-UTC → `400`); on `update` an omitted intake field
+keeps its stored value, an empty string clears it, and an explicit `null` is
+`400`. A read whose JSON would exceed the **512 KiB** response cap (e.g. a
+long legacy Core text) fails closed with `500 internal` rather than emitting
+an oversized body.
+
 Error codes (stable, never free text): `unauthorized`, `not_found`,
 `invalid_request`, `unsupported_media_type`, `body_too_large`,
 `method_not_allowed`, `command_id_conflict`, `stale_state`,

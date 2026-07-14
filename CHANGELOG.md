@@ -14,6 +14,11 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
   partial UNIQUE index closing the double-convert gap while keeping
   re-conversion after Storno. Not deployed; the office panel keeps its direct
   database access until Phase 2.
+- Tightened Core Office API validation after review (still Phase 1, dormant):
+  enforce the 512 KiB response cap as `500 internal`, require uuid4 for
+  `command_id` and id/version references, require UTC-with-offset `expect`
+  timestamps, and merge intake fields on update (omitted keeps, `""` clears,
+  `null` is `400`) instead of silently wiping omitted fields.
 - Recorded ADR-011: the Core Office API supersedes the office panel's in-process
   Core access; after cutover exactly three Lenovo processes touch `core.db` —
   the Core Office API (read+command), the kiosk (read), and the website-intake
