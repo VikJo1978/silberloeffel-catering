@@ -18,8 +18,9 @@ missing and wrong tokens get the identical constant
 `401 {"error":"unauthorized"}`. The token lives only in root-owned
 `/etc/catering/office-api.env` (mode `600`).
 
-Phase 1 is **dormant**: the unit may run, but nothing consumes it — the
-office panel keeps its direct database access until Phase 2 configuration.
+Phase 1 is **dormant**: the unit may run, but nothing consumes it in
+production — the office panel keeps its direct database access until an
+explicit Phase 2 configuration/deploy step (not yet done; see below).
 
 ## Reads
 
@@ -91,4 +92,40 @@ journalctl -u catering-office-api --since '5 minutes ago' --no-pager \
 ```
 
 The token never enters a command line; the authenticated path is exercised
-by the panel itself (Phase 2+) and by the test suite.
+by `RemoteCoreClient` (Phase 2) and by the test suite.
+
+## Phase 2 client — dual mode (`catering_system.ui.remote_core_client`)
+
+`RemoteCoreClient` is the office panel's only path to this API — implemented,
+tested, **not yet deployed** (that is a separate rollout step per the pack's
+Phase 5). The panel's rendering code (`office_panel.py`) is unmodified between
+modes; only the repository/service objects it's constructed with differ.
+
+- **Mode select**: `CORE_OFFICE_API_URL` unset → direct mode, byte-identical
+  to before. Both `CORE_OFFICE_API_URL` and `CORE_OFFICE_API_TOKEN` set →
+  remote mode, the panel never opens `core.db`. Exactly one of the two set →
+  refuses to start before binding a port or opening any file. The token is
+  env-only, never a CLI flag or argv.
+- **Transport**: bearer from `CORE_OFFICE_API_TOKEN`; 3 s read / 5 s command
+  timeout; redirects refused outright (the bearer never leaves for a second
+  host); responses capped at 512 KiB; malformed/non-JSON/wrong-content-type
+  bodies are treated as failures, never partially trusted.
+- **No business rules on Proxmox**: the client never re-implements
+  `InquiryService`/`OrderService`/`OperationalCoreService`'s write logic (ID
+  minting, defaults, timestamps) locally — every write is one of the frozen
+  named commands above. Reads (`list_all`, `get_by_id`, `list_orders`,
+  `get_order`, `list_order_versions`, `get_order_version`, `print_data`)
+  satisfy the same repository shape the panel's rendering code already calls
+  directly, so dashboard/search/next-action output matches direct mode.
+- **Idempotent forms**: every mutating page embeds a hidden `_command_id`
+  (minted once per render) plus one `_expect_<field>` per precondition the
+  route requires (`updated_at`, `latest_version_number`,
+  `current_effective_order_version_id` → form field
+  `_expect_effective_version_id`). Resubmitting the same loaded page — a
+  double click, or a retry after an indeterminate network failure — always
+  sends the identical envelope, so the ledger replays rather than repeats.
+- **Degradation**: an unreachable/malformed API response renders the fixed
+  page *„Core nicht erreichbar — nichts wurde gespeichert"* (503) — never an
+  empty or partially-built dashboard, never a silent local write.
+- **Rückruf/Auerswald** stays a separate, local, non-Core integration in both
+  modes (pack §3.9) — unaffected by remote mode either way.

@@ -23,6 +23,17 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
   Core access; after cutover exactly three Lenovo processes touch `core.db` —
   the Core Office API (read+command), the kiosk (read), and the website-intake
   receiver (Inquiry create). Archived kiosk packs stay untouched.
+- Implemented Phase 2 of the frozen Proxmox office pack: `RemoteCoreClient`
+  (bearer-only auth, 3 s/5 s timeouts, redirect refusal, 512 KiB response cap,
+  no business rules reproduced on Proxmox) and dual-mode wiring for the office
+  panel — `CORE_OFFICE_API_URL`/`CORE_OFFICE_API_TOKEN` unset keeps the
+  existing direct-`core.db` mode byte-identical; both set switches to remote
+  mode without ever opening `core.db`; either alone refuses to start. Every
+  mutating form now carries a hidden `_command_id` plus the frozen contract's
+  preconditions, so a retry after an indeterminate failure resends the
+  identical envelope. An unreachable/malformed API renders the fixed
+  degradation page instead of an empty dashboard. Still not deployed — the
+  panel keeps running in direct mode until a separate Phase 3+ rollout.
 
 - Corrected the operational status after the office-workflow proof: the
   staging form now exercises an already-connected office queue, the Lenovo

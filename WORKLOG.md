@@ -2328,3 +2328,136 @@ Must not be changed
 	  `_v_uuid` must keep requiring version 4; update must keep the
 	  preserve/clear/reject-null intake merge — each is exactly a round-4
 	  fix with its own regression test
+
+
+Entry 061
+
+Date: 2026-07-14 — Core Office API Phase 2: RemoteCoreClient + panel dual mode
+Scope: PROXMOX_OFFICE_SERVER_CORE_API_PACK_V1 Phase 2 only —
+src/catering_system/ui/remote_core_client.py (audited and fixed, was an
+uncommitted Codex draft), src/catering_system/ui/office_panel.py (dual-mode
+constructor, hidden idempotency fields on every mutating form, main() env
+wiring), src/catering_system/ui/office_panel_http.py (remote passthrough,
+begin_request() per request, RemoteCoreError degradation handling). Tests:
+tests/unit/test_remote_core_client.py (new, 27), tests/unit/
+test_office_panel_remote.py (new, 15), one-line fix in test_office_api_views.py
+(OfficePanel.__new__ bypass needed `_remote = None`). Docs: .env.example,
+docs/api/core-office-api.md, CHANGELOG. No deploy, no push, no Proxmox VM.
+Status: local quality gate green; external Phase-2 review verdict pending
+
+Meaning
+	•	found src/catering_system/ui/remote_core_client.py uncommitted at
+	  session start — a prior Codex session had started Phase 2 and run out
+	  of budget. Audited it fully against the frozen contract rather than
+	  trusting it; three real defects fixed before building on it:
+	    1. `_write_forbidden(self) -> NoReturn` was bound directly as
+	       `save`/`update`/`save_order_with_initial_version`/`update_order`/
+	       `append_order_version`/`update_order_version` — calling any of
+	       them with the Protocol's real arguments raised a bare arity
+	       TypeError instead of the intended RuntimeError, and the
+	       signature mismatch would have failed structural typing the
+	       moment the client was assigned to an `InquiryRepository`/
+	       `OrderRepository`-typed parameter. Replaced with six explicit
+	       stub methods matching each Protocol signature exactly.
+	    2. `get_order_version(order_version_id)` only ever searched
+	       already-fetched order details — correct for ProgressionService's
+	       call pattern (always preceded by get_order() on the same order in
+	       the same call), silently wrong for
+	       WochenuebersichtService.get_week_overview(), which loops every
+	       order calling get_order_version(effective_id) without a prior
+	       per-order fetch. In remote mode this always returned an empty
+	       Wochenübersicht regardless of real data. Fixed with a bounded
+	       fallback: after list_orders() records every known order_id, a
+	       cache miss walks the remaining known orders (fetching each
+	       detail at most once) until the version turns up.
+	    3. The severe one, found only by exercising a full command-then-
+	       reread cycle against a real Core Office API server (not by
+	       isolated client tests with canned responses):
+	       `create_relevant_order_change_version` and `confirm_kitchen_print`
+	       resolved their result via
+	       `next(generator, cast(T, _bad_response()))` — Python evaluates
+	       every argument to `next()`, including the default, before
+	       calling it, so the always-raising `_bad_response()` fired
+	       unconditionally regardless of whether the generator had a match.
+	       Both real routes were **permanently broken** — every version
+	       creation and every print-confirm failed with `invalid_response`
+	       (rendered by the panel as the generic degradation page) even
+	       though the underlying Core command had already succeeded.
+	       Rewritten as a plain loop that returns on match and calls
+	       `_bad_response()` only when the loop is exhausted. Also removed
+	       `queue_view()` — a `GET /office/v1/queue` wrapper the draft added
+	       but `office_panel.py`'s `render_queue()` never calls (it
+	       recomputes the dashboard itself from raw repo reads, exactly as
+	       in direct mode) — dead, untested surface in a security-sensitive
+	       file
+	•	dual-mode wiring: `OfficePanel.__init__` gained a keyword-only
+	  `remote: RemoteCoreClient | None` parameter. `remote=None` (default)
+	  is untouched — same `InquiryService`/`OrderService`/
+	  `OperationalCoreService` construction as before, byte-identical HTML
+	  (proved by running the full pre-existing 109-test direct-mode suite
+	  unchanged). `remote=<client>` swaps in the client's own command-backed
+	  service facades for writes while reusing the SAME client for the
+	  repo-shaped reads `render_queue`/`render_anfragen`/`render_auftraege`/
+	  `render_inquiry`/`render_order` already call directly — no business
+	  logic (ID minting, defaults, timestamps) ever runs against the remote
+	  client. `ProgressionService`/`WochenuebersichtService` are safe to
+	  keep constructing over the same client since they're pure reads
+	•	idempotent forms: `OfficePanel._command_fields()` returns "" in
+	  direct mode (empty in all existing HTML, proven by the same unchanged
+	  109-test suite) and, in remote mode, mints a fresh `_command_id` per
+	  render plus one `_expect_<field>` hidden input per precondition the
+	  route needs (`updated_at`, `latest_version_number`,
+	  `effective_version_id`). `OfficePanel.begin_request(form)` is a no-op
+	  in direct mode; in remote mode it resets the client's per-request read
+	  caches and stashes the submitted form so the command facades can read
+	  back `_command_id`/`_expect_*`. `office_panel_http.py` calls it once
+	  per request (empty form on GET, the parsed form on POST, right after
+	  the CSRF check) — the only two touch points needed
+	•	degradation: `office_panel_http.py` catches `RemoteCoreError`
+	  ahead of the existing generic `ValueError` handler (it subclasses
+	  ValueError, so order matters); `.unavailable` cases (unreachable,
+	  timeout, redirect, malformed/oversized response) render the fixed
+	  «Core nicht erreichbar — nichts wurde gespeichert» page at 503; a
+	  genuine remote 4xx/409 business rejection falls through to the
+	  existing generic error rendering, unchanged
+	•	`main()`: `--core-office-api-url` is a CLI flag (URL isn't secret);
+	  `CORE_OFFICE_API_TOKEN` is env-only, never argv, matching the API
+	  server's own `OFFICE_API_TOKEN` convention. Exactly one of
+	  URL/token set → `SystemExit` before anything else runs (no db open,
+	  no bind). `--db` is no longer required — remote mode never touches
+	  `SQLiteInquiryRepository`/`SQLiteOrderRepository` at all
+
+Completed
+	•	ruff clean, mypy clean (65 files), pytest 596 passed (554 baseline +
+	  42 new: 27 in test_remote_core_client.py covering redirect-refusal +
+	  bearer-never-leaked, timeout/unreachable, malformed/non-object/wrong-
+	  content-type/oversized responses, uuid4 command_id, the write-tripwire
+	  regression, and the two eager-evaluation regressions against a real
+	  API server; 15 in test_office_panel_remote.py covering direct-vs-
+	  remote read parity on one shared seeded core.db — dashboard, search,
+	  order/inquiry detail, print-data, Rückruf-stays-local — a full create→
+	  verify/update→convert→print-confirm→ready→effective→cancel write flow,
+	  same-command-id-and-preconditions retry, the German degradation page,
+	  remote mode never touching SQLite, and half-config startup rejection),
+	  coverage 91.7% (remote_core_client.py 83.2%, up from 78.3% before
+	  extending the write-flow test to also cover update/verify/ready)
+
+Open
+	•	external Phase-2 review verdict not yet recorded; push held pending
+	  it, same as Phase 1 (pack → review → freeze → code → verdict → push)
+	•	not deployed: no Proxmox VM (Phase 3), no isolated-Core rehearsal
+	  (Phase 4), no live cutover (Phase 5) — this entry is code + tests only
+
+Must not be changed
+	•	direct mode (`remote=None`/no env vars) must stay byte-identical —
+	  verified by running the pre-existing test_office_panel.py suite
+	  unmodified; any future change here must keep that suite green as-is
+	•	writes in remote mode must keep going only through the command
+	  facades (`_RemoteInquiryService`/`_RemoteOrderService`/
+	  `_RemoteOperationalCoreService`), never by constructing
+	  `InquiryService`/`OrderService`/`OperationalCoreService` directly
+	  against the remote client — that would reproduce Core's business
+	  rules on Proxmox, which the pack forbids
+	•	the three remote_core_client.py fixes above are exactly that —
+	  bug fixes to match the frozen contract, not new behavior; no new
+	  route, shape, or precondition was added
