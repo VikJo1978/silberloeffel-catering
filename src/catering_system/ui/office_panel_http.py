@@ -83,10 +83,8 @@ def make_office_panel_handler(
             self.send_header("Cache-Control", "no-store")
             self.send_header(
                 "Content-Security-Policy",
-                "default-src 'none'; style-src 'unsafe-inline' "
-                "https://fonts.googleapis.com; font-src https://fonts.gstatic.com; "
-                "img-src data:; form-action 'self'; base-uri 'none'; "
-                "frame-ancestors 'none'",
+                "default-src 'none'; style-src 'unsafe-inline'; img-src data:; "
+                "form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
             )
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("X-Content-Type-Options", "nosniff")
@@ -127,6 +125,7 @@ def make_office_panel_handler(
                 _page(
                     "Fehler",
                     f'<p class="blocked">{_e(message)}</p>',
+                    active_section="home",
                     context=self._fetch_page_context(),
                 ),
                 status,
@@ -146,6 +145,7 @@ def make_office_panel_handler(
                     _page(
                         "Fehler",
                         f'<p class="blocked">{_e(_UNAVAILABLE_MESSAGE)}</p>',
+                        active_section="home",
                         context=self._fetch_page_context(),
                     ),
                     503,

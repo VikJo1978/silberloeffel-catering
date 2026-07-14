@@ -102,7 +102,12 @@ def render_proposal_preview_form(
         'style="width:100%;box-sizing:border-box;font-family:monospace"></textarea></p>'
         '<p><button type="submit">Vorschau anzeigen</button></p></form>'
     )
-    return _page("Angebots-Import (Vorschau)", body, context=context)
+    return _page(
+        "Angebots-Import (Vorschau)",
+        body,
+        active_section="proposal",
+        context=context,
+    )
 
 
 def render_proposal_preview(
@@ -154,4 +159,9 @@ def render_proposal_preview(
 </form>
 <p><a href="/proposal-preview">Weitere Vorschau anzeigen</a></p>"""
     )
-    return _page("Angebots-Import (Vorschau)", body, context=context)
+    return _page(
+        "Angebots-Import (Vorschau)",
+        body,
+        active_section="proposal",
+        context=context,
+    )

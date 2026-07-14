@@ -173,10 +173,14 @@ def render_rueckruf(
             f'<p class="blocked">Rückrufliste nicht erreichbar: {_e(error)}</p>'
             "<p>Prüfe AUERSWALD_SYNC_URL / erreichbarkeit des auerswald-sync Servers.</p>"
         )
-        return _page("Offene Rückrufe", body, context=context)
+        return _page(
+            "Offene Rückrufe", body, active_section="callbacks", context=context
+        )
     if not items:
         body = _RUECKRUF_SUBTITLE + "<p>Keine offenen Rückrufe.</p>"
-        return _page("Offene Rückrufe", body, context=context)
+        return _page(
+            "Offene Rückrufe", body, active_section="callbacks", context=context
+        )
     rows = []
     for it in items:
         contact = _e(it["contact_name"]) if it.get("contact_found") else "Unbekannt"
@@ -198,7 +202,7 @@ def render_rueckruf(
         "<table><tr><th>Datum</th><th>Zeit</th><th>Nummer</th>"
         "<th>Grund</th><th>Kontakt</th><th></th></tr>" + "".join(rows) + "</table>"
     )
-    return _page("Offene Rückrufe", body, context=context)
+    return _page("Offene Rückrufe", body, active_section="callbacks", context=context)
 
 
 class OfficePanel:
@@ -533,7 +537,7 @@ class OfficePanel:
             + auftraege_section
             + '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a></p>'
         )
-        return _page("Büro-Übersicht", body, context=context)
+        return _page("Büro-Übersicht", body, active_section="home", context=context)
 
     def _render_remote_queue(
         self,
@@ -712,7 +716,7 @@ class OfficePanel:
             + auftraege_section
             + '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a></p>'
         )
-        return _page("Büro-Übersicht", body, context=context)
+        return _page("Büro-Übersicht", body, active_section="home", context=context)
 
     # -- full lists (moved out of the Startseite, §11 addendum §13) ------
 
@@ -782,7 +786,7 @@ class OfficePanel:
             + "".join(rows or ['<tr><td colspan="8">keine</td></tr>'])
             + "</table>"
         )
-        return _page("Anfragen", body, context=context)
+        return _page("Anfragen", body, active_section="inquiries", context=context)
 
     def render_auftraege(
         self, q: str = "", *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
@@ -836,7 +840,7 @@ class OfficePanel:
             + "".join(rows or ['<tr><td colspan="5">keine</td></tr>'])
             + "</table>"
         )
-        return _page("Aufträge", body, context=context)
+        return _page("Aufträge", body, active_section="orders", context=context)
 
     # -- inquiries -------------------------------------------------------
 
@@ -888,7 +892,7 @@ class OfficePanel:
 <p><button type="submit">Anfrage anlegen</button></p>
 </fieldset></form>"""
         )
-        return _page("Neue Anfrage", body, context=context)
+        return _page("Neue Anfrage", body, active_section="inquiries", context=context)
 
     def create_inquiry(self, form: dict[str, str]) -> Inquiry:
         required = form.get("call_verification_required") == "1"
@@ -1044,7 +1048,12 @@ class OfficePanel:
 <p><button type="submit">Speichern</button></p>
 </fieldset></form>"""
         )
-        return _page(f"Anfrage {inq.inquiry_id[:8]}", body, context=context)
+        return _page(
+            f"Anfrage {inq.inquiry_id[:8]}",
+            body,
+            active_section="inquiries",
+            context=context,
+        )
 
     def update_inquiry(self, inquiry_id: str, form: dict[str, str]) -> None:
         crm_stage = validate_crm_stage(form.get("crm_stage", CRM_PIPELINE[0]))
@@ -1222,7 +1231,12 @@ class OfficePanel:
 <th>Druck bestätigt</th><th>Status</th><th>Aktionen</th></tr>{"".join(rows)}</table>
 <h2>Freigabe (READY_TO_SEND)</h2>{release}
 {actions_block}"""
-        return _page(f"Auftrag {order.order_id[:8]}", body, context=context)
+        return _page(
+            f"Auftrag {order.order_id[:8]}",
+            body,
+            active_section="orders",
+            context=context,
+        )
 
     def create_version(self, order_id: str, form: dict[str, str]) -> None:
         order = self._orders.get_order(order_id)

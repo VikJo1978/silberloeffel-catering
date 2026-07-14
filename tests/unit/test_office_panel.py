@@ -30,6 +30,8 @@ from catering_system.ui.office_panel import (
     render_proposal_preview_form,
 )
 from catering_system.ui.office_panel_http import csrf_token_for_password
+from catering_system.ui.office_panel_shell import OFFICE_PANEL_STYLE
+from catering_system.ui.office_panel_views import _page
 
 _PASSWORD = "test-pw"
 _AUTH = "Basic " + base64.b64encode(f"office:{_PASSWORD}".encode()).decode()
@@ -108,6 +110,97 @@ def test_page_context_badge_does_not_leak_between_renders() -> None:
 
     assert '<span class="badge">3</span>' in with_badge
     assert '<span class="badge">' not in without_badge
+
+
+def test_v2_shell_uses_explicit_active_section_and_semantic_landmarks() -> None:
+    body = _page("Anfragen", "<p>Inhalt</p>", active_section="orders")
+
+    assert '<nav class="office-nav" aria-label="Office Panel">' in body
+    assert '<main class="office-workspace">' in body
+    assert '<a class="office-nav-link" href="/auftraege" aria-current="page">' in body
+    assert (
+        '<a class="office-nav-link" href="/anfragen" aria-current="page">' not in body
+    )
+    assert body.count("<h1>") == 1
+
+
+def test_v2_shell_is_local_no_js_and_has_complete_inline_icon_sprite() -> None:
+    body = _page("Büro-Übersicht", "<p>Inhalt</p>", active_section="home")
+
+    assert "<script" not in body
+    assert "fonts.googleapis.com" not in body
+    assert "fonts.gstatic.com" not in body
+    assert "@import" not in body
+    assert "/Users/viktorjohanson/office_panell" not in body
+    assert '<meta name="viewport"' in body
+    for target in (
+        'href="/"',
+        'href="/anfragen"',
+        'href="/auftraege"',
+        'href="/#diese-woche"',
+        'href="/rueckruf"',
+        'href="/proposal-preview"',
+    ):
+        assert target in body
+
+    references = set(re.findall(r'<use href="#(office-i-[^"]+)"', body))
+    symbols = set(re.findall(r'<symbol id="(office-i-[^"]+)"', body))
+    assert references == symbols
+    assert all(body.count(f'<symbol id="{symbol}"') == 1 for symbol in symbols)
+
+
+def test_v2_mobile_navigation_is_visible_without_javascript() -> None:
+    assert "@media (max-width: 820px)" in OFFICE_PANEL_STYLE
+    mobile_css = OFFICE_PANEL_STYLE.split("@media (max-width: 820px)", 1)[1]
+    assert ".office-sidebar {" in mobile_css
+    assert "position: static;" in mobile_css
+    assert ".office-nav {" in mobile_css
+    assert "display: flex;" in mobile_css
+    assert "overflow-x: auto;" in mobile_css
+    assert "transform: translateX" not in mobile_css
+    assert ".js " not in OFFICE_PANEL_STYLE
+
+
+@pytest.mark.parametrize(
+    ("path", "current_href"),
+    (
+        ("/", "/"),
+        ("/anfragen", "/anfragen"),
+        ("/auftraege", "/auftraege"),
+        ("/inquiry/new", "/anfragen"),
+        ("/rueckruf", "/rueckruf"),
+        ("/proposal-preview", "/proposal-preview"),
+    ),
+)
+def test_shell_marks_current_navigation_for_route_groups(
+    panel: str, path: str, current_href: str
+) -> None:
+    status, body = _get(f"{panel}{path}")
+
+    assert status == 200
+    assert (
+        len(re.findall(r'<a class="office-nav-link"[^>]*aria-current="page"', body))
+        == 1
+    )
+    assert (
+        f'<a class="office-nav-link" href="{current_href}" aria-current="page">' in body
+    )
+
+
+def test_detail_routes_mark_their_parent_navigation(panel: str) -> None:
+    inquiry_id = _create_inquiry(panel)
+    _status, inquiry_body = _get(f"{panel}/inquiry/{inquiry_id}")
+    assert (
+        '<a class="office-nav-link" href="/anfragen" aria-current="page">'
+        in inquiry_body
+    )
+
+    order_id = _convert(panel, inquiry_id)
+    _status, order_body = _get(f"{panel}/order/{order_id}")
+    assert (
+        '<a class="office-nav-link" href="/auftraege" aria-current="page">'
+        in order_body
+    )
 
 
 # -- auth ---------------------------------------------------------------
@@ -189,7 +282,14 @@ def test_office_panel_sets_security_headers(panel: str) -> None:
     request.add_header("Authorization", _AUTH)
     with urllib.request.urlopen(request) as response:
         assert response.headers["Cache-Control"] == "no-store"
-        assert "form-action 'self'" in response.headers["Content-Security-Policy"]
+        csp = response.headers["Content-Security-Policy"]
+        assert "form-action 'self'" in csp
+        assert "frame-ancestors 'none'" in csp
+        assert "fonts.googleapis.com" not in csp
+        assert "fonts.gstatic.com" not in csp
+        assert "font-src" not in csp
+        assert "script-src" not in csp
+        assert response.headers["Referrer-Policy"] == "no-referrer"
         assert response.headers["X-Content-Type-Options"] == "nosniff"
         assert response.headers["X-Frame-Options"] == "DENY"
 
