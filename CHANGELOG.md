@@ -34,6 +34,14 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
   identical envelope. An unreachable/malformed API renders the fixed
   degradation page instead of an empty dashboard. Still not deployed — the
   panel keeps running in direct mode until a separate Phase 3+ rollout.
+- Closed the Phase 2 contract-review gaps before rollout: the remote dashboard
+  now consumes Core's single authoritative Berlin `QueueView`; exact response
+  shapes, status/error pairs and echoed `command_id` values are enforced;
+  truncation metadata is preserved with visible warnings and the true version
+  count is used for optimistic writes; successful commands no longer perform
+  a failure-prone post-commit reread; and unavailable Auerswald data on
+  Proxmox is labelled “Rückruf-Liste: nur vor Ort verfügbar”. Phase 2 remains
+  local and undeployed.
 
 - Corrected the operational status after the office-workflow proof: the
   staging form now exercises an already-connected office queue, the Lenovo

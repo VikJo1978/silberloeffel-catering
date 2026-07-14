@@ -247,6 +247,40 @@ def test_unexpected_status_is_unavailable() -> None:
         server.server_close()
 
 
+def test_known_error_code_on_wrong_status_is_invalid_response() -> None:
+    url, server = _json_server(409, "application/json", b'{"error":"not_found"}')
+    try:
+        client = RemoteCoreClient(url, _TOKEN)
+        with pytest.raises(RemoteCoreError) as exc:
+            client.get("/office/v1/queue")
+        assert exc.value.unavailable
+        assert exc.value.code == "invalid_response"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_queue_view_rejects_unknown_response_field() -> None:
+    body = json.dumps(
+        {
+            "attention": {},
+            "week": {},
+            "neue_anfragen_top": [],
+            "auftraege_top": [],
+            "unexpected": True,
+        }
+    ).encode()
+    url, server = _json_server(200, "application/json", body)
+    try:
+        client = RemoteCoreClient(url, _TOKEN)
+        with pytest.raises(RemoteCoreError) as exc:
+            client.queue_view()
+        assert exc.value.code == "invalid_response"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 # --- construction / config strictness ----------------------------------------
 
 
@@ -289,6 +323,103 @@ def test_begin_request_resets_command_id_from_form() -> None:
     assert client.form_value("other") == "x"
     client.begin_request(None)
     assert client._id() != "fixed-id"  # falls back to a fresh uuid4
+
+
+def test_command_response_must_echo_submitted_command_id() -> None:
+    submitted = str(uuid.uuid4())
+    different = str(uuid.uuid4())
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers["Content-Length"])
+            self.rfile.read(length)
+            body = json.dumps(
+                {
+                    "command_id": different,
+                    "inquiry_id": str(uuid.uuid4()),
+                    "updated_at": "2026-07-14T12:00:00+02:00",
+                }
+            ).encode()
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    url, server = _serve(Handler)
+    try:
+        client = RemoteCoreClient(url, _TOKEN)
+        client.begin_request({"_command_id": submitted})
+        with pytest.raises(RemoteCoreError) as exc:
+            client.inquiry_service.create_inquiry(
+                event_date=date(2026, 7, 20),
+                inquiry_source="manual",
+                crm_stage="Neue Anfrage",
+                customer_linkage={},
+                time_window_text="mittags",
+                location_text="Hamburg",
+                guest_count_estimate=10,
+                planning_mode="caterer_suggestion",
+                call_verification_required=False,
+                call_verification_status="not_required",
+            )
+        assert exc.value.code == "invalid_response"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_successful_create_does_not_reread_after_commit() -> None:
+    gets = 0
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            nonlocal gets
+            gets += 1
+            self.send_error(503)
+
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers["Content-Length"])
+            request = json.loads(self.rfile.read(length))
+            body = json.dumps(
+                {
+                    "command_id": request["command_id"],
+                    "inquiry_id": str(uuid.uuid4()),
+                    "updated_at": "2026-07-14T12:00:00+02:00",
+                }
+            ).encode()
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    url, server = _serve(Handler)
+    try:
+        client = RemoteCoreClient(url, _TOKEN)
+        created = client.inquiry_service.create_inquiry(
+            event_date=date(2026, 7, 20),
+            inquiry_source="manual",
+            crm_stage="Neue Anfrage",
+            customer_linkage={},
+            time_window_text="mittags",
+            location_text="Hamburg",
+            guest_count_estimate=10,
+            planning_mode="caterer_suggestion",
+            call_verification_required=False,
+            call_verification_status="not_required",
+        )
+        assert uuid.UUID(created.inquiry_id).version == 4
+        assert gets == 0
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 @pytest.mark.parametrize(

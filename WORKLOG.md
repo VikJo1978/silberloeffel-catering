@@ -2461,3 +2461,55 @@ Must not be changed
 	•	the three remote_core_client.py fixes above are exactly that —
 	  bug fixes to match the frozen contract, not new behavior; no new
 	  route, shape, or precondition was added
+
+
+Entry 062
+
+Date: 2026-07-14 — Core Office API Phase 2 contract-review corrections
+Scope: local Phase 2 implementation and documentation only. No push, deploy,
+Proxmox provisioning, Lenovo restart, database migration, or production data.
+
+Meaning
+	•	corrected Entry 061's rejected implementation assumption: remote
+	  `render_queue` now consumes the frozen `/office/v1/queue` `QueueView`
+	  in one read. Berlin operating day/week, attention counts, top-five rows
+	  and next actions stay Core-authoritative and are not recomputed on
+	  Proxmox
+	•	made the remote client fail closed on exact response field sets,
+	  nested types, list caps/counts, valid status/error pairs and the echoed
+	  command_id; redirects, oversized/non-JSON bodies and malformed success
+	  or error envelopes remain unavailable failures without exposing payloads
+	•	preserved all frozen truncation metadata. Queue week, Inquiry linked
+	  orders and Order versions now render prominent warnings. The new-version
+	  optimistic precondition uses `versions_total_count`, so an Order with 201
+	  versions sends 201 rather than the visible capped maximum 200
+	•	removed post-commit re-reads from every remote command facade. Minimal
+	  validated command results now provide the redirect/result IDs; a failed
+	  second GET can no longer turn a completed write into an in-request
+	  `invalid_response`
+	•	remote print rendering uses the frozen `print-data` route, including
+	  versions outside the embedded 200-version detail cap
+	•	when Auerswald is not available from Proxmox, `/rueckruf` now says
+	  `Rückruf-Liste: nur vor Ort verfügbar`, as required by §3.9
+
+Completed
+	•	new regressions cover an extra response field, an invalid HTTP
+	  status/error pair, a mismatched echoed command_id, a successful command
+	  with zero post-commit GETs, the Proxmox Rückruf wording, and a real
+	  201-version Order with visible truncation plus the correct precondition
+	•	quality gate: ruff check clean, ruff format clean, mypy clean (65
+	  source files), 601 tests passed, coverage 91.4% (required minimum 90%)
+
+Open
+	•	Phase 2 remains local and undeployed; external verdict and explicit
+	  push approval are still pending
+	•	Phases 3–5 remain untouched: no Proxmox VM, isolated-Core rehearsal,
+	  live cutover, or retirement of the Lenovo direct-DB panel
+
+Must not be changed
+	•	remote dashboard rendering must keep using QueueView rather than
+	  rebuilding Core semantics from repository-shaped reads
+	•	command facades must not add a post-command GET; the browser's later
+	  redirected GET is a separate request
+	•	truncation must never be silent, and hidden preconditions must use
+	  honest total counts rather than the visible capped array length

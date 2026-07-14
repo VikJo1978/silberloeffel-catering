@@ -16,7 +16,7 @@ import urllib.error
 import urllib.request
 from datetime import date
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote, urlencode
 
 from catering_system.domain.inquiry import CRM_PIPELINE, Inquiry, PLANNING_MODES
@@ -276,9 +276,7 @@ class OfficePanel:
         command_id = self._remote.new_page_command_id()
         fields = f'<input type="hidden" name="_command_id" value="{_e(command_id)}">'
         for key, value in (expect or {}).items():
-            fields += (
-                f'<input type="hidden" name="_expect_{key}" value="{_e(value)}">'
-            )
+            fields += f'<input type="hidden" name="_expect_{key}" value="{_e(value)}">'
         return fields
 
     def _next_step_action(
@@ -335,6 +333,10 @@ class OfficePanel:
         *,
         context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
     ) -> str:
+        if self._remote is not None:
+            return self._render_remote_queue(
+                self._remote.queue_view(), rueckruf_items, context=context
+            )
         orders = self._orders.list_orders()
         orders_by_inquiry: dict[str, list[Order]] = {}
         for o in orders:
@@ -504,6 +506,185 @@ class OfficePanel:
             + '<p><a href="/auftraege">Alle anzeigen</a></p>'
         )
 
+        body = (
+            attention
+            + diese_woche
+            + rueckruf_section
+            + neue_anfragen_section
+            + auftraege_section
+            + '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a></p>'
+        )
+        return _page("Büro-Übersicht", body, context=context)
+
+    def _render_remote_queue(
+        self,
+        view: dict[str, object],
+        rueckruf_items: list[dict] | None,
+        *,
+        context: OfficePageContext,
+    ) -> str:
+        """Render the frozen QueueView without recomputing Core semantics.
+
+        In remote mode the authoritative Berlin operating day, attention
+        counts and next actions are supplied by Core in one read.  This keeps
+        the Proxmox panel from recreating business rules or issuing an N+1
+        graph of list/detail calls.
+        """
+        attention_view = cast(dict[str, int], view["attention"])
+        rueckruf_card = (
+            f'<a href="/rueckruf"><strong>{context.rueckruf_count}</strong> Rückrufe offen</a>'
+            if context.rueckruf_count is not None
+            else ""
+        )
+        storniert = attention_view["storniert"]
+        storniert_card = (
+            f"<span><strong>{storniert}</strong> Stornierte Aufträge prüfen</span>"
+            if storniert
+            else ""
+        )
+        attention = (
+            "<h2>Was braucht Aufmerksamkeit?</h2>"
+            '<div class="attention">'
+            + rueckruf_card
+            + f'<a href="#anfragen"><strong>{attention_view["neue_anfragen"]}</strong> Neue Anfragen prüfen</a>'
+            f'<a href="#auftraege"><strong>{attention_view["druck_fehlt"]}</strong> Druckbestätigung fehlt</a>'
+            f'<a href="#auftraege"><strong>{attention_view["nicht_wirksam"]}</strong> Aufträge noch nicht wirksam</a>'
+            f'<a href="#auftraege"><strong>{attention_view["versand_blockiert"]}</strong> Versandfreigabe blockiert</a>'
+            + storniert_card
+            + "</div>"
+        )
+
+        week = cast(dict[str, Any], view["week"])
+        week_rows = [
+            f"<tr><td>{_e(entry['event_date'])}</td><td>{_e(entry['time_window_text'])}</td>"
+            f"<td>{_e(entry['location_text'])}</td>"
+            f"<td>{_e(str(entry['guest_count_estimate']) if entry['guest_count_estimate'] is not None else '–')}</td>"
+            f'<td><a href="/order/{_e(entry["order_id"])}">{_e(entry["order_id"][:8])}</a></td></tr>'
+            for entry in cast(list[dict[str, Any]], week["entries"])
+        ]
+        kiosk_link = (
+            f' <a href="{_e(self.kiosk_url)}">Vollständige Wochenübersicht (Küche)</a>'
+            if self.kiosk_url
+            else ""
+        )
+        truncation_warning = (
+            '<p class="blocked"><strong>Unvollständige Ansicht:</strong> '
+            f"Diese Woche zeigt {len(week_rows)} von {week['total_count']} Aufträgen. "
+            "Bitte die vollständige Wochenübersicht öffnen.</p>"
+            if week["truncated"]
+            else ""
+        )
+        diese_woche = (
+            f'<h2 id="diese-woche">Diese Woche (KW {week["iso_week"]}/{week["iso_year"]})</h2>'
+            + truncation_warning
+            + "<table><tr><th>Datum</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th><th>Auftrag</th></tr>"
+            + "".join(
+                week_rows
+                or [
+                    '<tr><td colspan="5">keine wirksamen Aufträge diese Woche</td></tr>'
+                ]
+            )
+            + "</table>"
+            + kiosk_link
+        )
+
+        rueckruf_section = ""
+        if rueckruf_items is not None:
+            rows = []
+            for item in rueckruf_items[:5]:
+                contact = (
+                    _e(item["contact_name"])
+                    if item.get("contact_found")
+                    else "Unbekannt"
+                )
+                phone = item.get("phone", "")
+                rows.append(
+                    f"<li>{_e(item.get('date', ''))} {_e(item.get('time', ''))} — "
+                    f"{_e(phone)} ({contact}) "
+                    '<form class="inline" method="post" action="/rueckruf/resolve">'
+                    f"{_csrf_input(context)}"
+                    f'<input type="hidden" name="call_id" value="{_e(item.get("call_id", ""))}">'
+                    "<button>Erledigt</button></form> "
+                    f'<a href="/inquiry/new?phone={quote(phone)}">Anfrage erfassen</a></li>'
+                )
+            rueckruf_section = (
+                "<h2>Rückruf nötig</h2>"
+                + (
+                    f"<ul>{''.join(rows)}</ul>"
+                    if rows
+                    else "<p>keine offenen Rückrufe.</p>"
+                )
+                + '<p><a href="/rueckruf">Alle anzeigen</a></p>'
+            )
+
+        inquiry_rows = []
+        for inquiry in cast(list[dict[str, Any]], view["neue_anfragen_top"]):
+            action_name = inquiry["next_action"]
+            if action_name == "verify":
+                action = (
+                    f'<form class="inline" method="post" action="/inquiry/{_e(inquiry["inquiry_id"])}/verify">'
+                    f"{_csrf_input(context)}{self._command_fields()}"
+                    "<button>Telefonisch verifiziert</button></form>"
+                )
+            else:
+                action = (
+                    f'<form class="inline" method="post" action="/inquiry/{_e(inquiry["inquiry_id"])}/convert">'
+                    f"{_csrf_input(context)}{self._command_fields()}"
+                    "<button>In Auftrag umwandeln</button></form>"
+                )
+            inquiry_rows.append(
+                f'<li><a href="/inquiry/{_e(inquiry["inquiry_id"])}">{_e(inquiry["event_date"])} · '
+                f"{_e(inquiry['location_text'])}</a> {action}</li>"
+            )
+        neue_anfragen_section = (
+            "<h2>Neue Anfragen</h2>"
+            + (
+                f"<ul>{''.join(inquiry_rows)}</ul>"
+                if inquiry_rows
+                else "<p>keine neuen Anfragen.</p>"
+            )
+            + '<p><a href="/anfragen">Alle anzeigen</a></p>'
+        )
+
+        order_rows = []
+        for order in cast(list[dict[str, Any]], view["auftraege_top"]):
+            reason = (
+                _e(_ready_to_send_blocker_label(order["blocker_reason"]))
+                if order["blocker_reason"] is not None
+                else "–"
+            )
+            action_view = cast(dict[str, str] | None, order["next_action"])
+            action = ""
+            if action_view is not None:
+                action_name = action_view["action"]
+                label = (
+                    "Druck bestätigen"
+                    if action_name == "print-confirm"
+                    else "Wirksam machen"
+                )
+                expect = (
+                    {"effective_version_id": order["effective_order_version_id"] or ""}
+                    if action_name == "effective"
+                    else None
+                )
+                action = (
+                    f'<form class="inline" method="post" action="/order/{_e(order["order_id"])}/{action_name}">'
+                    f"{_csrf_input(context)}{self._command_fields(expect)}"
+                    f'<input type="hidden" name="order_version_id" value="{_e(action_view["order_version_id"])}">'
+                    f"<button>{label}</button></form>"
+                )
+            order_rows.append(
+                f'<li><a href="/order/{_e(order["order_id"])}">{_e(order["order_id"][:8])}</a> — {reason} {action}</li>'
+            )
+        auftraege_section = (
+            "<h2>Aufträge mit nächstem Schritt</h2>"
+            + (
+                f"<ul>{''.join(order_rows)}</ul>"
+                if order_rows
+                else "<p>keine offenen Schritte.</p>"
+            )
+            + '<p><a href="/auftraege">Alle anzeigen</a></p>'
+        )
         body = (
             attention
             + diese_woche
@@ -718,6 +899,17 @@ class OfficePanel:
         inq = self._inquiries.get_by_id(inquiry_id)
         if inq is None:
             return None
+        inquiry_truncation_warning = ""
+        if self._remote is not None:
+            total_orders, orders_truncated = self._remote.inquiry_orders_meta(
+                inquiry_id
+            )
+            if orders_truncated:
+                inquiry_truncation_warning = (
+                    '<p class="blocked"><strong>Unvollständige Ansicht:</strong> '
+                    f"Die API-Detailansicht enthält nicht alle {total_orders} "
+                    "verknüpften Aufträge.</p>"
+                )
         ev = self.progression.evaluate_inquiry_to_order_progression(inq)
         if ev.blocked:
             reasons = "".join(
@@ -795,7 +987,8 @@ class OfficePanel:
                 "Nachricht an den Kunden.</p>"
             )
         body = (
-            website_banner
+            inquiry_truncation_warning
+            + website_banner
             + f"""<table>
 <tr><th>Datum</th><td>{_e(inq.event_date.isoformat())}</td></tr>
 <tr><th>Kanal</th><td>{_e(_source_label(inq.inquiry_source))}</td></tr>
@@ -853,6 +1046,12 @@ class OfficePanel:
         if order is None:
             return None
         versions = self._orders.list_order_versions(order_id)
+        versions_total_count = len(versions)
+        versions_truncated = False
+        if self._remote is not None:
+            versions_total_count, versions_truncated = self._remote.order_versions_meta(
+                order_id
+            )
         cancelled = order.cancelled_at is not None
         rows = []
         for v in versions:
@@ -905,7 +1104,7 @@ class OfficePanel:
         header = '<p class="cancelled">STORNIERT</p>' if cancelled else ""
         actions_block = ""
         if not cancelled:
-            latest_version_number = max(
+            latest_version_number = versions_total_count or max(
                 (v.version_number for v in versions), default=0
             )
             actions_block = f"""
@@ -922,7 +1121,14 @@ class OfficePanel:
 <p><label>Planungsmodus</label>{_planning_mode_select(PLANNING_MODES[0])}</p>
 <p><button type="submit">Version anlegen</button></p>
 </fieldset></form>"""
-        body = f"""{header}
+        truncation_warning = (
+            '<p class="blocked"><strong>Unvollständige Ansicht:</strong> '
+            f"Es werden {len(versions)} von {versions_total_count} Versionen "
+            "angezeigt.</p>"
+            if versions_truncated
+            else ""
+        )
+        body = f"""{header}{truncation_warning}
 <p>Anfrage: <a href="/inquiry/{_e(order.source_inquiry_id)}">{_e(order.source_inquiry_id[:8])}</a></p>
 <h2>Versionen</h2>
 <table><tr><th>Nr</th><th>Datum</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th>

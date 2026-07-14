@@ -13,6 +13,7 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import date, datetime
 from typing import Any, NoReturn, cast
 from urllib.parse import quote, urlencode, urlparse
@@ -32,6 +33,96 @@ _MAX_RESPONSE_BYTES = 512 * 1024
 _READ_TIMEOUT_SECONDS = 3
 _COMMAND_TIMEOUT_SECONDS = 5
 _PAGE_SIZE = 100
+
+_INQUIRY_SUMMARY_KEYS = frozenset(
+    {
+        "inquiry_id",
+        "event_date",
+        "created_at",
+        "updated_at",
+        "inquiry_source",
+        "crm_stage",
+        "time_window_text",
+        "location_text",
+        "guest_count_estimate",
+        "planning_mode",
+        "call_verification_required",
+        "call_verification_status",
+    }
+)
+_INQUIRY_LIST_KEYS = _INQUIRY_SUMMARY_KEYS | {
+    "intake_subject",
+    "linked_order_id",
+    "orders_total_count",
+}
+_INQUIRY_DETAIL_KEYS = _INQUIRY_LIST_KEYS | {
+    "customer_linkage",
+    "intake_message",
+    "intake_summary",
+    "intake_external_ref",
+    "allows_conversion",
+    "orders",
+    "orders_truncated",
+    "offer_prefill",
+}
+_ORDER_SUMMARY_KEYS = frozenset(
+    {
+        "order_id",
+        "source_inquiry_id",
+        "created_at",
+        "updated_at",
+        "candidate_order_version_id",
+        "effective_order_version_id",
+        "cancelled_at",
+    }
+)
+_ORDER_LIST_KEYS = _ORDER_SUMMARY_KEYS | {"ready", "blocker_reason", "next_action"}
+_ORDER_DETAIL_KEYS = _ORDER_SUMMARY_KEYS | {
+    "ready_to_send",
+    "versions",
+    "versions_total_count",
+    "versions_truncated",
+}
+_VERSION_KEYS = frozenset(
+    {
+        "order_version_id",
+        "order_id",
+        "version_number",
+        "created_at",
+        "event_date",
+        "time_window_text",
+        "location_text",
+        "guest_count_estimate",
+        "planning_mode",
+        "kitchen_print_confirmed_at",
+    }
+)
+_ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
+    400: frozenset({"invalid_request"}),
+    401: frozenset({"unauthorized"}),
+    404: frozenset({"not_found"}),
+    405: frozenset({"method_not_allowed"}),
+    409: frozenset(
+        {
+            "command_id_conflict",
+            "stale_state",
+            "already_converted",
+            "external_ref_conflict",
+        }
+    ),
+    413: frozenset({"body_too_large"}),
+    415: frozenset({"unsupported_media_type"}),
+    422: frozenset(
+        {
+            "verification_gate_blocked",
+            "order_cancelled",
+            "kitchen_print_not_confirmed",
+            "version_not_owned",
+        }
+    ),
+    500: frozenset({"internal"}),
+    503: frozenset({"core_busy"}),
+}
 
 
 class RemoteCoreError(ValueError):
@@ -59,6 +150,11 @@ def _dict(value: object) -> dict[str, object]:
     return cast(dict[str, object], value)
 
 
+def _exact(data: Mapping[str, object], keys: frozenset[str] | set[str]) -> None:
+    if set(data) != set(keys):
+        _bad_response()
+
+
 def _list(value: object) -> list[object]:
     if not isinstance(value, list):
         _bad_response()
@@ -71,10 +167,27 @@ def _str(value: object) -> str:
     return value
 
 
+def _uuid4(value: object) -> str:
+    raw = _str(value)
+    try:
+        parsed = uuid.UUID(raw)
+    except ValueError:
+        _bad_response()
+    if parsed.version != 4 or str(parsed) != raw:
+        _bad_response()
+    return raw
+
+
 def _optional_str(value: object) -> str | None:
     if value is None:
         return None
     return _str(value)
+
+
+def _optional_uuid4(value: object) -> str | None:
+    if value is None:
+        return None
+    return _uuid4(value)
 
 
 def _bool(value: object) -> bool:
@@ -89,10 +202,24 @@ def _int(value: object) -> int:
     return value
 
 
+def _nonnegative_int(value: object) -> int:
+    parsed = _int(value)
+    if parsed < 0:
+        _bad_response()
+    return parsed
+
+
 def _optional_int(value: object) -> int | None:
     if value is None:
         return None
     return _int(value)
+
+
+def _guest_count(value: object) -> int | None:
+    parsed = _optional_int(value)
+    if parsed is not None and not 1 <= parsed <= 2000:
+        _bad_response()
+    return parsed
 
 
 def _date(value: object) -> date:
@@ -118,7 +245,15 @@ def _optional_datetime(value: object) -> datetime | None:
     return _datetime(value)
 
 
-def _inquiry(data: Mapping[str, object]) -> Inquiry:
+def _inquiry(
+    data: Mapping[str, object], *, list_row: bool = False, detail: bool = False
+) -> Inquiry:
+    _exact(
+        data,
+        _INQUIRY_DETAIL_KEYS
+        if detail
+        else (_INQUIRY_LIST_KEYS if list_row else _INQUIRY_SUMMARY_KEYS),
+    )
     linkage_raw = data.get("customer_linkage", {})
     try:
         linkage = validate_customer_linkage(_dict(linkage_raw))
@@ -131,7 +266,7 @@ def _inquiry(data: Mapping[str, object]) -> Inquiry:
     except (KeyError, TypeError, ValueError):
         _bad_response()
     return Inquiry(
-        inquiry_id=_str(data.get("inquiry_id")),
+        inquiry_id=_uuid4(data.get("inquiry_id")),
         event_date=_date(data.get("event_date")),
         created_at=_datetime(data.get("created_at")),
         updated_at=_datetime(data.get("updated_at")),
@@ -140,7 +275,7 @@ def _inquiry(data: Mapping[str, object]) -> Inquiry:
         customer_linkage=linkage,
         time_window_text=_str(data.get("time_window_text")),
         location_text=_str(data.get("location_text")),
-        guest_count_estimate=_optional_int(data.get("guest_count_estimate")),
+        guest_count_estimate=_guest_count(data.get("guest_count_estimate")),
         planning_mode=planning_mode,
         call_verification_required=_bool(data.get("call_verification_required")),
         call_verification_status=verification,
@@ -151,16 +286,24 @@ def _inquiry(data: Mapping[str, object]) -> Inquiry:
     )
 
 
-def _order(data: Mapping[str, object]) -> Order:
+def _order(
+    data: Mapping[str, object], *, list_row: bool = False, detail: bool = False
+) -> Order:
+    _exact(
+        data,
+        _ORDER_DETAIL_KEYS
+        if detail
+        else (_ORDER_LIST_KEYS if list_row else _ORDER_SUMMARY_KEYS),
+    )
     return Order(
-        order_id=_str(data.get("order_id")),
-        source_inquiry_id=_str(data.get("source_inquiry_id")),
+        order_id=_uuid4(data.get("order_id")),
+        source_inquiry_id=_uuid4(data.get("source_inquiry_id")),
         created_at=_datetime(data.get("created_at")),
         updated_at=_datetime(data.get("updated_at")),
-        candidate_order_version_id=_optional_str(
+        candidate_order_version_id=_optional_uuid4(
             data.get("candidate_order_version_id")
         ),
-        effective_order_version_id=_optional_str(
+        effective_order_version_id=_optional_uuid4(
             data.get("effective_order_version_id")
         ),
         cancelled_at=_optional_datetime(data.get("cancelled_at")),
@@ -168,24 +311,97 @@ def _order(data: Mapping[str, object]) -> Order:
 
 
 def _version(data: Mapping[str, object]) -> OrderVersion:
+    _exact(data, _VERSION_KEYS)
     try:
         planning_mode = validate_planning_mode(_str(data["planning_mode"]))
     except (KeyError, ValueError):
         _bad_response()
     return OrderVersion(
-        order_version_id=_str(data.get("order_version_id")),
-        order_id=_str(data.get("order_id")),
-        version_number=_int(data.get("version_number")),
+        order_version_id=_uuid4(data.get("order_version_id")),
+        order_id=_uuid4(data.get("order_id")),
+        version_number=_nonnegative_int(data.get("version_number")),
         created_at=_datetime(data.get("created_at")),
         event_date=_date(data.get("event_date")),
         time_window_text=_str(data.get("time_window_text")),
         location_text=_str(data.get("location_text")),
-        guest_count_estimate=_optional_int(data.get("guest_count_estimate")),
+        guest_count_estimate=_guest_count(data.get("guest_count_estimate")),
         planning_mode=planning_mode,
         kitchen_print_confirmed_at=_optional_datetime(
             data.get("kitchen_print_confirmed_at")
         ),
     )
+
+
+def _next_action(value: object) -> dict[str, str] | None:
+    if value is None:
+        return None
+    action = _dict(value)
+    _exact(action, {"action", "order_version_id"})
+    name = _str(action["action"])
+    if name not in {"print-confirm", "effective"}:
+        _bad_response()
+    return {"action": name, "order_version_id": _uuid4(action["order_version_id"])}
+
+
+def _ready_evaluation(value: object, order_id: str) -> ReadyToSendEvaluation:
+    evaluation = _dict(value)
+    _exact(evaluation, {"ready", "reasons"})
+    return ReadyToSendEvaluation(
+        order_id=order_id,
+        ready=_bool(evaluation["ready"]),
+        reasons=tuple(_str(reason) for reason in _list(evaluation["reasons"])),
+    )
+
+
+def _validate_offer_prefill(value: object) -> None:
+    payload = _dict(value)
+    _exact(payload, {"schema_version", "source", "inquiry_id", "transfer"})
+    if _str(payload["schema_version"]) != "core_inquiry_offer_prefill_v1":
+        _bad_response()
+    if _str(payload["source"]) != "silberloeffel-core":
+        _bad_response()
+    _uuid4(payload["inquiry_id"])
+    transfer = _dict(payload["transfer"])
+    _exact(transfer, {"planning", "orderContextPrefill"})
+    planning = _dict(transfer["planning"])
+    _exact(
+        planning,
+        {
+            "persons",
+            "budget",
+            "budgetEnabled",
+            "desiredModules",
+            "dietaryRequirements",
+            "eventType",
+            "serviceStyle",
+        },
+    )
+    _guest_count(planning["persons"])
+    if planning["budget"] is not None:
+        _bad_response()
+    _bool(planning["budgetEnabled"])
+    if _list(planning["desiredModules"]):
+        _bad_response()
+    for key in ("dietaryRequirements", "eventType", "serviceStyle"):
+        _str(planning[key])
+    context = _dict(transfer["orderContextPrefill"])
+    _exact(
+        context,
+        {
+            "companyName",
+            "contactPerson",
+            "email",
+            "phone",
+            "eventDate",
+            "eventTime",
+            "location",
+            "billingAddress",
+            "remarks",
+        },
+    )
+    for item in context.values():
+        _str(item)
+    _date(context["eventDate"])
 
 
 class RemoteCoreClient:
@@ -212,6 +428,8 @@ class RemoteCoreClient:
         self._command_id = ""
         self._form: dict[str, str] = {}
         self._order_details: dict[str, dict[str, object]] = {}
+        self._inquiry_detail_meta: dict[str, tuple[int, bool]] = {}
+        self._order_version_meta: dict[str, tuple[int, bool]] = {}
         self._known_order_ids: list[str] = []
         self._evaluations: dict[str, ReadyToSendEvaluation] = {}
         self.inquiry_service = _RemoteInquiryService(self)
@@ -220,6 +438,8 @@ class RemoteCoreClient:
 
     def begin_request(self, form: Mapping[str, str] | None = None) -> None:
         self._order_details.clear()
+        self._inquiry_detail_meta.clear()
+        self._order_version_meta.clear()
         self._known_order_ids = []
         self._evaluations.clear()
         self._form = dict(form or {})
@@ -259,27 +479,38 @@ class RemoteCoreClient:
         request = urllib.request.Request(
             self._url(path, query), data=data, headers=headers, method=method
         )
-        timeout = (
-            _READ_TIMEOUT_SECONDS if method == "GET" else _COMMAND_TIMEOUT_SECONDS
-        )
+        timeout = _READ_TIMEOUT_SECONDS if method == "GET" else _COMMAND_TIMEOUT_SECONDS
         try:
             response = self._opener.open(request, timeout=timeout)
         except urllib.error.HTTPError as exc:
             if 300 <= exc.code < 400:
-                raise RemoteCoreError(502, "redirect_refused", unavailable=True) from exc
+                raise RemoteCoreError(
+                    502, "redirect_refused", unavailable=True
+                ) from exc
             raw = exc.read(_MAX_RESPONSE_BYTES + 1)
-            code = "remote_error"
+            if (
+                exc.headers.get_content_type() != "application/json"
+                or len(raw) > _MAX_RESPONSE_BYTES
+            ):
+                _bad_response()
             try:
                 parsed = _dict(json.loads(raw.decode("utf-8")))
-                code = _str(parsed.get("error"))
-            except (UnicodeDecodeError, json.JSONDecodeError, RemoteCoreError):
-                pass
+                _exact(parsed, {"error"})
+                code = _str(parsed["error"])
+            except (UnicodeDecodeError, json.JSONDecodeError, RemoteCoreError) as error:
+                raise RemoteCoreError(
+                    502, "invalid_response", unavailable=True
+                ) from error
+            if code not in _ERROR_CODES_BY_STATUS.get(exc.code, frozenset()):
+                _bad_response()
             raise RemoteCoreError(exc.code, code) from exc
         except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as exc:
             raise RemoteCoreError(503, "unreachable", unavailable=True) from exc
         with response:
             if response.status not in expected:
-                raise RemoteCoreError(response.status, "unexpected_status", unavailable=True)
+                raise RemoteCoreError(
+                    response.status, "unexpected_status", unavailable=True
+                )
             if response.headers.get_content_type() != "application/json":
                 _bad_response()
             raw = response.read(_MAX_RESPONSE_BYTES + 1)
@@ -290,7 +521,9 @@ class RemoteCoreClient:
         except (UnicodeDecodeError, json.JSONDecodeError):
             _bad_response()
 
-    def get(self, path: str, query: Mapping[str, object] | None = None) -> dict[str, object]:
+    def get(
+        self, path: str, query: Mapping[str, object] | None = None
+    ) -> dict[str, object]:
         return self._request("GET", path, query=query, expected={200})
 
     def command(
@@ -299,19 +532,113 @@ class RemoteCoreClient:
         args: Mapping[str, object],
         expect: Mapping[str, object],
         expected: set[int],
+        result_keys: set[str],
     ) -> dict[str, object]:
+        command_id = self._id()
         result = self._request(
             "POST",
             path,
-            body={"command_id": self._id(), "expect": dict(expect), "args": dict(args)},
+            body={
+                "command_id": command_id,
+                "expect": dict(expect),
+                "args": dict(args),
+            },
             expected=expected,
         )
+        _exact(result, result_keys | {"command_id"})
+        if _str(result["command_id"]) != command_id:
+            _bad_response()
         self._order_details.clear()
+        self._inquiry_detail_meta.clear()
+        self._order_version_meta.clear()
         self._known_order_ids = []
         self._evaluations.clear()
         return result
 
     # -- reads / repository-shaped facade ---------------------------------
+
+    def queue_view(self) -> dict[str, object]:
+        body = self.get("/office/v1/queue")
+        _exact(body, {"attention", "week", "neue_anfragen_top", "auftraege_top"})
+        attention = _dict(body["attention"])
+        _exact(
+            attention,
+            {
+                "neue_anfragen",
+                "druck_fehlt",
+                "nicht_wirksam",
+                "versand_blockiert",
+                "storniert",
+            },
+        )
+        for value in attention.values():
+            _nonnegative_int(value)
+
+        week = _dict(body["week"])
+        _exact(week, {"iso_year", "iso_week", "entries", "total_count", "truncated"})
+        iso_year, iso_week = _int(week["iso_year"]), _int(week["iso_week"])
+        try:
+            date.fromisocalendar(iso_year, iso_week, 1)
+        except ValueError:
+            _bad_response()
+        entries = _list(week["entries"])
+        for raw in entries:
+            entry = _dict(raw)
+            _exact(
+                entry,
+                {
+                    "order_id",
+                    "event_date",
+                    "time_window_text",
+                    "location_text",
+                    "guest_count_estimate",
+                },
+            )
+            _uuid4(entry["order_id"])
+            _date(entry["event_date"])
+            _str(entry["time_window_text"])
+            _str(entry["location_text"])
+            _guest_count(entry["guest_count_estimate"])
+        total = _nonnegative_int(week["total_count"])
+        truncated = _bool(week["truncated"])
+        if total < len(entries) or truncated != (total > len(entries)):
+            _bad_response()
+
+        inquiry_rows = _list(body["neue_anfragen_top"])
+        if len(inquiry_rows) > 5:
+            _bad_response()
+        for raw in inquiry_rows:
+            row = _dict(raw)
+            _exact(row, _INQUIRY_SUMMARY_KEYS | {"next_action"})
+            _inquiry({key: row[key] for key in _INQUIRY_SUMMARY_KEYS})
+            if _str(row["next_action"]) not in {"verify", "convert"}:
+                _bad_response()
+
+        order_rows = _list(body["auftraege_top"])
+        if len(order_rows) > 5:
+            _bad_response()
+        for raw in order_rows:
+            row = _dict(raw)
+            _exact(row, _ORDER_SUMMARY_KEYS | {"blocker_reason", "next_action"})
+            _order({key: row[key] for key in _ORDER_SUMMARY_KEYS})
+            _optional_str(row["blocker_reason"])
+            _next_action(row["next_action"])
+        return body
+
+    def _validate_page(
+        self,
+        page: dict[str, object],
+        item_key: str,
+        offset: int,
+    ) -> list[object]:
+        _exact(page, {item_key, "total_count", "limit", "offset"})
+        if _int(page["limit"]) != _PAGE_SIZE or _int(page["offset"]) != offset:
+            _bad_response()
+        items = _list(page[item_key])
+        total = _nonnegative_int(page["total_count"])
+        if len(items) > _PAGE_SIZE or total < offset + len(items):
+            _bad_response()
+        return items
 
     def list_all(self) -> list[Inquiry]:
         rows: list[Inquiry] = []
@@ -320,18 +647,42 @@ class RemoteCoreClient:
             page = self.get(
                 "/office/v1/inquiries", {"limit": _PAGE_SIZE, "offset": offset}
             )
-            items = _list(page.get("inquiries"))
-            rows.extend(_inquiry(_dict(item)) for item in items)
-            total = _int(page.get("total_count"))
+            items = self._validate_page(page, "inquiries", offset)
+            for item in items:
+                data = _dict(item)
+                rows.append(_inquiry(data, list_row=True))
+                _optional_uuid4(data["linked_order_id"])
+                _nonnegative_int(data["orders_total_count"])
+            total = _int(page["total_count"])
             offset += len(items)
             if offset >= total or not items:
+                if rows != sorted(
+                    rows, key=lambda inquiry: (inquiry.event_date, inquiry.inquiry_id)
+                ):
+                    _bad_response()
                 return rows
 
     def get_by_id(self, inquiry_id: str) -> Inquiry | None:
         try:
-            return _inquiry(
-                self.get(f"/office/v1/inquiries/{quote(inquiry_id, safe='')}")
-            )
+            detail = self.get(f"/office/v1/inquiries/{quote(inquiry_id, safe='')}")
+            inquiry = _inquiry(detail, detail=True)
+            _optional_uuid4(detail["linked_order_id"])
+            total = _nonnegative_int(detail["orders_total_count"])
+            truncated = _bool(detail["orders_truncated"])
+            orders = _list(detail["orders"])
+            if total < len(orders) or truncated != (total > len(orders)):
+                _bad_response()
+            for raw in orders:
+                row = _dict(raw)
+                _exact(row, {"order_id", "cancelled_at"})
+                _uuid4(row["order_id"])
+                _optional_datetime(row["cancelled_at"])
+            _bool(detail["allows_conversion"])
+            _validate_offer_prefill(detail["offer_prefill"])
+            if _uuid4(_dict(detail["offer_prefill"])["inquiry_id"]) != inquiry_id:
+                _bad_response()
+            self._inquiry_detail_meta[inquiry_id] = (total, truncated)
+            return inquiry
         except RemoteCoreError as exc:
             if exc.status == 404:
                 return None
@@ -357,21 +708,24 @@ class RemoteCoreClient:
             page = self.get(
                 "/office/v1/orders", {"limit": _PAGE_SIZE, "offset": offset}
             )
-            items = _list(page.get("orders"))
+            items = self._validate_page(page, "orders", offset)
             for item in items:
                 data = _dict(item)
-                order = _order(data)
+                order = _order(data, list_row=True)
                 rows.append(order)
                 self._known_order_ids.append(order.order_id)
-                reason = data.get("blocker_reason")
+                reason = data["blocker_reason"]
+                _next_action(data["next_action"])
                 self._evaluations[order.order_id] = ReadyToSendEvaluation(
                     order_id=order.order_id,
-                    ready=_bool(data.get("ready")),
+                    ready=_bool(data["ready"]),
                     reasons=() if reason is None else (_str(reason),),
                 )
-            total = _int(page.get("total_count"))
+            total = _int(page["total_count"])
             offset += len(items)
             if offset >= total or not items:
+                if rows != sorted(rows, key=lambda order: order.order_id):
+                    _bad_response()
                 return rows
 
     def _order_detail(self, order_id: str) -> dict[str, object] | None:
@@ -384,23 +738,40 @@ class RemoteCoreClient:
                 return None
             raise
         self._order_details[order_id] = detail
-        evaluation = _dict(detail.get("ready_to_send"))
-        self._evaluations[order_id] = ReadyToSendEvaluation(
-            order_id=order_id,
-            ready=_bool(evaluation.get("ready")),
-            reasons=tuple(_str(reason) for reason in _list(evaluation.get("reasons"))),
+        _order(detail, detail=True)
+        self._evaluations[order_id] = _ready_evaluation(
+            detail["ready_to_send"], order_id
         )
+        versions = _list(detail["versions"])
+        total = _nonnegative_int(detail["versions_total_count"])
+        truncated = _bool(detail["versions_truncated"])
+        if total < len(versions) or truncated != (total > len(versions)):
+            _bad_response()
+        parsed_versions = [_version(_dict(raw)) for raw in versions]
+        for version in parsed_versions:
+            if version.order_id != order_id:
+                _bad_response()
+        numbers = [version.version_number for version in parsed_versions]
+        if numbers != sorted(numbers) or len(numbers) != len(set(numbers)):
+            _bad_response()
+        self._order_version_meta[order_id] = (total, truncated)
         return detail
 
     def get_order(self, order_id: str) -> Order | None:
         detail = self._order_detail(order_id)
-        return None if detail is None else _order(detail)
+        return None if detail is None else _order(detail, detail=True)
 
     def list_order_versions(self, order_id: str) -> list[OrderVersion]:
         detail = self._order_detail(order_id)
         if detail is None:
             return []
         return [_version(_dict(row)) for row in _list(detail.get("versions"))]
+
+    def inquiry_orders_meta(self, inquiry_id: str) -> tuple[int, bool]:
+        return self._inquiry_detail_meta.get(inquiry_id, (0, False))
+
+    def order_versions_meta(self, order_id: str) -> tuple[int, bool]:
+        return self._order_version_meta.get(order_id, (0, False))
 
     def get_order_version(self, order_version_id: str) -> OrderVersion | None:
         """Global version lookup, matching the repo Protocol signature (no
@@ -442,7 +813,9 @@ class RemoteCoreClient:
             ),
         )
 
-    def print_data(self, order_id: str, version_id: str) -> tuple[Order, OrderVersion] | None:
+    def print_data(
+        self, order_id: str, version_id: str
+    ) -> tuple[Order, OrderVersion] | None:
         try:
             body = self.get(
                 f"/office/v1/orders/{quote(order_id, safe='')}/print-data",
@@ -452,7 +825,12 @@ class RemoteCoreClient:
             if exc.status == 404:
                 return None
             raise
-        return _order(_dict(body.get("order"))), _version(_dict(body.get("version")))
+        _exact(body, {"order", "version"})
+        order = _order(_dict(body["order"]))
+        version = _version(_dict(body["version"]))
+        if order.order_id != order_id or version.order_id != order_id:
+            _bad_response()
+        return order, version
 
     # Writes must never fall through repository semantics in remote mode: the
     # panel is wired to use the _Remote*Service facades below for every
@@ -509,12 +887,37 @@ class _RemoteInquiryService:
             if value is not None:
                 args[key] = value
         result = self._client.command(
-            "/office/v1/inquiries", args, {}, expected={201}
+            "/office/v1/inquiries",
+            args,
+            {},
+            expected={201},
+            result_keys={"inquiry_id", "updated_at"},
         )
-        inquiry = self._client.get_by_id(_str(result.get("inquiry_id")))
-        if inquiry is None:
-            _bad_response()
-        return inquiry
+        timestamp = _datetime(result["updated_at"])
+        # Only the id is consumed before the redirect.  Returning the
+        # submitted snapshot avoids a post-commit GET which could fail after
+        # the write and produce the false message "nothing was saved".
+        return Inquiry(
+            inquiry_id=_uuid4(result["inquiry_id"]),
+            event_date=values["event_date"],
+            created_at=timestamp,
+            updated_at=timestamp,
+            inquiry_source=validate_inquiry_source(values["inquiry_source"]),
+            crm_stage=validate_crm_stage(values["crm_stage"]),
+            customer_linkage=validate_customer_linkage(values["customer_linkage"]),
+            time_window_text=values["time_window_text"],
+            location_text=values["location_text"],
+            guest_count_estimate=values["guest_count_estimate"],
+            planning_mode=validate_planning_mode(values["planning_mode"]),
+            call_verification_required=values["call_verification_required"],
+            call_verification_status=validate_call_verification_status(
+                values["call_verification_status"]
+            ),
+            intake_subject=values.get("intake_subject"),
+            intake_message=values.get("intake_message"),
+            intake_summary=values.get("intake_summary"),
+            intake_external_ref=values.get("intake_external_ref"),
+        )
 
     def update_inquiry(self, inquiry_id: str, **values: Any) -> Inquiry:
         current = self._client.get_by_id(inquiry_id)
@@ -537,28 +940,50 @@ class _RemoteInquiryService:
             if key in values:
                 args[key] = values[key]
         expected_at = self._client.form_value("_expect_updated_at")
-        self._client.command(
+        result = self._client.command(
             f"/office/v1/inquiries/{quote(inquiry_id, safe='')}/update",
             args,
             {"updated_at": expected_at or current.updated_at.isoformat()},
             expected={200},
+            result_keys={"inquiry_id", "updated_at"},
         )
-        updated = self._client.get_by_id(inquiry_id)
-        if updated is None:
+        if _uuid4(result["inquiry_id"]) != inquiry_id:
             _bad_response()
-        return updated
+        return replace(
+            current,
+            event_date=values["event_date"],
+            crm_stage=validate_crm_stage(values["crm_stage"]),
+            time_window_text=values["time_window_text"],
+            location_text=values["location_text"],
+            guest_count_estimate=values["guest_count_estimate"],
+            planning_mode=validate_planning_mode(values["planning_mode"]),
+            updated_at=_datetime(result["updated_at"]),
+            intake_subject=values.get("intake_subject", current.intake_subject),
+            intake_message=values.get("intake_message", current.intake_message),
+            intake_summary=values.get("intake_summary", current.intake_summary),
+            intake_external_ref=values.get(
+                "intake_external_ref", current.intake_external_ref
+            ),
+        )
 
     def verify_customer_by_call(self, inquiry_id: str) -> Inquiry:
-        self._client.command(
+        current = self._client.get_by_id(inquiry_id)
+        if current is None:
+            raise RemoteCoreError(404, "not_found")
+        result = self._client.command(
             f"/office/v1/inquiries/{quote(inquiry_id, safe='')}/verify",
             {},
             {},
             expected={200},
+            result_keys={"inquiry_id", "updated_at"},
         )
-        inquiry = self._client.get_by_id(inquiry_id)
-        if inquiry is None:
+        if _uuid4(result["inquiry_id"]) != inquiry_id:
             _bad_response()
-        return inquiry
+        return replace(
+            current,
+            call_verification_status="verified",
+            updated_at=_datetime(result["updated_at"]),
+        )
 
 
 class _RemoteOrderService:
@@ -571,19 +996,39 @@ class _RemoteOrderService:
             {},
             {},
             expected={201},
+            result_keys={"order_id", "order_version_id"},
         )
-        order_id = _str(result.get("order_id"))
-        order = self._client.get_order(order_id)
-        versions = self._client.list_order_versions(order_id)
-        if order is None or not versions:
-            _bad_response()
-        return order, versions[0]
+        order_id = _uuid4(result["order_id"])
+        version_id = _uuid4(result["order_version_id"])
+        # These snapshots are redirect-only return values; Core remains the
+        # authority and the following GET request renders the persisted data.
+        order = Order(
+            order_id=order_id,
+            source_inquiry_id=inquiry.inquiry_id,
+            created_at=inquiry.updated_at,
+            updated_at=inquiry.updated_at,
+        )
+        version = OrderVersion(
+            order_version_id=version_id,
+            order_id=order_id,
+            version_number=1,
+            created_at=inquiry.updated_at,
+            event_date=inquiry.event_date,
+            time_window_text=inquiry.time_window_text,
+            location_text=inquiry.location_text,
+            guest_count_estimate=inquiry.guest_count_estimate,
+            planning_mode=inquiry.planning_mode,
+        )
+        return order, version
 
     def create_relevant_order_change_version(
         self, order: Order, **values: Any
     ) -> OrderVersion:
         versions = self._client.list_order_versions(order.order_id)
-        latest = max((version.version_number for version in versions), default=0)
+        total_count, _truncated = self._client.order_versions_meta(order.order_id)
+        latest = total_count or max(
+            (version.version_number for version in versions), default=0
+        )
         expected_latest = self._client.form_value("_expect_latest_version_number")
         result = self._client.command(
             f"/office/v1/orders/{quote(order.order_id, safe='')}/versions",
@@ -600,12 +1045,19 @@ class _RemoteOrderService:
                 )
             },
             expected={201},
+            result_keys={"order_version_id", "version_number"},
         )
-        version_id = _str(result.get("order_version_id"))
-        for version in self._client.list_order_versions(order.order_id):
-            if version.order_version_id == version_id:
-                return version
-        _bad_response()
+        return OrderVersion(
+            order_version_id=_uuid4(result["order_version_id"]),
+            order_id=order.order_id,
+            version_number=_int(result["version_number"]),
+            created_at=order.updated_at,
+            event_date=values["event_date"],
+            time_window_text=values["time_window_text"],
+            location_text=values["location_text"],
+            guest_count_estimate=values["guest_count_estimate"],
+            planning_mode=validate_planning_mode(values["planning_mode"]),
+        )
 
 
 class _RemoteOperationalCoreService:
@@ -621,27 +1073,44 @@ class _RemoteOperationalCoreService:
             {},
             {},
             expected={200},
+            result_keys={"evaluation"},
         )
-        evaluation = _dict(result.get("evaluation"))
-        return ReadyToSendEvaluation(
-            order_id=order_id,
-            ready=_bool(evaluation.get("ready")),
-            reasons=tuple(_str(v) for v in _list(evaluation.get("reasons"))),
-        )
+        return _ready_evaluation(result["evaluation"], order_id)
 
     def confirm_kitchen_print(
         self, order_id: str, order_version_id: str
     ) -> OrderVersion:
-        self._client.command(
+        versions = self._client.list_order_versions(order_id)
+        current = next(
+            (
+                version
+                for version in versions
+                if version.order_version_id == order_version_id
+            ),
+            None,
+        )
+        if current is None:
+            raise RemoteCoreError(422, "version_not_owned")
+        result = self._client.command(
             f"/office/v1/orders/{quote(order_id, safe='')}/print-confirm",
             {"order_version_id": order_version_id},
             {},
             expected={200},
+            result_keys={
+                "order_id",
+                "order_version_id",
+                "kitchen_print_confirmed_at",
+            },
         )
-        for version in self._client.list_order_versions(order_id):
-            if version.order_version_id == order_version_id:
-                return version
-        _bad_response()
+        if (
+            _uuid4(result["order_id"]) != order_id
+            or _uuid4(result["order_version_id"]) != order_version_id
+        ):
+            _bad_response()
+        return replace(
+            current,
+            kitchen_print_confirmed_at=_datetime(result["kitchen_print_confirmed_at"]),
+        )
 
     def make_order_version_effective(
         self, order_id: str, order_version_id: str
@@ -655,29 +1124,40 @@ class _RemoteOperationalCoreService:
             if expected_effective is None
             else (expected_effective or None)
         )
-        self._client.command(
+        result = self._client.command(
             f"/office/v1/orders/{quote(order_id, safe='')}/effective",
             {"order_version_id": order_version_id},
             {"current_effective_order_version_id": expect_value},
             expected={200},
+            result_keys={"order_id", "effective_order_version_id", "updated_at"},
         )
-        updated = self._client.get_order(order_id)
-        if updated is None:
+        if (
+            _uuid4(result["order_id"]) != order_id
+            or _uuid4(result["effective_order_version_id"]) != order_version_id
+        ):
             _bad_response()
-        return updated
+        return replace(
+            current,
+            effective_order_version_id=order_version_id,
+            updated_at=_datetime(result["updated_at"]),
+        )
 
     def cancel_order(self, order_id: str) -> Order:
         current = self._client.get_order(order_id)
         if current is None:
             raise RemoteCoreError(404, "not_found")
         expected_at = self._client.form_value("_expect_updated_at")
-        self._client.command(
+        result = self._client.command(
             f"/office/v1/orders/{quote(order_id, safe='')}/cancel",
             {},
             {"updated_at": expected_at or current.updated_at.isoformat()},
             expected={200},
+            result_keys={"order_id", "cancelled_at", "updated_at"},
         )
-        updated = self._client.get_order(order_id)
-        if updated is None:
+        if _uuid4(result["order_id"]) != order_id:
             _bad_response()
-        return updated
+        return replace(
+            current,
+            cancelled_at=_datetime(result["cancelled_at"]),
+            updated_at=_datetime(result["updated_at"]),
+        )

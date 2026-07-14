@@ -98,8 +98,9 @@ by `RemoteCoreClient` (Phase 2) and by the test suite.
 
 `RemoteCoreClient` is the office panel's only path to this API — implemented,
 tested, **not yet deployed** (that is a separate rollout step per the pack's
-Phase 5). The panel's rendering code (`office_panel.py`) is unmodified between
-modes; only the repository/service objects it's constructed with differ.
+Phase 5). Direct-mode rendering remains byte-identical. Remote mode consumes
+the authoritative `QueueView` for the dashboard and uses repository-shaped
+read adapters for the remaining existing views.
 
 - **Mode select**: `CORE_OFFICE_API_URL` unset → direct mode, byte-identical
   to before. Both `CORE_OFFICE_API_URL` and `CORE_OFFICE_API_TOKEN` set →
@@ -109,14 +110,25 @@ modes; only the repository/service objects it's constructed with differ.
 - **Transport**: bearer from `CORE_OFFICE_API_TOKEN`; 3 s read / 5 s command
   timeout; redirects refused outright (the bearer never leaves for a second
   host); responses capped at 512 KiB; malformed/non-JSON/wrong-content-type
-  bodies are treated as failures, never partially trusted.
+  bodies are treated as failures, never partially trusted. Successful and
+  error responses are checked against the exact frozen field/status contract;
+  every command response must echo the submitted `command_id`.
 - **No business rules on Proxmox**: the client never re-implements
   `InquiryService`/`OrderService`/`OperationalCoreService`'s write logic (ID
   minting, defaults, timestamps) locally — every write is one of the frozen
-  named commands above. Reads (`list_all`, `get_by_id`, `list_orders`,
+  named commands above. The dashboard is rendered from one `QueueView` read,
+  so Berlin-day/week selection, attention counts and next actions are not
+  recomputed on Proxmox. Other reads (`list_all`, `get_by_id`, `list_orders`,
   `get_order`, `list_order_versions`, `get_order_version`, `print_data`)
-  satisfy the same repository shape the panel's rendering code already calls
-  directly, so dashboard/search/next-action output matches direct mode.
+  satisfy the same repository shape the panel's rendering code already calls.
+- **Honest caps**: `week.truncated`, `orders_truncated` and
+  `versions_truncated` are retained and shown prominently. Version creation
+  uses `versions_total_count` for its optimistic precondition, including when
+  only the first 200 versions are returned.
+- **Command completion**: once a command returns its validated minimal result,
+  the POST handler redirects from that result and does not perform a second
+  Core read. A read outage can therefore no longer turn a committed write into
+  the false in-request result “nothing was saved”.
 - **Idempotent forms**: every mutating page embeds a hidden `_command_id`
   (minted once per render) plus one `_expect_<field>` per precondition the
   route requires (`updated_at`, `latest_version_number`,
@@ -127,5 +139,6 @@ modes; only the repository/service objects it's constructed with differ.
 - **Degradation**: an unreachable/malformed API response renders the fixed
   page *„Core nicht erreichbar — nichts wurde gespeichert"* (503) — never an
   empty or partially-built dashboard, never a silent local write.
-- **Rückruf/Auerswald** stays a separate, local, non-Core integration in both
-  modes (pack §3.9) — unaffected by remote mode either way.
+- **Rückruf/Auerswald** stays a separate, local, non-Core integration. When it
+  is not reachable/configured from Proxmox, remote mode explicitly shows
+  `Rückruf-Liste: nur vor Ort verfügbar` (pack §3.9).

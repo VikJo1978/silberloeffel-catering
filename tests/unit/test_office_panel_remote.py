@@ -260,6 +260,54 @@ def test_order_detail_parity_direct_vs_remote(parity_world) -> None:
         _assert_same_modulo_remote_fields(d_html, r_html)
 
 
+def test_truncated_order_detail_warns_and_uses_true_latest_version(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "core.db"
+    inquiries = SQLiteInquiryRepository(db)
+    orders = SQLiteOrderRepository(db)
+    inquiry = InquiryService(inquiries).create_inquiry(
+        event_date=date(2026, 10, 1),
+        inquiry_source="manual",
+        crm_stage="Neue Anfrage",
+        customer_linkage={},
+        time_window_text="mittags",
+        location_text="Hamburg",
+        guest_count_estimate=25,
+        planning_mode="caterer_suggestion",
+        call_verification_required=False,
+        call_verification_status="not_required",
+    )
+    service = OrderService(orders)
+    order, _version = service.convert_inquiry_to_order(inquiry)
+    for number in range(2, 202):
+        service.create_relevant_order_change_version(
+            order,
+            event_date=date(2026, 10, 1),
+            time_window_text=f"Fenster {number}",
+            location_text="Hamburg",
+            guest_count_estimate=25,
+            planning_mode="caterer_suggestion",
+        )
+    inquiries.close()
+    orders.close()
+
+    api_url, api_server = _start_api_server(db)
+    remote = RemoteCoreClient(api_url, _API_TOKEN)
+    panel_url, panel_server = _start_remote_panel(remote)
+    try:
+        status, html = _get(f"{panel_url}/order/{order.order_id}")
+        assert status == 200
+        assert "Unvollständige Ansicht" in html
+        assert "200 von 201 Versionen" in html
+        assert _extract_hidden(html, "_expect_latest_version_number") == "201"
+    finally:
+        panel_server.shutdown()
+        panel_server.server_close()
+        api_server.shutdown()
+        api_server.server_close()
+
+
 def test_inquiry_detail_parity_direct_vs_remote(parity_world) -> None:
     direct_url, remote_url, ids = parity_world
     for key in ("inquiry_verify", "inquiry_website"):
@@ -281,13 +329,15 @@ def test_print_data_parity_direct_vs_remote(parity_world) -> None:
 
 
 def test_rueckruf_stays_local_not_routed_through_core(parity_world) -> None:
-    """Rückruf/Auerswald is not Core data (pack §3.9) — unaffected by remote
-    mode either way; unconfigured renders identically in both modes."""
+    """Rückruf/Auerswald stays outside Core.  On Proxmox, an unconfigured
+    local integration must carry the frozen "only on premises" explanation
+    rather than pretending that it is an ordinary missing URL."""
     direct_url, remote_url, _ids = parity_world
     d_status, d_html = _get(f"{direct_url}/rueckruf")
     r_status, r_html = _get(f"{remote_url}/rueckruf")
     assert d_status == r_status == 200
-    assert d_html == r_html
+    assert "AUERSWALD_SYNC_URL nicht konfiguriert" in d_html
+    assert "Rückruf-Liste: nur vor Ort verfügbar" in r_html
 
 
 # --- full write flow through the frozen command envelope ---------------------
@@ -363,9 +413,7 @@ def test_full_write_flow_through_remote_panel(remote_world) -> None:
     assert status == 200
     assert "Rostock-Ost" in detail_html
     convert_command_id = _extract_hidden(
-        re.search(r"(<form[^>]*convert[^\"]*\"[^>]*>.*?</form>)", detail_html).group(
-            0
-        ),
+        re.search(r"(<form[^>]*convert[^\"]*\"[^>]*>.*?</form>)", detail_html).group(0),
         "_command_id",
     )
     status, _body = _post_form(
@@ -563,7 +611,9 @@ def test_unreachable_api_shows_german_message_never_empty_queue(tmp_path: Path) 
 # --- remote mode never opens core.db / half-config startup rejection --------
 
 
-def test_remote_mode_never_constructs_sqlite_repos(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_remote_mode_never_constructs_sqlite_repos(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     def _boom(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("remote mode must never open core.db")
 

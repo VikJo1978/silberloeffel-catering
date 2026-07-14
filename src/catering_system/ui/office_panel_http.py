@@ -183,6 +183,15 @@ def make_office_panel_handler(
             parsed = urlparse(self.path)
             parts = [part for part in parsed.path.split("/") if part]
             if parts == ["rueckruf"]:
+                if remote is not None and not auerswald_url:
+                    self._html(
+                        render_rueckruf(
+                            None,
+                            "Rückruf-Liste: nur vor Ort verfügbar",
+                            context=OfficePageContext(csrf_token=csrf_token),
+                        )
+                    )
+                    return
                 items, error = fetch_missed_board(
                     auerswald_url, auerswald_user, auerswald_password
                 )
@@ -236,8 +245,14 @@ def make_office_panel_handler(
 
         def _print_sheet(self, order_id: str, query: str) -> None:
             version_id = parse_qs(query).get("version", [""])[0]
-            order = order_repo.get_order(order_id)
-            version = order_repo.get_order_version(version_id) if version_id else None
+            if remote is not None and version_id:
+                data = remote.print_data(order_id, version_id)
+                order, version = data if data is not None else (None, None)
+            else:
+                order = order_repo.get_order(order_id)
+                version = (
+                    order_repo.get_order_version(version_id) if version_id else None
+                )
             if order is None or version is None or version.order_id != order_id:
                 self.send_error(404)
                 return
