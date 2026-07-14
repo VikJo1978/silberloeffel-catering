@@ -190,7 +190,8 @@ confirmed and must not be reused as print workflow deadlines.
 2. There is no technical acceptance distinct from human/domain confirmation.
 3. There is no clock-owned deadline, so “late” cannot be derived honestly.
 4. There is no kitchen agent health signal.
-5. There is no append-only attempt history; reprint is invisible.
+5. There is no append-only attempt history with additive immutable facts;
+   reprint is invisible.
 6. Current attention can miss a new unconfirmed target version when an older
    version remains effective and ready.
 7. The order detail can offer `Wirksam machen` before confirmation even though
@@ -215,8 +216,10 @@ The following terms are fixed and must not be conflated:
 - **Print acknowledgement / confirmation** — the existing strong domain fact:
   the intended kitchen print was actually handled and reviewed. This is what
   sets `OrderVersion.kitchen_print_confirmed_at` and gates `wirksam`.
-- **Reprint** — a new append-only print attempt for the same OrderVersion. It
-  never overwrites or deletes an older attempt.
+- **Reprint** — a new row in the append-only attempt history with additive
+  immutable facts for the same OrderVersion. It never deletes an older
+  attempt; a still-live prior row only receives its immutable supersession
+  fact.
 - **Agent unavailable** — the Core API is reachable but has not received a
   timely heartbeat from the kitchen print agent.
 - **Lenovo/Core unavailable** — the external Office observer cannot reach the
@@ -224,7 +227,7 @@ The following terms are fixed and must not be conflated:
 
 ## 5. Target data model
 
-### 5.1 New append-only `KitchenPrintJob`
+### 5.1 New `KitchenPrintJob`: append-only attempt history with additive immutable facts
 
 Add a dedicated Core record rather than more status fields on `OrderVersion`:
 

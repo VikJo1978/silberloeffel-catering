@@ -12,6 +12,7 @@ _ROOT_DOCS = (
     "SECURITY.md",
     "WORKLOG.md",
 )
+_ACTIVE_ROOT_PACKS = {"PHASE_3_PRINT_ACK_ATTENTION_PACK_V1.md"}
 _MARKDOWN_LINK = re.compile(r"\[[^]]*]\(([^)]+)\)")
 
 
@@ -38,7 +39,7 @@ def test_maintained_documentation_has_no_broken_local_links() -> None:
 
 
 def test_historical_packs_live_in_the_archive() -> None:
-    assert list(_ROOT.glob("*_PACK_V1.md")) == []
+    assert {path.name for path in _ROOT.glob("*_PACK_V1.md")} == _ACTIVE_ROOT_PACKS
     assert (_ROOT / "docs/archive/packs/README.md").is_file()
     assert len(list((_ROOT / "docs/archive/packs").glob("*_PACK_V1.md"))) >= 20
 
