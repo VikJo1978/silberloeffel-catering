@@ -18,6 +18,7 @@ needed.
 | Integration | [Kiosk order feed API](api/kiosk-order-feed.md) | Per-date courier feed contract |
 | Integration | [Core Office API](api/core-office-api.md) | Office panel commands and reads (Phase 1, dormant) |
 | Integration | [Kiosk pickup signal API](api/kiosk-pickup-signal.md) | Open equipment-return feed and kiosk cache |
+| Design | [Office Panel UI v2 implementation pack](proposals/OFFICE_PANEL_UI_V2_IMPLEMENTATION_PACK_V1.md) | Presentation-only migration plan and invariants |
 | Users | [Office panel guide](user/office-panel.md) | Daily office workflow and gates |
 | Decisions | [Decision register](decisions/README.md) | Durable architectural decisions |
 | Releases | [Changelog](../CHANGELOG.md) | User-visible and operational changes |
