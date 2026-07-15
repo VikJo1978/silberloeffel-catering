@@ -276,6 +276,8 @@ def make_office_panel_handler(
                 self._html(panel.render_angebote(context=context))
             elif parts == ["kontakte"]:
                 self._html(panel.render_kontakte(context=context))
+            elif parts == ["email"]:
+                self._html(panel.render_email(context=context))
             elif parts == ["auftraege"]:
                 search_query = parse_qs(parsed.query).get("q", [""])[0]
                 self._html(panel.render_auftraege(search_query, context=context))
@@ -304,6 +306,9 @@ def make_office_panel_handler(
                 self._html(page) if page else self.send_error(404)
             elif len(parts) == 2 and parts[0] == "kontakt":
                 page = panel.render_kontakt(unquote(parts[1]), context=context)
+                self._html(page) if page else self.send_error(404)
+            elif len(parts) == 2 and parts[0] == "email":
+                page = panel.render_email_detail(parts[1], context=context)
                 self._html(page) if page else self.send_error(404)
             elif len(parts) == 3 and parts[0] == "order" and parts[2] == "print":
                 self._print_sheet(parts[1], parsed.query)

@@ -58,6 +58,9 @@ from catering_system.services.wochenuebersicht_service import WochenuebersichtSe
 from catering_system.ui import office_api_views as api_views
 from catering_system.domain.work_center import WorkCenterSnapshot
 from catering_system.services.contact_projection_service import ContactProjectionService
+from catering_system.services.email_intake_projection_service import (
+    EmailIntakeProjectionService,
+)
 from catering_system.services.work_center_service import WorkCenterService
 from catering_system.ui.office_panel_dashboard import (
     WorkCenterDashboardUi,
@@ -65,6 +68,8 @@ from catering_system.ui.office_panel_dashboard import (
 )
 from catering_system.ui.office_panel_contact_detail import render_kontakt_detail
 from catering_system.ui.office_panel_contacts_list import render_kontakte_list
+from catering_system.ui.office_panel_email_detail import render_email_detail
+from catering_system.ui.office_panel_emails_list import render_email_list
 from catering_system.ui.office_panel_offer_detail import render_offer_detail
 from catering_system.ui.office_panel_offers_list import render_angebote_list
 from catering_system.ui.office_panel_inquiry_detail import (
@@ -404,6 +409,41 @@ class OfficePanel:
                 today=api_views.berlin_today(),
             )
         return render_kontakt_detail(detail, context=context)
+
+    def _email_list_rows(self) -> list[dict[str, object]]:
+        if self._remote is not None:
+            body = self._remote.list_emails()
+            return cast(list[dict[str, object]], body["emails"])
+        service = EmailIntakeProjectionService(
+            self._inquiries,
+            self._offers,
+            self._orders,
+        )
+        return api_views.email_list_view(service.list_emails())
+
+    def render_email(
+        self, *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
+    ) -> str:
+        return render_email_list(self._email_list_rows(), context=context)
+
+    def render_email_detail(
+        self, inquiry_id: str, *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
+    ) -> str | None:
+        if self._remote is not None:
+            detail = self._remote.email_detail(inquiry_id)
+            if detail is None:
+                return None
+        else:
+            service = EmailIntakeProjectionService(
+                self._inquiries,
+                self._offers,
+                self._orders,
+            )
+            projection = service.email_detail(inquiry_id)
+            if projection is None:
+                return None
+            detail = api_views.email_detail_view(projection)
+        return render_email_detail(detail, context=context)
 
     def begin_request(self, form: dict[str, str] | None = None) -> None:
         """No-op in direct mode. In remote mode, resets the RemoteCoreClient's

@@ -127,6 +127,7 @@ def _page(
             _nav_link("/anfragen", "Anfragen", "doc", "inquiries", active_section),
             _nav_link("/angebote", "Angebote", "doc", "offers", active_section),
             _nav_link("/kontakte", "Kontakte", "users", "contacts", active_section),
+            _nav_link("/email", "E-Mail", "doc", "email", active_section),
             '<div class="office-nav-label">Betrieb</div>',
             _nav_link("/auftraege", "Aufträge", "briefcase", "orders", active_section),
             _nav_link(

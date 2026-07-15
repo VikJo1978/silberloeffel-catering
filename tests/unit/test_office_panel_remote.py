@@ -528,6 +528,47 @@ def test_kontakte_parity_direct_vs_remote(parity_world) -> None:
     assert "Kontakte" in d_html
 
 
+def test_email_parity_direct_vs_remote(tmp_path: Path) -> None:
+    db = tmp_path / "email-list.db"
+    _seed(db)
+    from catering_system.repositories.sqlite_inquiry_repository import (
+        SQLiteInquiryRepository,
+    )
+    from catering_system.services.inquiry_service import InquiryService
+
+    inquiry_repo = SQLiteInquiryRepository(db)
+    InquiryService(inquiry_repo).create_inquiry(
+        event_date=date(2026, 9, 1),
+        inquiry_source="email",
+        crm_stage="Neue Anfrage",
+        customer_linkage={},
+        time_window_text="Wir planen ein Sommerfest.",
+        location_text="Catering Anfrage",
+        guest_count_estimate=40,
+        planning_mode="caterer_suggestion",
+        call_verification_required=True,
+        call_verification_status="pending",
+        intake_message="E-Mail: parity-mail@example.invalid\n",
+    )
+    inquiry_repo.close()
+
+    direct_url, direct_server = _start_direct_panel(db)
+    api_url, api_server = _start_api_server(db)
+    remote = RemoteCoreClient(api_url, _API_TOKEN)
+    remote_url, remote_server = _start_remote_panel(remote)
+    try:
+        d_status, d_html = _get(f"{direct_url}/email")
+        r_status, r_html = _get(f"{remote_url}/email")
+        assert d_status == r_status == 200
+        _assert_same_modulo_remote_fields(d_html, r_html)
+        assert "Catering Anfrage" in d_html
+        assert "parity-mail@example.invalid" in d_html
+    finally:
+        for server in (direct_server, remote_server, api_server):
+            server.shutdown()
+            server.server_close()
+
+
 def test_kontakt_detail_parity_direct_vs_remote(tmp_path: Path) -> None:
     db = tmp_path / "kontakt-detail.db"
     ids = _seed(db)

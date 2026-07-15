@@ -1039,6 +1039,77 @@ class RemoteCoreClient:
             _optional_datetime(row["cancelled_at"])
         return body
 
+    def list_emails(self) -> dict[str, object]:
+        body = self.get("/office/v1/emails")
+        _exact(body, {"emails"})
+        for raw in _list(body["emails"]):
+            row = _dict(raw)
+            _exact(
+                row,
+                {
+                    "email_id",
+                    "inquiry_id",
+                    "contact_key",
+                    "sender_email",
+                    "subject",
+                    "preview",
+                    "received_at",
+                    "external_ref",
+                    "linked_offer_id",
+                    "linked_order_ids",
+                },
+            )
+            inquiry_id = _uuid4(row["inquiry_id"])
+            if _uuid4(row["email_id"]) != inquiry_id:
+                _bad_response()
+            _str(row["contact_key"])
+            _optional_str(row["sender_email"])
+            _str(row["subject"])
+            _str(row["preview"])
+            _datetime(row["received_at"])
+            _optional_str(row["external_ref"])
+            _optional_uuid4(row["linked_offer_id"])
+            for order_id in _list(row["linked_order_ids"]):
+                _uuid4(order_id)
+        return body
+
+    def email_detail(self, inquiry_id: str) -> dict[str, object] | None:
+        try:
+            body = self.get(f"/office/v1/emails/{quote(inquiry_id, safe='')}")
+        except RemoteCoreError as exc:
+            if exc.status == 404:
+                return None
+            raise
+        _exact(
+            body,
+            {
+                "email_id",
+                "inquiry_id",
+                "contact_key",
+                "sender_email",
+                "subject",
+                "preview",
+                "received_at",
+                "external_ref",
+                "linked_offer_id",
+                "linked_order_ids",
+            },
+        )
+        if _uuid4(body["inquiry_id"]) != inquiry_id:
+            _bad_response()
+        if _uuid4(body["email_id"]) != inquiry_id:
+            _bad_response()
+        _str(body["contact_key"])
+        _optional_str(body["sender_email"])
+        _str(body["subject"])
+        _str(body["preview"])
+        _datetime(body["received_at"])
+        _optional_str(body["external_ref"])
+        _optional_uuid4(body["linked_offer_id"])
+        for order_id in _list(body["linked_order_ids"]):
+            _uuid4(order_id)
+        return body
+
     def _validate_page(
         self,
         page: dict[str, object],

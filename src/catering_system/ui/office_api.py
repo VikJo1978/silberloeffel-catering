@@ -81,6 +81,9 @@ from catering_system.services.order_service import OrderService
 from catering_system.services.payment_reminder_service import PaymentReminderService
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
 from catering_system.services.contact_projection_service import ContactProjectionService
+from catering_system.services.email_intake_projection_service import (
+    EmailIntakeProjectionService,
+)
 from catering_system.services.work_center_service import WorkCenterService
 from catering_system.ui import office_api_views as views
 
@@ -298,6 +301,11 @@ class OfficeApi:
             self.orders,
             today=views.berlin_today,
         )
+        self.email_intake_projection_service = EmailIntakeProjectionService(
+            self.inquiries,
+            self.offers,
+            self.orders,
+        )
 
     # -- reads -----------------------------------------------------------
 
@@ -401,6 +409,19 @@ class OfficeApi:
             list(detail.orders),
             today=views.berlin_today(),
         )
+
+    def list_emails(self) -> dict[str, object]:
+        return {
+            "emails": views.email_list_view(
+                self.email_intake_projection_service.list_emails()
+            )
+        }
+
+    def email_detail(self, inquiry_id: str) -> dict[str, object]:
+        projection = self.email_intake_projection_service.email_detail(inquiry_id)
+        if projection is None:
+            raise ApiError(404, "not_found")
+        return views.email_detail_view(projection)
 
     def list_inquiries(self, q: str, limit: int, offset: int) -> dict[str, object]:
         orders_by_inquiry: dict[str, list[Order]] = {}
@@ -1124,6 +1145,16 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         {"POST": "prepare-offer"},
     ),
     (
+        re.compile(r"^/office/v1/emails$"),
+        "/office/v1/emails",
+        {"GET": "list_emails"},
+    ),
+    (
+        re.compile(r"^/office/v1/emails/(?P<inquiry_id>[^/]+)$"),
+        "/office/v1/emails/{inquiry_id}",
+        {"GET": "email_detail"},
+    ),
+    (
         re.compile(r"^/office/v1/contacts$"),
         "/office/v1/contacts",
         {"GET": "list_contacts"},
@@ -1428,6 +1459,12 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             elif kind == "contact_detail":
                 self._query(set())
                 self._respond(200, api.contact_detail(path_ids["contact_key"]))
+            elif kind == "list_emails":
+                self._query(set())
+                self._respond(200, api.list_emails())
+            elif kind == "email_detail":
+                self._query(set())
+                self._respond(200, api.email_detail(path_ids["inquiry_id"]))
             elif kind == "offer_detail":
                 self._query(set())
                 self._respond(200, api.offer_detail(path_ids["offer_id"]))

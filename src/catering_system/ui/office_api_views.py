@@ -14,6 +14,7 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from catering_system.domain.contact_projection import ContactProjection
+from catering_system.domain.email_intake_projection import EmailIntakeProjection
 from catering_system.domain.inquiry import (
     Inquiry,
     InquiryOfferProjection,
@@ -537,3 +538,26 @@ def contact_detail_view(
     detail["offers"] = offer_rows
     detail["orders"] = order_rows
     return detail
+
+
+def email_list_row(projection: EmailIntakeProjection) -> dict[str, object]:
+    return {
+        "email_id": projection.email_id,
+        "inquiry_id": projection.inquiry_id,
+        "contact_key": projection.contact_key,
+        "sender_email": projection.sender_email,
+        "subject": projection.subject,
+        "preview": projection.preview,
+        "received_at": projection.received_at.isoformat(),
+        "external_ref": projection.external_ref,
+        "linked_offer_id": projection.linked_offer_id,
+        "linked_order_ids": list(projection.linked_order_ids),
+    }
+
+
+def email_list_view(projections: list[EmailIntakeProjection]) -> list[dict[str, object]]:
+    return [email_list_row(projection) for projection in projections]
+
+
+def email_detail_view(projection: EmailIntakeProjection) -> dict[str, object]:
+    return email_list_row(projection)

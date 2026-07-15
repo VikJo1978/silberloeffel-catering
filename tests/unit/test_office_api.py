@@ -477,6 +477,71 @@ def test_contact_detail_not_found(api) -> None:
     assert body["error"] == "not_found"
 
 
+def test_list_emails_schema(api) -> None:
+    base, _ids, _db = api
+    status, body, _h = _get(f"{base}/office/v1/emails")
+    assert status == 200
+    assert body["emails"] == []
+
+
+def test_list_emails_email_source_only(api, tmp_path: Path) -> None:
+    base, ids, db = api
+    from catering_system.repositories.sqlite_inquiry_repository import (
+        SQLiteInquiryRepository,
+    )
+    from catering_system.services.inquiry_service import InquiryService
+
+    inquiry_repo = SQLiteInquiryRepository(db)
+    email_inquiry = InquiryService(inquiry_repo).create_inquiry(
+        event_date=date(2026, 9, 1),
+        inquiry_source="email",
+        crm_stage="Neue Anfrage",
+        customer_linkage={},
+        time_window_text="abends",
+        location_text="Sommerfest",
+        guest_count_estimate=40,
+        planning_mode="caterer_suggestion",
+        call_verification_required=True,
+        call_verification_status="pending",
+        intake_message="E-Mail: mail@example.invalid\n",
+    )
+    inquiry_repo.close()
+
+    status, body, _h = _get(f"{base}/office/v1/emails")
+    assert status == 200
+    assert len(body["emails"]) == 1
+    row = body["emails"][0]
+    assert set(row) == {
+        "email_id",
+        "inquiry_id",
+        "contact_key",
+        "sender_email",
+        "subject",
+        "preview",
+        "received_at",
+        "external_ref",
+        "linked_offer_id",
+        "linked_order_ids",
+    }
+    assert row["email_id"] == email_inquiry.inquiry_id
+    assert row["inquiry_id"] == email_inquiry.inquiry_id
+    assert row["subject"] == "Sommerfest"
+    assert row["preview"] == "E-Mail: mail@example.invalid"
+    assert row["sender_email"] == "mail@example.invalid"
+    assert ids["inquiry_website"] not in {
+        item["inquiry_id"] for item in body["emails"]
+    }
+
+
+def test_email_detail_not_found(api) -> None:
+    base, ids, _db = api
+    status, body, _h = _get(
+        f"{base}/office/v1/emails/{ids['inquiry_convertible']}"
+    )
+    assert status == 404
+    assert body["error"] == "not_found"
+
+
 def test_inquiry_list_rows_and_search(api) -> None:
     base, ids, _db = api
     status, body, _h = _get(f"{base}/office/v1/inquiries")
