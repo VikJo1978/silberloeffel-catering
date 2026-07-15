@@ -62,6 +62,7 @@ from catering_system.ui.office_panel_dashboard import (
     WorkCenterDashboardUi,
     render_work_center_arbeitszentrale,
 )
+from catering_system.ui.office_panel_offer_detail import render_offer_detail
 from catering_system.ui.office_panel_offers_list import render_angebote_list
 from catering_system.ui.office_panel_inquiry_detail import (
     InquiryDetailFormFields,
@@ -343,6 +344,20 @@ class OfficePanel:
             titles_by_inquiry,
             context=context,
         )
+
+    def render_offer(
+        self, offer_id: str, *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
+    ) -> str | None:
+        if self._remote is not None:
+            detail = self._remote.offer_detail(offer_id)
+            if detail is None:
+                return None
+        else:
+            offer = self._offers.get(offer_id)
+            if offer is None:
+                return None
+            detail = api_views.offer_detail(offer, today=api_views.berlin_today())
+        return render_offer_detail(detail, context=context)
 
     def begin_request(self, form: dict[str, str] | None = None) -> None:
         """No-op in direct mode. In remote mode, resets the RemoteCoreClient's

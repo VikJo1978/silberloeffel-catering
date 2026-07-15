@@ -297,6 +297,9 @@ def make_office_panel_handler(
             elif len(parts) == 2 and parts[0] == "order":
                 page = panel.render_order(parts[1], context=context)
                 self._html(page) if page else self.send_error(404)
+            elif len(parts) == 2 and parts[0] == "offer":
+                page = panel.render_offer(parts[1], context=context)
+                self._html(page) if page else self.send_error(404)
             elif len(parts) == 3 and parts[0] == "order" and parts[2] == "print":
                 self._print_sheet(parts[1], parsed.query)
             else:

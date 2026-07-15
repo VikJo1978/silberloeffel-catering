@@ -36,7 +36,7 @@ def render_angebote_list(
             f"<td>{_e(offer_state_label(state))}</td>"  # type: ignore[arg-type]
             f"<td>{_e(title)}</td>"
             f"<td>{_e(_short_date(str(row['event_date'])))}</td>"
-            f'<td><a href="/inquiry/{_e(inquiry_id)}">Öffnen</a></td>'
+            f'<td><a href="/offer/{_e(str(row["offer_id"]))}">Öffnen</a></td>'
             "</tr>"
         )
     body = (

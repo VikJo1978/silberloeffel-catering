@@ -20,7 +20,7 @@ from catering_system.domain.inquiry import (
     derive_inquiry_offer_projection,
     derive_inquiry_office_state,
 )
-from catering_system.domain.offer import Offer, OfferState
+from catering_system.domain.offer import Offer, OfferState, derive_offer_state
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_payment_reminder import PaymentReminderView
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
@@ -92,6 +92,91 @@ def offer_list_view(
         rows.append(offer_list_row(offer, inquiry, today=operating_today))
     rows.sort(key=lambda row: (str(row["event_date"]), str(row["offer_id"])))
     return rows
+
+
+def _surface_sent_evidence(
+    offer: Offer, offer_version_id: str
+) -> dict[str, object] | None:
+    for item in offer.sent_evidence:
+        if item.offer_version_id == offer_version_id:
+            return {
+                "sent_at": item.sent_at.isoformat(),
+                "channel": item.channel,
+            }
+    return None
+
+
+def _acceptance_shape(acceptance: object | None) -> dict[str, object] | None:
+    if acceptance is None:
+        return None
+    from catering_system.domain.offer import AcceptanceEvidence
+
+    if not isinstance(acceptance, AcceptanceEvidence):
+        return None
+    return {
+        "accepted_at": acceptance.accepted_at.isoformat(),
+        "channel": acceptance.channel,
+        "accepted_variant_id": acceptance.accepted_variant_id,
+    }
+
+
+def _offer_history(offer: Offer) -> list[dict[str, object]]:
+    entries: list[tuple[datetime, str]] = []
+    for version in sorted(offer.versions, key=lambda item: item.version_number):
+        label = (
+            "Angebot erstellt"
+            if version.version_number == 1
+            else "Angebot vorbereitet"
+        )
+        entries.append((version.created_at, label))
+    for sent in offer.sent_evidence:
+        entries.append((sent.sent_at, "Angebot gesendet"))
+    if offer.acceptance_evidence is not None:
+        entries.append(
+            (offer.acceptance_evidence.accepted_at, "Angebot angenommen")
+        )
+    if offer.conversion_link is not None:
+        entries.append(
+            (offer.conversion_link.created_at, "In Auftrag umgewandelt")
+        )
+    entries.sort(key=lambda item: item[0])
+    return [{"at": at.isoformat(), "label": label} for at, label in entries]
+
+
+def offer_detail(offer: Offer, *, today: date | None = None) -> dict[str, object]:
+    operating_today = today or berlin_today()
+    projection = derive_inquiry_offer_projection(offer, today=operating_today)
+    versions = sorted(offer.versions, key=lambda item: item.version_number)
+    detail: dict[str, object] = {
+        "offer_id": offer.offer_id,
+        "inquiry_id": offer.source_inquiry_id,
+        "commercial_state": projection.commercial_state,
+        "versions": [
+            {
+                "version": version.version_number,
+                "state": derive_offer_state(
+                    offer, version.offer_version_id, today=operating_today
+                ),
+                "event_date": version.event_date.isoformat(),
+                "valid_until": version.valid_until.isoformat(),
+                "time_window_text": version.time_window_text,
+                "location_text": version.location_text,
+                "guest_count": version.guest_count,
+                "planning_mode": version.planning_mode,
+                "variants": [
+                    {"variant_id": variant.variant_id, "name": variant.label}
+                    for variant in version.variants
+                ],
+            }
+            for version in versions
+        ],
+        "sent_evidence": _surface_sent_evidence(offer, projection.offer_version_id),
+        "acceptance": _acceptance_shape(offer.acceptance_evidence),
+        "history": _offer_history(offer),
+    }
+    if offer.conversion_link is not None:
+        detail["order_id"] = offer.conversion_link.order_id
+    return detail
 
 
 # --- shared shapes -----------------------------------------------------------

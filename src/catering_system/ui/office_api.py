@@ -370,6 +370,12 @@ class OfficeApi:
             )
         }
 
+    def offer_detail(self, offer_id: str) -> dict[str, object]:
+        offer = self.offers.get(offer_id)
+        if offer is None:
+            raise ApiError(404, "not_found")
+        return views.offer_detail(offer, today=views.berlin_today())
+
     def list_inquiries(self, q: str, limit: int, offset: int) -> dict[str, object]:
         orders_by_inquiry: dict[str, list[Order]] = {}
         for order in self.orders.list_orders():
@@ -1097,6 +1103,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         {"GET": "list_offers"},
     ),
     (
+        re.compile(r"^/office/v1/offers/(?P<offer_id>[^/]+)$"),
+        "/office/v1/offers/{offer_id}",
+        {"GET": "offer_detail"},
+    ),
+    (
         re.compile(
             r"^/office/v1/offers/(?P<offer_id>[^/]+)/versions/"
             r"(?P<version_id>[^/]+)/mark-sent$"
@@ -1375,6 +1386,9 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             elif kind == "list_offers":
                 self._query(set())
                 self._respond(200, api.list_offers())
+            elif kind == "offer_detail":
+                self._query(set())
+                self._respond(200, api.offer_detail(path_ids["offer_id"]))
             elif kind == "inquiry_detail":
                 self._query(set())
                 self._respond(200, api.inquiry_detail(path_ids["id"]))

@@ -509,6 +509,73 @@ def test_angebote_parity_direct_vs_remote(parity_world) -> None:
     assert "Keine Angebote vorhanden" in d_html
 
 
+def test_offer_detail_parity_direct_vs_remote(tmp_path: Path) -> None:
+    db = tmp_path / "offer-detail.db"
+    ids = _seed(db)
+    inquiry_id = ids["inquiry_cancelled_order"]
+    api_url, api_server = _start_api_server(db)
+    try:
+        status, body = _api_post(
+            f"{api_url}/office/v1/inquiries/{inquiry_id}/prepare-offer",
+            args={"snapshot": _valid_offer_snapshot(inquiry_id=inquiry_id)},
+        )
+        assert status == 201
+        offer_id = body["offer_id"]
+        version_id = body["offer_version_id"]
+        mark_url = (
+            f"{api_url}/office/v1/offers/{offer_id}/versions/{version_id}/mark-sent"
+        )
+        assert _api_post(
+            mark_url,
+            args={
+                "sent_at": "2026-07-15T10:00:00+00:00",
+                "channel": "email",
+                "recipient_reference": "customer@example.invalid",
+                "evidence_reference": "mail-123",
+            },
+        )[0] == 200
+
+        direct_url, direct_server = _start_direct_panel(db)
+        remote = RemoteCoreClient(api_url, _API_TOKEN)
+        remote_url, remote_server = _start_remote_panel(remote)
+        try:
+            d_status, d_html = _get(f"{direct_url}/offer/{offer_id}")
+            r_status, r_html = _get(f"{remote_url}/offer/{offer_id}")
+            assert d_status == r_status == 200
+            _assert_same_modulo_remote_fields(d_html, r_html)
+            assert "Gesendet" in d_html
+            assert "Angebotsvarianten" in d_html
+            assert "Angebot gesendet" in d_html
+            assert f'href="/inquiry/{inquiry_id}"' in d_html
+            assert 'name="_command_id"' not in d_html
+            assert 'name="_command_id"' not in r_html
+        finally:
+            for server in (direct_server, remote_server):
+                server.shutdown()
+                server.server_close()
+    finally:
+        api_server.shutdown()
+        api_server.server_close()
+
+
+def test_offer_detail_not_found_parity(tmp_path: Path) -> None:
+    db = tmp_path / "offer-missing.db"
+    _seed(db)
+    missing = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    direct_url, direct_server = _start_direct_panel(db)
+    api_url, api_server = _start_api_server(db)
+    remote = RemoteCoreClient(api_url, _API_TOKEN)
+    remote_url, remote_server = _start_remote_panel(remote)
+    try:
+        d_status, _d_html = _get(f"{direct_url}/offer/{missing}")
+        r_status, _r_html = _get(f"{remote_url}/offer/{missing}")
+        assert d_status == r_status == 404
+    finally:
+        for server in (direct_server, remote_server, api_server):
+            server.shutdown()
+            server.server_close()
+
+
 def test_order_detail_parity_direct_vs_remote(parity_world) -> None:
     direct_url, remote_url, ids = parity_world
     for key in ("order_ready", "order_unprinted", "order_cancelled"):

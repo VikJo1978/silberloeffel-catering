@@ -830,6 +830,93 @@ class RemoteCoreClient:
             _date(row["valid_until"])
         return body
 
+    def offer_detail(self, offer_id: str) -> dict[str, object] | None:
+        try:
+            body = self.get(f"/office/v1/offers/{quote(offer_id, safe='')}")
+        except RemoteCoreError as exc:
+            if exc.status == 404:
+                return None
+            raise
+        allowed_states = {
+            "Prepared",
+            "Sent",
+            "Accepted",
+            "Converted",
+            "Expired",
+            "Withdrawn",
+            "Rejected",
+            "Superseded",
+        }
+        _exact(
+            body,
+            {
+                "offer_id",
+                "inquiry_id",
+                "commercial_state",
+                "versions",
+                "sent_evidence",
+                "acceptance",
+                "history",
+            },
+        )
+        _uuid4(body["offer_id"])
+        _uuid4(body["inquiry_id"])
+        state = _str(body["commercial_state"])
+        if state not in allowed_states:
+            _bad_response()
+        if "order_id" in body:
+            _uuid4(body["order_id"])
+        sent = body["sent_evidence"]
+        if sent is not None:
+            sent_row = _dict(sent)
+            _exact(sent_row, {"sent_at", "channel"})
+            _datetime(sent_row["sent_at"])
+            _str(sent_row["channel"])
+        acceptance = body["acceptance"]
+        if acceptance is not None:
+            acc_row = _dict(acceptance)
+            _exact(acc_row, {"accepted_at", "channel", "accepted_variant_id"})
+            _datetime(acc_row["accepted_at"])
+            _str(acc_row["channel"])
+            _uuid4(acc_row["accepted_variant_id"])
+        for raw in _list(body["versions"]):
+            version = _dict(raw)
+            _exact(
+                version,
+                {
+                    "version",
+                    "state",
+                    "event_date",
+                    "valid_until",
+                    "time_window_text",
+                    "location_text",
+                    "guest_count",
+                    "planning_mode",
+                    "variants",
+                },
+            )
+            version_state = _str(version["state"])
+            if version_state not in allowed_states:
+                _bad_response()
+            _date(version["event_date"])
+            _date(version["valid_until"])
+            _str(version["time_window_text"])
+            _str(version["location_text"])
+            if version["guest_count"] is not None:
+                _nonnegative_int(version["guest_count"])
+            _str(version["planning_mode"])
+            for variant_raw in _list(version["variants"]):
+                variant = _dict(variant_raw)
+                _exact(variant, {"variant_id", "name"})
+                _uuid4(variant["variant_id"])
+                _str(variant["name"])
+        for raw in _list(body["history"]):
+            entry = _dict(raw)
+            _exact(entry, {"at", "label"})
+            _datetime(entry["at"])
+            _str(entry["label"])
+        return body
+
     def _validate_page(
         self,
         page: dict[str, object],

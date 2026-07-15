@@ -360,6 +360,61 @@ def test_list_offers_schema_and_states(api) -> None:
     assert row["state"] == "Sent"
 
 
+def test_offer_detail_not_found(api) -> None:
+    base, _ids, _db = api
+    missing = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    status, body, _h = _get(f"{base}/office/v1/offers/{missing}")
+    assert status == 404
+    assert body["error"] == "not_found"
+
+
+def test_offer_detail_schema_prepared(api) -> None:
+    base, _ids, _db = api
+    offer_id, _version_id = _prepare_offer(api)
+    status, body, _h = _get(f"{base}/office/v1/offers/{offer_id}")
+    assert status == 200
+    assert set(body) == {
+        "offer_id",
+        "inquiry_id",
+        "commercial_state",
+        "versions",
+        "sent_evidence",
+        "acceptance",
+        "history",
+    }
+    assert body["offer_id"] == offer_id
+    assert body["commercial_state"] == "Prepared"
+    assert body["sent_evidence"] is None
+    assert body["acceptance"] is None
+    version = body["versions"][0]
+    assert set(version) == {
+        "version",
+        "state",
+        "event_date",
+        "valid_until",
+        "time_window_text",
+        "location_text",
+        "guest_count",
+        "planning_mode",
+        "variants",
+    }
+    assert version["variants"][0]["name"] == "Variante A"
+    assert body["history"][0]["label"] == "Angebot erstellt"
+
+
+def test_offer_detail_schema_sent(api) -> None:
+    base, _ids, _db = api
+    offer_id, version_id = _prepare_offer(api)
+    assert _post(_mark_sent_url(base, offer_id, version_id), args=_MARK_SENT_ARGS)[0] == 200
+    status, body, _h = _get(f"{base}/office/v1/offers/{offer_id}")
+    assert status == 200
+    assert body["commercial_state"] == "Sent"
+    assert body["sent_evidence"] is not None
+    assert body["sent_evidence"]["channel"] == "email"
+    labels = [entry["label"] for entry in body["history"]]
+    assert "Angebot gesendet" in labels
+
+
 def test_inquiry_list_rows_and_search(api) -> None:
     base, ids, _db = api
     status, body, _h = _get(f"{base}/office/v1/inquiries")
