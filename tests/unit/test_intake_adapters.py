@@ -64,8 +64,101 @@ def test_email_happy_path_uses_create_inquiry_and_source() -> None:
         spy.assert_called_once()
     assert q.inquiry_source == "email"
     assert "abends" in q.time_window_text
+    assert q.location_text == "Firma X"
+    assert q.intake_subject == "Firma X"
+    assert q.intake_message == "abends"
     assert q.call_verification_required is True
     assert q.call_verification_status == "pending"
+
+
+def test_email_maps_subject_to_intake_subject() -> None:
+    repo = InMemoryInquiryRepository()
+    svc = InquiryService(repo)
+    q = intake_from_email(
+        svc,
+        {"event_date": _D, "subject": "Catering Anfrage Sommerfest"},
+    )
+    assert q.intake_subject == "Catering Anfrage Sommerfest"
+    assert q.location_text == "Catering Anfrage Sommerfest"
+
+
+def test_email_maps_body_text_to_intake_message() -> None:
+    repo = InMemoryInquiryRepository()
+    svc = InquiryService(repo)
+    q = intake_from_email(
+        svc,
+        {"event_date": _D, "body_text": "Wir planen ein Event für 80 Personen."},
+    )
+    assert q.intake_message == "Wir planen ein Event für 80 Personen."
+    assert q.time_window_text == "Wir planen ein Event für 80 Personen."
+
+
+def test_email_maps_from_to_labelled_sender() -> None:
+    repo = InMemoryInquiryRepository()
+    svc = InquiryService(repo)
+    q = intake_from_email(
+        svc,
+        {"event_date": _D, "from": "sender@example.invalid"},
+    )
+    assert q.intake_message == "E-Mail: sender@example.invalid"
+
+
+def test_email_intake_context_combined() -> None:
+    repo = InMemoryInquiryRepository()
+    svc = InquiryService(repo)
+    q = intake_from_email(
+        svc,
+        {
+            "event_date": _D,
+            "subject": "Anfrage Firmenfeier",
+            "body_text": "Bitte um Rückruf wegen Menüauswahl.",
+            "from": "office@example.invalid",
+        },
+    )
+    assert q.intake_subject == "Anfrage Firmenfeier"
+    assert q.intake_message == (
+        "E-Mail: office@example.invalid\n"
+        "Bitte um Rückruf wegen Menüauswahl."
+    )
+    assert q.location_text == "Anfrage Firmenfeier"
+    assert q.time_window_text == "Bitte um Rückruf wegen Menüauswahl."
+
+
+def test_email_explicit_location_and_time_window_fallbacks_preserved() -> None:
+    repo = InMemoryInquiryRepository()
+    svc = InquiryService(repo)
+    q = intake_from_email(
+        svc,
+        {
+            "event_date": _D,
+            "subject": "Betreff",
+            "body_text": "Nachricht",
+            "location_text": "Expliziter Ort",
+            "time_window_text": "Explizites Fenster",
+        },
+    )
+    assert q.location_text == "Expliziter Ort"
+    assert q.time_window_text == "Explizites Fenster"
+    assert q.intake_subject == "Betreff"
+    assert q.intake_message == "Nachricht"
+
+
+def test_email_non_string_from_rejected() -> None:
+    repo = InMemoryInquiryRepository()
+    svc = InquiryService(repo)
+    with pytest.raises(TypeError, match="from"):
+        intake_from_email(svc, {"event_date": _D, "from": ["not", "a", "string"]})
+
+
+def test_email_absent_subject_body_sender_safe() -> None:
+    repo = InMemoryInquiryRepository()
+    svc = InquiryService(repo)
+    q = intake_from_email(svc, {"event_date": _D})
+    assert q.inquiry_source == "email"
+    assert q.intake_subject is None
+    assert q.intake_message is None
+    assert q.location_text == ""
+    assert q.time_window_text == ""
 
 
 def test_phone_happy_path_uses_create_inquiry_and_source() -> None:

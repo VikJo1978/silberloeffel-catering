@@ -11,6 +11,9 @@ from catering_system.services.inquiry_service import InquiryService
 
 _log = logging.getLogger(__name__)
 
+_MAX_TEXT_LEN = 500
+_MAX_INTAKE_MESSAGE_LEN = 5000
+
 
 def intake_from_email(
     service: InquiryService,
@@ -24,6 +27,33 @@ def intake_from_email(
         raise
 
 
+def _optional_text(raw: Mapping[str, Any], key: str) -> str:
+    value = raw.get(key)
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise TypeError(f"email intake: {key} must be str or absent")
+    return value
+
+
+def _email_intake_message(raw: Mapping[str, Any]) -> str:
+    lines: list[str] = []
+    sender = _optional_text(raw, "from").strip()
+    if sender:
+        lines.append(f"E-Mail: {sender}")
+    body = _optional_text(raw, "body_text").strip()
+    if body:
+        lines.append(body[:_MAX_INTAKE_MESSAGE_LEN])
+    return "\n".join(lines)
+
+
+def _email_intake_subject(raw: Mapping[str, Any]) -> str:
+    subject = raw.get("subject")
+    if subject is None:
+        return ""
+    return str(subject)[:_MAX_TEXT_LEN]
+
+
 def _intake_from_email_body(
     service: InquiryService,
     raw: Mapping[str, Any],
@@ -33,14 +63,14 @@ def _intake_from_email_body(
     )
     if raw.get("time_window_text") is None:
         body = raw.get("body_text")
-        time_window_text = "" if body is None else str(body)[:500]
+        time_window_text = "" if body is None else str(body)[:_MAX_TEXT_LEN]
     elif isinstance(raw.get("time_window_text"), str):
         time_window_text = raw["time_window_text"]
     else:
         raise TypeError("email intake: time_window_text must be str or absent")
     if raw.get("location_text") is None:
         subject = raw.get("subject")
-        location_text = "" if subject is None else str(subject)[:500]
+        location_text = "" if subject is None else str(subject)[:_MAX_TEXT_LEN]
     elif isinstance(raw.get("location_text"), str):
         location_text = raw["location_text"]
     else:
@@ -49,5 +79,7 @@ def _intake_from_email_body(
         inquiry_source="email",
         time_window_text=time_window_text,
         location_text=location_text,
+        intake_subject=_email_intake_subject(raw),
+        intake_message=_email_intake_message(raw),
         **common,
     )
