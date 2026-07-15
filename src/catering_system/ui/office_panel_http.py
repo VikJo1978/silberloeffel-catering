@@ -272,6 +272,8 @@ def make_office_panel_handler(
             if parts == ["anfragen"]:
                 search_query = parse_qs(parsed.query).get("q", [""])[0]
                 self._html(panel.render_anfragen(search_query, context=context))
+            elif parts == ["angebote"]:
+                self._html(panel.render_angebote(context=context))
             elif parts == ["auftraege"]:
                 search_query = parse_qs(parsed.query).get("q", [""])[0]
                 self._html(panel.render_auftraege(search_query, context=context))

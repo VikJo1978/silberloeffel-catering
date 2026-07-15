@@ -56,9 +56,11 @@ from catering_system.services.payment_reminder_service import PaymentReminderSer
 from catering_system.services.progression_service import ProgressionService
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
 from catering_system.ui import office_api_views as api_views
+from catering_system.domain.work_center import WorkCenterSnapshot
+from catering_system.services.work_center_service import WorkCenterService
 from catering_system.ui.office_panel_dashboard import (
-    DashboardUi,
-    render_arbeitszentrale,
+    WorkCenterDashboardUi,
+    render_work_center_arbeitszentrale,
 )
 from catering_system.ui.office_panel_inquiry_detail import (
     InquiryDetailFormFields,
@@ -264,6 +266,63 @@ class OfficePanel:
         # opening it performs no Core write.
         self.configurator_url = normalize_configurator_url(configurator_url)
 
+    @staticmethod
+    def _missed_calls_open(
+        rueckruf_items: list[dict] | None, rueckruf_error: str | None
+    ) -> int:
+        if rueckruf_error or rueckruf_items is None:
+            return 0
+        return len(rueckruf_items)
+
+    def build_work_center_snapshot(self, missed_calls_open: int) -> WorkCenterSnapshot:
+        if self._remote is not None:
+            raw = self._remote.work_center()
+            return WorkCenterSnapshot(
+                rueckrufe_open=cast(int, raw["rueckrufe_open"]),
+                missed_calls_open=missed_calls_open,
+                offers_waiting=cast(int, raw["offers_waiting"]),
+                offers_accepted=cast(int, raw["offers_accepted"]),
+                upcoming_orders=cast(int, raw["upcoming_orders"]),
+                open_tasks=cast(int, raw["open_tasks"]),
+                today_calendar_entries=cast(int, raw["today_calendar_entries"]),
+            )
+        return WorkCenterService(
+            self._inquiries,
+            self._offers,
+            self._orders,
+            today=api_views.berlin_today,
+            missed_calls_open=lambda: missed_calls_open,
+        ).snapshot()
+
+    def _render_v2_arbeitszentrale(
+        self,
+        *,
+        missed_calls_open: int,
+        context: OfficePageContext,
+    ) -> str:
+        operating_today = api_views.berlin_today()
+        iso = operating_today.isocalendar()
+        week = self.wochenuebersicht.get_week_overview(iso.year, iso.week)
+        snapshot = self.build_work_center_snapshot(missed_calls_open)
+        return render_work_center_arbeitszentrale(
+            snapshot,
+            ui=WorkCenterDashboardUi(
+                context=context,
+                today=operating_today,
+                week_order_count=len(week.entries),
+            ),
+        )
+
+    def render_angebote(
+        self, *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
+    ) -> str:
+        body = (
+            '<p class="subtitle">Angebotsübersicht für den Vertrieb — folgt in Kürze.</p>'
+            "<p>Die Kennzahlen zu wartenden und angenommenen Angeboten stehen bereits "
+            'auf der <a href="/">Arbeitszentrale</a>.</p>'
+        )
+        return _page("Angebote", body, active_section="inquiries", context=context)
+
     def begin_request(self, form: dict[str, str] | None = None) -> None:
         """No-op in direct mode. In remote mode, resets the RemoteCoreClient's
         per-request read caches and stashes the submitted form (if any) so the
@@ -423,6 +482,12 @@ class OfficePanel:
         rueckruf_error: str | None = None,
         context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
     ) -> str:
+        missed_calls_open = self._missed_calls_open(rueckruf_items, rueckruf_error)
+        if self._ui_version == "v2":
+            return self._render_v2_arbeitszentrale(
+                missed_calls_open=missed_calls_open,
+                context=context,
+            )
         if self._remote is not None:
             return self._render_remote_queue(
                 self._remote.queue_view(),
@@ -491,45 +556,9 @@ class OfficePanel:
             + "</div>"
         )
 
-        operating_today = (
-            api_views.berlin_today() if self._ui_version == "v2" else date.today()
-        )
+        operating_today = date.today()
         iso = operating_today.isocalendar()
         week = self.wochenuebersicht.get_week_overview(iso.year, iso.week)
-        if self._ui_version == "v2":
-            queue_view: dict[str, object] = {
-                "attention": {
-                    "neue_anfragen": len(open_inquiries),
-                    "druck_fehlt": len(ohne_druck),
-                    "nicht_wirksam": len(nicht_wirksam),
-                    "versand_blockiert": len(blockiert),
-                    "storniert": len(storniert),
-                },
-                "week": api_views.week_view(week),
-                "neue_anfragen_top": [
-                    api_views.inquiry_top_row(inquiry, state)
-                    for inquiry, state in open_inquiries[: api_views.TOP_ROWS_CAP]
-                ],
-                "auftraege_top": [
-                    api_views.order_top_row(
-                        order,
-                        self._orders.list_order_versions(order.order_id),
-                        evaluations[order.order_id],
-                    )
-                    for order in blockiert[: api_views.TOP_ROWS_CAP]
-                ],
-            }
-            return render_arbeitszentrale(
-                queue_view,
-                ui=DashboardUi(
-                    context=context,
-                    command_fields=self._command_fields,
-                    callbacks=rueckruf_items,
-                    callback_error=rueckruf_error,
-                    kiosk_url=self.kiosk_url,
-                    today=operating_today,
-                ),
-            )
         week_rows = [
             f"<tr><td>{_e(e.event_date.isoformat())}</td><td>{_e(e.time_window_text)}</td>"
             f"<td>{_e(e.location_text)}</td>"
@@ -652,19 +681,6 @@ class OfficePanel:
         the Proxmox panel from recreating business rules or issuing an N+1
         graph of list/detail calls.
         """
-        if self._ui_version == "v2":
-            return render_arbeitszentrale(
-                view,
-                ui=DashboardUi(
-                    context=context,
-                    command_fields=self._command_fields,
-                    callbacks=rueckruf_items,
-                    callback_error=rueckruf_error,
-                    kiosk_url=self.kiosk_url,
-                    today=api_views.berlin_today(),
-                ),
-            )
-
         attention_view = cast(dict[str, int], view["attention"])
         rueckruf_card = (
             f'<a href="/rueckruf"><strong>{context.rueckruf_count}</strong> Rückrufe offen</a>'

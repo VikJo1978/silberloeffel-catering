@@ -786,6 +786,24 @@ class RemoteCoreClient:
             _next_action(row["next_action"])
         return body
 
+    def work_center(self) -> dict[str, object]:
+        body = self.get("/office/v1/work-center")
+        _exact(
+            body,
+            {
+                "rueckrufe_open",
+                "missed_calls_open",
+                "offers_waiting",
+                "offers_accepted",
+                "upcoming_orders",
+                "open_tasks",
+                "today_calendar_entries",
+            },
+        )
+        for value in body.values():
+            _nonnegative_int(value)
+        return body
+
     def _validate_page(
         self,
         page: dict[str, object],

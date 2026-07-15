@@ -567,6 +567,102 @@ svg { display: block; }
 .dashboard-callback-row strong,
 .dashboard-callback-row span { display: block; }
 .dashboard-callback-row span { color: var(--muted); font-size: 11px; }
+
+/* UI2C Arbeitszentrale — WorkCenterSnapshot cards (5A-2). */
+.wc-page { display: grid; gap: 22px; }
+.wc-page-header h1 {
+  margin: 4px 0 8px;
+  font-size: clamp(28px, 3vw, 38px);
+  line-height: 1.12;
+  letter-spacing: -.03em;
+}
+.wc-page-header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+.wc-eyebrow {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.wc-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+.wc-card {
+  display: grid;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.wc-card-static { background: #fafafa; }
+.wc-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.wc-card-head h2 {
+  margin: 0;
+  font-size: 18px;
+  line-height: 1.2;
+}
+.wc-card-mark { font-size: 18px; line-height: 1; }
+.wc-card-rule {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+.wc-card-summary {
+  margin: 0;
+  font-size: 14px;
+}
+.wc-card-summary strong { font-size: 22px; }
+.wc-card p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+}
+.wc-card-lines {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.wc-card-lines li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  font-size: 13px;
+}
+.wc-card-lines span { color: var(--muted); }
+.wc-card-lines strong { font-size: 16px; }
+.wc-card-action {
+  display: inline-flex;
+  align-self: start;
+  min-height: 36px;
+  padding: 8px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+.wc-card-action:hover {
+  color: var(--accent-deep);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
 .inquiry-back {
   display: inline-flex;
   margin-bottom: 18px;
