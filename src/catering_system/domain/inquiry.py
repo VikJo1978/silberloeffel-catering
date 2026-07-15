@@ -170,6 +170,28 @@ class Inquiry:
     intake_external_ref: str | None = None
 
 
+def inquiry_shows_convert_accepted_button(state: InquiryOfficeState) -> bool:
+    """True only when the accepted-offer conversion command may be offered."""
+    return (
+        state.next_action == "convert-accepted"
+        and state.offer is not None
+        and state.offer.commercial_state == "Accepted"
+    )
+
+
+def inquiry_allows_convert_accepted_command(state: InquiryOfficeState) -> bool:
+    """True when POST convert-accepted is allowed (initial create or idempotent replay)."""
+    if inquiry_shows_convert_accepted_button(state):
+        return True
+    return (
+        state.next_action == "convert-accepted"
+        and state.offer is not None
+        and state.offer.commercial_state == "Converted"
+        and state.offer.accepted_variant_id is not None
+        and state.offer.acceptance_id is not None
+    )
+
+
 def inquiry_allows_order_conversion(inquiry: Inquiry) -> bool:
     """Core gate: rejected inquiries cannot convert; required calls need verification."""
     if inquiry.crm_stage == "Abgelehnt / verloren":

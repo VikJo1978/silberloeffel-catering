@@ -679,6 +679,38 @@ class RemoteCoreClient:
         self._evaluations.clear()
         return result
 
+    def convert_accepted_offer(
+        self,
+        offer_id: str,
+        offer_version_id: str,
+        *,
+        accepted_variant_id: str,
+        acceptance_id: str,
+    ) -> tuple[str, str]:
+        result = self.command(
+            f"/office/v1/offers/{quote(offer_id, safe='')}/versions/"
+            f"{quote(offer_version_id, safe='')}/convert-accepted",
+            {
+                "accepted_variant_id": accepted_variant_id,
+                "acceptance_id": acceptance_id,
+            },
+            {},
+            expected={201, 200},
+            result_keys={
+                "offer_id",
+                "offer_version_id",
+                "accepted_variant_id",
+                "acceptance_id",
+                "order_id",
+                "order_version_id",
+            },
+        )
+        if _uuid4(result["offer_id"]) != offer_id:
+            _bad_response()
+        if _uuid4(result["offer_version_id"]) != offer_version_id:
+            _bad_response()
+        return _uuid4(result["order_id"]), _uuid4(result["order_version_id"])
+
     # -- reads / repository-shaped facade ---------------------------------
 
     def queue_view(self) -> dict[str, object]:

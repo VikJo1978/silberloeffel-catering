@@ -43,6 +43,35 @@ _CSRF_CONTEXT = b"catering-office-panel-csrf-v1"
 _MAX_FORM_BODY_BYTES = 256 * 1024
 _UNAVAILABLE_MESSAGE = "Core nicht erreichbar — nichts wurde gespeichert."
 
+_INQUIRY_COMMAND_ERROR_LABELS: dict[str, str] = {
+    "conversion_blocked": (
+        "Das angenommene Angebot kann derzeit nicht in einen Auftrag umgewandelt werden."
+    ),
+    "already_converted": "Für diese Anfrage existiert bereits ein Auftrag.",
+    "verification_gate_blocked": (
+        "Die Rückrufprüfung ist noch nicht erfüllt — "
+        "eine Umwandlung ist noch nicht möglich."
+    ),
+    "offer_blocks_conversion": (
+        "Der Angebotsprozess blockiert die direkte Umwandlung in einen Auftrag."
+    ),
+}
+
+
+def inquiry_command_error_message(code_or_text: str) -> str:
+    if code_or_text in _INQUIRY_COMMAND_ERROR_LABELS:
+        return _INQUIRY_COMMAND_ERROR_LABELS[code_or_text]
+    lowered = code_or_text.lower()
+    if "accepted offer conversion gate" in lowered:
+        return _INQUIRY_COMMAND_ERROR_LABELS["conversion_blocked"]
+    if "offer blocks conversion" in lowered:
+        return _INQUIRY_COMMAND_ERROR_LABELS["offer_blocks_conversion"]
+    if "inquiry conversion gate" in lowered or "verification" in lowered:
+        return _INQUIRY_COMMAND_ERROR_LABELS["verification_gate_blocked"]
+    if "already converted" in lowered or "active order blocks" in lowered:
+        return _INQUIRY_COMMAND_ERROR_LABELS["already_converted"]
+    return code_or_text
+
 
 class FormBodyTooLargeError(ValueError):
     pass
@@ -161,7 +190,10 @@ def make_office_panel_handler(
                     503,
                 )
             else:
-                self._error_page(exc.code, status=exc.status)
+                self._error_page(
+                    inquiry_command_error_message(exc.code),
+                    status=exc.status,
+                )
 
         def _form(self) -> dict[str, str]:
             cached = getattr(self, "_form_cache", None)
@@ -306,7 +338,7 @@ def make_office_panel_handler(
             except RemoteCoreError as exc:
                 self._remote_error_page(exc)
             except (ValueError, KeyError) as exc:
-                self._error_page(str(exc))
+                self._error_page(inquiry_command_error_message(str(exc)))
 
         def _route_post(self, parts: list[str]) -> None:
             if parts == ["inquiry", "new"]:
@@ -362,6 +394,11 @@ def make_office_panel_handler(
                 self._redirect(f"/inquiry/{inquiry_id}")
             elif action == "convert":
                 order, _initial_version = panel.convert_inquiry_to_order(inquiry_id)
+                self._redirect(f"/order/{order.order_id}")
+            elif action == "convert-accepted":
+                order, _initial_version = panel.convert_accepted_offer_for_inquiry(
+                    inquiry_id
+                )
                 self._redirect(f"/order/{order.order_id}")
             else:
                 self.send_error(404)

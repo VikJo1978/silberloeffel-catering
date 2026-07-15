@@ -386,9 +386,9 @@ def test_legacy_convert_offer_gate_parity_direct_vs_remote(tmp_path: Path) -> No
             )
 
             assert direct_status == 400
-            assert "offer blocks conversion" in direct_body
+            assert "Angebotsprozess blockiert" in direct_body
             assert remote_status == 422
-            assert "offer_blocks_conversion" in remote_body
+            assert "Angebotsprozess blockiert" in remote_body
             assert _active_orders_for_inquiry(db, inquiry_id) == 0
         finally:
             for server in (direct_server, remote_server):

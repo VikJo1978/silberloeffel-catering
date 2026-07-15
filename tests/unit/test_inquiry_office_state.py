@@ -11,7 +11,9 @@ from catering_system.domain.inquiry import (
     CrmStage,
     Inquiry,
     derive_inquiry_office_state,
+    inquiry_allows_convert_accepted_command,
     inquiry_crm_stage_is_compatible_with_active_order,
+    inquiry_shows_convert_accepted_button,
 )
 from catering_system.domain.offer import (
     AcceptanceEvidence,
@@ -268,6 +270,30 @@ def test_converted_offer_after_storno_projects_convert_accepted_replay() -> None
     )
     assert state.is_open is False
     assert state.next_action == "convert-accepted"
+
+
+def test_convert_accepted_button_only_for_accepted_not_converted() -> None:
+    accepted = derive_inquiry_office_state(
+        _inquiry(),
+        has_order=False,
+        has_active_order=False,
+        offer=_offer(sent=True, acceptance=_acceptance()),
+        today=_TODAY,
+    )
+    converted = derive_inquiry_office_state(
+        _inquiry(crm_stage="Bestätigt / Auftrag"),
+        has_order=True,
+        has_active_order=False,
+        offer=_offer(
+            sent=True,
+            acceptance=_acceptance(),
+            link=_link(),
+        ),
+        today=_TODAY,
+    )
+    assert inquiry_shows_convert_accepted_button(accepted) is True
+    assert inquiry_shows_convert_accepted_button(converted) is False
+    assert inquiry_allows_convert_accepted_command(converted) is True
 
 
 def test_verify_still_wins_over_offer_pending() -> None:

@@ -6,7 +6,12 @@ import html
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from catering_system.domain.inquiry import CRM_PIPELINE, Inquiry, InquiryOfficeState
+from catering_system.domain.inquiry import (
+    CRM_PIPELINE,
+    Inquiry,
+    InquiryOfficeState,
+    inquiry_shows_convert_accepted_button,
+)
 from catering_system.domain.order import Order
 
 _SOURCE_LABELS = {
@@ -101,10 +106,15 @@ def _state_copy(
             "Ein direkter Legacy-Auftrag ist derzeit nicht vorgesehen.",
         )
     if state.next_action == "convert-accepted":
+        if state.offer is not None and state.offer.commercial_state == "Converted":
+            return (
+                "Auftrag bereits erstellt",
+                "Der Auftrag aus diesem angenommenen Angebot existiert bereits. "
+                "Bei Storno den verknüpften Auftrag unten öffnen.",
+            )
         return (
             "Angebot angenommen",
-            "Die Anfrage kann über den angenommenen Angebotspfad "
-            "in einen Auftrag überführt werden.",
+            "Das angenommene Angebot kann jetzt in einen Auftrag überführt werden.",
         )
     if has_active_order:
         return (
@@ -143,13 +153,28 @@ def _primary_action(
         )
         path = "convert"
         label = "In Auftrag umwandeln"
+    elif inquiry_shows_convert_accepted_button(state):
+        return (
+            '<section class="inquiry-next-step">'
+            '<div class="inquiry-eyebrow">Nächster Schritt</div>'
+            "<h2>Angenommenes Angebot in Auftrag überführen</h2>"
+            "<p>Dieses angenommene Angebot wird jetzt in einen Auftrag umgewandelt.</p>"
+            f'<form method="post" action="/inquiry/{_e(inquiry.inquiry_id)}/convert-accepted" '
+            'onsubmit="return confirm('
+            "'Dieses angenommene Angebot wird jetzt in einen Auftrag umgewandelt.'"
+            ');">'
+            f"{forms.csrf_input}{forms.primary_command_fields}"
+            '<button class="inquiry-button" type="submit">'
+            "Angenommenes Angebot in Auftrag überführen"
+            "</button></form></section>"
+        )
     elif state.next_action == "convert-accepted":
         return (
             '<section class="inquiry-next-step">'
             '<div class="inquiry-eyebrow">Nächster Schritt</div>'
-            "<h2>Angenommenes Angebot umsetzen</h2>"
-            "<p>Die Anfrage ist über den Angebotspfad vorgesehen. "
-            "Die Umwandlung erfolgt über den angenommenen Angebotsstand.</p>"
+            "<h2>Auftrag bereits erstellt</h2>"
+            "<p>Es wird kein zweiter Auftrag erzeugt. "
+            "Den verknüpften Auftrag finden Sie unten.</p>"
             "</section>"
         )
     elif state.next_action == "offer-pending":

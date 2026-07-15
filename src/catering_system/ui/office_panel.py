@@ -26,8 +26,11 @@ from catering_system.domain.inquiry import (
     Inquiry,
     InquiryOfficeState,
     inquiry_crm_stage_is_compatible_with_active_order,
+    inquiry_shows_convert_accepted_button,
+    inquiry_allows_convert_accepted_command,
     validate_crm_stage,
 )
+from catering_system.services.offer_service import OfferService
 from catering_system.domain.offer import offer_blocks_direct_inquiry_conversion
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_payment_reminder import (
@@ -1128,7 +1131,10 @@ class OfficePanel:
                 forms=InquiryDetailFormFields(
                     csrf_input=_csrf_input(context),
                     primary_command_fields=(
-                        self._command_fields() if state.next_action else ""
+                        self._command_fields()
+                        if state.next_action in ("verify", "convert")
+                        or inquiry_shows_convert_accepted_button(state)
+                        else ""
                     ),
                     update_command_fields=self._command_fields(
                         {"updated_at": inq.updated_at.isoformat()}
@@ -1178,7 +1184,25 @@ class OfficePanel:
         elif state.next_action == "offer-pending":
             convert += '<p class="muted">Angebot ausstehend</p>'
         elif state.next_action == "convert-accepted":
-            convert += '<p class="muted">Angebot angenommen — Umwandlung über den Angebotspfad.</p>'
+            if (
+                state.offer is not None
+                and state.offer.commercial_state == "Converted"
+            ):
+                convert += (
+                    '<p class="muted">Auftrag bereits erstellt — '
+                    "verknüpften Auftrag unten öffnen.</p>"
+                )
+            elif inquiry_shows_convert_accepted_button(state):
+                convert += (
+                    f'<form class="inline" method="post" '
+                    f'action="/inquiry/{_e(inquiry_id)}/convert-accepted" '
+                    'onsubmit="return confirm('
+                    "'Dieses angenommene Angebot wird jetzt in einen Auftrag umgewandelt.'"
+                    ');">'
+                    f"{_csrf_input(context)}{self._command_fields()}"
+                    "<button>Angenommenes Angebot in Auftrag überführen</button>"
+                    "</form>"
+                )
         guests = (
             str(inq.guest_count_estimate)
             if inq.guest_count_estimate is not None
@@ -1334,6 +1358,121 @@ class OfficePanel:
             if inquiry is None:
                 raise KeyError(inquiry_id)
             return self.order_service.convert_inquiry_to_order(inquiry)
+        if self._command_executor is not None:
+            return self._command_executor.run(work)
+        return work()
+
+    def convert_accepted_offer_for_inquiry(
+        self, inquiry_id: str
+    ) -> tuple[Order, OrderVersion]:
+        """Run the accepted-offer conversion through the existing Core command path."""
+
+        def work() -> tuple[Order, OrderVersion]:
+            inquiry = self._inquiries.get_by_id(inquiry_id)
+            if inquiry is None:
+                raise KeyError(inquiry_id)
+            linked_orders = [
+                order
+                for order in self._orders.list_orders()
+                if order.source_inquiry_id == inquiry_id
+            ]
+            state = self._inquiry_office_state(
+                inquiry,
+                linked_orders,
+                inquiry_id=inquiry_id,
+            )
+            if not inquiry_allows_convert_accepted_command(state):
+                offer = self._offers.get_by_source_inquiry_id(inquiry_id)
+                link = offer.conversion_link if offer is not None else None
+                if link is not None:
+                    order = self._orders.get_order(link.order_id)
+                    versions = self._orders.list_order_versions(link.order_id)
+                    order_version = next(
+                        (item for item in versions if item.version_number == 1),
+                        None,
+                    )
+                    if order is not None and order_version is not None:
+                        return order, order_version
+                raise ValueError("accepted offer conversion gate is not satisfied")
+            assert state.offer is not None
+            projection = state.offer
+            if (
+                projection.accepted_variant_id is None
+                or projection.acceptance_id is None
+            ):
+                raise ValueError("accepted offer conversion gate is not satisfied")
+            offer_service = OfferService(
+                self._offers,
+                self._inquiries,
+                self._orders,
+                today=api_views.berlin_today,
+            )
+            converted, order, order_version = offer_service.convert_accepted_offer(
+                projection.offer_id,
+                projection.offer_version_id,
+                projection.accepted_variant_id,
+                projection.acceptance_id,
+            )
+            commercial_version = next(
+                item
+                for item in converted.versions
+                if item.offer_version_id == projection.offer_version_id
+            )
+            self.payment_reminder_service.seed_from_conversion(
+                order.order_id,
+                commercial_version.payment_method,
+            )
+            self.inquiry_service.update_inquiry(
+                inquiry_id,
+                crm_stage=ACTIVE_ORDER_CRM_STAGE,
+            )
+            return order, order_version
+
+        if self._remote is not None:
+            inquiry = self._inquiries.get_by_id(inquiry_id)
+            if inquiry is None:
+                raise KeyError(inquiry_id)
+            linked_orders = [
+                order
+                for order in self._orders.list_orders()
+                if order.source_inquiry_id == inquiry_id
+            ]
+            state = self._inquiry_office_state(
+                inquiry,
+                linked_orders,
+                inquiry_id=inquiry_id,
+            )
+            if not inquiry_allows_convert_accepted_command(state):
+                offer = self._offers.get_by_source_inquiry_id(inquiry_id)
+                link = offer.conversion_link if offer is not None else None
+                if link is not None:
+                    order = self._orders.get_order(link.order_id)
+                    versions = self._orders.list_order_versions(link.order_id)
+                    order_version = next(
+                        (item for item in versions if item.version_number == 1),
+                        None,
+                    )
+                    if order is not None and order_version is not None:
+                        return order, order_version
+                raise ValueError("accepted offer conversion gate is not satisfied")
+            assert state.offer is not None
+            projection = state.offer
+            if (
+                projection.accepted_variant_id is None
+                or projection.acceptance_id is None
+            ):
+                raise ValueError("accepted offer conversion gate is not satisfied")
+            order_id, order_version_id = self._remote.convert_accepted_offer(
+                projection.offer_id,
+                projection.offer_version_id,
+                accepted_variant_id=projection.accepted_variant_id,
+                acceptance_id=projection.acceptance_id,
+            )
+            order = self._orders.get_order(order_id)
+            order_version = self._orders.get_order_version(order_version_id)
+            if order is None or order_version is None:
+                raise ValueError("accepted offer conversion response incomplete")
+            return order, order_version
         if self._command_executor is not None:
             return self._command_executor.run(work)
         return work()
