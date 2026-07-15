@@ -53,6 +53,26 @@ def panel():
     server.server_close()
 
 
+@pytest.fixture()
+def premium_panel():
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    server = create_office_panel_server(
+        inquiry_repo,
+        order_repo,
+        _PASSWORD,
+        host="127.0.0.1",
+        port=0,
+        ui_version="v2",
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    yield f"http://{host}:{port}"
+    server.shutdown()
+    server.server_close()
+
+
 def _get(url: str, *, auth: bool = True) -> tuple[int, str]:
     req = urllib.request.Request(url)
     if auth:
@@ -467,6 +487,125 @@ def test_rejected_inquiry_is_closed_without_queue_or_actions(panel: str) -> None
     with pytest.raises(urllib.error.HTTPError) as exc:
         _post(f"{panel}/inquiry/{iid}/convert", {})
     assert exc.value.code == 400
+
+
+def test_v2_inquiry_detail_ready_to_convert_and_verification_required(
+    premium_panel: str,
+) -> None:
+    ready_id = _create_inquiry(
+        premium_panel,
+        intake_subject="Sommerfest HafenCity",
+        intake_message="Bitte um ein Angebot für unser Sommerfest.",
+    )
+    verify_id = _create_inquiry(
+        premium_panel,
+        call_verification_required="1",
+        intake_subject="Firmenfeier",
+    )
+
+    _status, ready = _get(f"{premium_panel}/inquiry/{ready_id}")
+    _status, verify = _get(f"{premium_panel}/inquiry/{verify_id}")
+
+    assert "inquiry-hero" in ready
+    assert "<h1>Sommerfest HafenCity</h1>" in ready
+    assert "Bereit für Auftrag" in ready
+    assert f'action="/inquiry/{ready_id}/convert"' in ready
+    assert "In Auftrag umwandeln" in ready
+    assert "Telefonisch verifiziert" not in ready
+    assert "Rückruf erforderlich" in verify
+    assert "Rückrufprüfung noch nicht erfüllt" in verify
+    assert f'action="/inquiry/{verify_id}/verify"' in verify
+    assert "Telefonisch verifiziert" in verify
+    assert "In Auftrag umwandeln" not in verify
+
+
+def test_v2_inquiry_detail_rejected_has_no_primary_action(
+    premium_panel: str,
+) -> None:
+    inquiry_id = _create_inquiry(
+        premium_panel,
+        call_verification_required="1",
+        intake_subject="Abgesagte Feier",
+    )
+    _post(
+        f"{premium_panel}/inquiry/{inquiry_id}/update",
+        {
+            "event_date": "2026-10-01",
+            "time_window_text": "mittags",
+            "location_text": "Hamburg",
+            "guest_count_estimate": "25",
+            "planning_mode": "caterer_suggestion",
+            "crm_stage": "Abgelehnt / verloren",
+        },
+    )
+
+    _status, body = _get(f"{premium_panel}/inquiry/{inquiry_id}")
+
+    assert "Anfrage abgeschlossen" in body
+    assert "Anfrage wurde abgelehnt" in body
+    assert f'action="/inquiry/{inquiry_id}/verify"' not in body
+    assert f'action="/inquiry/{inquiry_id}/convert"' not in body
+
+
+def test_v2_inquiry_detail_active_and_cancelled_order_history(
+    premium_panel: str,
+) -> None:
+    active_inquiry_id = _create_inquiry(premium_panel, intake_subject="Business Lunch")
+    active_order_id = _convert(premium_panel, active_inquiry_id)
+    cancelled_inquiry_id = _create_inquiry(
+        premium_panel, intake_subject="Sommerempfang"
+    )
+    cancelled_order_id = _convert(premium_panel, cancelled_inquiry_id)
+    _post(f"{premium_panel}/order/{cancelled_order_id}/cancel", {})
+
+    _status, active = _get(f"{premium_panel}/inquiry/{active_inquiry_id}")
+    _status, cancelled = _get(f"{premium_panel}/inquiry/{cancelled_inquiry_id}")
+
+    assert "Auftrag vorhanden" in active
+    assert f'href="/order/{active_order_id}"' in active
+    assert "Aktiven Auftrag öffnen" in active
+    assert f'action="/inquiry/{active_inquiry_id}/convert"' not in active
+    assert '<select name="crm_stage">' not in active
+    assert (
+        '<input type="hidden" name="crm_stage" value="Bestätigt / Auftrag">' in active
+    )
+    assert f'href="/order/{cancelled_order_id}"' in cancelled
+    assert "Stornierten Auftrag öffnen" in cancelled
+    assert f'action="/inquiry/{cancelled_inquiry_id}/convert"' in cancelled
+
+    visible_active = html.unescape(re.sub(r"<[^>]+>", " ", active))
+    visible_cancelled = html.unescape(re.sub(r"<[^>]+>", " ", cancelled))
+    assert active_order_id[:8] not in visible_active
+    assert cancelled_order_id[:8] not in visible_cancelled
+
+
+def test_v2_inquiry_detail_escapes_hostile_intake_and_hides_technical_values(
+    premium_panel: str,
+) -> None:
+    inquiry_id = _create_inquiry(
+        premium_panel,
+        intake_subject='<img src=x onerror="alert(1)">',
+        intake_message="<script>alert('message')</script>",
+        intake_summary='<svg onload="alert(2)">Zusammenfassung</svg>',
+        intake_external_ref="<b>EXT-7</b>",
+    )
+
+    _status, body = _get(f"{premium_panel}/inquiry/{inquiry_id}")
+    visible = html.unescape(re.sub(r"<[^>]+>", " ", body))
+
+    assert "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;" in body
+    assert "&lt;script&gt;alert(&#x27;message&#x27;)&lt;/script&gt;" in body
+    assert "&lt;svg onload=&quot;alert(2)&quot;&gt;" in body
+    assert "&lt;b&gt;EXT-7&lt;/b&gt;" in body
+    assert "<script>alert" not in body
+    assert '<img src=x onerror="alert(1)">' not in body
+    assert inquiry_id[:8] not in visible
+    assert "caterer_suggestion" not in visible
+    assert "inquiry_call_verification_unsatisfied" not in visible
+    assert "Möbel & Mehr GmbH" not in body
+    assert '<details class="inquiry-edit">' in body
+    assert f'action="/inquiry/{inquiry_id}/update"' in body
+    assert 'name="_csrf_token"' in body
 
 
 def test_open_queue_shows_actual_crm_stage(panel: str) -> None:

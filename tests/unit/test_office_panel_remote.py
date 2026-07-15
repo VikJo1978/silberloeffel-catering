@@ -264,6 +264,30 @@ def test_v2_dashboard_parity_direct_vs_remote(tmp_path: Path) -> None:
             server.server_close()
 
 
+def test_v2_inquiry_detail_parity_direct_vs_remote(tmp_path: Path) -> None:
+    db = tmp_path / "core-v2-inquiry.db"
+    ids = _seed(db)
+    direct_url, direct_server = _start_direct_panel(db, ui_version="v2")
+    api_url, api_server = _start_api_server(db)
+    remote = RemoteCoreClient(api_url, _API_TOKEN)
+    remote_url, remote_server = _start_remote_panel(remote, ui_version="v2")
+    try:
+        for key in ("inquiry_verify", "inquiry_website"):
+            inquiry_id = ids[key]
+            d_status, d_html = _get(f"{direct_url}/inquiry/{inquiry_id}")
+            r_status, r_html = _get(f"{remote_url}/inquiry/{inquiry_id}")
+            assert d_status == r_status == 200
+            _assert_same_modulo_remote_fields(d_html, r_html)
+            assert "inquiry-hero" in d_html
+            assert 'name="_command_id"' in r_html
+            assert 'name="_expect_updated_at"' in r_html
+            assert 'name="_command_id"' not in d_html
+    finally:
+        for server in (direct_server, remote_server, api_server):
+            server.shutdown()
+            server.server_close()
+
+
 def test_anfragen_search_parity_direct_vs_remote(parity_world) -> None:
     direct_url, remote_url, _ids = parity_world
     for query in ("", "Bremen", "website_form"):
@@ -368,6 +392,49 @@ def test_truncated_order_detail_warns_and_uses_true_latest_version(
         assert "Unvollständige Ansicht" in html
         assert "200 von 201 Versionen" in html
         assert _extract_hidden(html, "_expect_latest_version_number") == "201"
+    finally:
+        panel_server.shutdown()
+        panel_server.server_close()
+        api_server.shutdown()
+        api_server.server_close()
+
+
+def test_v2_remote_inquiry_detail_preserves_linked_order_truncation_warning(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "core-v2-inquiry-truncated.db"
+    inquiries = SQLiteInquiryRepository(db)
+    orders = SQLiteOrderRepository(db)
+    inquiry = InquiryService(inquiries).create_inquiry(
+        event_date=date(2026, 10, 1),
+        inquiry_source="manual",
+        crm_stage="Neue Anfrage",
+        customer_linkage={},
+        time_window_text="mittags",
+        location_text="Hamburg",
+        guest_count_estimate=25,
+        planning_mode="caterer_suggestion",
+        call_verification_required=False,
+        call_verification_status="not_required",
+    )
+    order_service = OrderService(orders)
+    core = OperationalCoreService(orders)
+    for _index in range(51):
+        order, _version = order_service.convert_inquiry_to_order(inquiry)
+        core.cancel_order(order.order_id)
+    inquiries.close()
+    orders.close()
+
+    api_url, api_server = _start_api_server(db)
+    remote = RemoteCoreClient(api_url, _API_TOKEN)
+    panel_url, panel_server = _start_remote_panel(remote, ui_version="v2")
+    try:
+        status, body = _get(f"{panel_url}/inquiry/{inquiry.inquiry_id}")
+        assert status == 200
+        assert "Unvollständige Ansicht" in body
+        assert "Nicht alle 51 verknüpften Aufträge" in body
+        assert "Stornierten Auftrag öffnen" in body
+        assert "In Auftrag umwandeln" in body
     finally:
         panel_server.shutdown()
         panel_server.server_close()

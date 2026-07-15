@@ -54,6 +54,10 @@ from catering_system.ui.office_panel_dashboard import (
     DashboardUi,
     render_arbeitszentrale,
 )
+from catering_system.ui.office_panel_inquiry_detail import (
+    InquiryDetailFormFields,
+    render_inquiry_detail,
+)
 from catering_system.ui.office_panel_proposal import (
     parse_proposal_payload,
     render_proposal_preview,
@@ -1007,14 +1011,17 @@ class OfficePanel:
         if inq is None:
             return None
         inquiry_truncation_warning = ""
+        linked_orders_total_count: int | None = None
+        linked_orders_truncated = False
         if self._remote is not None:
-            total_orders, orders_truncated = self._remote.inquiry_orders_meta(
-                inquiry_id
+            linked_orders_total_count, linked_orders_truncated = (
+                self._remote.inquiry_orders_meta(inquiry_id)
             )
-            if orders_truncated:
+            if linked_orders_truncated:
                 inquiry_truncation_warning = (
                     '<p class="blocked"><strong>Unvollständige Ansicht:</strong> '
-                    f"Die API-Detailansicht enthält nicht alle {total_orders} "
+                    f"Die API-Detailansicht enthält nicht alle "
+                    f"{linked_orders_total_count} "
                     "verknüpften Aufträge.</p>"
                 )
         existing = [
@@ -1027,6 +1034,37 @@ class OfficePanel:
             has_active_order=has_active_order,
         )
         ev = self.progression.evaluate_inquiry_to_order_progression(inq)
+        if self._ui_version == "v2":
+            offer_url = (
+                build_offer_prefill_url(self.configurator_url, inq)
+                if self.configurator_url
+                else None
+            )
+            detail = render_inquiry_detail(
+                inq,
+                existing,
+                state,
+                ev.reasons,
+                forms=InquiryDetailFormFields(
+                    csrf_input=_csrf_input(context),
+                    primary_command_fields=(
+                        self._command_fields() if state.next_action else ""
+                    ),
+                    update_command_fields=self._command_fields(
+                        {"updated_at": inq.updated_at.isoformat()}
+                    ),
+                ),
+                linked_orders_total_count=linked_orders_total_count,
+                linked_orders_truncated=linked_orders_truncated,
+                offer_url=offer_url,
+            )
+            return _page(
+                detail.title,
+                detail.body,
+                active_section="inquiries",
+                context=context,
+                show_title=False,
+            )
         if existing:
             prog = '<p class="ok">Bereits in Auftrag umgewandelt.</p>'
         elif ev.blocked:
