@@ -114,6 +114,7 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
             "stale_state",
             "already_converted",
             "external_ref_conflict",
+            "conversion_already_exists",
         }
     ),
     413: frozenset({"body_too_large"}),
@@ -127,6 +128,7 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
             "kitchen_print_not_confirmed",
             "version_not_owned",
             "invalid_payment_reminder",
+            "conversion_blocked",
         }
     ),
     500: frozenset({"internal"}),

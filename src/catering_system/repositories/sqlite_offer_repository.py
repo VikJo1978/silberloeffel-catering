@@ -397,6 +397,29 @@ class SQLiteOfferRepository:
             self._insert_acceptance_evidence(evidence)
             return updated
 
+    def append_conversion_link(self, link: ConversionLink) -> Offer:
+        with self._write_scope():
+            offer = self.get(link.offer_id)
+            if offer is None:
+                raise KeyError(link.offer_id)
+            if offer.conversion_link is not None:
+                raise ValueError(
+                    f"conversion link already exists for offer_id={link.offer_id!r}"
+                )
+            updated = Offer(
+                offer_id=offer.offer_id,
+                source_inquiry_id=offer.source_inquiry_id,
+                created_at=offer.created_at,
+                versions=offer.versions,
+                sent_evidence=offer.sent_evidence,
+                acceptance_evidence=offer.acceptance_evidence,
+                rejection_evidence=offer.rejection_evidence,
+                withdrawal_evidence=offer.withdrawal_evidence,
+                conversion_link=link,
+            )
+            self._insert_conversion_link(link)
+            return updated
+
     def _insert_version(self, offer_id: str, version: OfferVersion) -> None:
         self._conn.execute(
             """

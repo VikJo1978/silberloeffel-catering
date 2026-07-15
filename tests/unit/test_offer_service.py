@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
@@ -14,6 +15,7 @@ from catering_system.domain.inquiry import (
 )
 from catering_system.domain.offer import (
     AcceptanceEvidence,
+    ConversionLink,
     Offer,
     OfferPosition,
     OfferVariant,
@@ -34,6 +36,8 @@ from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
 )
 from catering_system.services.offer_service import OfferService
+from catering_system.services.operational_core_service import OperationalCoreService
+from catering_system.services.order_service import OrderService
 
 _INQUIRY_ID = "22222222-2222-4222-8222-222222222222"
 _SNAPSHOT_ID = "77777777-7777-4777-8777-777777777771"
@@ -192,6 +196,17 @@ class _FailingAppendRepository(InMemoryOfferRepository):
         raise self._error
 
     def append_acceptance_evidence(self, evidence: AcceptanceEvidence) -> Offer:
+        self.append_calls += 1
+        raise self._error
+
+
+class _FailingConversionAppendRepository(InMemoryOfferRepository):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self._error = error
+        self.append_calls = 0
+
+    def append_conversion_link(self, link: ConversionLink) -> Offer:
         self.append_calls += 1
         raise self._error
 
@@ -858,3 +873,175 @@ def test_record_acceptance_evidence_append_failure_leaves_offer_unchanged() -> N
 
     assert offers.append_calls == 1
     assert offers.get(offer.offer_id) == sent
+
+
+def _accepted_offer_state() -> tuple[
+    Offer,
+    str,
+    str,
+    str,
+    InMemoryOfferRepository,
+    InMemoryOrderRepository,
+    InMemoryInquiryRepository,
+    OfferService,
+]:
+    inquiry = replace(
+        _sample_inquiry(),
+        location_text="Inquiry-only Berlin",
+        guest_count_estimate=999,
+    )
+    inquiries, orders, offers, service = _world(inquiry=inquiry)
+    offer = service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
+    version_id = offer.versions[0].offer_version_id
+    service.record_sent_evidence(offer.offer_id, version_id, **_record_args())
+    updated = service.record_acceptance_evidence(
+        offer.offer_id,
+        version_id,
+        _VARIANT_ID,
+        **_acceptance_args(),
+    )
+    assert updated.acceptance_evidence is not None
+    return (
+        updated,
+        version_id,
+        _VARIANT_ID,
+        updated.acceptance_evidence.acceptance_id,
+        offers,
+        orders,
+        inquiries,
+        service,
+    )
+
+
+def test_convert_accepted_offer_happy_path() -> None:
+    offer, version_id, variant_id, acceptance_id, offers, orders, _inq, service = (
+        _accepted_offer_state()
+    )
+
+    updated, order, order_version = service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
+    )
+
+    assert updated.conversion_link is not None
+    assert updated.conversion_link.order_id == order.order_id
+    assert order_version.version_number == 1
+    assert order_version.location_text == "Hamburg"
+    assert order_version.guest_count_estimate == 80
+    assert derive_offer_state(updated, version_id, today=date(2026, 7, 15)) == "Converted"
+    assert len(orders.list_orders()) == 1
+
+
+def test_convert_accepted_offer_order_version_from_offer_not_inquiry() -> None:
+    offer, version_id, variant_id, acceptance_id, _offers, _orders, inquiries, service = (
+        _accepted_offer_state()
+    )
+    inquiry = inquiries.get_by_id(_INQUIRY_ID)
+    assert inquiry is not None
+    assert inquiry.location_text == "Inquiry-only Berlin"
+    assert inquiry.guest_count_estimate == 999
+
+    _updated, _order, order_version = service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
+    )
+
+    assert order_version.location_text == "Hamburg"
+    assert order_version.guest_count_estimate == 80
+
+
+def test_convert_accepted_offer_idempotent_replay() -> None:
+    offer, version_id, variant_id, acceptance_id, offers, orders, _inq, service = (
+        _accepted_offer_state()
+    )
+    first = service.convert_accepted_offer(
+        offer.offer_id, version_id, variant_id, acceptance_id
+    )
+    second = service.convert_accepted_offer(
+        offer.offer_id, version_id, variant_id, acceptance_id
+    )
+    assert second[1].order_id == first[1].order_id
+    assert len(orders.list_orders()) == 1
+    assert offers.get(offer.offer_id) == second[0]
+
+
+def test_convert_accepted_offer_storno_replay_same_order() -> None:
+    offer, version_id, variant_id, acceptance_id, offers, orders, _inq, service = (
+        _accepted_offer_state()
+    )
+    _updated, order, _ov = service.convert_accepted_offer(
+        offer.offer_id, version_id, variant_id, acceptance_id
+    )
+    OperationalCoreService(orders).cancel_order(order.order_id)
+    replay = service.convert_accepted_offer(
+        offer.offer_id, version_id, variant_id, acceptance_id
+    )
+    assert replay[1].order_id == order.order_id
+    assert len(orders.list_orders()) == 1
+    assert offers.get(offer.offer_id) is not None
+    assert offers.get(offer.offer_id).conversion_link is not None
+
+
+def test_convert_accepted_offer_rejects_wrong_variant_or_acceptance() -> None:
+    offer, version_id, variant_id, acceptance_id, _offers, orders, _inq, service = (
+        _accepted_offer_state()
+    )
+    with pytest.raises(ValueError, match="accepted variant does not belong"):
+        service.convert_accepted_offer(
+            offer.offer_id,
+            version_id,
+            "55555555-5555-4555-8555-555555555551",
+            acceptance_id,
+        )
+    with pytest.raises(ValueError, match="conversion blocked"):
+        service.convert_accepted_offer(
+            offer.offer_id,
+            version_id,
+            variant_id,
+            "66666666-6666-4666-8666-666666666666",
+        )
+    assert len(orders.list_orders()) == 0
+
+
+def test_convert_accepted_offer_rejects_active_order_without_link() -> None:
+    offer, version_id, variant_id, acceptance_id, _offers, orders, inquiries, service = (
+        _accepted_offer_state()
+    )
+    inquiry = inquiries.get_by_id(_INQUIRY_ID)
+    assert inquiry is not None
+    OrderService(orders).convert_inquiry_to_order(inquiry)
+    with pytest.raises(ValueError, match="active order blocks conversion"):
+        service.convert_accepted_offer(
+            offer.offer_id, version_id, variant_id, acceptance_id
+        )
+
+
+def test_convert_accepted_offer_append_failure_leaves_no_order_or_link() -> None:
+    offer, version_id, variant_id, acceptance_id, offers, orders, inquiries, _service = (
+        _accepted_offer_state()
+    )
+    failing = _FailingConversionAppendRepository(RuntimeError("append failed"))
+    stored = offers.get(offer.offer_id)
+    assert stored is not None
+    failing.save(stored)
+    service = OfferService(
+        failing,
+        inquiries,
+        orders,
+        now=lambda: _RECORDED_AT,
+        today=lambda: date(2026, 7, 15),
+    )
+
+    with pytest.raises(RuntimeError, match="append failed"):
+        service.convert_accepted_offer(
+            offer.offer_id, version_id, variant_id, acceptance_id
+        )
+
+    assert failing.append_calls == 1
+    reloaded = failing.get(offer.offer_id)
+    assert reloaded is not None
+    assert reloaded.conversion_link is None

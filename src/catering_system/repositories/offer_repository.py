@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from catering_system.domain.offer import AcceptanceEvidence, Offer, SentEvidence
+from catering_system.domain.offer import AcceptanceEvidence, ConversionLink, Offer, SentEvidence
 
 
 class OfferRepository(Protocol):
@@ -25,3 +25,6 @@ class OfferRepository(Protocol):
 
     def append_acceptance_evidence(self, evidence: AcceptanceEvidence) -> Offer:
         """Append one AcceptanceEvidence row and return the updated Offer aggregate."""
+
+    def append_conversion_link(self, link: ConversionLink) -> Offer:
+        """Append one ConversionLink row and return the updated Offer aggregate."""

@@ -7,9 +7,11 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 
+from catering_system.domain.inquiry import inquiry_allows_order_conversion
 from catering_system.domain.offer import (
     AcceptanceChannel,
     AcceptanceEvidence,
+    ConversionLink,
     Offer,
     OfferPosition,
     OfferVariant,
@@ -18,8 +20,10 @@ from catering_system.domain.offer import (
     SentEvidence,
     derive_offer_state,
     offer_allows_acceptance,
+    offer_allows_conversion,
     offer_allows_sent_recording,
 )
+from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.offer_snapshot import (
     OfferSnapshotPosition,
     OfferSnapshotV1,
@@ -28,6 +32,7 @@ from catering_system.domain.offer_snapshot import (
 from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.repositories.offer_repository import OfferRepository
 from catering_system.repositories.order_repository import OrderRepository
+from catering_system.services.order_service import OrderService
 from catering_system.services.offer_snapshot_validation import validate_offer_snapshot
 
 _log = logging.getLogger(__name__)
@@ -48,6 +53,7 @@ class OfferService:
         self._offer_repository = offer_repository
         self._inquiry_repository = inquiry_repository
         self._order_repository = order_repository
+        self._order_service = OrderService(order_repository)
         self._now = now or (lambda: datetime.now(UTC))
         self._today = today or date.today
 
@@ -224,6 +230,103 @@ class OfferService:
             accepted_variant_id,
         )
         return updated
+
+    def convert_accepted_offer(
+        self,
+        offer_id: str,
+        offer_version_id: str,
+        accepted_variant_id: str,
+        acceptance_id: str,
+    ) -> tuple[Offer, Order, OrderVersion]:
+        """Convert an accepted OfferVersion into an Order and link the facts."""
+        offer = self._offer_repository.get(offer_id)
+        if offer is None:
+            raise KeyError(offer_id)
+
+        if not any(
+            version.offer_version_id == offer_version_id for version in offer.versions
+        ):
+            raise ValueError(
+                f"offer_version_id {offer_version_id!r} is not a version of "
+                f"offer {offer_id!r}"
+            )
+
+        version = next(
+            item for item in offer.versions if item.offer_version_id == offer_version_id
+        )
+        if not any(
+            variant.variant_id == accepted_variant_id for variant in version.variants
+        ):
+            raise ValueError("accepted variant does not belong to OfferVersion")
+
+        if not offer_allows_conversion(
+            offer,
+            offer_version_id,
+            accepted_variant_id,
+            acceptance_id,
+        ):
+            raise ValueError(
+                f"conversion blocked (offer_id={offer_id!r}, "
+                f"offer_version_id={offer_version_id!r}, "
+                f"accepted_variant_id={accepted_variant_id!r}, "
+                f"acceptance_id={acceptance_id!r}, "
+                f"state={derive_offer_state(offer, offer_version_id, today=self._today())!r})"
+            )
+
+        inquiry = self._inquiry_repository.get_by_id(offer.source_inquiry_id)
+        if inquiry is None:
+            raise KeyError(offer.source_inquiry_id)
+        if not inquiry_allows_order_conversion(inquiry):
+            raise ValueError(
+                "inquiry conversion blocked "
+                f"(inquiry_id={inquiry.inquiry_id!r}, "
+                f"crm_stage={inquiry.crm_stage!r}, "
+                f"call_verification_required={inquiry.call_verification_required!r}, "
+                f"call_verification_status={inquiry.call_verification_status!r})"
+            )
+
+        link = offer.conversion_link
+        if link is not None:
+            order = self._order_repository.get_order(link.order_id)
+            if order is None:
+                raise ValueError(
+                    f"conversion link references missing order_id={link.order_id!r}"
+                )
+            versions = self._order_repository.list_order_versions(link.order_id)
+            order_version = next(
+                (item for item in versions if item.version_number == 1), None
+            )
+            if order_version is None:
+                raise ValueError(
+                    f"conversion link order_id={link.order_id!r} has no version 1"
+                )
+            return offer, order, order_version
+
+        if self._has_active_order(offer.source_inquiry_id):
+            raise ValueError(
+                f"active order blocks conversion (inquiry_id={offer.source_inquiry_id!r})"
+            )
+
+        order, order_version = self._order_service.create_order_from_offer_version(
+            offer.source_inquiry_id,
+            version,
+        )
+        conversion_link = ConversionLink(
+            offer_id=offer_id,
+            offer_version_id=offer_version_id,
+            variant_id=accepted_variant_id,
+            acceptance_id=acceptance_id,
+            order_id=order.order_id,
+            created_at=self._now(),
+        )
+        updated = self._offer_repository.append_conversion_link(conversion_link)
+        _log.info(
+            "convert_accepted_offer offer_id=%s offer_version_id=%s order_id=%s",
+            offer_id,
+            offer_version_id,
+            order.order_id,
+        )
+        return updated, order, order_version
 
     def _has_active_order(self, inquiry_id: str) -> bool:
         return any(

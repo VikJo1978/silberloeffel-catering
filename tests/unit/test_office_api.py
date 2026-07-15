@@ -1467,3 +1467,174 @@ def test_record_acceptance_failure_leaves_no_acceptance_or_ledger(api) -> None:
     conn.close()
     assert acceptance_count == 0
     assert ledger_count == 0
+
+
+def _prepare_send_accept(api: tuple[str, dict[str, str], Path]) -> tuple[str, str, str, str]:
+    base, _ids, _db = api
+    offer_id, version_id = _prepare_and_send(api)
+    status, body, _h = _post(
+        _record_acceptance_url(base, offer_id, version_id),
+        args=_RECORD_ACCEPTANCE_ARGS,
+    )
+    assert status == 200
+    return offer_id, version_id, body["acceptance_id"], body["accepted_variant_id"]
+
+
+def _convert_accepted_url(base: str, offer_id: str, version_id: str) -> str:
+    return (
+        f"{base}/office/v1/offers/{offer_id}/versions/{version_id}/convert-accepted"
+    )
+
+
+def test_convert_accepted_happy_path_and_replay(api) -> None:
+    base, _ids, db = api
+    offer_id, version_id, acceptance_id, variant_id = _prepare_send_accept(api)
+    url = _convert_accepted_url(base, offer_id, version_id)
+    args = {"accepted_variant_id": variant_id, "acceptance_id": acceptance_id}
+    command_id = str(uuid.uuid4())
+
+    status, body, _h = _post(url, args=args, command_id=command_id)
+    assert status == 201
+    assert set(body) == {
+        "command_id",
+        "offer_id",
+        "offer_version_id",
+        "accepted_variant_id",
+        "acceptance_id",
+        "order_id",
+        "order_version_id",
+    }
+    assert body["offer_id"] == offer_id
+    assert body["offer_version_id"] == version_id
+
+    status2, body2, _h = _post(url, args=args, command_id=command_id)
+    assert (status2, body2) == (status, body)
+
+    status3, body3, _h = _post(url, args=args)
+    assert status3 == 200
+    assert body3["order_id"] == body["order_id"]
+
+    offers = SQLiteOfferRepository(db)
+    orders = SQLiteOrderRepository(db)
+    stored = offers.get(offer_id)
+    assert stored is not None
+    assert stored.conversion_link is not None
+    order = orders.get_order(body["order_id"])
+    assert order is not None
+    versions = orders.list_order_versions(body["order_id"])
+    assert versions[0].location_text == "Hamburg"
+    offers.close()
+    orders.close()
+
+
+def test_convert_accepted_rejects_prepared(api) -> None:
+    base, _ids, _db = api
+    offer_id, version_id = _prepare_offer(api)
+    status, body, _h = _post(
+        _convert_accepted_url(base, offer_id, version_id),
+        args={
+            "accepted_variant_id": _VARIANT_ID,
+            "acceptance_id": str(uuid.uuid4()),
+        },
+    )
+    assert (status, body["error"]) == (422, "conversion_blocked")
+
+
+def test_convert_accepted_rejects_wrong_variant_or_acceptance(api) -> None:
+    base, _ids, _db = api
+    offer_id, version_id, acceptance_id, variant_id = _prepare_send_accept(api)
+    url = _convert_accepted_url(base, offer_id, version_id)
+    status, body, _h = _post(
+        url,
+        args={
+            "accepted_variant_id": "55555555-5555-4555-8555-555555555551",
+            "acceptance_id": acceptance_id,
+        },
+    )
+    assert (status, body["error"]) == (422, "invalid_variant")
+    status, body, _h = _post(
+        url,
+        args={
+            "accepted_variant_id": variant_id,
+            "acceptance_id": "66666666-6666-4666-8666-666666666666",
+        },
+    )
+    assert (status, body["error"]) == (422, "conversion_blocked")
+
+
+def test_convert_accepted_active_order_without_link_blocks(api) -> None:
+    base, ids, _db = api
+    offer_id, version_id, acceptance_id, variant_id = _prepare_send_accept(api)
+    inquiry_id = ids["inquiry_cancelled_order"]
+    status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
+    assert status == 201
+    status, body, _h = _post(
+        _convert_accepted_url(base, offer_id, version_id),
+        args={"accepted_variant_id": variant_id, "acceptance_id": acceptance_id},
+    )
+    assert (status, body["error"]) == (409, "already_converted")
+
+
+def test_convert_accepted_storno_replay_same_order(api) -> None:
+    base, _ids, db = api
+    offer_id, version_id, acceptance_id, variant_id = _prepare_send_accept(api)
+    url = _convert_accepted_url(base, offer_id, version_id)
+    args = {"accepted_variant_id": variant_id, "acceptance_id": acceptance_id}
+    status, body, _h = _post(url, args=args)
+    assert status == 201
+    order_id = body["order_id"]
+
+    orders = SQLiteOrderRepository(db)
+    order = orders.get_order(order_id)
+    assert order is not None
+    cancel_status, _cancel_body, _h = _post(
+        f"{base}/office/v1/orders/{order_id}/cancel",
+        expect={"updated_at": order.updated_at.isoformat()},
+    )
+    assert cancel_status == 200
+    orders.close()
+
+    status2, body2, _h = _post(url, args=args)
+    assert status2 == 200
+    assert body2["order_id"] == order_id
+
+    offers = SQLiteOfferRepository(db)
+    stored = offers.get(offer_id)
+    assert stored is not None
+    assert stored.conversion_link is not None
+    assert stored.conversion_link.order_id == order_id
+    offers.close()
+
+
+def test_convert_accepted_failure_leaves_no_conversion_or_ledger(api) -> None:
+    base, _ids, db = api
+    offer_id, version_id, acceptance_id, variant_id = _prepare_send_accept(api)
+    command_id = str(uuid.uuid4())
+    status, body, _h = _post(
+        _convert_accepted_url(base, offer_id, version_id),
+        args={
+            "accepted_variant_id": variant_id,
+            "acceptance_id": "00000000-0000-4000-8000-000000000099",
+        },
+        command_id=command_id,
+    )
+    assert (status, body["error"]) == (422, "conversion_blocked")
+
+    conn = sqlite3.connect(db)
+    link_count = conn.execute(
+        "SELECT COUNT(*) FROM offer_conversion_links WHERE offer_id = ?",
+        (offer_id,),
+    ).fetchone()[0]
+    ledger_count = conn.execute(
+        "SELECT COUNT(*) FROM office_api_commands WHERE command_id = ?",
+        (command_id,),
+    ).fetchone()[0]
+    conn.close()
+    assert link_count == 0
+    assert ledger_count == 0
+
+    offers = SQLiteOfferRepository(db)
+    stored = offers.get(offer_id)
+    assert stored is not None
+    assert stored.conversion_link is None
+    offers.close()

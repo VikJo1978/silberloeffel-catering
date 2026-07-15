@@ -18,6 +18,7 @@ from catering_system.domain.inquiry import (
     inquiry_allows_order_conversion,
     validate_planning_mode,
 )
+from catering_system.domain.offer import OfferVersion as CommercialOfferVersion
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.repositories.order_repository import OrderRepository
 
@@ -70,6 +71,40 @@ class OrderService:
         _log.info(
             "convert_inquiry_to_order inquiry_id=%s order_id=%s version=%s",
             inquiry.inquiry_id,
+            order_id,
+            version.version_number,
+        )
+        return order, version
+
+    def create_order_from_offer_version(
+        self,
+        source_inquiry_id: str,
+        offer_version: CommercialOfferVersion,
+    ) -> tuple[Order, OrderVersion]:
+        """Create Order + v1 from commercial OfferVersion facts (not Inquiry)."""
+        now = _utc_now()
+        order_id = str(uuid.uuid4())
+        order = Order(
+            order_id=order_id,
+            source_inquiry_id=source_inquiry_id,
+            created_at=now,
+            updated_at=now,
+        )
+        version = OrderVersion(
+            order_version_id=str(uuid.uuid4()),
+            order_id=order_id,
+            version_number=1,
+            created_at=now,
+            event_date=offer_version.event_date,
+            time_window_text=offer_version.time_window_text,
+            location_text=offer_version.location_text,
+            guest_count_estimate=offer_version.guest_count,
+            planning_mode=offer_version.planning_mode,
+        )
+        self._order_repository.save_order_with_initial_version(order, version)
+        _log.info(
+            "create_order_from_offer_version inquiry_id=%s order_id=%s version=%s",
+            source_inquiry_id,
             order_id,
             version.version_number,
         )

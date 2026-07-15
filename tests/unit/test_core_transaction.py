@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from dataclasses import replace
 from datetime import date, datetime, timezone
@@ -11,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from catering_system.domain.inquiry import (
+    ACTIVE_ORDER_CRM_STAGE,
     CALL_VERIFICATION_STATUSES,
     CRM_PIPELINE,
     Inquiry,
@@ -35,10 +37,15 @@ from catering_system.repositories.sqlite_offer_repository import (
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
+from catering_system.repositories.sqlite_payment_reminder_repository import (
+    SQLitePaymentReminderRepository,
+)
 from catering_system.domain.offer_snapshot import compute_snapshot_hash
+from catering_system.services.inquiry_service import InquiryService
 from catering_system.services.offer_service import OfferService
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
+from catering_system.services.payment_reminder_service import PaymentReminderService
 
 _PREPARE_CMD = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 _SNAPSHOT_ID = "77777777-7777-4777-8777-777777777771"
@@ -616,3 +623,222 @@ def test_record_acceptance_evidence_append_failure_leaves_no_ledger(shared) -> N
     stored = offers.get(offer.offer_id)
     assert stored is not None
     assert stored.acceptance_evidence is None
+
+
+def test_convert_accepted_offer_and_ledger_commit_atomically(shared) -> None:
+    connection, inquiries, orders, ledger = shared
+    offers = SQLiteOfferRepository.from_connection(connection)
+    reminders = SQLitePaymentReminderRepository.from_connection(connection)
+    executor = CoreCommandExecutor(connection)
+    inquiry = replace(
+        _inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222"
+    )
+    executor.run(lambda: inquiries.save(inquiry))
+    service = OfferService(offers, inquiries, orders)
+    offer = executor.run(
+        lambda: service.prepare_offer_version(
+            inquiry.inquiry_id,
+            _valid_offer_snapshot(inquiry_id=inquiry.inquiry_id),
+        )
+    )
+    version_id = offer.versions[0].offer_version_id
+    variant_id = offer.versions[0].variants[0].variant_id
+    executor.run(
+        lambda: service.record_sent_evidence(
+            offer.offer_id,
+            version_id,
+            sent_at=datetime(2026, 7, 15, 10, 0, tzinfo=timezone.utc),
+            channel="email",
+            recipient_reference="customer@example.invalid",
+            evidence_reference="mail-123",
+            recorded_by="office-panel",
+        )
+    )
+    acceptance_id = executor.run(
+        lambda: service.record_acceptance_evidence(
+            offer.offer_id,
+            version_id,
+            variant_id,
+            accepted_at=datetime(2026, 7, 15, 11, 0, tzinfo=timezone.utc),
+            channel="email",
+            evidence_reference="reply-1",
+            recorded_by="office-panel",
+        ).acceptance_evidence.acceptance_id  # type: ignore[union-attr]
+    )
+    convert_cmd = "ffffffff-ffff-4fff-8fff-ffffffffffff"
+    payment_service = PaymentReminderService(reminders, orders)
+    inquiry_service = InquiryService(inquiries)
+
+    def work() -> str:
+        converted, order, order_version = service.convert_accepted_offer(
+            offer.offer_id,
+            version_id,
+            variant_id,
+            acceptance_id,
+        )
+        commercial_version = next(
+            item for item in converted.versions if item.offer_version_id == version_id
+        )
+        payment_service.seed_from_conversion(
+            order.order_id, commercial_version.payment_method
+        )
+        inquiry_service.update_inquiry(
+            inquiry.inquiry_id,
+            crm_stage=ACTIVE_ORDER_CRM_STAGE,
+        )
+        ledger.record(
+            convert_cmd,
+            "fp-convert",
+            201,
+            json.dumps({"order_id": order.order_id}),
+        )
+        return order_version.order_version_id
+
+    executor.run(work)
+    stored = offers.get(offer.offer_id)
+    assert stored is not None
+    assert stored.conversion_link is not None
+    assert ledger.get(convert_cmd) is not None
+    assert reminders.get(stored.conversion_link.order_id) is not None
+    assert inquiries.get_by_id(inquiry.inquiry_id).crm_stage == ACTIVE_ORDER_CRM_STAGE
+
+
+def test_convert_accepted_offer_append_failure_leaves_no_ledger(shared) -> None:
+    connection, inquiries, orders, ledger = shared
+    offers = SQLiteOfferRepository.from_connection(connection)
+    executor = CoreCommandExecutor(connection)
+    inquiry = replace(
+        _inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222"
+    )
+    executor.run(lambda: inquiries.save(inquiry))
+    service = OfferService(offers, inquiries, orders)
+    offer = executor.run(
+        lambda: service.prepare_offer_version(
+            inquiry.inquiry_id,
+            _valid_offer_snapshot(inquiry_id=inquiry.inquiry_id),
+        )
+    )
+    version_id = offer.versions[0].offer_version_id
+    variant_id = offer.versions[0].variants[0].variant_id
+    executor.run(
+        lambda: service.record_sent_evidence(
+            offer.offer_id,
+            version_id,
+            sent_at=datetime(2026, 7, 15, 10, 0, tzinfo=timezone.utc),
+            channel="email",
+            recipient_reference="customer@example.invalid",
+            evidence_reference="mail-123",
+            recorded_by="office-panel",
+        )
+    )
+    acceptance_id = executor.run(
+        lambda: service.record_acceptance_evidence(
+            offer.offer_id,
+            version_id,
+            variant_id,
+            accepted_at=datetime(2026, 7, 15, 11, 0, tzinfo=timezone.utc),
+            channel="email",
+            evidence_reference="reply-1",
+            recorded_by="office-panel",
+        ).acceptance_evidence.acceptance_id  # type: ignore[union-attr]
+    )
+    convert_cmd = "10101010-1010-4101-8101-010101010101"
+
+    def failing_append(link):  # noqa: ANN001
+        raise sqlite3.IntegrityError("simulated append failure")
+
+    offers.append_conversion_link = failing_append  # type: ignore[method-assign]
+
+    def work() -> None:
+        service.convert_accepted_offer(
+            offer.offer_id,
+            version_id,
+            variant_id,
+            acceptance_id,
+        )
+        ledger.record(convert_cmd, "fp-convert", 201, "{}")
+
+    with pytest.raises(sqlite3.IntegrityError):
+        executor.run(work)
+    assert ledger.get(convert_cmd) is None
+    stored = offers.get(offer.offer_id)
+    assert stored is not None
+    assert stored.conversion_link is None
+    assert len(orders.list_orders()) == 0
+
+
+def test_convert_accepted_offer_crm_failure_rolls_back(shared) -> None:
+    connection, inquiries, orders, ledger = shared
+    offers = SQLiteOfferRepository.from_connection(connection)
+    executor = CoreCommandExecutor(connection)
+    inquiry = replace(
+        _inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222"
+    )
+    executor.run(lambda: inquiries.save(inquiry))
+    service = OfferService(offers, inquiries, orders)
+    offer = executor.run(
+        lambda: service.prepare_offer_version(
+            inquiry.inquiry_id,
+            _valid_offer_snapshot(inquiry_id=inquiry.inquiry_id),
+        )
+    )
+    version_id = offer.versions[0].offer_version_id
+    variant_id = offer.versions[0].variants[0].variant_id
+    executor.run(
+        lambda: service.record_sent_evidence(
+            offer.offer_id,
+            version_id,
+            sent_at=datetime(2026, 7, 15, 10, 0, tzinfo=timezone.utc),
+            channel="email",
+            recipient_reference="customer@example.invalid",
+            evidence_reference="mail-123",
+            recorded_by="office-panel",
+        )
+    )
+    acceptance_id = executor.run(
+        lambda: service.record_acceptance_evidence(
+            offer.offer_id,
+            version_id,
+            variant_id,
+            accepted_at=datetime(2026, 7, 15, 11, 0, tzinfo=timezone.utc),
+            channel="email",
+            evidence_reference="reply-1",
+            recorded_by="office-panel",
+        ).acceptance_evidence.acceptance_id  # type: ignore[union-attr]
+    )
+    convert_cmd = "20202020-2020-4202-8202-020202020202"
+    reminders = SQLitePaymentReminderRepository.from_connection(connection)
+    payment_service = PaymentReminderService(reminders, orders)
+    inquiry_service = InquiryService(inquiries)
+
+    def failing_update(*args, **kwargs):  # noqa: ANN002, ANN003
+        raise RuntimeError("simulated CRM failure")
+
+    inquiry_service.update_inquiry = failing_update  # type: ignore[method-assign]
+
+    def work() -> None:
+        converted, order, _ov = service.convert_accepted_offer(
+            offer.offer_id,
+            version_id,
+            variant_id,
+            acceptance_id,
+        )
+        commercial_version = next(
+            item for item in converted.versions if item.offer_version_id == version_id
+        )
+        payment_service.seed_from_conversion(
+            order.order_id, commercial_version.payment_method
+        )
+        inquiry_service.update_inquiry(
+            inquiry.inquiry_id,
+            crm_stage=ACTIVE_ORDER_CRM_STAGE,
+        )
+        ledger.record(convert_cmd, "fp-convert", 201, "{}")
+
+    with pytest.raises(RuntimeError, match="simulated CRM failure"):
+        executor.run(work)
+    assert ledger.get(convert_cmd) is None
+    stored = offers.get(offer.offer_id)
+    assert stored is not None
+    assert stored.conversion_link is None
+    assert len(orders.list_orders()) == 0

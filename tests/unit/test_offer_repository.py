@@ -327,6 +327,29 @@ def test_append_acceptance_evidence_rejects_second_acceptance() -> None:
         repo.append_acceptance_evidence(_acceptance())
 
 
+def test_append_conversion_link_roundtrip_in_memory_and_sqlite(tmp_path: Path) -> None:
+    link = _link()
+    accepted_offer = _offer(sent=(_sent(),), acceptance=_acceptance())
+    for repo_factory in (
+        lambda: InMemoryOfferRepository(),
+        lambda: SQLiteOfferRepository(tmp_path / "convert.db"),
+    ):
+        repo = repo_factory()
+        repo.save(accepted_offer)
+        updated = repo.append_conversion_link(link)
+        assert updated.conversion_link == link
+        assert derive_offer_state(updated, _V1_ID, today=date(2026, 7, 20)) == "Converted"
+        reloaded = repo.get(_OFFER_ID)
+        assert reloaded == updated
+
+
+def test_append_conversion_link_rejects_second_link() -> None:
+    repo = InMemoryOfferRepository()
+    repo.save(_offer(sent=(_sent(),), acceptance=_acceptance(), link=_link()))
+    with pytest.raises(ValueError, match="conversion link already exists"):
+        repo.append_conversion_link(_link())
+
+
 def test_sqlite_offer_roundtrip_preserves_event_and_payment_facts(tmp_path: Path) -> None:
     v1 = _version(
         1,

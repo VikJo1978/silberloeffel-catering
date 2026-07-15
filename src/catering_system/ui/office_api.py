@@ -28,6 +28,7 @@ from typing import TypeVar
 from urllib.parse import parse_qsl, urlparse
 
 from catering_system.domain.inquiry import (
+    ACTIVE_ORDER_CRM_STAGE,
     CRM_PIPELINE,
     derive_inquiry_office_state,
     inquiry_crm_stage_is_compatible_with_active_order,
@@ -675,6 +676,92 @@ class OfficeApi:
             "acceptance_id": acceptance.acceptance_id,
         }
 
+    def cmd_convert_accepted(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        offer_id = path_ids["offer_id"]
+        offer_version_id = path_ids["version_id"]
+        accepted_variant_id = _v_uuid(args["accepted_variant_id"])
+        acceptance_id = _v_uuid(args["acceptance_id"])
+        existing = self.offers.get(offer_id)
+        if existing is None:
+            raise ApiError(404, "not_found")
+        replay = existing.conversion_link is not None
+        try:
+            offer, order, order_version = self.offer_service.convert_accepted_offer(
+                offer_id,
+                offer_version_id,
+                accepted_variant_id,
+                acceptance_id,
+            )
+        except KeyError as exc:
+            raise ApiError(404, "not_found") from exc
+        except ValueError as exc:
+            message = str(exc)
+            if "active order blocks conversion" in message:
+                raise ApiError(409, "already_converted") from exc
+            if "conversion link already exists" in message:
+                raise ApiError(409, "conversion_already_exists") from exc
+            if "not a version of offer" in message:
+                raise ApiError(422, "version_not_owned") from exc
+            if "accepted variant does not belong" in message:
+                raise ApiError(422, "invalid_variant") from exc
+            if "conversion blocked" in message:
+                raise ApiError(422, "conversion_blocked") from exc
+            if "inquiry conversion blocked" in message:
+                raise ApiError(422, "verification_gate_blocked") from exc
+            raise ApiError(422, "conversion_blocked") from exc
+        except sqlite3.IntegrityError:
+            offer_check = self.offers.get(offer_id)
+            if offer_check is None:
+                raise ApiError(404, "not_found") from None
+            link = offer_check.conversion_link
+            if link is not None:
+                if (
+                    link.offer_version_id == offer_version_id
+                    and link.variant_id == accepted_variant_id
+                    and link.acceptance_id == acceptance_id
+                ):
+                    loaded_order = self.orders.get_order(link.order_id)
+                    versions = self.orders.list_order_versions(link.order_id)
+                    loaded_version = next(
+                        (item for item in versions if item.version_number == 1), None
+                    )
+                    if loaded_order is None or loaded_version is None:
+                        raise ApiError(409, "conversion_already_exists") from None
+                    offer = offer_check
+                    order = loaded_order
+                    order_version = loaded_version
+                    replay = True
+                else:
+                    raise ApiError(409, "conversion_already_exists") from None
+            elif self._active_order_for_inquiry(offer_check.source_inquiry_id) is not None:
+                raise ApiError(409, "already_converted") from None
+            else:
+                raise
+        offer_version = next(
+            item
+            for item in offer.versions
+            if item.offer_version_id == offer_version_id
+        )
+        self.payment_reminder_service.seed_from_conversion(
+            order.order_id,
+            offer_version.payment_method,
+        )
+        self.inquiry_service.update_inquiry(
+            offer.source_inquiry_id,
+            crm_stage=ACTIVE_ORDER_CRM_STAGE,
+        )
+        status = 200 if replay else 201
+        return status, {
+            "offer_id": offer.offer_id,
+            "offer_version_id": offer_version_id,
+            "accepted_variant_id": accepted_variant_id,
+            "acceptance_id": acceptance_id,
+            "order_id": order.order_id,
+            "order_version_id": order_version.order_version_id,
+        }
+
     def cmd_create_version(
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict
     ) -> tuple[int, dict[str, object]]:
@@ -884,6 +971,9 @@ _RECORD_ACCEPTANCE_ARGS = _ArgKeys(
     ),
     optional=frozenset({"note"}),
 )
+_CONVERT_ACCEPTED_ARGS = _ArgKeys(
+    required=frozenset({"accepted_variant_id", "acceptance_id"})
+)
 _VERSION_ID_ARGS = _ArgKeys(required=frozenset({"order_version_id"}))
 _PAYMENT_REMINDER_ARGS = _ArgKeys(
     required=frozenset(
@@ -908,6 +998,9 @@ _COMMANDS: dict[str, _CommandSpec] = {
     "mark-sent": _CommandSpec("cmd_mark_sent", _MARK_SENT_ARGS, set()),
     "record-acceptance": _CommandSpec(
         "cmd_record_acceptance", _RECORD_ACCEPTANCE_ARGS, set()
+    ),
+    "convert-accepted": _CommandSpec(
+        "cmd_convert_accepted", _CONVERT_ACCEPTED_ARGS, set()
     ),
     "versions": _CommandSpec(
         "cmd_create_version", _VERSION_ARGS, {"latest_version_number"}
@@ -971,6 +1064,14 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         ),
         "/office/v1/offers/{offer_id}/versions/{version_id}/record-acceptance",
         {"POST": "record-acceptance"},
+    ),
+    (
+        re.compile(
+            r"^/office/v1/offers/(?P<offer_id>[^/]+)/versions/"
+            r"(?P<version_id>[^/]+)/convert-accepted$"
+        ),
+        "/office/v1/offers/{offer_id}/versions/{version_id}/convert-accepted",
+        {"POST": "convert-accepted"},
     ),
     (
         re.compile(r"^/office/v1/orders$"),

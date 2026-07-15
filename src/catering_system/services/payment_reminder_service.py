@@ -11,6 +11,7 @@ from catering_system.domain.order_payment_reminder import (
     PaymentReminderView,
     derive_payment_reminder,
     has_downstream_payment_facts,
+    validate_payment_method,
     validate_payment_reminder,
 )
 from catering_system.repositories.order_repository import OrderRepository
@@ -76,3 +77,12 @@ class PaymentReminderService:
             return self.view(reminder.order_id)
         self._reminders.save(replace(reminder, updated_at=self._now()))
         return self.view(reminder.order_id)
+
+    def seed_from_conversion(self, order_id: str, payment_method: str) -> None:
+        """Insert a minimal payment reminder when absent after offer conversion."""
+        if self._reminders.get(order_id) is not None:
+            return
+        method = validate_payment_method(payment_method)
+        reminder = OrderPaymentReminder(order_id=order_id, payment_method=method)
+        validate_payment_reminder(reminder)
+        self._reminders.save(replace(reminder, updated_at=self._now()))
