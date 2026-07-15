@@ -2687,10 +2687,51 @@ Not included
 	  or deployed. Neither the Lenovo nor a Proxmox Office Panel contains UI2A
 
 
+Entry 067
+
+Date: 2026-07-15 — Office Panel UI v2 / UI2B premium Arbeitszentrale
+Scope: local uncommitted presentation slice on `d210ea8`; no deploy, Core,
+Office API contract, schema, operational-workflow or non-dashboard changes.
+
+Meaning
+	•	`office_panel_dashboard.py` is the single server-side presentation renderer
+	  for the direct `render_queue()` and remote `_render_remote_queue()` paths.
+	  It consumes the existing QueueView plus request-local UI services only;
+	  it performs no repository or Core reads
+	•	the premium Arbeitszentrale uses the existing UI2A shell and the real
+	  embedded Silberlöffel logo. It renders only projected Inquiry, Order,
+	  current-week and callback facts; no demonstration customers, contacts,
+	  dates, addresses or counters were copied from the visual reference
+	•	Rückruf `0 offen` is shown only after a successful empty fetch. An
+	  unconfigured or unavailable integration is labelled `Dienst nicht
+	  erreichbar`, never as a zero queue. QueueView truncation remains visible
+	•	existing POST routes, CSRF fields, remote command IDs and optimistic
+	  preconditions are reused unchanged. CSP, Basic Auth, no-store and all
+	  transport security headers remain at the shared HTTP boundary
+	•	`OFFICE_UI_VERSION=legacy|v2` guards the rollout. `legacy` is the default;
+	  only `GET /` changes in v2. Every other Office Panel screen remains on its
+	  existing renderer
+
+Completed
+	•	new focused renderer/flag/parity/security tests passed
+	•	full pytest under coverage: 664 passed; total coverage 90.5% with the
+	  project minimum of 90%
+	•	full Ruff check clean; Ruff format reported 110 files already formatted;
+	  full mypy clean for 77 source files; `git diff --check` clean before
+	  documentation closeout
+	•	browser smoke passed for empty and populated queues, available and
+	  unavailable Rückruf service, and direct/remote mode at 1280, 820 and
+	  320 px: no body overflow; mobile navigation remained locally scrollable
+
+Not included
+	•	no Anfragen, Anfrage-Detail, Aufträge, Auftrag-Detail, Rückrufe or separate
+	  Wochenübersicht redesign; no `office-panel-ui-v2/build.py`; no push or deploy
+
+
 Entry 068
 
 Date: 2026-07-15 — minimal Order payment-reminder workflow
-Scope: local uncommitted implementation on `b2b6b1a`; no push, deploy, Phase
+Scope: local commit `d210ea8` on `b2b6b1a`; no push, deploy, Phase
 3B, accounting subsystem, banking integration or operational workflow change.
 
 Meaning

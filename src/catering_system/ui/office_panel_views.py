@@ -118,6 +118,7 @@ def _page(
     *,
     active_section: OfficeSection,
     context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
+    show_title: bool = True,
 ) -> str:
     nav = "".join(
         (
@@ -148,6 +149,7 @@ def _page(
             ),
         )
     )
+    page_title = f"<h1>{_e(title)}</h1>" if show_title else ""
     return (
         '<!DOCTYPE html><html lang="de"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
@@ -163,7 +165,7 @@ def _page(
         "<span>Tägliche Arbeitszentrale</span></div></aside>"
         '<main class="office-workspace">'
         f'<header class="office-topbar"><span class="office-crumb">{_e(title)}</span></header>'
-        f'<div class="office-content"><h1>{_e(title)}</h1>{body}</div>'
+        f'<div class="office-content">{page_title}{body}</div>'
         "</main></div></body></html>"
     )
 

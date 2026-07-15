@@ -67,6 +67,12 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
   navigation that works without JavaScript. External Google Fonts and their CSP
   origins were removed. Core workflow, API behavior and individual screen
   layouts are unchanged; UI2A is committed locally and is not deployed.
+- Added UI2B, a premium Arbeitszentrale rendered from the existing QueueView in
+  both direct and remote modes. It uses only projected data, distinguishes an
+  empty Rückruf queue from an unavailable service, preserves existing command
+  forms and security controls, and is guarded by `OFFICE_UI_VERSION`; `legacy`
+  remains the safe default. No other screen, Core rule, API contract or schema
+  changed, and the slice is not deployed.
 - Added a local, undeployed payment-reminder block to Order detail. Confirmed
   Orders without reminder data truthfully show `Zahlungsart auswählen`; the
   office can record `Vorkasse`, `Rechnung` or `Bar vor Ort`, external invoice

@@ -2,11 +2,10 @@
 
 Live deployment last verified: **2026-07-13, Europe/Berlin**.
 
-Local undeployed development last verified: **2026-07-14, Europe/Berlin**.
-The reviewed implementation HEAD is `4e42112`; the status-only documentation
-commit that follows it does not change application behavior. The Office Panel
-UI v2 implementation pack is committed separately at `4507938`. Neither commit
-changes the live/deployed baseline below.
+Local undeployed development last verified: **2026-07-15, Europe/Berlin**.
+The committed baseline is `d210ea8`. UI2B is an uncommitted local working-tree
+slice on top of it. None of these changes alter the live/deployed baseline
+below.
 
 ## Live/deployed baseline
 
@@ -132,25 +131,39 @@ Offer workflow development:
   follow-up are present on `origin/main` through `20566dd`, but none is
   deployed.
 - The Office Panel UI v2 implementation pack and UI2A foundation/shared shell
-  are complete and committed locally. UI2A adds
+  are complete on `origin/main`. UI2A adds
   repo-owned styling and inline icons, explicit active navigation, and desktop
   plus horizontal mobile navigation that works without JavaScript. Core,
   routes, actions and individual screen layouts are unchanged.
-- UI2A has not been pushed or deployed. The Lenovo Office Panel
-  remains on its existing deployed UI and direct-`core.db` mode; no Proxmox
-  Office Panel contains UI2A.
-- UI2B and Phase 3B have not started.
+- UI2A has not been deployed. The Lenovo Office Panel remains on its existing
+  deployed UI and direct-`core.db` mode; no Proxmox Office Panel contains UI2A.
+- UI2B is complete in the local working tree: one shared
+  `office_panel_dashboard.py` renderer consumes the existing QueueView in
+  direct and remote mode. Only `GET /` changes when
+  `OFFICE_UI_VERSION=v2`; `legacy` remains the default. The renderer uses no
+  demonstration data or extra Core reads and distinguishes `0 offen` from an
+  unavailable Rückruf service. Other screens and Phase 3B are untouched.
+- The minimal payment-reminder slice is committed locally at `d210ea8`. It adds
+  one separate `order_payment_reminders` table, one pure
+  derivation and one Order-detail command/block in direct and remote mode.
+  Existing Orders need no backfill: a missing row means `Noch nicht gewählt`
+  and `Zahlungsart auswählen`. Reminder facts neither block nor advance any
+  OrderVersion, kitchen-print, effective-version, `READY_TO_SEND` or kiosk
+  state. The slice is not pushed or deployed.
 
 ## Local undeployed quality baseline
 
-- Python tests: **657 passed**
+- Python tests: **664 passed**
 - coverage gate: **90% minimum**
 - last full-project coverage: **90.5%**
 - website intake receiver coverage: **99.2%**
-- Ruff: clean; format check reported **108 files already formatted**
-- Mypy: clean for **76 source files**
+- Ruff: clean; format check reported **110 files already formatted**
+- Mypy: clean for **77 source files**
 - Office Panel UI2A browser smoke: 1280/820/620/320 px, no body overflow,
   no-JS mobile navigation and table-local scrolling verified
+- Office Panel UI2B browser smoke: empty and populated queues, available and
+  unavailable Rückruf service, and direct/remote mode at 1280/820/320 px; no
+  body overflow, and mobile navigation remains locally scrollable
 - staging-form browser tests and Cloudflare Worker sanitizer tests: clean
 - CI: GitHub Actions on every push and pull request
 

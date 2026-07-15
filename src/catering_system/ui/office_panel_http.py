@@ -65,6 +65,7 @@ def make_office_panel_handler(
     remote: "RemoteCoreClient | None" = None,
     command_executor: "CoreCommandExecutor | None" = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
+    ui_version: str = "legacy",
 ) -> type[BaseHTTPRequestHandler]:
     panel = OfficePanel(
         inquiry_repo,
@@ -74,6 +75,7 @@ def make_office_panel_handler(
         remote=remote,
         command_executor=command_executor,
         payment_reminder_repo=payment_reminder_repo,
+        ui_version=ui_version,
     )
     expected = "Basic " + base64.b64encode(f"office:{password}".encode()).decode()
     csrf_token = csrf_token_for_password(password)
@@ -214,14 +216,20 @@ def make_office_panel_handler(
                 self._html(render_rueckruf(items, error, context=context))
                 return
             if not parts:
-                items, _error = fetch_missed_board(
+                items, error = fetch_missed_board(
                     auerswald_url, auerswald_user, auerswald_password
                 )
                 context = OfficePageContext(
                     rueckruf_count=len(items) if items else None,
                     csrf_token=csrf_token,
                 )
-                self._html(panel.render_queue(items, context=context))
+                self._html(
+                    panel.render_queue(
+                        items,
+                        rueckruf_error=error,
+                        context=context,
+                    )
+                )
                 return
             context = self._fetch_page_context()
             if parts == ["anfragen"]:
@@ -395,6 +403,7 @@ def create_office_panel_server(
     remote: "RemoteCoreClient | None" = None,
     command_executor: "CoreCommandExecutor | None" = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
+    ui_version: str = "legacy",
 ) -> HTTPServer:
     """Create the intentionally single-threaded office HTTP server."""
     return HTTPServer(
@@ -411,5 +420,6 @@ def create_office_panel_server(
             remote=remote,
             command_executor=command_executor,
             payment_reminder_repo=payment_reminder_repo,
+            ui_version=ui_version,
         ),
     )

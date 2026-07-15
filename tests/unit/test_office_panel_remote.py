@@ -143,7 +143,9 @@ def _start_api_server(db: Path) -> tuple[str, HTTPServer]:
     )
 
 
-def _start_direct_panel(db: Path) -> tuple[str, HTTPServer]:
+def _start_direct_panel(
+    db: Path, *, ui_version: str = "legacy"
+) -> tuple[str, HTTPServer]:
     return _run_server_in_thread(
         lambda: create_office_panel_server(
             SQLiteInquiryRepository(db),
@@ -151,17 +153,26 @@ def _start_direct_panel(db: Path) -> tuple[str, HTTPServer]:
             _PASSWORD,
             host="127.0.0.1",
             port=0,
+            ui_version=ui_version,
         )
     )
 
 
-def _start_remote_panel(remote: RemoteCoreClient) -> tuple[str, HTTPServer]:
+def _start_remote_panel(
+    remote: RemoteCoreClient, *, ui_version: str = "legacy"
+) -> tuple[str, HTTPServer]:
     """`remote` is constructed by the caller (no sqlite inside it, so no
     thread-affinity concern), but the panel/server objects that reference it
     are still built here on the serving thread, matching the same pattern."""
     return _run_server_in_thread(
         lambda: create_office_panel_server(
-            remote, remote, _PASSWORD, host="127.0.0.1", port=0, remote=remote
+            remote,
+            remote,
+            _PASSWORD,
+            host="127.0.0.1",
+            port=0,
+            remote=remote,
+            ui_version=ui_version,
         )
     )
 
@@ -230,6 +241,27 @@ def test_dashboard_parity_direct_vs_remote(parity_world) -> None:
     # diffs
     assert "_command_id" in r_html
     assert "_command_id" not in d_html
+
+
+def test_v2_dashboard_parity_direct_vs_remote(tmp_path: Path) -> None:
+    db = tmp_path / "core-v2.db"
+    _seed(db)
+    direct_url, direct_server = _start_direct_panel(db, ui_version="v2")
+    api_url, api_server = _start_api_server(db)
+    remote = RemoteCoreClient(api_url, _API_TOKEN)
+    remote_url, remote_server = _start_remote_panel(remote, ui_version="v2")
+    try:
+        d_status, d_html = _get(f"{direct_url}/")
+        r_status, r_html = _get(f"{remote_url}/")
+        assert d_status == r_status == 200
+        _assert_same_modulo_remote_fields(d_html, r_html)
+        assert "dashboard-page-header" in d_html
+        assert "_command_id" in r_html
+        assert "_command_id" not in d_html
+    finally:
+        for server in (direct_server, remote_server, api_server):
+            server.shutdown()
+            server.server_close()
 
 
 def test_anfragen_search_parity_direct_vs_remote(parity_world) -> None:

@@ -20,6 +20,15 @@ On desktop, the section navigation remains visible in the left sidebar. On
 narrow screens it becomes a horizontally scrollable navigation above the page.
 Both variants and every workflow action remain usable without JavaScript.
 
+The rollout switch `OFFICE_UI_VERSION` controls only the Arbeitszentrale:
+`legacy` keeps the previous dashboard and is the safe default; `v2` enables the
+premium UI2B dashboard. All other pages, routes and actions are identical. A
+configuration change requires an Office Panel restart.
+
+On the v2 Arbeitszentrale, **0 offen** means the callback service was reached
+and returned no open callbacks. **Dienst nicht erreichbar** means the callback
+integration is unavailable; it must not be interpreted as an empty queue.
+
 ## Daily start
 
 1. Open **Arbeitszentrale**.

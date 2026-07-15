@@ -50,6 +50,10 @@ from catering_system.services.payment_reminder_service import PaymentReminderSer
 from catering_system.services.progression_service import ProgressionService
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
 from catering_system.ui import office_api_views as api_views
+from catering_system.ui.office_panel_dashboard import (
+    DashboardUi,
+    render_arbeitszentrale,
+)
 from catering_system.ui.office_panel_proposal import (
     parse_proposal_payload,
     render_proposal_preview,
@@ -232,7 +236,10 @@ class OfficePanel:
         remote: "RemoteCoreClient | None" = None,
         command_executor: "CoreCommandExecutor | None" = None,
         payment_reminder_repo: PaymentReminderRepository | None = None,
+        ui_version: str = "legacy",
     ) -> None:
+        if ui_version not in {"legacy", "v2"}:
+            raise ValueError("ui_version must be 'legacy' or 'v2'")
         self._inquiries = inquiry_repo
         self._orders = order_repo
         # Phase 2 dual mode (PROXMOX_OFFICE_SERVER_CORE_API_PACK_V1 §7): when
@@ -272,6 +279,7 @@ class OfficePanel:
             self.payment_reminder_service = remote.payment_reminder_service  # type: ignore[assignment]
         self._remote = remote
         self._command_executor = command_executor
+        self._ui_version = ui_version
         # Pure-read derivations: safe to run over the remote client's repo-
         # shaped reads in both modes, since they only ever call
         # get_order/get_order_version/list_orders/list_order_versions —
@@ -367,11 +375,15 @@ class OfficePanel:
         self,
         rueckruf_items: list[dict] | None,
         *,
+        rueckruf_error: str | None = None,
         context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
     ) -> str:
         if self._remote is not None:
             return self._render_remote_queue(
-                self._remote.queue_view(), rueckruf_items, context=context
+                self._remote.queue_view(),
+                rueckruf_items,
+                rueckruf_error=rueckruf_error,
+                context=context,
             )
         orders = self._orders.list_orders()
         orders_by_inquiry: dict[str, list[Order]] = {}
@@ -407,11 +419,11 @@ class OfficePanel:
         nicht_wirksam = [
             o for o in active_orders if o.effective_order_version_id is None
         ]
-        blockiert = [
-            o
+        evaluations = {
+            o.order_id: self.core.evaluate_ready_to_send(o.order_id)
             for o in active_orders
-            if not self.core.evaluate_ready_to_send(o.order_id).ready
-        ]
+        }
+        blockiert = [o for o in active_orders if not evaluations[o.order_id].ready]
         storniert = [o for o in orders if o.cancelled_at is not None]
         # Reuses the same request-local count already fetched for the sidebar
         # badge — no second auerswald-sync request. None = not configured/unreachable -> card omitted, same
@@ -440,8 +452,45 @@ class OfficePanel:
             + "</div>"
         )
 
-        iso = date.today().isocalendar()
+        operating_today = (
+            api_views.berlin_today() if self._ui_version == "v2" else date.today()
+        )
+        iso = operating_today.isocalendar()
         week = self.wochenuebersicht.get_week_overview(iso.year, iso.week)
+        if self._ui_version == "v2":
+            queue_view: dict[str, object] = {
+                "attention": {
+                    "neue_anfragen": len(open_inquiries),
+                    "druck_fehlt": len(ohne_druck),
+                    "nicht_wirksam": len(nicht_wirksam),
+                    "versand_blockiert": len(blockiert),
+                    "storniert": len(storniert),
+                },
+                "week": api_views.week_view(week),
+                "neue_anfragen_top": [
+                    api_views.inquiry_top_row(inquiry, state)
+                    for inquiry, state in open_inquiries[: api_views.TOP_ROWS_CAP]
+                ],
+                "auftraege_top": [
+                    api_views.order_top_row(
+                        order,
+                        self._orders.list_order_versions(order.order_id),
+                        evaluations[order.order_id],
+                    )
+                    for order in blockiert[: api_views.TOP_ROWS_CAP]
+                ],
+            }
+            return render_arbeitszentrale(
+                queue_view,
+                ui=DashboardUi(
+                    context=context,
+                    command_fields=self._command_fields,
+                    callbacks=rueckruf_items,
+                    callback_error=rueckruf_error,
+                    kiosk_url=self.kiosk_url,
+                    today=operating_today,
+                ),
+            )
         week_rows = [
             f"<tr><td>{_e(e.event_date.isoformat())}</td><td>{_e(e.time_window_text)}</td>"
             f"<td>{_e(e.location_text)}</td>"
@@ -532,7 +581,7 @@ class OfficePanel:
 
         auftraege_rows = []
         for o in blockiert[:5]:
-            ev = self.core.evaluate_ready_to_send(o.order_id)
+            ev = evaluations[o.order_id]
             reason = (
                 _e(_ready_to_send_blocker_label(ev.reasons[0])) if ev.reasons else "–"
             )
@@ -565,6 +614,7 @@ class OfficePanel:
         view: dict[str, object],
         rueckruf_items: list[dict] | None,
         *,
+        rueckruf_error: str | None = None,
         context: OfficePageContext,
     ) -> str:
         """Render the frozen QueueView without recomputing Core semantics.
@@ -574,6 +624,19 @@ class OfficePanel:
         the Proxmox panel from recreating business rules or issuing an N+1
         graph of list/detail calls.
         """
+        if self._ui_version == "v2":
+            return render_arbeitszentrale(
+                view,
+                ui=DashboardUi(
+                    context=context,
+                    command_fields=self._command_fields,
+                    callbacks=rueckruf_items,
+                    callback_error=rueckruf_error,
+                    kiosk_url=self.kiosk_url,
+                    today=api_views.berlin_today(),
+                ),
+            )
+
         attention_view = cast(dict[str, int], view["attention"])
         rueckruf_card = (
             f'<a href="/rueckruf"><strong>{context.rueckruf_count}</strong> Rückrufe offen</a>'
@@ -1373,6 +1436,7 @@ def make_office_panel_handler(
     remote: "RemoteCoreClient | None" = None,
     command_executor: "CoreCommandExecutor | None" = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
+    ui_version: str = "legacy",
 ) -> type[BaseHTTPRequestHandler]:
     """Compatibility wrapper; HTTP routing lives in office_panel_http."""
     from catering_system.ui.office_panel_http import (
@@ -1391,6 +1455,7 @@ def make_office_panel_handler(
         remote=remote,
         command_executor=command_executor,
         payment_reminder_repo=payment_reminder_repo,
+        ui_version=ui_version,
     )
 
 
@@ -1409,6 +1474,7 @@ def create_office_panel_server(
     remote: "RemoteCoreClient | None" = None,
     command_executor: "CoreCommandExecutor | None" = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
+    ui_version: str = "legacy",
 ) -> HTTPServer:
     """Compatibility wrapper; server construction lives in office_panel_http."""
     from catering_system.ui.office_panel_http import (
@@ -1429,6 +1495,7 @@ def create_office_panel_server(
         remote=remote,
         command_executor=command_executor,
         payment_reminder_repo=payment_reminder_repo,
+        ui_version=ui_version,
     )
 
 
@@ -1485,6 +1552,13 @@ def main() -> None:
         help="Base URL of the separate offer configurator (or set "
         "CONFIGURATOR_URL); empty keeps Inquiry-to-offer prefill dormant",
     )
+    parser.add_argument(
+        "--ui-version",
+        choices=("legacy", "v2"),
+        default=os.environ.get("OFFICE_UI_VERSION", "legacy"),
+        help="Office presentation version (or set OFFICE_UI_VERSION); "
+        "legacy is the safe rollout default",
+    )
     args = parser.parse_args()
     if not args.password:
         raise SystemExit(
@@ -1522,6 +1596,7 @@ def main() -> None:
             args.kiosk_url,
             args.configurator_url,
             remote=remote,
+            ui_version=args.ui_version,
         )
         print(
             f"Office panel on http://{args.host}:{args.port}/ (user: office) "
@@ -1567,6 +1642,7 @@ def main() -> None:
             args.configurator_url,
             command_executor=CoreCommandExecutor(connection),
             payment_reminder_repo=payment_reminder_repo,
+            ui_version=args.ui_version,
         )
         print(f"Office panel on http://{args.host}:{args.port}/ (user: office)")
     server.serve_forever()
