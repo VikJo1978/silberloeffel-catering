@@ -17,6 +17,7 @@ review that updates architecture, tests, runbooks, and this register.
 | ADR-010 | Durable intake buffering is deferred but required before real customer traffic | Avoid queue complexity during fake-data testing without accepting lead loss at launch |
 | ADR-011 | Core Office API supersedes the panel's in-process Core access | After cutover exactly three Lenovo processes touch `core.db`: Core Office API (read+command), kiosk (read), website-intake receiver (Inquiry create) |
 | ADR-012 | Payment method is agreed in the accepted offer; Office tracks reminders only | Keep commercial terms explicit without turning Office or operational Core into accounting software |
+| ADR-013 | Commercial Offer is a separate aggregate between Inquiry and Order | Preserve commercial history and accepted variants without mixing pricing with operational OrderVersion truth |
 
 ## ADR-001 — Core on Lenovo
 
@@ -187,6 +188,148 @@ Migration and rollback impact: this is a documentation-only decision. It adds
 no schema, API, UI, migration, or runtime behavior. Any implementation requires
 its own reviewed slice with additive backward compatibility; absence of future
 payment-reminder data must continue to mean `Zahlungsart noch nicht gewählt`.
+
+## ADR-013 — Commercial Offer layer
+
+Context and problem: the current production workflow converts an eligible
+Inquiry directly into an Order and its first OrderVersion. The separate
+configurator can compose and calculate proposal drafts, but those drafts have no
+authoritative lifecycle, immutable sent history, customer decision, or accepted
+variant in Core. Adding those concepts to Inquiry or OrderVersion would mix
+commercial negotiation with operational kitchen truth.
+
+Decision: Offer is a separate commercial aggregate between Inquiry and Order.
+V1 permits exactly one Offer aggregate per Inquiry; every commercial revision
+belongs to that aggregate as a new immutable OfferVersion. Each OfferVersion
+contains one or more immutable variants representing the exact alternatives
+presented together. A variant is part of its OfferVersion and has no independent
+mutable lifecycle. Customer acceptance identifies one exact OfferVersion and
+one exact variant; only an explicit, office-initiated, idempotent
+`ConvertAcceptedOffer` Core command may convert that accepted variant into an
+Order.
+
+The authority boundary is:
+
+```text
+Configurator Draft (editing / preview; not Core truth)
+    → Prepared OfferVersion (commercial Core truth begins)
+    → Sent
+    → Accepted OfferVersion + Variant + AcceptanceEvidence
+    → ConvertAcceptedOffer
+    → Order + OrderVersion 1 (operational truth begins)
+```
+
+Offer commercial history does not disappear after conversion. The exact
+OfferVersion, accepted variant, acceptance evidence, and immutable conversion
+link to the resulting Order remain the evidence of what was agreed.
+
+The boundaries are:
+
+- Inquiry remains incoming demand and CRM context;
+- configurator Draft, Editing, and Preview are proposal tooling outside the
+  Core lifecycle and are never OfferVersions;
+- Offer and OfferVersion own commercial proposal facts, including positions,
+  frozen prices and tax breakdown, validity, customer-visible wording, and the
+  agreed payment method;
+- Order begins only after acceptance and remains operational truth;
+- OfferVersion and OrderVersion are independent histories: commercial revisions
+  never become OrderVersion numbers, and operational revisions never rewrite an
+  accepted OfferVersion;
+- candidate/effective selection, kitchen-print confirmation, cancellation, and
+  `READY_TO_SEND` remain exclusively on the Order axis;
+- the configurator backend becomes the single authoritative calculator for an
+  OfferSnapshot; the frontend may display results but must not mint authoritative
+  totals;
+- the Office Panel remains the human Core write surface. The configurator does
+  not create Orders or call Core commands directly;
+- the agreed `Zahlungsart` originates in the accepted Offer and is transferred
+  into the separate reminder context after Order creation, as required by
+  ADR-012;
+- invoices and legally significant accounting documents remain in the external
+  accounting system.
+
+Core lifecycle belongs to OfferVersion: `Prepared`, `Sent`, `Accepted`,
+`Rejected`, `Withdrawn`, or `Superseded`. `Expired` is derived when a sent
+version has passed `valid_until` without acceptance and is not already rejected,
+withdrawn, or superseded; it is not a stored mutable status. Sending a newer
+version supersedes the earlier sent version. Rejection, withdrawal, supersession,
+or expiry of one version does not prevent a later OfferVersion on the same Offer
+aggregate. `Cancelled` is deliberately not an Offer term because cancellation
+belongs to Order/Storno.
+
+These lifecycle names are derived views, not a mutable stored `status` field.
+Core stores immutable OfferVersion content plus append-only facts:
+SentEvidence, AcceptanceEvidence, RejectionEvidence, WithdrawalEvidence, and
+ConversionLink. `Prepared` follows from OfferVersion existence, `Superseded`
+follows from a newer sent version, and `Expired` follows from `valid_until`.
+One pure `derive_offer_state` decision must interpret those facts consistently
+for domain, API, and UI consumers.
+
+Acceptance is a Core-owned append-only fact containing the accepted
+OfferVersion, accepted variant, actual acceptance time, recording time, channel,
+evidence reference, and authenticated office principal. Only a sent version that
+is not rejected, withdrawn, superseded, or expired is eligible, and one Offer
+aggregate can have at most one accepted variant. `ConvertAcceptedOffer` consumes
+that exact acceptance and records a one-time link to the resulting Order. The
+office supplies the factual `sent_at` and `accepted_at`; Core generates
+`recorded_at` and derives `recorded_by` from the authenticated office principal.
+
+Order and OrderVersion facts never flow back into Offer commercial history.
+Operational revisions, print/effective state, payment-reminder progress, and
+Order Storno neither rewrite nor reopen an accepted OfferVersion. An acceptance
+that has already produced an Order cannot produce another Order after Storno; a
+new commercial agreement requires a new Inquiry and its new Offer aggregate, or
+a separately reviewed exceptional manual command. That exception is not the
+ordinary direct conversion and is not authorised by this ADR. An accepted
+OfferVersion is immutable and closed forever.
+
+The versioned boundary is defined by
+[`offer_contract_v1.md`](../proposals/offer_contract_v1.md). Acceptance evidence
+is a Core-owned fact bound to the exact persisted snapshot and variant; it is not
+editable configurator draft data.
+
+Alternatives rejected:
+
+- keeping direct Inquiry-to-Order as the only permanent workflow, because it
+  cannot preserve what was priced, sent, and accepted;
+- using Inquiry CRM stages as the Offer lifecycle, because labels do not provide
+  immutable commercial snapshots or variant acceptance;
+- adding prices, VAT, customer decisions, or proposal variants to OrderVersion,
+  because that would turn operational history into a second commercial ledger;
+- treating configurator Draft Storage or exported JSON as accepted truth without
+  an explicit office review and Core command;
+- allowing frontend and backend pricing implementations to remain co-authoritative;
+- creating invoices, payments, or accounting entries inside Offer, Order, or the
+  Office Panel.
+
+Consequences:
+
+- future Offer persistence and commands require a separately reviewed,
+  additive implementation;
+- sent and accepted commercial history must be append-only and independent of
+  later catalog changes;
+- conversion must atomically enforce the existing Inquiry verification and
+  single-active-Order gates, record the Offer conversion, create Order plus
+  OrderVersion 1, and update the Inquiry CRM stage;
+- legacy Inquiry-to-Order conversion remains available during migration and for
+  explicitly manual Orders; it must use the same operational gates. The future
+  direct command must refuse conversion while the Inquiry has an active
+  OfferVersion (`Prepared` or an eligible `Sent` version), and must always refuse
+  to bypass an accepted Offer. Rejected, withdrawn, superseded, or expired
+  versions are inactive. Creating a new OfferVersion is refused while the
+  Inquiry has an active Order;
+- menu composition transfer into production remains a separate reviewed seam
+  and must not be implemented by reusing OfferVersion as OrderVersion;
+- changes to an already sent proposal create a new OfferVersion rather than
+  rewriting the previous version.
+
+Migration and rollback impact: this ADR and its contract draft are documentation
+only. They add no table, route, command, UI, or configurator-to-Core write path.
+The current direct Inquiry-to-Order workflow and all current configurator
+boundaries remain unchanged until separately accepted implementation slices are
+deployed. Future storage must be additive, tolerate records without an Offer,
+and permit rollback to the legacy conversion path without altering existing
+Order or OrderVersion history.
 
 ## How to add a decision
 
