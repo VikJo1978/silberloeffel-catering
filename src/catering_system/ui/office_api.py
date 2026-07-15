@@ -358,6 +358,18 @@ class OfficeApi:
             ],
         }
 
+    def list_offers(self) -> dict[str, object]:
+        inquiries_by_id = {
+            inquiry.inquiry_id: inquiry for inquiry in self.inquiries.list_all()
+        }
+        return {
+            "offers": views.offer_list_view(
+                self.offers.list_all(),
+                inquiries_by_id,
+                today=views.berlin_today(),
+            )
+        }
+
     def list_inquiries(self, q: str, limit: int, offset: int) -> dict[str, object]:
         orders_by_inquiry: dict[str, list[Order]] = {}
         for order in self.orders.list_orders():
@@ -1080,6 +1092,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         {"POST": "prepare-offer"},
     ),
     (
+        re.compile(r"^/office/v1/offers$"),
+        "/office/v1/offers",
+        {"GET": "list_offers"},
+    ),
+    (
         re.compile(
             r"^/office/v1/offers/(?P<offer_id>[^/]+)/versions/"
             r"(?P<version_id>[^/]+)/mark-sent$"
@@ -1355,6 +1372,9 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
                 q = _v_str(params.get("q", ""), _MAX_Q_CHARS).strip().lower()
                 limit, offset = self._pagination(params)
                 self._respond(200, api.list_orders(q, limit, offset))
+            elif kind == "list_offers":
+                self._query(set())
+                self._respond(200, api.list_offers())
             elif kind == "inquiry_detail":
                 self._query(set())
                 self._respond(200, api.inquiry_detail(path_ids["id"]))

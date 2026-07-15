@@ -332,6 +332,34 @@ def test_work_center_requires_auth(api) -> None:
     assert (status, body["error"]) == (401, "unauthorized")
 
 
+def test_list_offers_empty(api) -> None:
+    base, _ids, _db = api
+    status, body, _h = _get(f"{base}/office/v1/offers")
+    assert status == 200
+    assert body == {"offers": []}
+
+
+def test_list_offers_schema_and_states(api) -> None:
+    base, _ids, _db = api
+    offer_id, version_id = _prepare_offer(api)
+    mark_url = _mark_sent_url(base, offer_id, version_id)
+    assert _post(mark_url, args=_MARK_SENT_ARGS)[0] == 200
+
+    status, body, _h = _get(f"{base}/office/v1/offers")
+    assert status == 200
+    assert len(body["offers"]) == 1
+    row = body["offers"][0]
+    assert set(row) == {
+        "offer_id",
+        "inquiry_id",
+        "state",
+        "event_date",
+        "valid_until",
+    }
+    assert row["offer_id"] == offer_id
+    assert row["state"] == "Sent"
+
+
 def test_inquiry_list_rows_and_search(api) -> None:
     base, ids, _db = api
     status, body, _h = _get(f"{base}/office/v1/inquiries")

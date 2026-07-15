@@ -355,6 +355,17 @@ class SQLiteOfferRepository:
             return None
         return self.get(row[0])
 
+    def list_all(self) -> list[Offer]:
+        rows = self._conn.execute(
+            "SELECT offer_id FROM offers ORDER BY created_at, offer_id"
+        ).fetchall()
+        offers: list[Offer] = []
+        for (offer_id,) in rows:
+            offer = self.get(offer_id)
+            if offer is not None:
+                offers.append(offer)
+        return offers
+
     def append_sent_evidence(self, evidence: SentEvidence) -> Offer:
         with self._write_scope():
             offer = self.get(evidence.offer_id)

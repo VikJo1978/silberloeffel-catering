@@ -62,6 +62,7 @@ from catering_system.ui.office_panel_dashboard import (
     WorkCenterDashboardUi,
     render_work_center_arbeitszentrale,
 )
+from catering_system.ui.office_panel_offers_list import render_angebote_list
 from catering_system.ui.office_panel_inquiry_detail import (
     InquiryDetailFormFields,
     render_inquiry_detail,
@@ -313,15 +314,35 @@ class OfficePanel:
             ),
         )
 
+    def _offer_list_rows(self) -> list[dict[str, object]]:
+        if self._remote is not None:
+            body = self._remote.list_offers()
+            return cast(list[dict[str, object]], body["offers"])
+        inquiries_by_id = {
+            inquiry.inquiry_id: inquiry for inquiry in self._inquiries.list_all()
+        }
+        return api_views.offer_list_view(
+            self._offers.list_all(),
+            inquiries_by_id,
+            today=api_views.berlin_today(),
+        )
+
     def render_angebote(
         self, *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
     ) -> str:
-        body = (
-            '<p class="subtitle">Angebotsübersicht für den Vertrieb — folgt in Kürze.</p>'
-            "<p>Die Kennzahlen zu wartenden und angenommenen Angeboten stehen bereits "
-            'auf der <a href="/">Arbeitszentrale</a>.</p>'
+        rows = self._offer_list_rows()
+        inquiries_by_id = {
+            inquiry.inquiry_id: inquiry for inquiry in self._inquiries.list_all()
+        }
+        titles_by_inquiry = {
+            inquiry_id: (inquiry.intake_subject or inquiry.location_text or "–")
+            for inquiry_id, inquiry in inquiries_by_id.items()
+        }
+        return render_angebote_list(
+            rows,
+            titles_by_inquiry,
+            context=context,
         )
-        return _page("Angebote", body, active_section="inquiries", context=context)
 
     def begin_request(self, form: dict[str, str] | None = None) -> None:
         """No-op in direct mode. In remote mode, resets the RemoteCoreClient's

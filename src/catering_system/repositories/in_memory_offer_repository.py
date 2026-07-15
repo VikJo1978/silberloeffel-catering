@@ -26,6 +26,9 @@ class InMemoryOfferRepository:
                 return offer
         return None
 
+    def list_all(self) -> list[Offer]:
+        return sorted(self._offers.values(), key=lambda offer: (offer.created_at, offer.offer_id))
+
     def append_sent_evidence(self, evidence: SentEvidence) -> Offer:
         offer = self.get(evidence.offer_id)
         if offer is None:

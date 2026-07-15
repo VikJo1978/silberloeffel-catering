@@ -804,6 +804,32 @@ class RemoteCoreClient:
             _nonnegative_int(value)
         return body
 
+    def list_offers(self) -> dict[str, object]:
+        body = self.get("/office/v1/offers")
+        _exact(body, {"offers"})
+        rows = _list(body["offers"])
+        allowed_states = {
+            "Prepared",
+            "Sent",
+            "Accepted",
+            "Converted",
+            "Expired",
+            "Withdrawn",
+            "Rejected",
+            "Superseded",
+        }
+        for raw in rows:
+            row = _dict(raw)
+            _exact(row, {"offer_id", "inquiry_id", "state", "event_date", "valid_until"})
+            _uuid4(row["offer_id"])
+            _uuid4(row["inquiry_id"])
+            state = _str(row["state"])
+            if state not in allowed_states:
+                _bad_response()
+            _date(row["event_date"])
+            _date(row["valid_until"])
+        return body
+
     def _validate_page(
         self,
         page: dict[str, object],

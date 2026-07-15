@@ -17,9 +17,10 @@ from catering_system.domain.inquiry import (
     Inquiry,
     InquiryOfferProjection,
     InquiryOfficeState,
+    derive_inquiry_offer_projection,
     derive_inquiry_office_state,
 )
-from catering_system.domain.offer import Offer
+from catering_system.domain.offer import Offer, OfferState
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_payment_reminder import PaymentReminderView
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
@@ -39,6 +40,58 @@ TOP_ROWS_CAP = 5  # the dashboard's own cap
 
 def berlin_today() -> date:
     return datetime.now(BERLIN).date()
+
+
+OFFER_STATE_LABELS: dict[OfferState, str] = {
+    "Prepared": "Vorbereitet",
+    "Sent": "Gesendet",
+    "Accepted": "Angenommen",
+    "Converted": "Auftrag erstellt",
+    "Expired": "Abgelaufen",
+    "Withdrawn": "Zurückgezogen",
+    "Rejected": "Abgelehnt",
+    "Superseded": "Ersetzt",
+}
+
+
+def offer_state_label(state: OfferState) -> str:
+    return OFFER_STATE_LABELS[state]
+
+
+def _offer_version(offer: Offer, offer_version_id: str):
+    for version in offer.versions:
+        if version.offer_version_id == offer_version_id:
+            return version
+    raise ValueError(f"unknown offer_version_id={offer_version_id!r}")
+
+
+def offer_list_row(offer: Offer, inquiry: Inquiry, *, today: date | None = None) -> dict[str, object]:
+    projection = derive_inquiry_offer_projection(offer, today=today or berlin_today())
+    version = _offer_version(offer, projection.offer_version_id)
+    return {
+        "offer_id": offer.offer_id,
+        "inquiry_id": offer.source_inquiry_id,
+        "state": projection.commercial_state,
+        "event_date": version.event_date.isoformat(),
+        "valid_until": version.valid_until.isoformat(),
+    }
+
+
+def offer_list_view(
+    offers: list[Offer],
+    inquiries_by_id: dict[str, Inquiry],
+    *,
+    today: date | None = None,
+) -> list[dict[str, object]]:
+    operating_today = today or berlin_today()
+    rows: list[dict[str, object]] = []
+    for offer in offers:
+        inquiry = inquiries_by_id.get(offer.source_inquiry_id)
+        if inquiry is None:
+            continue
+        rows.append(offer_list_row(offer, inquiry, today=operating_today))
+    rows.sort(key=lambda row: (str(row["event_date"]), str(row["offer_id"])))
+    return rows
 
 
 # --- shared shapes -----------------------------------------------------------

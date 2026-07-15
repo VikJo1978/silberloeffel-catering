@@ -20,6 +20,9 @@ class OfferRepository(Protocol):
     def get_by_source_inquiry_id(self, inquiry_id: str) -> Offer | None:
         """Load the Offer linked to an Inquiry, if any."""
 
+    def list_all(self) -> list[Offer]:
+        """Load every stored Offer aggregate in repository order."""
+
     def append_sent_evidence(self, evidence: SentEvidence) -> Offer:
         """Append one SentEvidence row and return the updated Offer aggregate."""
 

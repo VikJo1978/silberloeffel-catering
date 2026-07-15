@@ -500,6 +500,15 @@ def test_auftraege_parity_direct_vs_remote(parity_world) -> None:
     _assert_same_modulo_remote_fields(d_html, r_html)
 
 
+def test_angebote_parity_direct_vs_remote(parity_world) -> None:
+    direct_url, remote_url, _ids = parity_world
+    d_status, d_html = _get(f"{direct_url}/angebote")
+    r_status, r_html = _get(f"{remote_url}/angebote")
+    assert d_status == r_status == 200
+    _assert_same_modulo_remote_fields(d_html, r_html)
+    assert "Keine Angebote vorhanden" in d_html
+
+
 def test_order_detail_parity_direct_vs_remote(parity_world) -> None:
     direct_url, remote_url, ids = parity_world
     for key in ("order_ready", "order_unprinted", "order_cancelled"):
