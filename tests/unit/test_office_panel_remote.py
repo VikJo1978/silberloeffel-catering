@@ -337,8 +337,10 @@ def _post_panel_convert(
             detail_html,
             re.DOTALL,
         )
-        assert convert_form is not None
-        fields["_command_id"] = _extract_hidden(convert_form.group(0), "_command_id")
+        if convert_form is not None:
+            fields["_command_id"] = _extract_hidden(convert_form.group(0), "_command_id")
+        else:
+            fields["_command_id"] = str(uuid.uuid4())
     return _post_form(f"{panel_url}/inquiry/{inquiry_id}/convert", fields)
 
 

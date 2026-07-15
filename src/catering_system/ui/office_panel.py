@@ -24,7 +24,7 @@ from catering_system.domain.inquiry import (
     CRM_PIPELINE,
     PLANNING_MODES,
     Inquiry,
-    derive_inquiry_office_state,
+    InquiryOfficeState,
     inquiry_crm_stage_is_compatible_with_active_order,
     validate_crm_stage,
 )
@@ -384,6 +384,85 @@ class OfficePanel:
             f"<button>{label}</button></form>"
         )
 
+    def _inquiry_office_state(
+        self,
+        inquiry: Inquiry,
+        linked_orders: list[Order],
+        *,
+        inquiry_id: str | None = None,
+    ) -> InquiryOfficeState:
+        inquiry_id = inquiry_id or inquiry.inquiry_id
+        if self._remote is not None:
+            meta = self._remote.inquiry_detail_meta(inquiry_id)
+            if meta.next_action is not None or meta.offer is not None:
+                from catering_system.domain.inquiry import InquiryOfferProjection
+
+                offer_projection = None
+                if meta.offer is not None:
+                    raw_offer = meta.offer
+                    offer_projection = InquiryOfferProjection(
+                        offer_id=str(raw_offer["offer_id"]),
+                        offer_version_id=str(raw_offer["offer_version_id"]),
+                        commercial_state=raw_offer["commercial_state"],  # type: ignore[arg-type]
+                        accepted_variant_id=(
+                            str(raw_offer["accepted_variant_id"])
+                            if raw_offer.get("accepted_variant_id") is not None
+                            else None
+                        ),
+                        acceptance_id=(
+                            str(raw_offer["acceptance_id"])
+                            if raw_offer.get("acceptance_id") is not None
+                            else None
+                        ),
+                    )
+                has_order = bool(linked_orders)
+                has_active_order = any(
+                    order.cancelled_at is None for order in linked_orders
+                )
+                if has_active_order and not has_order:
+                    raise ValueError("an active order is also an existing order")
+                if inquiry.crm_stage == "Abgelehnt / verloren" or has_active_order:
+                    is_open = False
+                else:
+                    is_open = not has_order
+                return InquiryOfficeState(
+                    is_open=is_open,
+                    next_action=meta.next_action,
+                    offer=offer_projection,
+                )
+        offer = self._offers.get_by_source_inquiry_id(inquiry_id)
+        return api_views.inquiry_office_state(
+            inquiry,
+            linked_orders,
+            offer=offer,
+            today=api_views.berlin_today(),
+        )
+
+    def _inquiry_primary_action_html(
+        self,
+        inquiry_id: str,
+        state: InquiryOfficeState,
+        *,
+        context: OfficePageContext,
+    ) -> str:
+        if state.next_action == "verify":
+            return (
+                f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/verify">'
+                f"{_csrf_input(context)}{self._command_fields()}"
+                "<button>Telefonisch verifiziert</button></form>"
+            )
+        if state.next_action == "convert":
+            return (
+                f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/convert">'
+                f"{_csrf_input(context)}{self._command_fields()}"
+                "<button>In Auftrag umwandeln</button></form>"
+            )
+        if state.next_action == "offer-pending":
+            return '<span class="muted">Angebot ausstehend</span>'
+        if state.next_action == "convert-accepted":
+            return '<span class="muted">Angebot angenommen</span>'
+        return ""
+
     # -- queue -----------------------------------------------------------
 
     def render_queue(
@@ -412,14 +491,8 @@ class OfficePanel:
         all_inquiries = self._inquiries.list_all()
         open_inquiries = []
         for inquiry in all_inquiries:
-            state = derive_inquiry_office_state(
-                inquiry,
-                has_order=inquiry.inquiry_id in orders_by_inquiry,
-                has_active_order=any(
-                    order.cancelled_at is None
-                    for order in orders_by_inquiry.get(inquiry.inquiry_id, [])
-                ),
-            )
+            linked = orders_by_inquiry.get(inquiry.inquiry_id, [])
+            state = self._inquiry_office_state(inquiry, linked)
             if state.is_open:
                 open_inquiries.append((inquiry, state))
         active_orders = [o for o in orders if o.cancelled_at is None]
@@ -566,20 +639,9 @@ class OfficePanel:
 
         offene_anfragen_rows = []
         for inq, state in open_inquiries[:5]:
-            if state.next_action == "verify":
-                action = (
-                    f'<form class="inline" method="post" action="/inquiry/{_e(inq.inquiry_id)}/verify">'
-                    f"{_csrf_input(context)}{self._command_fields()}"
-                    "<button>Telefonisch verifiziert</button></form>"
-                )
-            elif state.next_action == "convert":
-                action = (
-                    f'<form class="inline" method="post" action="/inquiry/{_e(inq.inquiry_id)}/convert">'
-                    f"{_csrf_input(context)}{self._command_fields()}"
-                    "<button>In Auftrag umwandeln</button></form>"
-                )
-            else:
-                action = ""
+            action = self._inquiry_primary_action_html(
+                inq.inquiry_id, state, context=context
+            )
             offene_anfragen_rows.append(
                 f'<li><a href="/inquiry/{_e(inq.inquiry_id)}">{_e(inq.event_date.isoformat())} · '
                 f"{_e(inq.location_text)}</a> — {_e(inq.crm_stage)} {action}</li>"
@@ -742,18 +804,25 @@ class OfficePanel:
         inquiry_rows = []
         for inquiry in cast(list[dict[str, Any]], view["neue_anfragen_top"]):
             action_name = inquiry["next_action"]
+            inquiry_id = str(inquiry["inquiry_id"])
             if action_name == "verify":
                 action = (
-                    f'<form class="inline" method="post" action="/inquiry/{_e(inquiry["inquiry_id"])}/verify">'
+                    f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/verify">'
                     f"{_csrf_input(context)}{self._command_fields()}"
                     "<button>Telefonisch verifiziert</button></form>"
                 )
-            else:
+            elif action_name == "convert":
                 action = (
-                    f'<form class="inline" method="post" action="/inquiry/{_e(inquiry["inquiry_id"])}/convert">'
+                    f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/convert">'
                     f"{_csrf_input(context)}{self._command_fields()}"
                     "<button>In Auftrag umwandeln</button></form>"
                 )
+            elif action_name == "offer-pending":
+                action = '<span class="muted">Angebot ausstehend</span>'
+            elif action_name == "convert-accepted":
+                action = '<span class="muted">Angebot angenommen</span>'
+            else:
+                action = ""
             inquiry_rows.append(
                 f'<li><a href="/inquiry/{_e(inquiry["inquiry_id"])}">{_e(inquiry["event_date"])} · '
                 f"{_e(inquiry['location_text'])}</a> — {_e(inquiry['crm_stage'])} {action}</li>"
@@ -1039,10 +1108,10 @@ class OfficePanel:
             o for o in self._orders.list_orders() if o.source_inquiry_id == inquiry_id
         ]
         has_active_order = any(order.cancelled_at is None for order in existing)
-        state = derive_inquiry_office_state(
+        state = self._inquiry_office_state(
             inq,
-            has_order=bool(existing),
-            has_active_order=has_active_order,
+            existing,
+            inquiry_id=inquiry_id,
         )
         ev = self.progression.evaluate_inquiry_to_order_progression(inq)
         if self._ui_version == "v2":
@@ -1106,6 +1175,10 @@ class OfficePanel:
                 f"{_csrf_input(context)}{self._command_fields()}"
                 "<button>In Auftrag umwandeln</button></form>"
             )
+        elif state.next_action == "offer-pending":
+            convert += '<p class="muted">Angebot ausstehend</p>'
+        elif state.next_action == "convert-accepted":
+            convert += '<p class="muted">Angebot angenommen — Umwandlung über den Angebotspfad.</p>'
         guests = (
             str(inq.guest_count_estimate)
             if inq.guest_count_estimate is not None
@@ -1232,22 +1305,22 @@ class OfficePanel:
             has_active_order = any(
                 order.cancelled_at is None for order in linked_orders
             )
-            state = derive_inquiry_office_state(
+            state = self._inquiry_office_state(
                 inquiry,
-                has_order=bool(linked_orders),
-                has_active_order=has_active_order,
+                linked_orders,
+                inquiry_id=inquiry_id,
             )
             if has_active_order:
                 raise ValueError("inquiry already converted")
             if inquiry.crm_stage == "Abgelehnt / verloren":
                 raise ValueError("rejected inquiry cannot be converted")
-            if state.next_action != "convert":
-                raise ValueError("inquiry conversion gate is not satisfied")
             offer = self._offers.get_by_source_inquiry_id(inquiry_id)
             if offer is not None and offer_blocks_direct_inquiry_conversion(
                 offer, today=api_views.berlin_today()
             ):
                 raise ValueError("offer blocks conversion")
+            if state.next_action != "convert":
+                raise ValueError("inquiry conversion gate is not satisfied")
             order, version = self.order_service.convert_inquiry_to_order(inquiry)
             if self._remote is None:
                 self.inquiry_service.update_inquiry(

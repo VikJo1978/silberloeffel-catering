@@ -15,9 +15,11 @@ from zoneinfo import ZoneInfo
 
 from catering_system.domain.inquiry import (
     Inquiry,
+    InquiryOfferProjection,
     InquiryOfficeState,
     derive_inquiry_office_state,
 )
+from catering_system.domain.offer import Offer
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_payment_reminder import PaymentReminderView
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
@@ -68,18 +70,54 @@ def inquiry_list_row(inquiry: Inquiry, orders: list[Order]) -> dict[str, object]
     return row
 
 
-def inquiry_detail(inquiry: Inquiry, orders: list[Order]) -> dict[str, object]:
+def inquiry_offer_projection_shape(
+    projection: InquiryOfferProjection,
+) -> dict[str, object]:
+    row: dict[str, object] = {
+        "offer_id": projection.offer_id,
+        "offer_version_id": projection.offer_version_id,
+        "commercial_state": projection.commercial_state,
+    }
+    if projection.accepted_variant_id is not None:
+        row["accepted_variant_id"] = projection.accepted_variant_id
+    if projection.acceptance_id is not None:
+        row["acceptance_id"] = projection.acceptance_id
+    return row
+
+
+def inquiry_office_state(
+    inquiry: Inquiry,
+    orders: list[Order],
+    *,
+    offer: Offer | None = None,
+    today: date | None = None,
+) -> InquiryOfficeState:
+    return derive_inquiry_office_state(
+        inquiry,
+        has_order=bool(orders),
+        has_active_order=any(order.cancelled_at is None for order in orders),
+        offer=offer,
+        today=today or berlin_today(),
+    )
+
+
+def inquiry_detail(
+    inquiry: Inquiry,
+    orders: list[Order],
+    *,
+    offer: Offer | None = None,
+    today: date | None = None,
+) -> dict[str, object]:
     detail = inquiry_list_row(inquiry, orders)
     detail["customer_linkage"] = dict(inquiry.customer_linkage)
     detail["intake_message"] = inquiry.intake_message
     detail["intake_summary"] = inquiry.intake_summary
     detail["intake_external_ref"] = inquiry.intake_external_ref
-    state = derive_inquiry_office_state(
-        inquiry,
-        has_order=bool(orders),
-        has_active_order=any(order.cancelled_at is None for order in orders),
-    )
+    state = inquiry_office_state(inquiry, orders, offer=offer, today=today)
     detail["allows_conversion"] = state.next_action == "convert"
+    detail["next_action"] = state.next_action
+    if state.offer is not None:
+        detail["offer"] = inquiry_offer_projection_shape(state.offer)
     detail["orders"] = [
         {
             "order_id": o.order_id,
@@ -252,6 +290,8 @@ def inquiry_top_row(inquiry: Inquiry, state: InquiryOfficeState) -> dict[str, ob
     if state.next_action is None:
         raise ValueError("open inquiry top row requires a next action")
     row["next_action"] = state.next_action
+    if state.offer is not None:
+        row["offer"] = inquiry_offer_projection_shape(state.offer)
     return row
 
 

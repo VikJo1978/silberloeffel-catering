@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Any, Literal, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
+
+if TYPE_CHECKING:
+    from catering_system.domain.offer import Offer, OfferState
 
 InquirySource = Literal[
     "wix_form",  # legacy/adapter-compatible; not office-offered, not new-default
@@ -60,7 +63,20 @@ CALL_VERIFICATION_STATUSES: tuple[CallVerificationStatus, ...] = (
 )
 CALL_VERIFICATION_STATUS_SET: frozenset[str] = frozenset(CALL_VERIFICATION_STATUSES)
 
-InquiryOfficeNextAction = Literal["verify", "convert"]
+InquiryOfficeNextAction = Literal[
+    "verify", "convert", "convert-accepted", "offer-pending"
+]
+
+
+@dataclass(frozen=True)
+class InquiryOfferProjection:
+    """Read-only commercial context for office UI; never persisted."""
+
+    offer_id: str
+    offer_version_id: str
+    commercial_state: OfferState
+    accepted_variant_id: str | None = None
+    acceptance_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -69,6 +85,7 @@ class InquiryOfficeState:
 
     is_open: bool
     next_action: InquiryOfficeNextAction | None
+    offer: InquiryOfferProjection | None = None
 
 
 class CustomerLinkage(TypedDict, total=False):
@@ -167,20 +184,96 @@ def inquiry_crm_stage_is_compatible_with_active_order(stage: CrmStage) -> bool:
     return stage == ACTIVE_ORDER_CRM_STAGE
 
 
+def derive_inquiry_offer_projection(
+    offer: Offer, *, today: date
+) -> InquiryOfferProjection:
+    """Pick the one commercial version the office UI should surface for an Inquiry."""
+    from catering_system.domain.offer import derive_offer_state
+
+    link = offer.conversion_link
+    if link is not None:
+        return InquiryOfferProjection(
+            offer_id=offer.offer_id,
+            offer_version_id=link.offer_version_id,
+            commercial_state="Converted",
+            accepted_variant_id=link.variant_id,
+            acceptance_id=link.acceptance_id,
+        )
+    acceptance = offer.acceptance_evidence
+    if acceptance is not None:
+        return InquiryOfferProjection(
+            offer_id=offer.offer_id,
+            offer_version_id=acceptance.accepted_offer_version_id,
+            commercial_state="Accepted",
+            accepted_variant_id=acceptance.accepted_variant_id,
+            acceptance_id=acceptance.acceptance_id,
+        )
+    latest = max(offer.versions, key=lambda version: version.version_number)
+    return InquiryOfferProjection(
+        offer_id=offer.offer_id,
+        offer_version_id=latest.offer_version_id,
+        commercial_state=derive_offer_state(
+            offer, latest.offer_version_id, today=today
+        ),
+    )
+
+
 def derive_inquiry_office_state(
-    inquiry: Inquiry, *, has_order: bool, has_active_order: bool
+    inquiry: Inquiry,
+    *,
+    has_order: bool,
+    has_active_order: bool,
+    offer: Offer | None = None,
+    today: date | None = None,
 ) -> InquiryOfficeState:
     """Derive queue membership and the one truthful primary office action."""
     if has_active_order and not has_order:
         raise ValueError("an active order is also an existing order")
+    if today is None:
+        raise ValueError("today is required when deriving inquiry office state")
+    offer_projection = (
+        derive_inquiry_offer_projection(offer, today=today) if offer is not None else None
+    )
     if inquiry.crm_stage == "Abgelehnt / verloren" or has_active_order:
-        return InquiryOfficeState(is_open=False, next_action=None)
+        return InquiryOfficeState(
+            is_open=False, next_action=None, offer=offer_projection
+        )
     is_open = not has_order
     if (
         inquiry.call_verification_required
         and inquiry.call_verification_status != "verified"
     ):
-        return InquiryOfficeState(is_open=is_open, next_action="verify")
+        return InquiryOfficeState(
+            is_open=is_open, next_action="verify", offer=offer_projection
+        )
+    if offer_projection is not None:
+        commercial = offer_projection.commercial_state
+        if commercial == "Accepted":
+            return InquiryOfficeState(
+                is_open=is_open,
+                next_action="convert-accepted",
+                offer=offer_projection,
+            )
+        if commercial == "Converted":
+            if inquiry_allows_order_conversion(inquiry):
+                return InquiryOfficeState(
+                    is_open=False,
+                    next_action="convert-accepted",
+                    offer=offer_projection,
+                )
+            return InquiryOfficeState(
+                is_open=is_open, next_action=None, offer=offer_projection
+            )
+        if commercial in ("Prepared", "Sent"):
+            return InquiryOfficeState(
+                is_open=is_open,
+                next_action="offer-pending",
+                offer=offer_projection,
+            )
     if inquiry_allows_order_conversion(inquiry):
-        return InquiryOfficeState(is_open=is_open, next_action="convert")
-    return InquiryOfficeState(is_open=is_open, next_action=None)
+        return InquiryOfficeState(
+            is_open=is_open, next_action="convert", offer=offer_projection
+        )
+    return InquiryOfficeState(
+        is_open=is_open, next_action=None, offer=offer_projection
+    )

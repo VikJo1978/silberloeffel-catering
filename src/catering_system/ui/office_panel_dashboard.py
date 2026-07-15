@@ -67,6 +67,16 @@ def _inquiry_action(inquiry: Mapping[str, Any], ui: DashboardUi) -> tuple[str, s
         label, suffix = "Rückruf bestätigen", "verify"
     elif action_name == "convert":
         label, suffix = "Auftrag anlegen", "convert"
+    elif action_name == "offer-pending":
+        return (
+            '<span class="dashboard-status">Angebot ausstehend</span>',
+            f"/inquiry/{quote(inquiry_id, safe='')}",
+        )
+    elif action_name == "convert-accepted":
+        return (
+            '<span class="dashboard-status">Angebot angenommen</span>',
+            f"/inquiry/{quote(inquiry_id, safe='')}",
+        )
     else:
         return "Anfrage öffnen", f"/inquiry/{quote(inquiry_id, safe='')}"
     form = (

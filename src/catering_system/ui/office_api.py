@@ -30,7 +30,6 @@ from urllib.parse import parse_qsl, urlparse
 from catering_system.domain.inquiry import (
     ACTIVE_ORDER_CRM_STAGE,
     CRM_PIPELINE,
-    derive_inquiry_office_state,
     inquiry_crm_stage_is_compatible_with_active_order,
     validate_crm_stage,
     validate_planning_mode,
@@ -295,14 +294,15 @@ class OfficeApi:
         for order in orders:
             orders_by_inquiry.setdefault(order.source_inquiry_id, []).append(order)
         open_inquiries = []
+        operating_today = views.berlin_today()
         for inquiry in inquiries:
-            state = derive_inquiry_office_state(
+            linked = orders_by_inquiry.get(inquiry.inquiry_id, [])
+            offer = self.offers.get_by_source_inquiry_id(inquiry.inquiry_id)
+            state = views.inquiry_office_state(
                 inquiry,
-                has_order=inquiry.inquiry_id in orders_by_inquiry,
-                has_active_order=any(
-                    order.cancelled_at is None
-                    for order in orders_by_inquiry.get(inquiry.inquiry_id, [])
-                ),
+                linked,
+                offer=offer,
+                today=operating_today,
             )
             if state.is_open:
                 open_inquiries.append((inquiry, state))
@@ -388,7 +388,10 @@ class OfficeApi:
         linked = [
             o for o in self.orders.list_orders() if o.source_inquiry_id == inquiry_id
         ]
-        return views.inquiry_detail(inquiry, linked)
+        offer = self.offers.get_by_source_inquiry_id(inquiry_id)
+        return views.inquiry_detail(
+            inquiry, linked, offer=offer, today=views.berlin_today()
+        )
 
     def order_detail(self, order_id: str) -> dict[str, object]:
         order = self.orders.get_order(order_id)
@@ -534,22 +537,23 @@ class OfficeApi:
             if order.source_inquiry_id == inquiry.inquiry_id
         ]
         has_active_order = any(order.cancelled_at is None for order in linked_orders)
-        state = derive_inquiry_office_state(
+        offer = self.offers.get_by_source_inquiry_id(inquiry.inquiry_id)
+        state = views.inquiry_office_state(
             inquiry,
-            has_order=bool(linked_orders),
-            has_active_order=has_active_order,
+            linked_orders,
+            offer=offer,
+            today=views.berlin_today(),
         )
         if has_active_order:
             raise ApiError(409, "already_converted")
         if inquiry.crm_stage == "Abgelehnt / verloren":
             raise ApiError(422, "inquiry_rejected")
-        if state.next_action != "convert":
-            raise ApiError(422, "verification_gate_blocked")
-        offer = self.offers.get_by_source_inquiry_id(inquiry.inquiry_id)
         if offer is not None and offer_blocks_direct_inquiry_conversion(
             offer, today=views.berlin_today()
         ):
             raise ApiError(422, "offer_blocks_conversion")
+        if state.next_action != "convert":
+            raise ApiError(422, "verification_gate_blocked")
         try:
             order, version = self.order_service.convert_inquiry_to_order(inquiry)
         except sqlite3.IntegrityError:

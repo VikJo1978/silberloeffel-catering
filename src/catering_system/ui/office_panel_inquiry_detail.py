@@ -94,6 +94,18 @@ def _state_copy(
             "Bereit für Auftrag",
             "Die vorhandenen Angaben erlauben die Umwandlung in einen Auftrag.",
         )
+    if state.next_action == "offer-pending":
+        return (
+            "Angebot ausstehend",
+            "Für diese Anfrage läuft der Angebotsprozess. "
+            "Ein direkter Legacy-Auftrag ist derzeit nicht vorgesehen.",
+        )
+    if state.next_action == "convert-accepted":
+        return (
+            "Angebot angenommen",
+            "Die Anfrage kann über den angenommenen Angebotspfad "
+            "in einen Auftrag überführt werden.",
+        )
     if has_active_order:
         return (
             "Auftrag vorhanden",
@@ -131,6 +143,24 @@ def _primary_action(
         )
         path = "convert"
         label = "In Auftrag umwandeln"
+    elif state.next_action == "convert-accepted":
+        return (
+            '<section class="inquiry-next-step">'
+            '<div class="inquiry-eyebrow">Nächster Schritt</div>'
+            "<h2>Angenommenes Angebot umsetzen</h2>"
+            "<p>Die Anfrage ist über den Angebotspfad vorgesehen. "
+            "Die Umwandlung erfolgt über den angenommenen Angebotsstand.</p>"
+            "</section>"
+        )
+    elif state.next_action == "offer-pending":
+        return (
+            '<section class="inquiry-next-step">'
+            '<div class="inquiry-eyebrow">Nächster Schritt</div>'
+            "<h2>Angebot ausstehend</h2>"
+            "<p>Der Angebotsprozess ist noch offen. "
+            "Es gibt derzeit keine direkte Legacy-Umwandlung in einen Auftrag.</p>"
+            "</section>"
+        )
     else:
         return ""
     return (

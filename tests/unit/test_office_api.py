@@ -369,6 +369,8 @@ def test_inquiry_detail_shape(api) -> None:
     status, body, _h = _get(f"{base}/office/v1/inquiries/{ids['inquiry_printed']}")
     assert status == 200
     assert body["allows_conversion"] is False
+    assert body["next_action"] is None
+    assert "offer" not in body
     assert body["orders"] == [{"order_id": ids["order_ready"], "cancelled_at": None}]
     assert body["orders_truncated"] is False
     assert body["customer_linkage"] == {}
@@ -377,6 +379,29 @@ def test_inquiry_detail_shape(api) -> None:
     assert prefill["inquiry_id"] == ids["inquiry_printed"]
     status, _body, _h = _get(f"{base}/office/v1/inquiries/{uuid.uuid4()}")
     assert status == 404
+
+
+def test_prepared_offer_changes_queue_and_detail_projection(api) -> None:
+    base, ids, _db = api
+    inquiry_id = ids["inquiry_convertible"]
+    status, _body, _h = _post(
+        f"{base}/office/v1/inquiries/{inquiry_id}/prepare-offer",
+        args={"snapshot": _valid_offer_snapshot(inquiry_id=inquiry_id)},
+    )
+    assert status == 201
+
+    status, body, _h = _get(f"{base}/office/v1/queue")
+    assert status == 200
+    top_actions = {
+        row["inquiry_id"]: row["next_action"] for row in body["neue_anfragen_top"]
+    }
+    assert top_actions[inquiry_id] == "offer-pending"
+
+    status, detail, _h = _get(f"{base}/office/v1/inquiries/{inquiry_id}")
+    assert status == 200
+    assert detail["allows_conversion"] is False
+    assert detail["next_action"] == "offer-pending"
+    assert detail["offer"]["commercial_state"] == "Prepared"
 
 
 def test_order_detail_and_print_data(api) -> None:

@@ -13,13 +13,14 @@ import urllib.error
 import urllib.request
 import uuid
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from typing import Any, NoReturn, cast
 from urllib.parse import quote, urlencode, urlparse
 
 from catering_system.domain.inquiry import (
     Inquiry,
+    InquiryOfficeNextAction,
     validate_call_verification_status,
     validate_crm_stage,
     validate_customer_linkage,
@@ -66,10 +67,31 @@ _INQUIRY_DETAIL_KEYS = _INQUIRY_LIST_KEYS | {
     "intake_summary",
     "intake_external_ref",
     "allows_conversion",
+    "next_action",
     "orders",
     "orders_truncated",
     "offer_prefill",
 }
+_INQUIRY_DETAIL_OPTIONAL_KEYS = frozenset({"offer"})
+_INQUIRY_OFFER_KEYS = frozenset(
+    {"offer_id", "offer_version_id", "commercial_state"}
+)
+_INQUIRY_OFFER_OPTIONAL_KEYS = frozenset({"accepted_variant_id", "acceptance_id"})
+_INQUIRY_NEXT_ACTIONS = frozenset(
+    {"verify", "convert", "convert-accepted", "offer-pending"}
+)
+_OFFER_COMMERCIAL_STATES = frozenset(
+    {
+        "Prepared",
+        "Sent",
+        "Accepted",
+        "Converted",
+        "Rejected",
+        "Withdrawn",
+        "Superseded",
+        "Expired",
+    }
+)
 _ORDER_SUMMARY_KEYS = frozenset(
     {
         "order_id",
@@ -147,6 +169,14 @@ class RemoteCoreError(ValueError):
         self.unavailable = unavailable
 
 
+@dataclass(frozen=True)
+class InquiryDetailMeta:
+    orders_total_count: int
+    orders_truncated: bool
+    next_action: InquiryOfficeNextAction | None = None
+    offer: dict[str, object] | None = None
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201
         return None
@@ -160,6 +190,33 @@ def _dict(value: object) -> dict[str, object]:
     if not isinstance(value, dict) or not all(isinstance(k, str) for k in value):
         _bad_response()
     return cast(dict[str, object], value)
+
+
+def _optional_inquiry_next_action(value: object) -> InquiryOfficeNextAction | None:
+    if value is None:
+        return None
+    action = _str(value)
+    if action not in _INQUIRY_NEXT_ACTIONS:
+        _bad_response()
+    return cast(InquiryOfficeNextAction, action)
+
+
+def _inquiry_offer_projection(value: object) -> dict[str, object]:
+    row = _dict(value)
+    keys = set(row)
+    allowed = _INQUIRY_OFFER_KEYS | _INQUIRY_OFFER_OPTIONAL_KEYS
+    if not _INQUIRY_OFFER_KEYS <= keys <= allowed:
+        _bad_response()
+    _uuid4(row["offer_id"])
+    _uuid4(row["offer_version_id"])
+    state = _str(row["commercial_state"])
+    if state not in _OFFER_COMMERCIAL_STATES:
+        _bad_response()
+    if "accepted_variant_id" in row:
+        _uuid4(row["accepted_variant_id"])
+    if "acceptance_id" in row:
+        _uuid4(row["acceptance_id"])
+    return row
 
 
 def _exact(data: Mapping[str, object], keys: frozenset[str] | set[str]) -> None:
@@ -260,12 +317,16 @@ def _optional_datetime(value: object) -> datetime | None:
 def _inquiry(
     data: Mapping[str, object], *, list_row: bool = False, detail: bool = False
 ) -> Inquiry:
-    _exact(
-        data,
-        _INQUIRY_DETAIL_KEYS
-        if detail
-        else (_INQUIRY_LIST_KEYS if list_row else _INQUIRY_SUMMARY_KEYS),
-    )
+    if detail:
+        keys = set(data)
+        allowed = _INQUIRY_DETAIL_KEYS | _INQUIRY_DETAIL_OPTIONAL_KEYS
+        if not _INQUIRY_DETAIL_KEYS <= keys <= allowed:
+            _bad_response()
+    else:
+        _exact(
+            data,
+            _INQUIRY_LIST_KEYS if list_row else _INQUIRY_SUMMARY_KEYS,
+        )
     linkage_raw = data.get("customer_linkage", {})
     try:
         linkage = validate_customer_linkage(_dict(linkage_raw))
@@ -490,7 +551,7 @@ class RemoteCoreClient:
         self._command_id = ""
         self._form: dict[str, str] = {}
         self._order_details: dict[str, dict[str, object]] = {}
-        self._inquiry_detail_meta: dict[str, tuple[int, bool]] = {}
+        self._inquiry_detail_meta: dict[str, InquiryDetailMeta] = {}
         self._order_version_meta: dict[str, tuple[int, bool]] = {}
         self._known_order_ids: list[str] = []
         self._evaluations: dict[str, ReadyToSendEvaluation] = {}
@@ -672,10 +733,15 @@ class RemoteCoreClient:
             _bad_response()
         for raw in inquiry_rows:
             row = _dict(raw)
-            _exact(row, _INQUIRY_SUMMARY_KEYS | {"next_action"})
-            _inquiry({key: row[key] for key in _INQUIRY_SUMMARY_KEYS})
-            if _str(row["next_action"]) not in {"verify", "convert"}:
+            row_keys = set(row)
+            allowed = _INQUIRY_SUMMARY_KEYS | {"next_action", "offer"}
+            if not (_INQUIRY_SUMMARY_KEYS | {"next_action"}) <= row_keys <= allowed:
                 _bad_response()
+            _inquiry({key: row[key] for key in _INQUIRY_SUMMARY_KEYS})
+            if _str(row["next_action"]) not in _INQUIRY_NEXT_ACTIONS:
+                _bad_response()
+            if "offer" in row:
+                _inquiry_offer_projection(row["offer"])
 
         order_rows = _list(body["auftraege_top"])
         if len(order_rows) > 5:
@@ -729,6 +795,10 @@ class RemoteCoreClient:
         try:
             detail = self.get(f"/office/v1/inquiries/{quote(inquiry_id, safe='')}")
             inquiry = _inquiry(detail, detail=True)
+            detail_keys = set(detail)
+            allowed = _INQUIRY_DETAIL_KEYS | _INQUIRY_DETAIL_OPTIONAL_KEYS
+            if not _INQUIRY_DETAIL_KEYS <= detail_keys <= allowed:
+                _bad_response()
             _optional_uuid4(detail["linked_order_id"])
             total = _nonnegative_int(detail["orders_total_count"])
             truncated = _bool(detail["orders_truncated"])
@@ -741,10 +811,21 @@ class RemoteCoreClient:
                 _uuid4(row["order_id"])
                 _optional_datetime(row["cancelled_at"])
             _bool(detail["allows_conversion"])
+            next_action = _optional_inquiry_next_action(detail.get("next_action"))
+            offer = (
+                _inquiry_offer_projection(detail["offer"])
+                if "offer" in detail
+                else None
+            )
             _validate_offer_prefill(detail["offer_prefill"])
             if _uuid4(_dict(detail["offer_prefill"])["inquiry_id"]) != inquiry_id:
                 _bad_response()
-            self._inquiry_detail_meta[inquiry_id] = (total, truncated)
+            self._inquiry_detail_meta[inquiry_id] = InquiryDetailMeta(
+                orders_total_count=total,
+                orders_truncated=truncated,
+                next_action=next_action,
+                offer=offer,
+            )
             return inquiry
         except RemoteCoreError as exc:
             if exc.status == 404:
@@ -831,8 +912,15 @@ class RemoteCoreClient:
             return []
         return [_version(_dict(row)) for row in _list(detail.get("versions"))]
 
+    def inquiry_detail_meta(self, inquiry_id: str) -> InquiryDetailMeta:
+        return self._inquiry_detail_meta.get(
+            inquiry_id,
+            InquiryDetailMeta(orders_total_count=0, orders_truncated=False),
+        )
+
     def inquiry_orders_meta(self, inquiry_id: str) -> tuple[int, bool]:
-        return self._inquiry_detail_meta.get(inquiry_id, (0, False))
+        meta = self.inquiry_detail_meta(inquiry_id)
+        return meta.orders_total_count, meta.orders_truncated
 
     def order_versions_meta(self, order_id: str) -> tuple[int, bool]:
         return self._order_version_meta.get(order_id, (0, False))
