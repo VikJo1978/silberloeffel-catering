@@ -98,8 +98,10 @@ Offer workflow development:
 - ADR-012 fixes the future commercial/payment boundary: `Zahlungsart` is agreed
   in the Angebot (`Vorkasse`, `Rechnung`, or `Bar vor Ort`), transferred only
   after Angebot acceptance and Order confirmation, and then drives an Office
-  reminder workflow. The Office Panel remains reminder-only; no invoice,
-  accounting, banking, schema, API, or UI implementation exists yet.
+  reminder workflow. A minimal local reminder slice now supplies the truthful
+  fallback for legacy/manual Orders without an accepted-offer handoff. The
+  Office Panel remains reminder-only; no invoice document, accounting,
+  banking or automatic matching implementation exists.
 
 ## Local undeployed development baseline
 
@@ -141,12 +143,12 @@ Offer workflow development:
 
 ## Local undeployed quality baseline
 
-- Python tests: **643 passed**
+- Python tests: **657 passed**
 - coverage gate: **90% minimum**
-- last full-project coverage: **90.4%**
+- last full-project coverage: **90.5%**
 - website intake receiver coverage: **99.2%**
-- Ruff: clean; format check reported **101 files already formatted**
-- Mypy: clean for **71 source files**
+- Ruff: clean; format check reported **108 files already formatted**
+- Mypy: clean for **76 source files**
 - Office Panel UI2A browser smoke: 1280/820/620/320 px, no body overflow,
   no-JS mobile navigation and table-local scrolling verified
 - staging-form browser tests and Cloudflare Worker sanitizer tests: clean

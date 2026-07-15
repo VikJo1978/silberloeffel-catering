@@ -26,6 +26,11 @@ from catering_system.domain.inquiry import (
     validate_planning_mode,
 )
 from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.order_payment_reminder import (
+    OrderPaymentReminder,
+    PaymentReminderView,
+    validate_payment_method,
+)
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
 from catering_system.services.inquiry_service import validate_inquiry_source
 
@@ -79,6 +84,7 @@ _ORDER_SUMMARY_KEYS = frozenset(
 _ORDER_LIST_KEYS = _ORDER_SUMMARY_KEYS | {"ready", "blocker_reason", "next_action"}
 _ORDER_DETAIL_KEYS = _ORDER_SUMMARY_KEYS | {
     "ready_to_send",
+    "payment_reminder",
     "versions",
     "versions_total_count",
     "versions_truncated",
@@ -120,6 +126,7 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
             "order_cancelled",
             "kitchen_print_not_confirmed",
             "version_not_owned",
+            "invalid_payment_reminder",
         }
     ),
     500: frozenset({"internal"}),
@@ -355,6 +362,56 @@ def _ready_evaluation(value: object, order_id: str) -> ReadyToSendEvaluation:
     )
 
 
+_PAYMENT_REMINDER_KEYS = frozenset(
+    {
+        "order_id",
+        "payment_method",
+        "payment_method_label",
+        "invoice_created",
+        "invoice_number",
+        "sent_on",
+        "due_on",
+        "paid_on",
+        "cash_received",
+        "invoice_state_label",
+        "payment_state_label",
+        "next_step",
+        "updated_at",
+    }
+)
+
+
+def _payment_reminder(value: object, order_id: str) -> PaymentReminderView:
+    data = _dict(value)
+    _exact(data, _PAYMENT_REMINDER_KEYS)
+    if _uuid4(data["order_id"]) != order_id:
+        _bad_response()
+    method_raw = data["payment_method"]
+    try:
+        method = (
+            None if method_raw is None else validate_payment_method(_str(method_raw))
+        )
+    except ValueError:
+        _bad_response()
+    return PaymentReminderView(
+        order_id=order_id,
+        payment_method=method,
+        payment_method_label=_str(data["payment_method_label"]),
+        invoice_created=_bool(data["invoice_created"]),
+        invoice_number=_optional_str(data["invoice_number"]),
+        sent_on=None if data["sent_on"] is None else _date(data["sent_on"]),
+        due_on=None if data["due_on"] is None else _date(data["due_on"]),
+        paid_on=None if data["paid_on"] is None else _date(data["paid_on"]),
+        cash_received=_bool(data["cash_received"]),
+        invoice_state_label=_optional_str(data["invoice_state_label"]),
+        payment_state_label=_str(data["payment_state_label"]),
+        next_step=_optional_str(data["next_step"]),
+        updated_at=(
+            None if data["updated_at"] is None else _datetime(data["updated_at"])
+        ),
+    )
+
+
 def _validate_offer_prefill(value: object) -> None:
     payload = _dict(value)
     _exact(payload, {"schema_version", "source", "inquiry_id", "transfer"})
@@ -436,6 +493,7 @@ class RemoteCoreClient:
         self._evaluations: dict[str, ReadyToSendEvaluation] = {}
         self.inquiry_service = _RemoteInquiryService(self)
         self.order_service = _RemoteOrderService(self)
+        self.payment_reminder_service = _RemotePaymentReminderService(self)
         self.core = _RemoteOperationalCoreService(self)
 
     def begin_request(self, form: Mapping[str, str] | None = None) -> None:
@@ -744,6 +802,7 @@ class RemoteCoreClient:
         self._evaluations[order_id] = _ready_evaluation(
             detail["ready_to_send"], order_id
         )
+        _payment_reminder(detail["payment_reminder"], order_id)
         versions = _list(detail["versions"])
         total = _nonnegative_int(detail["versions_total_count"])
         truncated = _bool(detail["versions_truncated"])
@@ -814,6 +873,12 @@ class RemoteCoreClient:
                 reasons=("ready_to_send_order_not_found",),
             ),
         )
+
+    def payment_reminder_view(self, order_id: str) -> PaymentReminderView:
+        detail = self._order_detail(order_id)
+        if detail is None:
+            raise RemoteCoreError(404, "not_found")
+        return _payment_reminder(detail["payment_reminder"], order_id)
 
     def print_data(
         self, order_id: str, version_id: str
@@ -1060,6 +1125,44 @@ class _RemoteOrderService:
             guest_count_estimate=values["guest_count_estimate"],
             planning_mode=validate_planning_mode(values["planning_mode"]),
         )
+
+
+class _RemotePaymentReminderService:
+    def __init__(self, client: RemoteCoreClient) -> None:
+        self._client = client
+
+    def view(self, order_id: str) -> PaymentReminderView:
+        return self._client.payment_reminder_view(order_id)
+
+    def save(self, reminder: OrderPaymentReminder) -> PaymentReminderView:
+        expected_at = self._client.form_value("_expect_payment_reminder_updated_at")
+        current = self.view(reminder.order_id)
+        result = self._client.command(
+            f"/office/v1/orders/{quote(reminder.order_id, safe='')}/payment-reminder",
+            {
+                "payment_method": reminder.payment_method,
+                "invoice_created": reminder.invoice_created,
+                "invoice_number": reminder.invoice_number,
+                "sent_on": reminder.sent_on.isoformat() if reminder.sent_on else None,
+                "due_on": reminder.due_on.isoformat() if reminder.due_on else None,
+                "paid_on": reminder.paid_on.isoformat() if reminder.paid_on else None,
+                "cash_received": reminder.cash_received,
+            },
+            {
+                "updated_at": (
+                    expected_at
+                    if expected_at
+                    else (
+                        current.updated_at.isoformat() if current.updated_at else None
+                    )
+                )
+            },
+            expected={200},
+            result_keys={"order_id", "updated_at"},
+        )
+        if _uuid4(result["order_id"]) != reminder.order_id:
+            _bad_response()
+        return replace(current, updated_at=_datetime(result["updated_at"]))
 
 
 class _RemoteOperationalCoreService:

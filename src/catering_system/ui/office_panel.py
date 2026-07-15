@@ -29,13 +29,27 @@ from catering_system.domain.inquiry import (
     validate_crm_stage,
 )
 from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.order_payment_reminder import (
+    PAYMENT_METHOD_LABELS,
+    PAYMENT_METHODS,
+    OrderPaymentReminder,
+    validate_payment_method,
+)
+from catering_system.repositories.in_memory_payment_reminder_repository import (
+    InMemoryPaymentReminderRepository,
+)
 from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.repositories.order_repository import OrderRepository
+from catering_system.repositories.payment_reminder_repository import (
+    PaymentReminderRepository,
+)
 from catering_system.services.inquiry_service import InquiryService
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
+from catering_system.services.payment_reminder_service import PaymentReminderService
 from catering_system.services.progression_service import ProgressionService
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
+from catering_system.ui import office_api_views as api_views
 from catering_system.ui.office_panel_proposal import (
     parse_proposal_payload,
     render_proposal_preview,
@@ -217,6 +231,7 @@ class OfficePanel:
         *,
         remote: "RemoteCoreClient | None" = None,
         command_executor: "CoreCommandExecutor | None" = None,
+        payment_reminder_repo: PaymentReminderRepository | None = None,
     ) -> None:
         self._inquiries = inquiry_repo
         self._orders = order_repo
@@ -237,6 +252,11 @@ class OfficePanel:
             self.inquiry_service = InquiryService(inquiry_repo)
             self.order_service = OrderService(order_repo)
             self.core = OperationalCoreService(order_repo)
+            self.payment_reminder_service = PaymentReminderService(
+                payment_reminder_repo or InMemoryPaymentReminderRepository(),
+                order_repo,
+                today=api_views.berlin_today,
+            )
         else:
             # Structurally duck-typed, not the same concrete class — the
             # remote facades implement exactly the method surface this
@@ -249,6 +269,7 @@ class OfficePanel:
             self.inquiry_service = remote.inquiry_service  # type: ignore[assignment]
             self.order_service = remote.order_service  # type: ignore[assignment]
             self.core = remote.core  # type: ignore[assignment]
+            self.payment_reminder_service = remote.payment_reminder_service  # type: ignore[assignment]
         self._remote = remote
         self._command_executor = command_executor
         # Pure-read derivations: safe to run over the remote client's repo-
@@ -1197,6 +1218,59 @@ class OfficePanel:
             release = (
                 f'<p class="blocked">Versandfreigabe blockiert:</p><ul>{reasons}</ul>'
             )
+        payment = self.payment_reminder_service.view(order_id)
+        payment_rows = [
+            f"<p><strong>Zahlungsart:</strong> {_e(payment.payment_method_label)}</p>"
+        ]
+        if payment.invoice_state_label is not None:
+            payment_rows.append(
+                f"<p><strong>Rechnung:</strong> {_e(payment.invoice_state_label)}</p>"
+            )
+        if payment.invoice_number:
+            payment_rows.append(
+                f"<p><strong>Rechnungsnummer:</strong> {_e(payment.invoice_number)}</p>"
+            )
+        for label, value in (
+            ("Versendet am", payment.sent_on),
+            ("Fällig am", payment.due_on),
+            ("Bezahlt am", payment.paid_on),
+        ):
+            if value is not None:
+                payment_rows.append(
+                    f"<p><strong>{label}:</strong> {_e(value.isoformat())}</p>"
+                )
+        payment_rows.append(
+            f"<p><strong>Zahlungsstatus:</strong> {_e(payment.payment_state_label)}</p>"
+        )
+        if payment.next_step:
+            payment_rows.append(
+                f"<p><strong>Nächster Schritt:</strong> {_e(payment.next_step)}</p>"
+            )
+        payment_form = ""
+        if not cancelled:
+            options = ['<option value="">Bitte wählen</option>']
+            for method in PAYMENT_METHODS:
+                selected = " selected" if payment.payment_method == method else ""
+                options.append(
+                    f'<option value="{method}"{selected}>'
+                    f"{_e(PAYMENT_METHOD_LABELS[method])}</option>"
+                )
+            expect = {
+                "payment_reminder_updated_at": (
+                    payment.updated_at.isoformat() if payment.updated_at else ""
+                )
+            }
+            payment_form = f"""
+<form method="post" action="/order/{_e(order_id)}/payment-reminder">{_csrf_input(context)}{self._command_fields(expect)}<fieldset>
+<p><label>Zahlungsart*</label><select name="payment_method" required>{"".join(options)}</select></p>
+<p><label><input type="checkbox" name="invoice_created" value="1"{" checked" if payment.invoice_created else ""}> Rechnung in der Buchhaltung erstellt</label></p>
+<p><label>Rechnungsnummer</label><input name="invoice_number" maxlength="200" value="{_e(payment.invoice_number or "")}"></p>
+<p><label>Versendet am</label><input type="date" name="sent_on" value="{payment.sent_on.isoformat() if payment.sent_on else ""}"></p>
+<p><label>Fällig am</label><input type="date" name="due_on" value="{payment.due_on.isoformat() if payment.due_on else ""}"></p>
+<p><label>Bezahlt am</label><input type="date" name="paid_on" value="{payment.paid_on.isoformat() if payment.paid_on else ""}"></p>
+<p><label><input type="checkbox" name="cash_received" value="1"{" checked" if payment.cash_received else ""}> Barzahlung erhalten</label></p>
+<p><button type="submit">Zahlungshinweis speichern</button></p>
+</fieldset></form>"""
         header = '<p class="cancelled">STORNIERT</p>' if cancelled else ""
         actions_block = ""
         if not cancelled:
@@ -1229,6 +1303,7 @@ class OfficePanel:
 <h2>Versionen</h2>
 <table><tr><th>Nr</th><th>Datum</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th>
 <th>Druck bestätigt</th><th>Status</th><th>Aktionen</th></tr>{"".join(rows)}</table>
+<h2>Zahlung</h2>{"".join(payment_rows)}{payment_form}
 <h2>Freigabe (READY_TO_SEND)</h2>{release}
 {actions_block}"""
         return _page(
@@ -1237,6 +1312,32 @@ class OfficePanel:
             active_section="orders",
             context=context,
         )
+
+    def save_payment_reminder(self, order_id: str, form: dict[str, str]) -> None:
+        def optional_date(name: str) -> date | None:
+            raw = form.get(name, "").strip()
+            return date.fromisoformat(raw) if raw else None
+
+        reminder = OrderPaymentReminder(
+            order_id=order_id,
+            payment_method=validate_payment_method(form.get("payment_method", "")),
+            invoice_created=form.get("invoice_created") == "1",
+            invoice_number=form.get("invoice_number", "").strip() or None,
+            sent_on=optional_date("sent_on"),
+            due_on=optional_date("due_on"),
+            paid_on=optional_date("paid_on"),
+            cash_received=form.get("cash_received") == "1",
+        )
+
+        def work() -> None:
+            self.payment_reminder_service.save(reminder)
+
+        if self._remote is not None:
+            work()
+        elif self._command_executor is not None:
+            self._command_executor.run(work)
+        else:
+            work()
 
     def create_version(self, order_id: str, form: dict[str, str]) -> None:
         order = self._orders.get_order(order_id)
@@ -1271,6 +1372,7 @@ def make_office_panel_handler(
     *,
     remote: "RemoteCoreClient | None" = None,
     command_executor: "CoreCommandExecutor | None" = None,
+    payment_reminder_repo: PaymentReminderRepository | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     """Compatibility wrapper; HTTP routing lives in office_panel_http."""
     from catering_system.ui.office_panel_http import (
@@ -1288,6 +1390,7 @@ def make_office_panel_handler(
         configurator_url,
         remote=remote,
         command_executor=command_executor,
+        payment_reminder_repo=payment_reminder_repo,
     )
 
 
@@ -1305,6 +1408,7 @@ def create_office_panel_server(
     *,
     remote: "RemoteCoreClient | None" = None,
     command_executor: "CoreCommandExecutor | None" = None,
+    payment_reminder_repo: PaymentReminderRepository | None = None,
 ) -> HTTPServer:
     """Compatibility wrapper; server construction lives in office_panel_http."""
     from catering_system.ui.office_panel_http import (
@@ -1324,6 +1428,7 @@ def create_office_panel_server(
         configurator_url,
         remote=remote,
         command_executor=command_executor,
+        payment_reminder_repo=payment_reminder_repo,
     )
 
 
@@ -1438,10 +1543,16 @@ def main() -> None:
         from catering_system.repositories.sqlite_order_repository import (
             SQLiteOrderRepository,
         )
+        from catering_system.repositories.sqlite_payment_reminder_repository import (
+            SQLitePaymentReminderRepository,
+        )
 
         connection = open_core_connection(args.db)
         inquiry_repo = SQLiteInquiryRepository.from_connection(connection)
         order_repo = SQLiteOrderRepository.from_connection(connection)
+        payment_reminder_repo = SQLitePaymentReminderRepository.from_connection(
+            connection
+        )
 
         server = create_office_panel_server(
             inquiry_repo,
@@ -1455,6 +1566,7 @@ def main() -> None:
             args.kiosk_url,
             args.configurator_url,
             command_executor=CoreCommandExecutor(connection),
+            payment_reminder_repo=payment_reminder_repo,
         )
         print(f"Office panel on http://{args.host}:{args.port}/ (user: office)")
     server.serve_forever()

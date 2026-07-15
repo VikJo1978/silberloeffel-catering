@@ -260,6 +260,41 @@ def test_order_detail_parity_direct_vs_remote(parity_world) -> None:
         _assert_same_modulo_remote_fields(d_html, r_html)
 
 
+def test_remote_payment_reminder_command_and_operational_actions(parity_world) -> None:
+    _direct_url, remote_url, ids = parity_world
+    order_id = ids["order_unprinted"]
+    status, detail = _get(f"{remote_url}/order/{order_id}")
+    assert status == 200
+    form = re.search(
+        rf'(<form method="post" action="/order/{order_id}/payment-reminder".*?</form>)',
+        detail,
+        re.DOTALL,
+    )
+    assert form is not None
+    form_html = form.group(1)
+
+    status, saved = _post_form(
+        f"{remote_url}/order/{order_id}/payment-reminder",
+        {
+            "_csrf_token": _CSRF_TOKEN,
+            "_command_id": _extract_hidden(form_html, "_command_id"),
+            "_expect_payment_reminder_updated_at": _extract_hidden(
+                form_html, "_expect_payment_reminder_updated_at"
+            ),
+            "payment_method": "RECHNUNG",
+            "invoice_created": "1",
+            "invoice_number": "RE-REMOTE-1",
+            "sent_on": "2026-07-15",
+            "due_on": "2026-07-22",
+        },
+    )
+
+    assert status == 200
+    assert "Zahlungsart:</strong> Rechnung" in saved
+    assert "Rechnungsnummer:</strong> RE-REMOTE-1" in saved
+    assert "Druck bestätigen" in saved
+
+
 def test_truncated_order_detail_warns_and_uses_true_latest_version(
     tmp_path: Path,
 ) -> None:

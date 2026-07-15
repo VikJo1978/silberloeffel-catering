@@ -2685,3 +2685,45 @@ Completed
 Not included
 	•	the implementation pack and UI2A are committed locally but are not pushed
 	  or deployed. Neither the Lenovo nor a Proxmox Office Panel contains UI2A
+
+
+Entry 068
+
+Date: 2026-07-15 — minimal Order payment-reminder workflow
+Scope: local uncommitted implementation on `b2b6b1a`; no push, deploy, Phase
+3B, accounting subsystem, banking integration or operational workflow change.
+
+Meaning
+	•	one separate `order_payment_reminders` table stores the manually chosen
+	  `VORKASSE`, `RECHNUNG` or `BAR_VOR_ORT` method plus external invoice
+	  reference/dates, paid date and cash-received flag. It does not store prices,
+	  tax, an official invoice document, bank data or an Order status
+	•	absence is backward compatible and requires no backfill: every existing
+	  non-cancelled Order derives `Noch nicht gewählt` and the next step
+	  `Zahlungsart auswählen`
+	•	one pure derivation supplies the German invoice/payment labels and next
+	  reminder, including due-date attention and the post-event cash check
+	•	one direct/remote Office command saves the reminder. The remote path uses
+	  the existing atomic command ledger and optimistic `updated_at` precondition;
+	  identical service saves are idempotent. Contradictory invoice/cash facts and
+	  changes of payment method after downstream facts are rejected
+	•	the Order detail contains a separate `Zahlung` block. Cancelled Orders keep
+	  the reminder readable but do not offer changes
+	•	Order, OrderVersion, kitchen-print confirmation, effective selection,
+	  `READY_TO_SEND`, kiosk and all operational event state are unchanged; the
+	  reminder is not a second source of operational truth
+
+Completed
+	•	194 focused domain, SQLite, Core Office API, direct panel and remote parity
+	  tests passed
+	•	full pytest under coverage: 657 passed; total coverage 90.5% with the
+	  project minimum of 90%
+	•	full Ruff check clean; Ruff format reported 108 files already formatted;
+	  full mypy clean for 76 source files
+
+Not included
+	•	no Invoice or Payment ledger, PDF, XRechnung, official invoice-number
+	  generation, accounting entries, bank/Open-Banking access, automatic payment
+	  matching, dashboard queue or accepted-offer handoff
+	•	UI2B working-tree changes were preserved; neither UI2B nor this reminder
+	  slice is pushed or deployed

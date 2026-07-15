@@ -15,6 +15,9 @@ from urllib.parse import parse_qs, urlparse
 
 from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.repositories.order_repository import OrderRepository
+from catering_system.repositories.payment_reminder_repository import (
+    PaymentReminderRepository,
+)
 from catering_system.ui.office_panel import (
     OfficePageContext,
     OfficePanel,
@@ -61,6 +64,7 @@ def make_office_panel_handler(
     *,
     remote: "RemoteCoreClient | None" = None,
     command_executor: "CoreCommandExecutor | None" = None,
+    payment_reminder_repo: PaymentReminderRepository | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     panel = OfficePanel(
         inquiry_repo,
@@ -69,6 +73,7 @@ def make_office_panel_handler(
         configurator_url,
         remote=remote,
         command_executor=command_executor,
+        payment_reminder_repo=payment_reminder_repo,
     )
     expected = "Basic " + base64.b64encode(f"office:{password}".encode()).decode()
     csrf_token = csrf_token_for_password(password)
@@ -365,6 +370,8 @@ def make_office_panel_handler(
                 panel.core.request_ready_to_send(order_id)
             elif action == "cancel":
                 panel.core.cancel_order(order_id)
+            elif action == "payment-reminder":
+                panel.save_payment_reminder(order_id, self._form())
             else:
                 self.send_error(404)
                 return
@@ -387,6 +394,7 @@ def create_office_panel_server(
     *,
     remote: "RemoteCoreClient | None" = None,
     command_executor: "CoreCommandExecutor | None" = None,
+    payment_reminder_repo: PaymentReminderRepository | None = None,
 ) -> HTTPServer:
     """Create the intentionally single-threaded office HTTP server."""
     return HTTPServer(
@@ -402,5 +410,6 @@ def create_office_panel_server(
             configurator_url,
             remote=remote,
             command_executor=command_executor,
+            payment_reminder_repo=payment_reminder_repo,
         ),
     )

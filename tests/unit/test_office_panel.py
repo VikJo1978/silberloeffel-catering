@@ -370,6 +370,46 @@ def test_verify_then_convert(panel: str) -> None:
     assert "Bestätigt / Auftrag" in inquiry_body
 
 
+def test_order_payment_reminder_is_separate_and_truthful(panel: str) -> None:
+    inquiry_id = _create_inquiry(panel)
+    order_id = _convert(panel, inquiry_id)
+
+    status, initial = _get(f"{panel}/order/{order_id}")
+    assert status == 200
+    assert "<h2>Zahlung</h2>" in initial
+    assert "Zahlungsart:</strong> Noch nicht gewählt" in initial
+    assert "Nächster Schritt:</strong> Zahlungsart auswählen" in initial
+    assert f'action="/order/{order_id}/payment-reminder"' in initial
+    assert "Druck bestätigen" in initial
+
+    status, _url, saved = _post(
+        f"{panel}/order/{order_id}/payment-reminder",
+        {
+            "payment_method": "VORKASSE",
+            "invoice_created": "1",
+            "invoice_number": "RE-2026-0048",
+            "sent_on": "2026-07-15",
+            "due_on": "2026-07-22",
+        },
+    )
+    assert status == 200
+    assert "Zahlungsart:</strong> Vorkasse" in saved
+    assert "Rechnungsnummer:</strong> RE-2026-0048" in saved
+    assert "Nächster Schritt:</strong> Zahlungseingang prüfen" in saved
+    assert "Druck bestätigen" in saved
+
+
+def test_cancelled_order_payment_reminder_is_read_only(panel: str) -> None:
+    inquiry_id = _create_inquiry(panel)
+    order_id = _convert(panel, inquiry_id)
+    _post(f"{panel}/order/{order_id}/cancel", {})
+
+    _status, body = _get(f"{panel}/order/{order_id}")
+
+    assert "Zahlungsart:</strong> Noch nicht gewählt" in body
+    assert f'action="/order/{order_id}/payment-reminder"' not in body
+
+
 def test_converted_inquiry_shows_order_link_instead_of_button(panel: str) -> None:
     iid = _create_inquiry(panel)
     oid = _convert(panel, iid)

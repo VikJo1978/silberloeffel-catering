@@ -30,7 +30,7 @@ explicit Phase 2 configuration/deploy step (not yet done; see below).
 | `GET /office/v1/inquiries?q=&limit=&offset=` | list rows (`intake_subject`, `linked_order_id`, `orders_total_count`); `limit` ≤100, honest `total_count` |
 | `GET /office/v1/inquiries/{id}` | full detail incl. `allows_conversion`, capped `orders` array, `offer_prefill` payload |
 | `GET /office/v1/orders?q=&limit=&offset=` | rows with `ready`, `blocker_reason`, `next_action` — no N+1 |
-| `GET /office/v1/orders/{id}` | detail with versions (≤200, flagged) and `ready_to_send` |
+| `GET /office/v1/orders/{id}` | detail with versions (≤200, flagged), `ready_to_send` and the separately derived `payment_reminder` view |
 | `GET /office/v1/orders/{id}/print-data?version=` | print-sheet data; unknown and unowned are the same `404` |
 
 Orderings are the repository orderings (inquiries by event date then id,
@@ -55,6 +55,7 @@ are minimal (IDs + timestamps, no PII); the panel re-reads details via GET.
 | `POST /office/v1/orders/{id}/effective` | `current_effective_order_version_id` |
 | `POST /office/v1/orders/{id}/ready` | – (unknown order: `200`, `ready=false`) |
 | `POST /office/v1/orders/{id}/cancel` | `updated_at` (repeat = success) |
+| `POST /office/v1/orders/{id}/payment-reminder` | reminder `updated_at` (nullable before first save); exact manual reminder facts only |
 
 Idempotency: every command carries a client `command_id`; precondition,
 business write and the ledger record commit in **one** SQLite transaction.
@@ -81,7 +82,12 @@ Error codes (stable, never free text): `unauthorized`, `not_found`,
 `already_converted`, `external_ref_conflict`,
 `active_order_crm_stage_conflict`, `inquiry_rejected`, `verification_gate_blocked`,
 `order_cancelled`, `kitchen_print_not_confirmed`, `version_not_owned`,
-`core_busy`, `internal`.
+`invalid_payment_reminder`, `core_busy`, `internal`.
+
+The local payment-reminder extension records only the chosen method, external
+invoice reference/dates, paid date and cash-received flag. Its command uses the
+same atomic idempotency ledger as the other Office commands. It neither reads
+nor writes operational Order progression fields.
 
 ## Smoke test (status codes only — never dump bodies)
 

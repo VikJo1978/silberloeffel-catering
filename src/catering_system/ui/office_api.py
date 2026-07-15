@@ -35,6 +35,10 @@ from catering_system.domain.inquiry import (
     validate_planning_mode,
 )
 from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.order_payment_reminder import (
+    OrderPaymentReminder,
+    validate_payment_method,
+)
 from catering_system.repositories.core_transaction import (
     CoreBusyError,
     CoreCommandExecutor,
@@ -54,12 +58,16 @@ from catering_system.repositories.sqlite_inquiry_repository import (
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
+from catering_system.repositories.sqlite_payment_reminder_repository import (
+    SQLitePaymentReminderRepository,
+)
 from catering_system.services.inquiry_service import (
     InquiryService,
     validate_inquiry_source,
 )
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
+from catering_system.services.payment_reminder_service import PaymentReminderService
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
 from catering_system.ui import office_api_views as views
 
@@ -128,6 +136,17 @@ def _v_date(value: object) -> date:
         return date.fromisoformat(value)
     except ValueError as exc:
         raise _invalid() from exc
+
+
+def _v_optional_date(value: object) -> date | None:
+    return None if value is None else _v_date(value)
+
+
+def _v_optional_str(value: object, max_len: int) -> str | None:
+    if value is None:
+        return None
+    result = _v_str(value, max_len).strip()
+    return result or None
 
 
 def _v_datetime(value: object) -> datetime:
@@ -217,11 +236,19 @@ class OfficeApi:
         self._conn = connection
         self.inquiries = SQLiteInquiryRepository.from_connection(connection)
         self.orders = SQLiteOrderRepository.from_connection(connection)
+        self.payment_reminders = SQLitePaymentReminderRepository.from_connection(
+            connection
+        )
         self.ledger = OfficeCommandLedger(connection)
         self.events = DeferredEventSink()
         self.executor = CoreCommandExecutor(connection, self.events)
         self.inquiry_service = InquiryService(self.inquiries, event_sink=self.events)
         self.order_service = OrderService(self.orders)
+        self.payment_reminder_service = PaymentReminderService(
+            self.payment_reminders,
+            self.orders,
+            today=views.berlin_today,
+        )
         self.core = OperationalCoreService(self.orders, event_sink=self.events)
         self.week_service = WochenuebersichtService(self.orders)
 
@@ -337,6 +364,7 @@ class OfficeApi:
             order,
             self.orders.list_order_versions(order_id),
             self.core.evaluate_ready_to_send(order_id),
+            self.payment_reminder_service.view(order_id),
         )
 
     def print_data(self, order_id: str, version_id: str) -> dict[str, object]:
@@ -591,6 +619,44 @@ class OfficeApi:
             "updated_at": cancelled.updated_at.isoformat(),
         }
 
+    def cmd_payment_reminder(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        order = self._require_active_order(path_ids["id"])
+        current = self.payment_reminders.get(order.order_id)
+        expected_at = expect["updated_at"]
+        if expected_at is not None and not isinstance(expected_at, str):
+            raise _invalid()
+        actual_at = (
+            current.updated_at.isoformat()
+            if current is not None and current.updated_at is not None
+            else None
+        )
+        if expected_at != actual_at:
+            raise ApiError(409, "stale_state")
+        try:
+            view = self.payment_reminder_service.save(
+                OrderPaymentReminder(
+                    order_id=order.order_id,
+                    payment_method=_v_enum(
+                        args["payment_method"], validate_payment_method
+                    ),
+                    invoice_created=_v_bool(args["invoice_created"]),
+                    invoice_number=_v_optional_str(args["invoice_number"], 200),
+                    sent_on=_v_optional_date(args["sent_on"]),
+                    due_on=_v_optional_date(args["due_on"]),
+                    paid_on=_v_optional_date(args["paid_on"]),
+                    cash_received=_v_bool(args["cash_received"]),
+                )
+            )
+        except ValueError as exc:
+            raise ApiError(422, "invalid_payment_reminder") from exc
+        assert view.updated_at is not None
+        return 200, {
+            "order_id": order.order_id,
+            "updated_at": view.updated_at.isoformat(),
+        }
+
 
 # --- command specs: exact args/expect keys per route (pack §4.4) --------------
 
@@ -651,6 +717,19 @@ _VERSION_ARGS = _ArgKeys(
 )
 _NO_ARGS = _ArgKeys(required=frozenset())
 _VERSION_ID_ARGS = _ArgKeys(required=frozenset({"order_version_id"}))
+_PAYMENT_REMINDER_ARGS = _ArgKeys(
+    required=frozenset(
+        {
+            "payment_method",
+            "invoice_created",
+            "invoice_number",
+            "sent_on",
+            "due_on",
+            "paid_on",
+            "cash_received",
+        }
+    )
+)
 
 _COMMANDS: dict[str, _CommandSpec] = {
     "create_inquiry": _CommandSpec("cmd_create_inquiry", _CREATE_ARGS, set()),
@@ -666,6 +745,9 @@ _COMMANDS: dict[str, _CommandSpec] = {
     ),
     "ready": _CommandSpec("cmd_ready", _NO_ARGS, set()),
     "cancel": _CommandSpec("cmd_cancel", _NO_ARGS, {"updated_at"}),
+    "payment-reminder": _CommandSpec(
+        "cmd_payment_reminder", _PAYMENT_REMINDER_ARGS, {"updated_at"}
+    ),
 }
 
 # route table: (regex, template, {method: kind})
@@ -735,6 +817,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/cancel$"),
         "/office/v1/orders/{id}/cancel",
         {"POST": "cancel"},
+    ),
+    (
+        re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/payment-reminder$"),
+        "/office/v1/orders/{id}/payment-reminder",
+        {"POST": "payment-reminder"},
     ),
 )
 

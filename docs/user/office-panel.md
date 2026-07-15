@@ -93,6 +93,22 @@ For every operational version:
 The order cannot become ready when the effective version is missing or its
 kitchen print is unconfirmed.
 
+## Payment reminders
+
+The **Zahlung** block is an office checklist, not the accounting system. For an
+existing Order without payment data it shows **Noch nicht gewählt** and asks
+for one of **Vorkasse**, **Rechnung** or **Bar vor Ort**.
+
+For Vorkasse/Rechnung, create the actual invoice in the external accounting
+program, then record its external number and the sent, due and paid dates. The
+panel derives **Zahlungseingang prüfen**, **Zahlung überfällig** or **Bezahlt**
+from those manual facts. For Bar vor Ort it asks for confirmation after the
+event and records the paid date together with the cash receipt.
+
+The panel does not create an invoice number, PDF, XRechnung, tax posting or bank
+transaction. Payment reminders never release or block kitchen print,
+**Wirksam machen**, `READY_TO_SEND` or the kiosk workflow.
+
 ## Cancellation
 
 `Storno` is explicit and irreversible through the application. It preserves

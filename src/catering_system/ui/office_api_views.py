@@ -19,6 +19,7 @@ from catering_system.domain.inquiry import (
     derive_inquiry_office_state,
 )
 from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.order_payment_reminder import PaymentReminderView
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
 from catering_system.domain.wochenuebersicht import Wochenuebersicht
 from catering_system.ui.office_panel_offer_prefill import offer_prefill_payload
@@ -164,6 +165,7 @@ def order_detail(
     order: Order,
     versions: list[OrderVersion],
     evaluation: ReadyToSendEvaluation,
+    payment_reminder: PaymentReminderView | None = None,
 ) -> dict[str, object]:
     detail = order_summary(order)
     detail["ready_to_send"] = {
@@ -174,7 +176,27 @@ def order_detail(
     detail["versions"] = [order_version_shape(v) for v in ordered[:DETAIL_VERSIONS_CAP]]
     detail["versions_total_count"] = len(versions)
     detail["versions_truncated"] = len(versions) > DETAIL_VERSIONS_CAP
+    if payment_reminder is not None:
+        detail["payment_reminder"] = payment_reminder_shape(payment_reminder)
     return detail
+
+
+def payment_reminder_shape(view: PaymentReminderView) -> dict[str, object]:
+    return {
+        "order_id": view.order_id,
+        "payment_method": view.payment_method,
+        "payment_method_label": view.payment_method_label,
+        "invoice_created": view.invoice_created,
+        "invoice_number": view.invoice_number,
+        "sent_on": view.sent_on.isoformat() if view.sent_on else None,
+        "due_on": view.due_on.isoformat() if view.due_on else None,
+        "paid_on": view.paid_on.isoformat() if view.paid_on else None,
+        "cash_received": view.cash_received,
+        "invoice_state_label": view.invoice_state_label,
+        "payment_state_label": view.payment_state_label,
+        "next_step": view.next_step,
+        "updated_at": view.updated_at.isoformat() if view.updated_at else None,
+    }
 
 
 # --- search (fixed semantics, matching the panel's `_matches`) ---------------

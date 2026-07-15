@@ -396,6 +396,90 @@ def test_order_detail_and_print_data(api) -> None:
     assert (status, body["error"]) == (400, "invalid_request")
 
 
+def test_payment_reminder_read_write_replay_and_stale_gate(api) -> None:
+    base, ids, _db = api
+    order_id = ids["order_unprinted"]
+    detail_url = f"{base}/office/v1/orders/{order_id}"
+    command_url = f"{detail_url}/payment-reminder"
+    status, before, _h = _get(detail_url)
+    assert status == 200
+    assert before["payment_reminder"]["payment_method"] is None
+    assert before["payment_reminder"]["next_step"] == "Zahlungsart auswählen"
+    operational_before = {
+        key: before[key]
+        for key in (
+            "candidate_order_version_id",
+            "effective_order_version_id",
+            "ready_to_send",
+            "versions",
+        )
+    }
+    args = {
+        "payment_method": "VORKASSE",
+        "invoice_created": True,
+        "invoice_number": "RE-2026-0048",
+        "sent_on": "2026-07-15",
+        "due_on": "2026-07-22",
+        "paid_on": None,
+        "cash_received": False,
+    }
+    command_id = str(uuid.uuid4())
+
+    status, saved, _h = _post(
+        command_url,
+        args=args,
+        expect={"updated_at": None},
+        command_id=command_id,
+    )
+    assert status == 200
+    assert set(saved) == {"command_id", "order_id", "updated_at"}
+    status, replay, _h = _post(
+        command_url,
+        args=args,
+        expect={"updated_at": None},
+        command_id=command_id,
+    )
+    assert (status, replay) == (200, saved)
+
+    status, after, _h = _get(detail_url)
+    assert status == 200
+    reminder = after["payment_reminder"]
+    assert reminder["payment_method_label"] == "Vorkasse"
+    assert reminder["invoice_number"] == "RE-2026-0048"
+    assert reminder["payment_state_label"] == "Offen"
+    assert reminder["next_step"] == "Zahlungseingang prüfen"
+    assert {key: after[key] for key in operational_before} == operational_before
+
+    status, body, _h = _post(command_url, args=args, expect={"updated_at": None})
+    assert (status, body["error"]) == (409, "stale_state")
+
+
+def test_payment_reminder_rejects_cancelled_order_and_contradictory_facts(api) -> None:
+    base, ids, _db = api
+    base_args = {
+        "payment_method": "BAR_VOR_ORT",
+        "invoice_created": False,
+        "invoice_number": None,
+        "sent_on": None,
+        "due_on": None,
+        "paid_on": None,
+        "cash_received": True,
+    }
+    status, body, _h = _post(
+        f"{base}/office/v1/orders/{ids['order_unprinted']}/payment-reminder",
+        args=base_args,
+        expect={"updated_at": None},
+    )
+    assert (status, body["error"]) == (422, "invalid_payment_reminder")
+
+    status, body, _h = _post(
+        f"{base}/office/v1/orders/{ids['order_cancelled']}/payment-reminder",
+        args={**base_args, "cash_received": False},
+        expect={"updated_at": None},
+    )
+    assert (status, body["error"]) == (422, "order_cancelled")
+
+
 # --- command envelope strictness ----------------------------------------------
 
 
