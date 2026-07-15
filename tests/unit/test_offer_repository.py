@@ -287,6 +287,29 @@ def test_append_sent_evidence_roundtrip_in_memory_and_sqlite(tmp_path: Path) -> 
         assert reloaded == updated
 
 
+def test_append_acceptance_evidence_roundtrip_in_memory_and_sqlite(tmp_path: Path) -> None:
+    evidence = _acceptance()
+    sent_offer = _offer(sent=(_sent(),))
+    for repo_factory in (
+        lambda: InMemoryOfferRepository(),
+        lambda: SQLiteOfferRepository(tmp_path / "accept.db"),
+    ):
+        repo = repo_factory()
+        repo.save(sent_offer)
+        updated = repo.append_acceptance_evidence(evidence)
+        assert updated.acceptance_evidence == evidence
+        assert derive_offer_state(updated, _V1_ID, today=date(2026, 7, 20)) == "Accepted"
+        reloaded = repo.get(_OFFER_ID)
+        assert reloaded == updated
+
+
+def test_append_acceptance_evidence_rejects_second_acceptance() -> None:
+    repo = InMemoryOfferRepository()
+    repo.save(_offer(sent=(_sent(),), acceptance=_acceptance()))
+    with pytest.raises(ValueError, match="acceptance already exists"):
+        repo.append_acceptance_evidence(_acceptance())
+
+
 def test_sqlite_offer_version_rows_are_immutable(tmp_path: Path) -> None:
     repo = SQLiteOfferRepository(tmp_path / "offer.db")
     repo.save(_offer())

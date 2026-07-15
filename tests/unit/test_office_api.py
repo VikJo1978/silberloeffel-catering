@@ -1325,3 +1325,145 @@ def test_mark_sent_failure_leaves_no_sent_evidence_or_ledger(api) -> None:
     conn.close()
     assert sent_count == 0
     assert ledger_count == 0
+
+
+_RECORD_ACCEPTANCE_ARGS = {
+    "accepted_variant_id": _VARIANT_ID,
+    "accepted_at": "2026-07-15T11:00:00+00:00",
+    "channel": "email",
+    "evidence_reference": "reply-1",
+    "note": None,
+}
+
+
+def _record_acceptance_url(base: str, offer_id: str, version_id: str) -> str:
+    return (
+        f"{base}/office/v1/offers/{offer_id}/versions/{version_id}/record-acceptance"
+    )
+
+
+def _prepare_and_send(api: tuple[str, dict[str, str], Path]) -> tuple[str, str]:
+    base, _ids, _db = api
+    offer_id, version_id = _prepare_offer(api)
+    assert _post(_mark_sent_url(base, offer_id, version_id), args=_MARK_SENT_ARGS)[0] == 200
+    return offer_id, version_id
+
+
+def test_record_acceptance_sent_to_accepted_and_replay(api) -> None:
+    base, _ids, db = api
+    offer_id, version_id = _prepare_and_send(api)
+    url = _record_acceptance_url(base, offer_id, version_id)
+    command_id = str(uuid.uuid4())
+
+    status, body, _h = _post(url, args=_RECORD_ACCEPTANCE_ARGS, command_id=command_id)
+    assert status == 200
+    assert set(body) == {
+        "command_id",
+        "offer_id",
+        "offer_version_id",
+        "accepted_variant_id",
+        "acceptance_id",
+    }
+    assert body["offer_id"] == offer_id
+    assert body["offer_version_id"] == version_id
+    assert body["accepted_variant_id"] == _VARIANT_ID
+
+    status2, body2, _h = _post(url, args=_RECORD_ACCEPTANCE_ARGS, command_id=command_id)
+    assert (status2, body2) == (status, body)
+
+    offers = SQLiteOfferRepository(db)
+    stored = offers.get(offer_id)
+    assert stored is not None
+    assert stored.acceptance_evidence is not None
+    assert stored.acceptance_evidence.acceptance_id == body["acceptance_id"]
+    offers.close()
+
+
+def test_record_acceptance_rejects_prepared(api) -> None:
+    base, _ids, _db = api
+    offer_id, version_id = _prepare_offer(api)
+    status, body, _h = _post(
+        _record_acceptance_url(base, offer_id, version_id),
+        args=_RECORD_ACCEPTANCE_ARGS,
+    )
+    assert (status, body["error"]) == (422, "acceptance_blocked")
+
+
+def test_record_acceptance_rejects_second_acceptance(api) -> None:
+    base, _ids, _db = api
+    offer_id, version_id = _prepare_and_send(api)
+    url = _record_acceptance_url(base, offer_id, version_id)
+    assert _post(url, args=_RECORD_ACCEPTANCE_ARGS)[0] == 200
+    status, body, _h = _post(url, args=_RECORD_ACCEPTANCE_ARGS)
+    assert (status, body["error"]) == (409, "acceptance_already_exists")
+
+
+def test_record_acceptance_rejects_wrong_variant(api) -> None:
+    base, _ids, _db = api
+    offer_id, version_id = _prepare_and_send(api)
+    status, body, _h = _post(
+        _record_acceptance_url(base, offer_id, version_id),
+        args=dict(
+            _RECORD_ACCEPTANCE_ARGS,
+            accepted_variant_id="55555555-5555-4555-8555-555555555551",
+        ),
+    )
+    assert (status, body["error"]) == (422, "invalid_variant")
+
+
+def test_record_acceptance_blocks_later_send(api) -> None:
+    base, _ids, _db = api
+    offer_id, version_id = _prepare_and_send(api)
+    assert (
+        _post(
+            _record_acceptance_url(base, offer_id, version_id),
+            args=_RECORD_ACCEPTANCE_ARGS,
+        )[0]
+        == 200
+    )
+    status, body, _h = _post(
+        _mark_sent_url(base, offer_id, version_id),
+        args=_MARK_SENT_ARGS,
+    )
+    assert (status, body["error"]) == (422, "sent_recording_blocked")
+
+
+def test_record_acceptance_same_command_id_different_variant_conflicts(api) -> None:
+    base, _ids, _db = api
+    offer_id, version_id = _prepare_and_send(api)
+    url = _record_acceptance_url(base, offer_id, version_id)
+    command_id = str(uuid.uuid4())
+    assert _post(url, args=_RECORD_ACCEPTANCE_ARGS, command_id=command_id)[0] == 200
+    other = dict(
+        _RECORD_ACCEPTANCE_ARGS,
+        accepted_variant_id="55555555-5555-4555-8555-555555555551",
+    )
+    status, body, _h = _post(url, args=other, command_id=command_id)
+    assert (status, body["error"]) == (409, "command_id_conflict")
+
+
+def test_record_acceptance_failure_leaves_no_acceptance_or_ledger(api) -> None:
+    base, _ids, db = api
+    offer_id, version_id = _prepare_and_send(api)
+    command_id = str(uuid.uuid4())
+    status, body, _h = _post(
+        _record_acceptance_url(base, offer_id, version_id),
+        args=dict(
+            _RECORD_ACCEPTANCE_ARGS,
+            accepted_at="2026-07-15T09:00:00+00:00",
+        ),
+        command_id=command_id,
+    )
+    assert (status, body["error"]) == (422, "invalid_acceptance_evidence")
+
+    conn = sqlite3.connect(db)
+    acceptance_count = conn.execute(
+        "SELECT COUNT(*) FROM offer_acceptance_evidence"
+    ).fetchone()[0]
+    ledger_count = conn.execute(
+        "SELECT COUNT(*) FROM office_api_commands WHERE command_id = ?",
+        (command_id,),
+    ).fetchone()[0]
+    conn.close()
+    assert acceptance_count == 0
+    assert ledger_count == 0

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from catering_system.domain.offer import Offer, SentEvidence
+from catering_system.domain.offer import AcceptanceEvidence, Offer, SentEvidence
 
 
 class InMemoryOfferRepository:
@@ -37,6 +37,28 @@ class InMemoryOfferRepository:
             versions=offer.versions,
             sent_evidence=(*offer.sent_evidence, evidence),
             acceptance_evidence=offer.acceptance_evidence,
+            rejection_evidence=offer.rejection_evidence,
+            withdrawal_evidence=offer.withdrawal_evidence,
+            conversion_link=offer.conversion_link,
+        )
+        self._offers[offer.offer_id] = updated
+        return updated
+
+    def append_acceptance_evidence(self, evidence: AcceptanceEvidence) -> Offer:
+        offer = self.get(evidence.offer_id)
+        if offer is None:
+            raise KeyError(evidence.offer_id)
+        if offer.acceptance_evidence is not None:
+            raise ValueError(
+                f"acceptance already exists for offer_id={evidence.offer_id!r}"
+            )
+        updated = Offer(
+            offer_id=offer.offer_id,
+            source_inquiry_id=offer.source_inquiry_id,
+            created_at=offer.created_at,
+            versions=offer.versions,
+            sent_evidence=offer.sent_evidence,
+            acceptance_evidence=evidence,
             rejection_evidence=offer.rejection_evidence,
             withdrawal_evidence=offer.withdrawal_evidence,
             conversion_link=offer.conversion_link,

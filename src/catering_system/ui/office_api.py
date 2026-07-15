@@ -34,7 +34,7 @@ from catering_system.domain.inquiry import (
     validate_crm_stage,
     validate_planning_mode,
 )
-from catering_system.domain.offer import SENT_CHANNELS, SentChannel
+from catering_system.domain.offer import ACCEPTANCE_CHANNELS, SENT_CHANNELS, AcceptanceChannel, SentChannel
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_payment_reminder import (
     OrderPaymentReminder,
@@ -199,6 +199,13 @@ def _v_sent_channel(value: object) -> SentChannel:
     if not isinstance(value, str) or value not in SENT_CHANNELS:
         raise _invalid()
     channel: SentChannel = value
+    return channel
+
+
+def _v_acceptance_channel(value: object) -> AcceptanceChannel:
+    if not isinstance(value, str) or value not in ACCEPTANCE_CHANNELS:
+        raise _invalid()
+    channel: AcceptanceChannel = value
     return channel
 
 
@@ -624,6 +631,50 @@ class OfficeApi:
             "sent_at": evidence.sent_at.isoformat(),
         }
 
+    def cmd_record_acceptance(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        offer_id = path_ids["offer_id"]
+        offer_version_id = path_ids["version_id"]
+        try:
+            offer = self.offer_service.record_acceptance_evidence(
+                offer_id,
+                offer_version_id,
+                _v_uuid(args["accepted_variant_id"]),
+                accepted_at=_v_datetime(args["accepted_at"]),
+                channel=_v_acceptance_channel(args["channel"]),
+                evidence_reference=_v_str(args["evidence_reference"], 1000),
+                recorded_by=CLIENT_ID,
+                note=_v_optional_str(args.get("note"), 20000),
+            )
+        except KeyError as exc:
+            raise ApiError(404, "not_found") from exc
+        except ValueError as exc:
+            message = str(exc)
+            if "acceptance already exists" in message:
+                raise ApiError(409, "acceptance_already_exists") from exc
+            if "not a version of offer" in message:
+                raise ApiError(422, "version_not_owned") from exc
+            if "accepted variant does not belong" in message:
+                raise ApiError(422, "invalid_variant") from exc
+            if "conversion link blocks acceptance" in message:
+                raise ApiError(422, "acceptance_blocked") from exc
+            if "acceptance blocked" in message:
+                raise ApiError(422, "acceptance_blocked") from exc
+            raise ApiError(422, "invalid_acceptance_evidence") from exc
+        except sqlite3.IntegrityError:
+            if self.offers.get(offer_id) is None:
+                raise ApiError(404, "not_found") from None
+            raise ApiError(409, "acceptance_already_exists") from None
+        assert offer.acceptance_evidence is not None
+        acceptance = offer.acceptance_evidence
+        return 200, {
+            "offer_id": offer.offer_id,
+            "offer_version_id": offer_version_id,
+            "accepted_variant_id": acceptance.accepted_variant_id,
+            "acceptance_id": acceptance.acceptance_id,
+        }
+
     def cmd_create_version(
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict
     ) -> tuple[int, dict[str, object]]:
@@ -822,6 +873,17 @@ _MARK_SENT_ARGS = _ArgKeys(
         }
     )
 )
+_RECORD_ACCEPTANCE_ARGS = _ArgKeys(
+    required=frozenset(
+        {
+            "accepted_variant_id",
+            "accepted_at",
+            "channel",
+            "evidence_reference",
+        }
+    ),
+    optional=frozenset({"note"}),
+)
 _VERSION_ID_ARGS = _ArgKeys(required=frozenset({"order_version_id"}))
 _PAYMENT_REMINDER_ARGS = _ArgKeys(
     required=frozenset(
@@ -844,6 +906,9 @@ _COMMANDS: dict[str, _CommandSpec] = {
     "convert": _CommandSpec("cmd_convert", _NO_ARGS, set()),
     "prepare-offer": _CommandSpec("cmd_prepare_offer", _SNAPSHOT_ARGS, set()),
     "mark-sent": _CommandSpec("cmd_mark_sent", _MARK_SENT_ARGS, set()),
+    "record-acceptance": _CommandSpec(
+        "cmd_record_acceptance", _RECORD_ACCEPTANCE_ARGS, set()
+    ),
     "versions": _CommandSpec(
         "cmd_create_version", _VERSION_ARGS, {"latest_version_number"}
     ),
@@ -898,6 +963,14 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         ),
         "/office/v1/offers/{offer_id}/versions/{version_id}/mark-sent",
         {"POST": "mark-sent"},
+    ),
+    (
+        re.compile(
+            r"^/office/v1/offers/(?P<offer_id>[^/]+)/versions/"
+            r"(?P<version_id>[^/]+)/record-acceptance$"
+        ),
+        "/office/v1/offers/{offer_id}/versions/{version_id}/record-acceptance",
+        {"POST": "record-acceptance"},
     ),
     (
         re.compile(r"^/office/v1/orders$"),

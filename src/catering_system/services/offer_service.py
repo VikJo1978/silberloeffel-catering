@@ -8,6 +8,8 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime
 
 from catering_system.domain.offer import (
+    AcceptanceChannel,
+    AcceptanceEvidence,
     Offer,
     OfferPosition,
     OfferVariant,
@@ -15,6 +17,7 @@ from catering_system.domain.offer import (
     SentChannel,
     SentEvidence,
     derive_offer_state,
+    offer_allows_acceptance,
     offer_allows_sent_recording,
 )
 from catering_system.domain.offer_snapshot import (
@@ -146,6 +149,79 @@ class OfferService:
             offer_id,
             offer_version_id,
             channel,
+        )
+        return updated
+
+    def record_acceptance_evidence(
+        self,
+        offer_id: str,
+        offer_version_id: str,
+        accepted_variant_id: str,
+        *,
+        accepted_at: datetime,
+        channel: AcceptanceChannel,
+        evidence_reference: str,
+        recorded_by: str,
+        note: str | None = None,
+    ) -> Offer:
+        """Append AcceptanceEvidence for one eligible sent OfferVersion/variant."""
+        offer = self._offer_repository.get(offer_id)
+        if offer is None:
+            raise KeyError(offer_id)
+
+        if not any(version.offer_version_id == offer_version_id for version in offer.versions):
+            raise ValueError(
+                f"offer_version_id {offer_version_id!r} is not a version of "
+                f"offer {offer_id!r}"
+            )
+
+        if offer.acceptance_evidence is not None:
+            raise ValueError(f"acceptance already exists for offer_id={offer_id!r}")
+
+        if offer.conversion_link is not None:
+            raise ValueError("conversion link blocks acceptance recording")
+
+        version = next(
+            item for item in offer.versions if item.offer_version_id == offer_version_id
+        )
+        if not any(
+            variant.variant_id == accepted_variant_id for variant in version.variants
+        ):
+            raise ValueError("accepted variant does not belong to OfferVersion")
+
+        if not offer_allows_acceptance(
+            offer,
+            offer_version_id,
+            accepted_variant_id,
+            today=self._today(),
+        ):
+            raise ValueError(
+                f"acceptance blocked (offer_id={offer_id!r}, "
+                f"offer_version_id={offer_version_id!r}, "
+                f"accepted_variant_id={accepted_variant_id!r}, "
+                f"state={derive_offer_state(offer, offer_version_id, today=self._today())!r})"
+            )
+
+        acceptance_id = str(uuid.uuid4())
+        recorded_at = self._now()
+        evidence = AcceptanceEvidence(
+            acceptance_id=acceptance_id,
+            offer_id=offer_id,
+            accepted_offer_version_id=offer_version_id,
+            accepted_variant_id=accepted_variant_id,
+            accepted_at=accepted_at,
+            recorded_at=recorded_at,
+            channel=channel,
+            evidence_reference=evidence_reference,
+            recorded_by=recorded_by,
+            note=note,
+        )
+        updated = self._offer_repository.append_acceptance_evidence(evidence)
+        _log.info(
+            "record_acceptance_evidence offer_id=%s offer_version_id=%s variant_id=%s",
+            offer_id,
+            offer_version_id,
+            accepted_variant_id,
         )
         return updated
 

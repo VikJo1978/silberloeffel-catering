@@ -511,3 +511,108 @@ def test_record_sent_evidence_append_failure_leaves_no_ledger(shared) -> None:
     stored = offers.get(offer.offer_id)
     assert stored is not None
     assert stored.sent_evidence == ()
+
+
+def test_record_acceptance_evidence_and_ledger_commit_atomically(shared) -> None:
+    connection, inquiries, orders, ledger = shared
+    offers = SQLiteOfferRepository.from_connection(connection)
+    executor = CoreCommandExecutor(connection)
+    inquiry = replace(
+        _inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222"
+    )
+    executor.run(lambda: inquiries.save(inquiry))
+    service = OfferService(offers, inquiries, orders)
+    offer = executor.run(
+        lambda: service.prepare_offer_version(
+            inquiry.inquiry_id,
+            _valid_offer_snapshot(inquiry_id=inquiry.inquiry_id),
+        )
+    )
+    version_id = offer.versions[0].offer_version_id
+    variant_id = offer.versions[0].variants[0].variant_id
+    executor.run(
+        lambda: service.record_sent_evidence(
+            offer.offer_id,
+            version_id,
+            sent_at=datetime(2026, 7, 15, 10, 0, tzinfo=timezone.utc),
+            channel="email",
+            recipient_reference="customer@example.invalid",
+            evidence_reference="mail-123",
+            recorded_by="office-panel",
+        )
+    )
+    acceptance_cmd = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+
+    def work() -> str:
+        service.record_acceptance_evidence(
+            offer.offer_id,
+            version_id,
+            variant_id,
+            accepted_at=datetime(2026, 7, 15, 11, 0, tzinfo=timezone.utc),
+            channel="email",
+            evidence_reference="reply-1",
+            recorded_by="office-panel",
+        )
+        ledger.record(acceptance_cmd, "fp-accept", 200, '{"acceptance_id":"x"}')
+        return version_id
+
+    executor.run(work)
+    stored = offers.get(offer.offer_id)
+    assert stored is not None
+    assert stored.acceptance_evidence is not None
+    assert ledger.get(acceptance_cmd) is not None
+
+
+def test_record_acceptance_evidence_append_failure_leaves_no_ledger(shared) -> None:
+    connection, inquiries, orders, ledger = shared
+    offers = SQLiteOfferRepository.from_connection(connection)
+    executor = CoreCommandExecutor(connection)
+    inquiry = replace(
+        _inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222"
+    )
+    executor.run(lambda: inquiries.save(inquiry))
+    service = OfferService(offers, inquiries, orders)
+    offer = executor.run(
+        lambda: service.prepare_offer_version(
+            inquiry.inquiry_id,
+            _valid_offer_snapshot(inquiry_id=inquiry.inquiry_id),
+        )
+    )
+    version_id = offer.versions[0].offer_version_id
+    variant_id = offer.versions[0].variants[0].variant_id
+    executor.run(
+        lambda: service.record_sent_evidence(
+            offer.offer_id,
+            version_id,
+            sent_at=datetime(2026, 7, 15, 10, 0, tzinfo=timezone.utc),
+            channel="email",
+            recipient_reference="customer@example.invalid",
+            evidence_reference="mail-123",
+            recorded_by="office-panel",
+        )
+    )
+    acceptance_cmd = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+
+    def failing_append(evidence):  # noqa: ANN001
+        raise sqlite3.IntegrityError("simulated append failure")
+
+    offers.append_acceptance_evidence = failing_append  # type: ignore[method-assign]
+
+    def work() -> None:
+        service.record_acceptance_evidence(
+            offer.offer_id,
+            version_id,
+            variant_id,
+            accepted_at=datetime(2026, 7, 15, 11, 0, tzinfo=timezone.utc),
+            channel="email",
+            evidence_reference="reply-1",
+            recorded_by="office-panel",
+        )
+        ledger.record(acceptance_cmd, "fp-accept", 200, "{}")
+
+    with pytest.raises(sqlite3.IntegrityError):
+        executor.run(work)
+    assert ledger.get(acceptance_cmd) is None
+    stored = offers.get(offer.offer_id)
+    assert stored is not None
+    assert stored.acceptance_evidence is None
