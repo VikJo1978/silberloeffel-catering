@@ -1,0 +1,563 @@
+"""Pure premium presentation renderer for the Office Panel Order detail."""
+
+from __future__ import annotations
+
+import html
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+
+from catering_system.domain.inquiry import PLANNING_MODES
+from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.order_payment_reminder import (
+    PAYMENT_METHOD_LABELS,
+    PAYMENT_METHODS,
+    PaymentReminderView,
+)
+from catering_system.domain.ready_to_send import ReadyToSendEvaluation
+
+_PLANNING_MODE_LABELS = {
+    "caterer_suggestion": "Vorschlag durch Silberlöffel",
+    "self_select": "Auswahl durch den Kunden",
+}
+_READY_BLOCKER_LABELS = {
+    "ready_to_send_order_not_found": "Die Auftragsdaten sind nicht verfügbar.",
+    "order_cancelled": "Der Auftrag ist storniert.",
+    "no_effective_version": "Noch kein Stand ist als aktueller Küchenstand festgelegt.",
+    "effective_version_not_resolvable": (
+        "Der aktuelle Küchenstand kann nicht geladen werden."
+    ),
+    "kitchen_print_not_confirmed": (
+        "Für den aktuellen Küchenstand fehlt die Druckbestätigung."
+    ),
+}
+
+
+@dataclass(frozen=True)
+class OrderDetailFormFields:
+    """Trusted hidden fields produced by the existing Office Panel helpers."""
+
+    csrf_input: str
+    print_confirm_command_fields: Mapping[str, str]
+    effective_command_fields: Mapping[str, str]
+    ready_command_fields: str
+    cancel_command_fields: str
+    version_command_fields: str
+    payment_command_fields: str
+
+
+@dataclass(frozen=True)
+class OrderDetailPage:
+    """Page title and body ready for the shared server-rendered shell."""
+
+    title: str
+    body: str
+
+
+def _e(value: object) -> str:
+    return html.escape(str(value))
+
+
+def _date_text(version: OrderVersion) -> str:
+    return version.event_date.strftime("%d.%m.%Y")
+
+
+def _created_text(version: OrderVersion) -> str:
+    return version.created_at.strftime("%d.%m.%Y · %H:%M")
+
+
+def _planning_label(value: str) -> str:
+    return _PLANNING_MODE_LABELS.get(value, "Planung noch prüfen")
+
+
+def _ready_blocker_label(value: str) -> str:
+    return _READY_BLOCKER_LABELS.get(
+        value, "Die Versandfreigabe kann derzeit nicht bestätigt werden."
+    )
+
+
+def _target_version(
+    order: Order, versions: Sequence[OrderVersion]
+) -> OrderVersion | None:
+    candidate = next(
+        (
+            version
+            for version in versions
+            if version.order_version_id == order.candidate_order_version_id
+        ),
+        None,
+    )
+    if candidate is not None:
+        return candidate
+    return max(versions, key=lambda version: version.version_number, default=None)
+
+
+def _state_copy(
+    order: Order,
+    target: OrderVersion | None,
+    next_action: Mapping[str, str] | None,
+    ready: ReadyToSendEvaluation,
+) -> tuple[str, str]:
+    if order.cancelled_at is not None:
+        return (
+            "Auftrag storniert",
+            "Historie und Küchenzettel bleiben zur Einsicht verfügbar.",
+        )
+    if next_action is not None and next_action.get("action") == "print-confirm":
+        return (
+            "Druckbestätigung ausstehend",
+            "Den Küchenzettel öffnen, tatsächlich drucken und danach bestätigen.",
+        )
+    if next_action is not None and next_action.get("action") == "effective":
+        stand = target.version_number if target is not None else ""
+        return (
+            f"Stand {stand} als Küchenstand festlegen",
+            "Der Ausdruck ist bestätigt. Jetzt den geprüften Stand übernehmen.",
+        )
+    if ready.ready:
+        return (
+            "Vorbereitung vollständig",
+            "Der aktuelle Küchenstand erfüllt die Versandfreigabe.",
+        )
+    return (
+        "Versandfreigabe blockiert",
+        "Die offenen Hinweise müssen vor der Freigabe geklärt werden.",
+    )
+
+
+def _primary_action(
+    order: Order,
+    target: OrderVersion | None,
+    next_action: Mapping[str, str] | None,
+    forms: OrderDetailFormFields,
+) -> str:
+    if order.cancelled_at is not None:
+        return (
+            '<section class="order-next-step muted">'
+            '<div class="order-eyebrow">Nächster Schritt</div>'
+            "<h2>Keine weitere Bearbeitung</h2>"
+            "<p>Der Auftrag ist storniert und bleibt schreibgeschützt.</p>"
+            "</section>"
+        )
+    if target is None or next_action is None:
+        return (
+            '<section class="order-next-step complete">'
+            '<div class="order-eyebrow">Nächster Schritt</div>'
+            "<h2>Kein offener Vorbereitungsschritt</h2>"
+            "<p>Prüfen Sie die Versandfreigabe und den separaten Zahlungsbereich.</p>"
+            "</section>"
+        )
+    action = next_action.get("action")
+    if action == "print-confirm":
+        command_fields = forms.print_confirm_command_fields.get(
+            target.order_version_id, ""
+        )
+        return (
+            '<section class="order-next-step">'
+            '<div class="order-eyebrow">Nächster Schritt</div>'
+            f"<h2>Küchenzettel für Stand {target.version_number} drucken</h2>"
+            "<p>Bestätigen Sie den Druck erst nach dem tatsächlichen Ausdruck.</p>"
+            '<div class="order-next-actions">'
+            f'<a class="order-button secondary" target="_blank" rel="noopener" '
+            f'href="/order/{_e(order.order_id)}/print?version='
+            f'{_e(target.order_version_id)}">Küchenzettel öffnen</a>'
+            f'<form method="post" action="/order/{_e(order.order_id)}/print-confirm">'
+            f"{forms.csrf_input}{command_fields}"
+            f'<input type="hidden" name="order_version_id" '
+            f'value="{_e(target.order_version_id)}">'
+            '<button class="order-button" type="submit">Druck bestätigen</button>'
+            "</form></div></section>"
+        )
+    if action == "effective":
+        command_fields = forms.effective_command_fields.get(target.order_version_id, "")
+        return (
+            '<section class="order-next-step">'
+            '<div class="order-eyebrow">Nächster Schritt</div>'
+            f"<h2>Stand {target.version_number} als Küchenstand festlegen</h2>"
+            "<p>Der Ausdruck ist bestätigt. Dieser Stand wird zur aktuellen "
+            "Arbeitsgrundlage für die Küche.</p>"
+            f'<form method="post" action="/order/{_e(order.order_id)}/effective">'
+            f"{forms.csrf_input}{command_fields}"
+            f'<input type="hidden" name="order_version_id" '
+            f'value="{_e(target.order_version_id)}">'
+            '<button class="order-button" type="submit">Stand übernehmen</button>'
+            "</form></section>"
+        )
+    return ""
+
+
+def _progress_item(
+    css_class: str,
+    mark: str,
+    heading: str,
+    description: str,
+) -> str:
+    return (
+        f'<li class="order-progress-item {css_class}">'
+        f'<span class="order-progress-mark" aria-hidden="true">{mark}</span>'
+        f"<div><strong>{heading}</strong><span>{description}</span></div></li>"
+    )
+
+
+def _operational_progress(
+    order: Order,
+    target: OrderVersion | None,
+    ready: ReadyToSendEvaluation,
+    forms: OrderDetailFormFields,
+) -> str:
+    if target is None:
+        steps = '<p class="order-section-note">Keine Auftragsstände vorhanden.</p>'
+    else:
+        printed = target.kitchen_print_confirmed_at is not None
+        effective = target.order_version_id == order.effective_order_version_id
+        steps = '<ol class="order-progress-list">'
+        steps += _progress_item(
+            "done" if printed else "current",
+            "✓" if printed else "1",
+            f"Druck für Stand {target.version_number} bestätigen",
+            (
+                "Der Ausdruck wurde bestätigt."
+                if printed
+                else "Küchenzettel drucken und den tatsächlichen Ausdruck bestätigen."
+            ),
+        )
+        steps += _progress_item(
+            "done" if effective else ("current" if printed else "waiting"),
+            "✓" if effective else "2",
+            f"Stand {target.version_number} als Küchenstand festlegen",
+            (
+                "Die Küche arbeitet mit diesem Stand."
+                if effective
+                else "Dieser Schritt ist erst nach der Druckbestätigung möglich."
+            ),
+        )
+        steps += _progress_item(
+            "done" if ready.ready else ("current" if effective else "waiting"),
+            "✓" if ready.ready else "3",
+            "Versandfreigabe prüfen",
+            (
+                "Die Versandfreigabe ist erfüllt."
+                if ready.ready
+                else "Die Freigabe bleibt blockiert, bis alle Hinweise geklärt sind."
+            ),
+        )
+        steps += "</ol>"
+        if ready.ready and not effective:
+            steps += (
+                '<p class="order-context-note">Die Versandfreigabe gilt für den '
+                "bisherigen Küchenstand. Der neue Stand ist noch nicht übernommen.</p>"
+            )
+    blocker_html = ""
+    if not ready.ready:
+        reasons = "".join(
+            f"<li>{_e(_ready_blocker_label(reason))}</li>" for reason in ready.reasons
+        )
+        blocker_html = (
+            '<div class="order-blockers"><strong>Offene Hinweise</strong>'
+            f"<ul>{reasons}</ul></div>"
+        )
+    ready_form = ""
+    if order.cancelled_at is None:
+        ready_form = (
+            f'<form class="order-ready-form" method="post" '
+            f'action="/order/{_e(order.order_id)}/ready">'
+            f"{forms.csrf_input}{forms.ready_command_fields}"
+            '<button class="order-button secondary" type="submit">'
+            "Versandfreigabe prüfen</button></form>"
+        )
+    return (
+        '<section class="order-card order-content-card">'
+        "<h2>Operative Vorbereitung</h2>"
+        f"{steps}{blocker_html}{ready_form}</section>"
+    )
+
+
+def _version_actions(
+    order: Order,
+    version: OrderVersion,
+    forms: OrderDetailFormFields,
+) -> str:
+    actions = [
+        f'<a class="order-button ghost" target="_blank" rel="noopener" '
+        f'href="/order/{_e(order.order_id)}/print?version='
+        f'{_e(version.order_version_id)}">Küchenzettel öffnen</a>'
+    ]
+    print_fields = forms.print_confirm_command_fields.get(version.order_version_id)
+    if print_fields is not None:
+        actions.append(
+            f'<form method="post" action="/order/{_e(order.order_id)}/print-confirm">'
+            f"{forms.csrf_input}{print_fields}"
+            f'<input type="hidden" name="order_version_id" '
+            f'value="{_e(version.order_version_id)}">'
+            '<button class="order-button ghost" type="submit">'
+            "Druck bestätigen</button></form>"
+        )
+    effective_fields = forms.effective_command_fields.get(version.order_version_id)
+    if effective_fields is not None:
+        actions.append(
+            f'<form method="post" action="/order/{_e(order.order_id)}/effective">'
+            f"{forms.csrf_input}{effective_fields}"
+            f'<input type="hidden" name="order_version_id" '
+            f'value="{_e(version.order_version_id)}">'
+            '<button class="order-button ghost" type="submit">'
+            "Als Küchenstand festlegen</button></form>"
+        )
+    return '<div class="order-version-actions">' + "".join(actions) + "</div>"
+
+
+def _version_history(
+    order: Order,
+    versions: Sequence[OrderVersion],
+    forms: OrderDetailFormFields,
+) -> str:
+    rows = []
+    target = _target_version(order, versions)
+    for version in sorted(versions, key=lambda item: item.version_number, reverse=True):
+        statuses = []
+        if target is not None and version.order_version_id == target.order_version_id:
+            statuses.append("Aktueller Bearbeitungsstand")
+        if version.order_version_id == order.effective_order_version_id:
+            statuses.append("Aktueller Küchenstand")
+        if version.order_version_id == order.candidate_order_version_id:
+            statuses.append("Nächster Stand")
+        statuses.append(
+            "Druck bestätigt"
+            if version.kitchen_print_confirmed_at is not None
+            else "Druck offen"
+        )
+        status_html = "".join(
+            f'<span class="order-version-status">{_e(status)}</span>'
+            for status in statuses
+        )
+        guests = (
+            f"ca. {version.guest_count_estimate}"
+            if version.guest_count_estimate is not None
+            else "Noch offen"
+        )
+        rows.append(
+            '<article class="order-version-row">'
+            '<div class="order-version-head">'
+            f"<div><strong>Stand {version.version_number}</strong>"
+            f"<span>{_e(_created_text(version))}</span></div>"
+            f'<div class="order-version-statuses">{status_html}</div></div>'
+            '<dl class="order-version-facts">'
+            f"<div><dt>Datum</dt><dd>{_e(_date_text(version))}</dd></div>"
+            f"<div><dt>Zeit</dt><dd>{_e(version.time_window_text or 'Noch offen')}</dd></div>"
+            f"<div><dt>Ort</dt><dd>{_e(version.location_text or 'Noch offen')}</dd></div>"
+            f"<div><dt>Gäste</dt><dd>{_e(guests)}</dd></div>"
+            "</dl>"
+            f"{_version_actions(order, version, forms)}</article>"
+        )
+    return (
+        '<details class="order-history">'
+        f"<summary>Alle Auftragsstände ({len(versions)})</summary>"
+        '<div class="order-history-body">'
+        + (
+            "".join(rows)
+            if rows
+            else '<p class="order-section-note">Keine Auftragsstände vorhanden.</p>'
+        )
+        + "</div></details>"
+    )
+
+
+def _payment_form(
+    order: Order,
+    payment: PaymentReminderView,
+    forms: OrderDetailFormFields,
+) -> str:
+    if order.cancelled_at is not None:
+        return ""
+    options = ['<option value="">Bitte wählen</option>']
+    for method in PAYMENT_METHODS:
+        selected = " selected" if payment.payment_method == method else ""
+        options.append(
+            f'<option value="{method}"{selected}>'
+            f"{_e(PAYMENT_METHOD_LABELS[method])}</option>"
+        )
+    return (
+        '<details class="order-payment-edit"><summary>Zahlungsdaten bearbeiten</summary>'
+        f'<form method="post" action="/order/{_e(order.order_id)}/payment-reminder">'
+        f"{forms.csrf_input}{forms.payment_command_fields}<fieldset>"
+        '<p><label>Zahlungsart*</label><select name="payment_method" required>'
+        f"{''.join(options)}</select></p>"
+        f'<p><label><input type="checkbox" name="invoice_created" value="1"'
+        f"{' checked' if payment.invoice_created else ''}> "
+        "Rechnung in der Buchhaltung erstellt</label></p>"
+        f'<p><label>Rechnungsnummer</label><input name="invoice_number" '
+        f'maxlength="200" value="{_e(payment.invoice_number or "")}"></p>'
+        f'<p><label>Versendet am</label><input type="date" name="sent_on" '
+        f'value="{_e(payment.sent_on.isoformat() if payment.sent_on else "")}"></p>'
+        f'<p><label>Fällig am</label><input type="date" name="due_on" '
+        f'value="{_e(payment.due_on.isoformat() if payment.due_on else "")}"></p>'
+        f'<p><label>Bezahlt am</label><input type="date" name="paid_on" '
+        f'value="{_e(payment.paid_on.isoformat() if payment.paid_on else "")}"></p>'
+        f'<p><label><input type="checkbox" name="cash_received" value="1"'
+        f"{' checked' if payment.cash_received else ''}> "
+        "Barzahlung erhalten</label></p>"
+        '<p><button type="submit">Zahlungshinweis speichern</button></p>'
+        "</fieldset></form></details>"
+    )
+
+
+def _payment_card(
+    order: Order,
+    payment: PaymentReminderView,
+    forms: OrderDetailFormFields,
+) -> str:
+    facts = [
+        ("Zahlungsart", payment.payment_method_label),
+        ("Reminder-Status", payment.payment_state_label),
+    ]
+    if payment.invoice_state_label is not None:
+        facts.append(("Rechnung", payment.invoice_state_label))
+    if payment.invoice_number:
+        facts.append(("Rechnungsnummer", payment.invoice_number))
+    if payment.due_on is not None:
+        facts.append(("Fällig am", payment.due_on.strftime("%d.%m.%Y")))
+    next_step = payment.next_step or "Keine offene Zahlungsaufgabe."
+    return (
+        '<section class="order-card order-content-card order-payment-card">'
+        '<div class="order-section-kicker">Separater Bereich</div>'
+        "<h2>Zahlung</h2>"
+        '<dl class="order-payment-facts">'
+        + "".join(
+            f"<div><dt>{_e(label)}</dt><dd>{_e(value)}</dd></div>"
+            for label, value in facts
+        )
+        + "</dl>"
+        '<div class="order-payment-next"><span>Nächste Zahlungsaufgabe</span>'
+        f"<strong>{_e(next_step)}</strong></div>"
+        + _payment_form(order, payment, forms)
+        + "</section>"
+    )
+
+
+def _planning_mode_select() -> str:
+    options = "".join(
+        f'<option value="{_e(value)}">{_e(_PLANNING_MODE_LABELS[value])}</option>'
+        for value in PLANNING_MODES
+    )
+    return f'<select name="planning_mode">{options}</select>'
+
+
+def _secondary_actions(
+    order: Order,
+    forms: OrderDetailFormFields,
+) -> str:
+    inquiry_link = (
+        f'<a class="order-text-link" href="/inquiry/{_e(order.source_inquiry_id)}">'
+        "Zugehörige Anfrage öffnen</a>"
+    )
+    if order.cancelled_at is not None:
+        return (
+            '<section class="order-card order-content-card">'
+            "<h2>Weitere Informationen</h2>"
+            f"<p>{inquiry_link}</p></section>"
+        )
+    return (
+        '<section class="order-card order-content-card">'
+        "<h2>Weitere Aktionen</h2>"
+        f"<p>{inquiry_link}</p>"
+        '<details class="order-version-edit"><summary>Neuen Stand anlegen</summary>'
+        f'<form method="post" action="/order/{_e(order.order_id)}/version">'
+        f"{forms.csrf_input}{forms.version_command_fields}<fieldset>"
+        '<p><label>Datum*</label><input type="date" name="event_date" required></p>'
+        '<p><label>Zeitfenster</label><input name="time_window_text"></p>'
+        '<p><label>Ort</label><input name="location_text"></p>'
+        '<p><label>Gäste (ca.)</label><input name="guest_count_estimate" '
+        'inputmode="numeric"></p>'
+        f"<p><label>Planung</label>{_planning_mode_select()}</p>"
+        '<p><button type="submit">Stand anlegen</button></p>'
+        "</fieldset></form></details>"
+        '<details class="order-danger"><summary>Auftrag stornieren</summary>'
+        "<p>Dieser Schritt kann nicht rückgängig gemacht werden. Historie und "
+        "Küchenzettel bleiben zur Einsicht erhalten.</p>"
+        f'<form method="post" action="/order/{_e(order.order_id)}/cancel">'
+        f"{forms.csrf_input}{forms.cancel_command_fields}"
+        '<button type="submit">Auftrag endgültig stornieren</button>'
+        "</form></details></section>"
+    )
+
+
+def render_order_detail(
+    order: Order,
+    versions: Sequence[OrderVersion],
+    ready: ReadyToSendEvaluation,
+    payment: PaymentReminderView,
+    next_action: Mapping[str, str] | None,
+    *,
+    forms: OrderDetailFormFields,
+    versions_total_count: int,
+    versions_truncated: bool,
+) -> OrderDetailPage:
+    """Render existing Order facts and actions without performing any reads."""
+
+    target = _target_version(order, versions)
+    title = f"Auftrag für den {_date_text(target)}" if target is not None else "Auftrag"
+    state_title, state_description = _state_copy(order, target, next_action, ready)
+    truncation_warning = (
+        '<div class="order-notice blocked"><strong>Unvollständige Ansicht:</strong> '
+        f"Es werden {len(versions)} von {_e(versions_total_count)} Auftragsständen "
+        "angezeigt.</div>"
+        if versions_truncated
+        else ""
+    )
+    if target is None:
+        hero_facts = "<span>Keine Veranstaltungsdaten vorhanden</span>"
+        event_facts = (
+            '<p class="order-section-note">Keine Auftragsstände vorhanden.</p>'
+        )
+        stand_label = "Auftrag"
+    else:
+        guests = (
+            f"ca. {target.guest_count_estimate} Gäste"
+            if target.guest_count_estimate is not None
+            else "Gästezahl noch offen"
+        )
+        hero_facts = (
+            f"<span>Datum: {_e(_date_text(target))}</span>"
+            f"<span>Zeit: {_e(target.time_window_text or 'Noch offen')}</span>"
+            f"<span>Ort: {_e(target.location_text or 'Noch offen')}</span>"
+            f"<span>{_e(guests)}</span>"
+        )
+        event_facts = (
+            '<dl class="order-facts-list">'
+            f"<div><dt>Datum</dt><dd>{_e(_date_text(target))}</dd></div>"
+            f"<div><dt>Zeit</dt><dd>{_e(target.time_window_text or 'Noch offen')}</dd></div>"
+            f"<div><dt>Ort</dt><dd>{_e(target.location_text or 'Noch offen')}</dd></div>"
+            f"<div><dt>Gäste</dt><dd>{_e(guests)}</dd></div>"
+            f"<div><dt>Planung</dt><dd>{_e(_planning_label(target.planning_mode))}</dd></div>"
+            f"<div><dt>Stand erstellt</dt><dd>{_e(_created_text(target))}</dd></div>"
+            "</dl>"
+        )
+        stand_label = f"Auftrag · Stand {target.version_number}"
+    cancelled_banner = (
+        '<div class="order-cancelled-banner">STORNIERT</div>'
+        if order.cancelled_at is not None
+        else ""
+    )
+    body = (
+        '<a class="order-back" href="/auftraege">← Zurück zu den Aufträgen</a>'
+        + cancelled_banner
+        + truncation_warning
+        + '<section class="order-hero"><div>'
+        f'<div class="order-eyebrow">{_e(stand_label)}</div>'
+        f"<h1>{_e(title)}</h1>"
+        f'<div class="order-hero-facts">{hero_facts}</div></div>'
+        '<div class="order-state-panel"><span>Arbeitsstand</span>'
+        f"<strong>{_e(state_title)}</strong><p>{_e(state_description)}</p></div>"
+        "</section>"
+        '<div class="order-detail-layout"><div class="order-detail-main">'
+        '<section class="order-card order-content-card">'
+        "<h2>Aktueller Veranstaltungsstand</h2>"
+        f"{event_facts}</section>"
+        + _operational_progress(order, target, ready, forms)
+        + _version_history(order, versions, forms)
+        + "</div>"
+        '<aside class="order-detail-side">'
+        + _primary_action(order, target, next_action, forms)
+        + _payment_card(order, payment, forms)
+        + _secondary_actions(order, forms)
+        + "</aside></div>"
+    )
+    return OrderDetailPage(title=title, body=body)

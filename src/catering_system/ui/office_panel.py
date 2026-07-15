@@ -58,6 +58,10 @@ from catering_system.ui.office_panel_inquiry_detail import (
     InquiryDetailFormFields,
     render_inquiry_detail,
 )
+from catering_system.ui.office_panel_order_detail import (
+    OrderDetailFormFields,
+    render_order_detail,
+)
 from catering_system.ui.office_panel_proposal import (
     parse_proposal_payload,
     render_proposal_preview,
@@ -1268,6 +1272,84 @@ class OfficePanel:
                 order_id
             )
         cancelled = order.cancelled_at is not None
+        ev = self.core.evaluate_ready_to_send(order_id)
+        payment = self.payment_reminder_service.view(order_id)
+        if self._ui_version == "v2":
+            print_confirm_fields: dict[str, str] = {}
+            effective_fields: dict[str, str] = {}
+            if not cancelled:
+                for version in versions:
+                    if version.kitchen_print_confirmed_at is None:
+                        print_confirm_fields[version.order_version_id] = (
+                            self._command_fields()
+                        )
+                    if (
+                        version.kitchen_print_confirmed_at is not None
+                        and version.order_version_id != order.effective_order_version_id
+                    ):
+                        effective_fields[version.order_version_id] = (
+                            self._command_fields(
+                                {
+                                    "effective_version_id": (
+                                        order.effective_order_version_id or ""
+                                    )
+                                }
+                            )
+                        )
+            latest_version_number = versions_total_count or max(
+                (version.version_number for version in versions), default=0
+            )
+            detail = render_order_detail(
+                order,
+                versions,
+                ev,
+                payment,
+                api_views.resolve_next_action(order, versions),
+                forms=OrderDetailFormFields(
+                    csrf_input=_csrf_input(context),
+                    print_confirm_command_fields=print_confirm_fields,
+                    effective_command_fields=effective_fields,
+                    ready_command_fields=(
+                        self._command_fields() if not cancelled else ""
+                    ),
+                    cancel_command_fields=(
+                        self._command_fields(
+                            {"updated_at": order.updated_at.isoformat()}
+                        )
+                        if not cancelled
+                        else ""
+                    ),
+                    version_command_fields=(
+                        self._command_fields(
+                            {"latest_version_number": str(latest_version_number)}
+                        )
+                        if not cancelled
+                        else ""
+                    ),
+                    payment_command_fields=(
+                        self._command_fields(
+                            {
+                                "payment_reminder_updated_at": (
+                                    payment.updated_at.isoformat()
+                                    if payment.updated_at
+                                    else ""
+                                )
+                            }
+                        )
+                        if not cancelled
+                        else ""
+                    ),
+                ),
+                versions_total_count=versions_total_count,
+                versions_truncated=versions_truncated,
+            )
+            return _page(
+                detail.title,
+                detail.body,
+                active_section="orders",
+                context=context,
+                show_title=False,
+            )
         rows = []
         for v in versions:
             printed = (
@@ -1309,7 +1391,6 @@ class OfficePanel:
                 f"<td>{_e(printed)}</td><td>{_e(', '.join(marks) or '–')}</td>"
                 f"<td>{' '.join(actions)}</td></tr>"
             )
-        ev = self.core.evaluate_ready_to_send(order_id)
         if ev.ready:
             release = '<p class="ok">READY_TO_SEND: bereit.</p>'
         else:
@@ -1319,7 +1400,6 @@ class OfficePanel:
             release = (
                 f'<p class="blocked">Versandfreigabe blockiert:</p><ul>{reasons}</ul>'
             )
-        payment = self.payment_reminder_service.view(order_id)
         payment_rows = [
             f"<p><strong>Zahlungsart:</strong> {_e(payment.payment_method_label)}</p>"
         ]

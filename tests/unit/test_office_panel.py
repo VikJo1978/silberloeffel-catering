@@ -895,6 +895,167 @@ def test_cancel_shows_storniert_and_hides_actions(panel: str) -> None:
     assert "Küchenzettel" in body  # history stays viewable
 
 
+def test_v2_order_detail_guides_print_effective_and_release(
+    premium_panel: str,
+) -> None:
+    inquiry_id = _create_inquiry(premium_panel)
+    order_id = _convert(premium_panel, inquiry_id)
+
+    _status, initial = _get(f"{premium_panel}/order/{order_id}")
+    version_id = re.search(r'name="order_version_id" value="([^"]+)"', initial).group(1)
+
+    assert "order-hero" in initial
+    assert "<h1>Auftrag für den 01.10.2026</h1>" in initial
+    assert "Küchenzettel für Stand 1 drucken" in initial
+    assert f'action="/order/{order_id}/print-confirm"' in initial
+    assert f'action="/order/{order_id}/effective"' not in initial
+    assert "Noch kein Stand ist als aktueller Küchenstand festgelegt." in initial
+    assert "READY_TO_SEND" not in initial
+
+    _post(
+        f"{premium_panel}/order/{order_id}/print-confirm",
+        {"order_version_id": version_id},
+    )
+    _status, printed = _get(f"{premium_panel}/order/{order_id}")
+
+    assert "Stand 1 als Küchenstand festlegen" in printed
+    assert f'action="/order/{order_id}/print-confirm"' not in printed
+    assert f'action="/order/{order_id}/effective"' in printed
+
+    _post(
+        f"{premium_panel}/order/{order_id}/effective",
+        {"order_version_id": version_id},
+    )
+    _status, effective = _get(f"{premium_panel}/order/{order_id}")
+
+    assert "Vorbereitung vollständig" in effective
+    assert "Die Versandfreigabe ist erfüllt." in effective
+    assert f'action="/order/{order_id}/effective"' not in effective
+    assert f'action="/order/{order_id}/ready"' in effective
+
+    visible = html.unescape(re.sub(r"<[^>]+>", " ", effective))
+    assert order_id[:8] not in visible
+    assert inquiry_id[:8] not in visible
+    assert "caterer_suggestion" not in visible
+    assert "READY_TO_SEND" not in visible
+
+
+def test_v2_order_detail_prefers_new_candidate_over_ready_old_stand(
+    premium_panel: str,
+) -> None:
+    inquiry_id = _create_inquiry(premium_panel)
+    order_id = _convert(premium_panel, inquiry_id)
+    _status, initial = _get(f"{premium_panel}/order/{order_id}")
+    version_id = re.search(r'name="order_version_id" value="([^"]+)"', initial).group(1)
+    _post(
+        f"{premium_panel}/order/{order_id}/print-confirm",
+        {"order_version_id": version_id},
+    )
+    _post(
+        f"{premium_panel}/order/{order_id}/effective",
+        {"order_version_id": version_id},
+    )
+    _post(
+        f"{premium_panel}/order/{order_id}/version",
+        {
+            "event_date": "2026-10-03",
+            "time_window_text": "18:00–22:00",
+            "location_text": "Hamburg-Altona",
+            "guest_count_estimate": "40",
+            "planning_mode": "self_select",
+        },
+    )
+
+    _status, body = _get(f"{premium_panel}/order/{order_id}")
+
+    assert "<h1>Auftrag für den 03.10.2026</h1>" in body
+    assert "Küchenzettel für Stand 2 drucken" in body
+    assert "Hamburg-Altona" in body
+    assert "Auswahl durch den Kunden" in body
+    assert (
+        "Die Versandfreigabe gilt für den bisherigen Küchenstand. "
+        "Der neue Stand ist noch nicht übernommen."
+    ) in body
+    assert "Aktueller Küchenstand" in body
+    assert "Aktueller Bearbeitungsstand" in body
+
+
+def test_v2_order_detail_keeps_payment_separate_and_cancelled_read_only(
+    premium_panel: str,
+) -> None:
+    inquiry_id = _create_inquiry(premium_panel)
+    order_id = _convert(premium_panel, inquiry_id)
+
+    _post(
+        f"{premium_panel}/order/{order_id}/payment-reminder",
+        {
+            "payment_method": "RECHNUNG",
+            "invoice_created": "1",
+            "invoice_number": "RE-UI4-1",
+            "sent_on": "2026-07-15",
+            "due_on": "2026-10-01",
+        },
+    )
+    _status, body = _get(f"{premium_panel}/order/{order_id}")
+
+    assert "order-payment-card" in body
+    assert "<h2>Zahlung</h2>" in body
+    assert "Zahlungseingang prüfen" in body
+    assert "Reminder-Status" in body
+    assert "RE-UI4-1" in body
+    assert f'action="/order/{order_id}/payment-reminder"' in body
+    assert "Küchenzettel für Stand 1 drucken" in body
+
+    _post(f"{premium_panel}/order/{order_id}/cancel", {})
+    _status, cancelled = _get(f"{premium_panel}/order/{order_id}")
+
+    assert "STORNIERT" in cancelled
+    assert "Keine weitere Bearbeitung" in cancelled
+    assert "RE-UI4-1" in cancelled
+    assert f"/order/{order_id}/print?version=" in cancelled
+    for action in (
+        "print-confirm",
+        "effective",
+        "ready",
+        "cancel",
+        "version",
+        "payment-reminder",
+    ):
+        assert f'action="/order/{order_id}/{action}"' not in cancelled
+
+
+def test_v2_order_detail_escapes_hostile_facts_and_hides_technical_values(
+    premium_panel: str,
+) -> None:
+    inquiry_id = _create_inquiry(premium_panel)
+    order_id = _convert(premium_panel, inquiry_id)
+    _post(
+        f"{premium_panel}/order/{order_id}/version",
+        {
+            "event_date": "2026-10-03",
+            "time_window_text": '<img src=x onerror="alert(1)">',
+            "location_text": "<script>alert('location')</script>",
+            "guest_count_estimate": "40",
+            "planning_mode": "self_select",
+        },
+    )
+
+    _status, body = _get(f"{premium_panel}/order/{order_id}")
+    visible = html.unescape(re.sub(r"<[^>]+>", " ", body))
+
+    assert "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;" in body
+    assert "&lt;script&gt;alert(&#x27;location&#x27;)&lt;/script&gt;" in body
+    assert '<img src=x onerror="alert(1)">' not in body
+    assert "<script>alert" not in body
+    assert order_id[:8] not in visible
+    assert inquiry_id[:8] not in visible
+    assert "self_select" not in visible
+    assert "no_effective_version" not in visible
+    assert "candidate_order_version_id" not in visible
+    assert "Hanseatic Consulting" not in body
+    assert "<script" not in body
+
+
 def test_queue_shows_storniert_card_only_after_a_cancellation(panel: str) -> None:
     iid = _create_inquiry(panel)
     oid = _convert(panel, iid)

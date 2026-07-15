@@ -316,6 +316,33 @@ def test_order_detail_parity_direct_vs_remote(parity_world) -> None:
         _assert_same_modulo_remote_fields(d_html, r_html)
 
 
+def test_v2_order_detail_parity_direct_vs_remote(tmp_path: Path) -> None:
+    db = tmp_path / "core-v2-order.db"
+    ids = _seed(db)
+    direct_url, direct_server = _start_direct_panel(db, ui_version="v2")
+    api_url, api_server = _start_api_server(db)
+    remote = RemoteCoreClient(api_url, _API_TOKEN)
+    remote_url, remote_server = _start_remote_panel(remote, ui_version="v2")
+    try:
+        for key in ("order_ready", "order_unprinted", "order_cancelled"):
+            order_id = ids[key]
+            d_status, d_html = _get(f"{direct_url}/order/{order_id}")
+            r_status, r_html = _get(f"{remote_url}/order/{order_id}")
+            assert d_status == r_status == 200
+            _assert_same_modulo_remote_fields(d_html, r_html)
+            assert "order-hero" in d_html
+            assert 'name="_command_id"' not in d_html
+            if key != "order_cancelled":
+                assert 'name="_command_id"' in r_html
+                assert 'name="_expect_updated_at"' in r_html
+                assert 'name="_expect_latest_version_number"' in r_html
+                assert 'name="_expect_payment_reminder_updated_at"' in r_html
+    finally:
+        for server in (direct_server, remote_server, api_server):
+            server.shutdown()
+            server.server_close()
+
+
 def test_remote_payment_reminder_command_and_operational_actions(parity_world) -> None:
     _direct_url, remote_url, ids = parity_world
     order_id = ids["order_unprinted"]
@@ -351,8 +378,10 @@ def test_remote_payment_reminder_command_and_operational_actions(parity_world) -
     assert "Druck bestätigen" in saved
 
 
+@pytest.mark.parametrize("ui_version", ("legacy", "v2"))
 def test_truncated_order_detail_warns_and_uses_true_latest_version(
     tmp_path: Path,
+    ui_version: str,
 ) -> None:
     db = tmp_path / "core.db"
     inquiries = SQLiteInquiryRepository(db)
@@ -385,12 +414,17 @@ def test_truncated_order_detail_warns_and_uses_true_latest_version(
 
     api_url, api_server = _start_api_server(db)
     remote = RemoteCoreClient(api_url, _API_TOKEN)
-    panel_url, panel_server = _start_remote_panel(remote)
+    panel_url, panel_server = _start_remote_panel(remote, ui_version=ui_version)
     try:
         status, html = _get(f"{panel_url}/order/{order.order_id}")
         assert status == 200
         assert "Unvollständige Ansicht" in html
-        assert "200 von 201 Versionen" in html
+        expected_warning = (
+            "200 von 201 Versionen"
+            if ui_version == "legacy"
+            else "200 von 201 Auftragsständen"
+        )
+        assert expected_warning in html
         assert _extract_hidden(html, "_expect_latest_version_number") == "201"
     finally:
         panel_server.shutdown()
