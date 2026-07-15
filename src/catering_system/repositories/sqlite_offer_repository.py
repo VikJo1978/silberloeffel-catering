@@ -12,6 +12,7 @@ from contextlib import nullcontext
 from datetime import date, datetime
 from pathlib import Path
 
+from catering_system.domain.inquiry import validate_planning_mode
 from catering_system.domain.offer import (
     ACCEPTANCE_CHANNELS,
     POSITION_KINDS,
@@ -31,6 +32,7 @@ from catering_system.domain.offer import (
     VatRatePercent,
     WithdrawalEvidence,
 )
+from catering_system.domain.order_payment_reminder import validate_payment_method
 from catering_system.repositories.sqlite_migrations import apply_migrations
 
 _CREATE_OFFERS = """
@@ -209,10 +211,37 @@ def _migration_3_immutability_triggers(connection: sqlite3.Connection) -> None:
         )
 
 
+def _migration_4_offer_version_event_and_payment_facts(
+    connection: sqlite3.Connection,
+) -> None:
+    existing = {
+        row[1] for row in connection.execute("PRAGMA table_info(offer_versions)")
+    }
+    columns = (
+        ("event_date", "TEXT"),
+        ("time_window_text", "TEXT"),
+        ("location_text", "TEXT"),
+        ("guest_count", "INTEGER"),
+        ("planning_mode", "TEXT"),
+        ("payment_method", "TEXT"),
+        ("payment_customer_visible_text", "TEXT"),
+    )
+    for name, column_type in columns:
+        if name not in existing:
+            connection.execute(
+                f"ALTER TABLE offer_versions ADD COLUMN {name} {column_type}"
+            )
+
+
 _MIGRATIONS = (
     (1, "create_offer_tables", _migration_1_create_tables),
     (2, "unique_source_inquiry", _migration_2_unique_source_inquiry),
     (3, "offer_immutability_triggers", _migration_3_immutability_triggers),
+    (
+        4,
+        "offer_version_event_and_payment_facts",
+        _migration_4_offer_version_event_and_payment_facts,
+    ),
 )
 
 
@@ -371,7 +400,12 @@ class SQLiteOfferRepository:
     def _insert_version(self, offer_id: str, version: OfferVersion) -> None:
         self._conn.execute(
             """
-            INSERT INTO offer_versions VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO offer_versions (
+                offer_version_id, offer_id, version_number, created_at, valid_until,
+                snapshot_id, snapshot_hash, event_date, time_window_text,
+                location_text, guest_count, planning_mode, payment_method,
+                payment_customer_visible_text
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 version.offer_version_id,
@@ -381,6 +415,13 @@ class SQLiteOfferRepository:
                 version.valid_until.isoformat(),
                 version.snapshot_id,
                 version.snapshot_hash,
+                version.event_date.isoformat(),
+                version.time_window_text,
+                version.location_text,
+                version.guest_count,
+                version.planning_mode,
+                version.payment_method,
+                version.payment_customer_visible_text,
             ),
         )
         for sort_order, variant in enumerate(version.variants):
@@ -499,7 +540,9 @@ class SQLiteOfferRepository:
         version_rows = self._conn.execute(
             """
             SELECT offer_version_id, version_number, created_at, valid_until,
-                   snapshot_id, snapshot_hash
+                   snapshot_id, snapshot_hash, event_date, time_window_text,
+                   location_text, guest_count, planning_mode, payment_method,
+                   payment_customer_visible_text
             FROM offer_versions
             WHERE offer_id = ?
             ORDER BY version_number
@@ -511,6 +554,10 @@ class SQLiteOfferRepository:
         versions: list[OfferVersion] = []
         for row in version_rows:
             version_id = row[0]
+            if row[6] is None:
+                raise ValueError(
+                    f"offer_version_id {version_id!r} is missing persisted event facts"
+                )
             variant_rows = variants_by_version.get(version_id, [])
             variants = tuple(
                 OfferVariant(
@@ -530,6 +577,13 @@ class SQLiteOfferRepository:
                     valid_until=date.fromisoformat(row[3]),
                     snapshot_id=row[4],
                     snapshot_hash=row[5],
+                    event_date=date.fromisoformat(row[6]),
+                    time_window_text=row[7],
+                    location_text=row[8],
+                    guest_count=row[9],
+                    planning_mode=validate_planning_mode(row[10]),
+                    payment_method=validate_payment_method(row[11]),
+                    payment_customer_visible_text=row[12],
                     variants=variants,
                 )
             )

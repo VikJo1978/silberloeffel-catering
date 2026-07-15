@@ -37,6 +37,21 @@ _HASH = "sha256:" + ("a" * 64)
 _POS_A = "88888888-8888-8888-8888-888888888881"
 _POS_B = "88888888-8888-8888-8888-888888888882"
 _POS_C = "88888888-8888-8888-8888-888888888883"
+_EVENT_DATE = date(2026, 8, 20)
+
+
+def _version_facts(**overrides: object) -> dict[str, object]:
+    facts: dict[str, object] = {
+        "event_date": _EVENT_DATE,
+        "time_window_text": "18:00–22:00",
+        "location_text": "Hamburg",
+        "guest_count": 80,
+        "planning_mode": "caterer_suggestion",
+        "payment_method": "RECHNUNG",
+        "payment_customer_visible_text": "Zahlung per Rechnung",
+    }
+    facts.update(overrides)
+    return facts
 
 
 def _position(position_id: str = _POS_A, *, kind: str = "catalog") -> OfferPosition:
@@ -83,6 +98,7 @@ def _version(
         valid_until=valid_until,
         snapshot_id=f"77777777-7777-7777-7777-77777777777{number}",
         snapshot_hash=_HASH,
+        **_version_facts(),
         variants=tuple(
             _variant(variant_id, version_id, f"Variante {index}")
             for index, variant_id in enumerate(variant_ids, start=1)
@@ -181,6 +197,7 @@ def test_variant_must_belong_to_its_exact_version() -> None:
             valid_until=date(2026, 7, 31),
             snapshot_id="77777777-7777-7777-7777-777777777771",
             snapshot_hash=_HASH,
+            **_version_facts(),
             variants=(foreign,),
         )
 
@@ -398,6 +415,7 @@ def test_one_version_can_present_three_selectable_variants_with_positions() -> N
         valid_until=date(2026, 7, 31),
         snapshot_id="77777777-7777-7777-7777-777777777771",
         snapshot_hash=_HASH,
+        **_version_facts(),
         variants=(
             _variant(_A_ID, _V1_ID, "Variante A", position_id=_POS_A),
             _variant(_B_ID, _V1_ID, "Variante B", position_id=_POS_B),
@@ -486,3 +504,44 @@ def test_accepted_or_converted_offer_stays_closed_after_order_storno() -> None:
         )
         assert offer_blocks_direct_inquiry_conversion(offer, today=date(2026, 7, 20))
         assert not offer_allows_conversion(offer, _V1_ID, _B_ID, "other-acceptance-id")
+
+
+def test_offer_version_requires_event_and_payment_facts() -> None:
+    with pytest.raises(ValueError, match="time_window_text is required"):
+        OfferVersion(
+            offer_version_id=_V1_ID,
+            offer_id=_OFFER_ID,
+            version_number=1,
+            created_at=_NOW,
+            valid_until=date(2026, 7, 31),
+            snapshot_id="77777777-7777-7777-7777-777777777771",
+            snapshot_hash=_HASH,
+            **_version_facts(time_window_text="   "),
+            variants=(_variant(_A_ID, _V1_ID, "Variante A"),),
+        )
+
+    with pytest.raises(ValueError, match="guest_count must be a positive integer"):
+        OfferVersion(
+            offer_version_id=_V1_ID,
+            offer_id=_OFFER_ID,
+            version_number=1,
+            created_at=_NOW,
+            valid_until=date(2026, 7, 31),
+            snapshot_id="77777777-7777-7777-7777-777777777771",
+            snapshot_hash=_HASH,
+            **_version_facts(guest_count=0),
+            variants=(_variant(_A_ID, _V1_ID, "Variante A"),),
+        )
+
+    version = OfferVersion(
+        offer_version_id=_V1_ID,
+        offer_id=_OFFER_ID,
+        version_number=1,
+        created_at=_NOW,
+        valid_until=date(2026, 7, 31),
+        snapshot_id="77777777-7777-7777-7777-777777777771",
+        snapshot_hash=_HASH,
+        **_version_facts(guest_count=None),
+        variants=(_variant(_A_ID, _V1_ID, "Variante A"),),
+    )
+    assert version.guest_count is None

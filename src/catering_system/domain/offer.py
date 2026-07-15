@@ -8,6 +8,15 @@ from datetime import date, datetime
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+from catering_system.domain.inquiry import PlanningMode, validate_planning_mode
+from catering_system.domain.order_payment_reminder import (
+    PaymentMethod,
+    validate_payment_method,
+)
+
+_MAX_EVENT_TEXT_LEN = 500
+_MAX_PAYMENT_VISIBLE_TEXT_LEN = 20_000
+
 OfferState = Literal[
     "Prepared",
     "Sent",
@@ -50,6 +59,12 @@ def _require_aware(value: datetime, field: str) -> None:
 def _require_non_negative_cents(value: int, field: str) -> None:
     if value < 0:
         raise ValueError(f"{field} must be non-negative")
+
+
+def _require_bounded_text(value: str, field: str, *, max_len: int) -> None:
+    _require_text(value, field)
+    if len(value) > max_len:
+        raise ValueError(f"{field} exceeds length limit")
 
 
 @dataclass(frozen=True)
@@ -120,8 +135,8 @@ class OfferVersion:
     """Prepared commercial snapshot identity and its embedded alternatives.
 
     ``snapshot_id`` and ``snapshot_hash`` anchor the immutable envelope.
-    A future import slice can attach the full ``offer_snapshot_v1`` payload
-    without changing Offer aggregate boundaries or lifecycle facts.
+    Event facts and payment terms are frozen commercial fields required for
+    later Offer-to-Order conversion.
     """
 
     offer_version_id: str
@@ -131,6 +146,13 @@ class OfferVersion:
     valid_until: date
     snapshot_id: str
     snapshot_hash: str
+    event_date: date
+    time_window_text: str
+    location_text: str
+    guest_count: int | None
+    planning_mode: PlanningMode
+    payment_method: PaymentMethod
+    payment_customer_visible_text: str
     variants: tuple[OfferVariant, ...]
 
     def __post_init__(self) -> None:
@@ -142,6 +164,21 @@ class OfferVersion:
             raise ValueError("version_number must be at least 1")
         if not _SNAPSHOT_HASH.fullmatch(self.snapshot_hash):
             raise ValueError("snapshot_hash must be a lowercase sha256 digest")
+        _require_bounded_text(
+            self.time_window_text, "time_window_text", max_len=_MAX_EVENT_TEXT_LEN
+        )
+        _require_bounded_text(
+            self.location_text, "location_text", max_len=_MAX_EVENT_TEXT_LEN
+        )
+        if self.guest_count is not None and self.guest_count < 1:
+            raise ValueError("guest_count must be a positive integer")
+        validate_planning_mode(self.planning_mode)
+        validate_payment_method(self.payment_method)
+        _require_bounded_text(
+            self.payment_customer_visible_text,
+            "payment_customer_visible_text",
+            max_len=_MAX_PAYMENT_VISIBLE_TEXT_LEN,
+        )
         if not self.variants:
             raise ValueError("an OfferVersion requires at least one variant")
         variant_ids: set[str] = set()

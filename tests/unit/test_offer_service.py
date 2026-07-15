@@ -43,6 +43,21 @@ _NOW = datetime(2026, 7, 15, 8, 30, tzinfo=UTC)
 _SENT_AT = datetime(2026, 7, 15, 10, 0, tzinfo=UTC)
 _RECORDED_AT = datetime(2026, 7, 15, 10, 0, 5, tzinfo=UTC)
 _HASH = "sha256:" + ("a" * 64)
+_EVENT_DATE = date(2026, 8, 20)
+
+
+def _version_facts(**overrides: object) -> dict[str, object]:
+    facts: dict[str, object] = {
+        "event_date": _EVENT_DATE,
+        "time_window_text": "18:00–22:00",
+        "location_text": "Hamburg",
+        "guest_count": 80,
+        "planning_mode": "caterer_suggestion",
+        "payment_method": "RECHNUNG",
+        "payment_customer_visible_text": "Zahlung per Rechnung",
+    }
+    facts.update(overrides)
+    return facts
 
 
 def _position() -> dict[str, object]:
@@ -196,6 +211,7 @@ def _existing_offer(*, inquiry_id: str = _INQUIRY_ID) -> Offer:
                 valid_until=date(2026, 7, 29),
                 snapshot_id="99999999-9999-4999-8999-999999999991",
                 snapshot_hash=_HASH,
+                **_version_facts(),
                 variants=(
                     OfferVariant(
                         variant_id=_VARIANT_ID,
@@ -493,6 +509,7 @@ def test_record_sent_evidence_rejects_superseded_version() -> None:
         valid_until=date(2026, 7, 29),
         snapshot_id="99999999-9999-4999-8999-999999999992",
         snapshot_hash=_HASH,
+        **_version_facts(),
         variants=(
             OfferVariant(
                 variant_id="55555555-5555-4555-8555-555555555551",
@@ -536,6 +553,41 @@ def test_record_sent_evidence_rejects_superseded_version() -> None:
 
     with pytest.raises(ValueError, match="sent evidence already exists"):
         service.record_sent_evidence(offer.offer_id, v1_id, **_record_args())
+
+
+def test_prepare_offer_version_persists_event_and_payment_facts() -> None:
+    offers = _CountingOfferRepository()
+    _inquiries, _orders, _offers, service = _world(
+        inquiry=_sample_inquiry(), offers=offers
+    )
+    payload = _valid_snapshot()
+
+    offer = service.prepare_offer_version(_INQUIRY_ID, payload)
+    version = offer.versions[0]
+
+    assert version.event_date == date(2026, 8, 20)
+    assert version.time_window_text == "18:00–22:00"
+    assert version.location_text == "Hamburg"
+    assert version.guest_count == 80
+    assert version.planning_mode == "caterer_suggestion"
+    assert version.payment_method == "RECHNUNG"
+    assert version.payment_customer_visible_text == "Zahlung per Rechnung"
+
+
+def test_prepare_offer_version_persists_null_guest_count() -> None:
+    offers = InMemoryOfferRepository()
+    _inquiries, _orders, _offers, service = _world(
+        inquiry=_sample_inquiry(), offers=offers
+    )
+    payload = _valid_snapshot()
+    event = dict(payload["event"])  # type: ignore[arg-type]
+    event["guest_count"] = None
+    payload["event"] = event
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+
+    offer = service.prepare_offer_version(_INQUIRY_ID, payload)
+
+    assert offer.versions[0].guest_count is None
 
 
 def test_record_sent_evidence_append_failure_leaves_offer_unchanged() -> None:
@@ -655,6 +707,7 @@ def test_record_acceptance_evidence_rejects_superseded() -> None:
         valid_until=date(2026, 7, 29),
         snapshot_id="99999999-9999-4999-8999-999999999992",
         snapshot_hash=_HASH,
+        **_version_facts(),
         variants=(
             OfferVariant(
                 variant_id="55555555-5555-4555-8555-555555555551",

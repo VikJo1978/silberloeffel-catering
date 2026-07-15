@@ -44,6 +44,21 @@ _HASH_V2 = "sha256:" + ("b" * 64)
 _POS_A = "88888888-8888-8888-8888-888888888881"
 _POS_B = "88888888-8888-8888-8888-888888888882"
 _POS_C = "88888888-8888-8888-8888-888888888883"
+_EVENT_DATE = date(2026, 8, 20)
+
+
+def _version_facts(**overrides: object) -> dict[str, object]:
+    facts: dict[str, object] = {
+        "event_date": _EVENT_DATE,
+        "time_window_text": "18:00–22:00",
+        "location_text": "Hamburg",
+        "guest_count": 80,
+        "planning_mode": "caterer_suggestion",
+        "payment_method": "RECHNUNG",
+        "payment_customer_visible_text": "Zahlung per Rechnung",
+    }
+    facts.update(overrides)
+    return facts
 
 
 def _position(position_id: str = _POS_A) -> OfferPosition:
@@ -92,6 +107,7 @@ def _version(
         valid_until=valid_until,
         snapshot_id=f"77777777-7777-7777-7777-77777777777{number}",
         snapshot_hash=snapshot_hash,
+        **_version_facts(),
         variants=tuple(
             _variant(
                 variant_id,
@@ -214,6 +230,7 @@ def test_sqlite_offer_roundtrip_preserves_three_variants(tmp_path: Path) -> None
         valid_until=date(2026, 7, 31),
         snapshot_id="77777777-7777-7777-7777-777777777771",
         snapshot_hash=_HASH_V1,
+        **_version_facts(),
         variants=(
             _variant(_A_ID, _V1_ID, "Variante A", position_id=_POS_A),
             _variant(_B_ID, _V1_ID, "Variante B", position_id=_POS_B),
@@ -310,6 +327,54 @@ def test_append_acceptance_evidence_rejects_second_acceptance() -> None:
         repo.append_acceptance_evidence(_acceptance())
 
 
+def test_sqlite_offer_roundtrip_preserves_event_and_payment_facts(tmp_path: Path) -> None:
+    v1 = _version(
+        1,
+        snapshot_hash=_HASH_V1,
+        valid_until=date(2026, 7, 31),
+    )
+    v2 = _version(
+        2,
+        snapshot_hash=_HASH_V2,
+        valid_until=date(2026, 8, 15),
+    )
+    v2 = OfferVersion(
+        offer_version_id=v2.offer_version_id,
+        offer_id=v2.offer_id,
+        version_number=v2.version_number,
+        created_at=v2.created_at,
+        valid_until=v2.valid_until,
+        snapshot_id=v2.snapshot_id,
+        snapshot_hash=v2.snapshot_hash,
+        **_version_facts(
+            event_date=date(2026, 9, 1),
+            location_text="Berlin",
+            guest_count=120,
+            payment_method="VORKASSE",
+            payment_customer_visible_text="Zahlung per Vorkasse",
+        ),
+        variants=v2.variants,
+    )
+    offer = _offer(versions=(v1, v2))
+    repo = SQLiteOfferRepository(tmp_path / "facts.db")
+    repo.save(offer)
+    loaded = repo.get(_OFFER_ID)
+    assert loaded == offer
+    assert loaded is not None
+    assert loaded.versions[0].payment_method == "RECHNUNG"
+    assert loaded.versions[1].guest_count == 120
+
+
+def test_sqlite_offer_version_event_facts_are_immutable(tmp_path: Path) -> None:
+    repo = SQLiteOfferRepository(tmp_path / "offer.db")
+    repo.save(_offer())
+    with pytest.raises(sqlite3.IntegrityError, match="offer_versions is immutable"):
+        repo._conn.execute(
+            "UPDATE offer_versions SET event_date = ? WHERE offer_version_id = ?",
+            ("2026-09-01", _V1_ID),
+        )
+
+
 def test_sqlite_offer_version_rows_are_immutable(tmp_path: Path) -> None:
     repo = SQLiteOfferRepository(tmp_path / "offer.db")
     repo.save(_offer())
@@ -333,6 +398,7 @@ def test_offer_component_migrations_are_recorded_once(tmp_path: Path) -> None:
         (1, "create_offer_tables"),
         (2, "unique_source_inquiry"),
         (3, "offer_immutability_triggers"),
+        (4, "offer_version_event_and_payment_facts"),
     ]
     conn = sqlite3.connect(db)
     apply_migrations(conn, "offers", _MIGRATIONS)
@@ -340,4 +406,4 @@ def test_offer_component_migrations_are_recorded_once(tmp_path: Path) -> None:
         "SELECT COUNT(*) FROM schema_migrations WHERE component = 'offers'"
     ).fetchone()
     conn.close()
-    assert rows_after == (3,)
+    assert rows_after == (4,)

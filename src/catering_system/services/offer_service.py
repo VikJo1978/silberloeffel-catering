@@ -244,6 +244,13 @@ def _build_offer_from_snapshot(snapshot: OfferSnapshotV1) -> Offer:
         valid_until=snapshot.valid_until,
         snapshot_id=snapshot.snapshot_id,
         snapshot_hash=snapshot.snapshot_hash,
+        event_date=snapshot.event.event_date,
+        time_window_text=snapshot.event.time_window_text,
+        location_text=snapshot.event.location_text,
+        guest_count=snapshot.event.guest_count,
+        planning_mode=snapshot.event.planning_mode,
+        payment_method=snapshot.payment_terms.method,
+        payment_customer_visible_text=snapshot.payment_terms.customer_visible_text,
         variants=tuple(
             _map_variant(variant, offer_version_id) for variant in snapshot.variants
         ),
