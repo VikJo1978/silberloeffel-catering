@@ -19,19 +19,21 @@ from catering_system.repositories.order_repository import OrderRepository
 from catering_system.repositories.payment_reminder_repository import (
     PaymentReminderRepository,
 )
+from catering_system.integration.auerswald_sync import (
+    fetch_missed_board,
+    resolve_missed_call,
+)
 from catering_system.ui.office_panel import (
     OfficePageContext,
     OfficePanel,
     _e,
     _page,
-    fetch_missed_board,
     fetch_rueckruf_count,
     parse_proposal_payload,
     render_print_sheet,
     render_proposal_preview,
     render_proposal_preview_form,
     render_rueckruf,
-    resolve_missed_call,
 )
 from catering_system.ui.remote_core_client import RemoteCoreError
 

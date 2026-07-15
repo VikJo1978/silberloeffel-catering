@@ -9,15 +9,13 @@ progression (B7) on inquiry views, operational gate on order views.
 from __future__ import annotations
 
 import argparse
-import base64
-import json
 import os
-import urllib.error
-import urllib.request
 from datetime import date
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING, Any, cast
-from urllib.parse import quote, urlencode
+from urllib.parse import quote
+
+from catering_system.integration.auerswald_sync import fetch_missed_board
 
 from catering_system.domain.inquiry import (
     ACTIVE_ORDER_CRM_STAGE,
@@ -129,30 +127,6 @@ _OFFICE_SOURCES = ("manual", "phone_by_office", "email", "website_form", "config
 # goes to auerswald-sync's own /missed/resolve, not to Core.
 
 
-def _auth_header(user: str, password: str) -> str | None:
-    if not user and not password:
-        return None
-    token = base64.b64encode(f"{user}:{password}".encode()).decode()
-    return f"Basic {token}"
-
-
-def fetch_missed_board(
-    url: str, user: str, password: str, limit: int = 100
-) -> tuple[list[dict] | None, str | None]:
-    if not url:
-        return None, "AUERSWALD_SYNC_URL nicht konfiguriert"
-    req = urllib.request.Request(f"{url.rstrip('/')}/missed-board.json?limit={limit}")
-    auth = _auth_header(user, password)
-    if auth:
-        req.add_header("Authorization", auth)
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        return data.get("items", []), None
-    except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
-        return None, str(exc)
-
-
 def fetch_rueckruf_count(url: str, user: str, password: str) -> int | None:
     """Sidebar badge count. Same source/call as the Rückrufliste page itself
     (fetch_missed_board) — not a second data source or a new business rule,
@@ -162,32 +136,6 @@ def fetch_rueckruf_count(url: str, user: str, password: str) -> int | None:
     if error or not items:
         return None
     return len(items)
-
-
-class _NoRedirect(urllib.request.HTTPErrorProcessor):
-    """auerswald-sync's own /missed/resolve replies 303 to its own HTML
-    /missed-board page (fine for a browser, irrelevant here) — don't follow
-    it and don't treat it as an error; we only care that the POST landed."""
-
-    def http_response(self, request, response):
-        return response
-
-    https_response = http_response
-
-
-def resolve_missed_call(url: str, user: str, password: str, call_id: str) -> None:
-    req = urllib.request.Request(
-        f"{url.rstrip('/')}/missed/resolve",
-        data=urlencode({"call_id": call_id}).encode(),
-        method="POST",
-    )
-    req.add_header("Content-Type", "application/x-www-form-urlencoded")
-    auth = _auth_header(user, password)
-    if auth:
-        req.add_header("Authorization", auth)
-    opener = urllib.request.build_opener(_NoRedirect)
-    with opener.open(req, timeout=5):
-        pass
 
 
 _RUECKRUF_SUBTITLE = (

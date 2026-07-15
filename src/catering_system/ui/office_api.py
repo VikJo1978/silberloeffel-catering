@@ -80,6 +80,7 @@ from catering_system.services.operational_core_service import OperationalCoreSer
 from catering_system.services.order_service import OrderService
 from catering_system.services.payment_reminder_service import PaymentReminderService
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
+from catering_system.services.work_center_service import WorkCenterService
 from catering_system.ui import office_api_views as views
 
 _log = logging.getLogger(__name__)
@@ -284,8 +285,17 @@ class OfficeApi:
         )
         self.core = OperationalCoreService(self.orders, event_sink=self.events)
         self.week_service = WochenuebersichtService(self.orders)
+        self.work_center_service = WorkCenterService(
+            self.inquiries,
+            self.offers,
+            self.orders,
+            today=views.berlin_today,
+        )
 
     # -- reads -----------------------------------------------------------
+
+    def work_center(self) -> dict[str, object]:
+        return views.work_center_snapshot(self.work_center_service.snapshot())
 
     def queue_view(self) -> dict[str, object]:
         orders = self.orders.list_orders()
@@ -1035,6 +1045,11 @@ _COMMANDS: dict[str, _CommandSpec] = {
 _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
     (re.compile(r"^/office/v1/queue$"), "/office/v1/queue", {"GET": "queue"}),
     (
+        re.compile(r"^/office/v1/work-center$"),
+        "/office/v1/work-center",
+        {"GET": "work_center"},
+    ),
+    (
         re.compile(r"^/office/v1/inquiries$"),
         "/office/v1/inquiries",
         {"GET": "list_inquiries", "POST": "create_inquiry"},
@@ -1327,6 +1342,9 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             if kind == "queue":
                 self._query(set())
                 self._respond(200, api.queue_view())
+            elif kind == "work_center":
+                self._query(set())
+                self._respond(200, api.work_center())
             elif kind == "list_inquiries":
                 params = self._query({"q", "limit", "offset"})
                 q = _v_str(params.get("q", ""), _MAX_Q_CHARS).strip().lower()

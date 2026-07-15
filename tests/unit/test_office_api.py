@@ -299,6 +299,39 @@ def test_queue_view_attention_counts_and_tops(api) -> None:
     }
 
 
+_WORK_CENTER_KEYS = {
+    "rueckrufe_open",
+    "missed_calls_open",
+    "offers_waiting",
+    "offers_accepted",
+    "upcoming_orders",
+    "open_tasks",
+    "today_calendar_entries",
+}
+
+
+def test_work_center_schema_and_seed_counts(api) -> None:
+    base, _ids, _db = api
+    status, body, _h = _get(f"{base}/office/v1/work-center")
+    assert status == 200
+    assert set(body) == _WORK_CENTER_KEYS
+    assert body == {
+        "rueckrufe_open": 2,
+        "missed_calls_open": 0,
+        "offers_waiting": 0,
+        "offers_accepted": 0,
+        "upcoming_orders": 1,
+        "open_tasks": 0,
+        "today_calendar_entries": 0,
+    }
+
+
+def test_work_center_requires_auth(api) -> None:
+    base, _ids, _db = api
+    status, body, _h = _get(f"{base}/office/v1/work-center", headers={})
+    assert (status, body["error"]) == (401, "unauthorized")
+
+
 def test_inquiry_list_rows_and_search(api) -> None:
     base, ids, _db = api
     status, body, _h = _get(f"{base}/office/v1/inquiries")

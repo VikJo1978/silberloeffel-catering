@@ -24,6 +24,7 @@ from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_payment_reminder import PaymentReminderView
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
 from catering_system.domain.wochenuebersicht import Wochenuebersicht
+from catering_system.domain.work_center import WorkCenterSnapshot
 from catering_system.ui.office_panel_offer_prefill import offer_prefill_payload
 
 BERLIN = ZoneInfo("Europe/Berlin")
@@ -304,3 +305,15 @@ def order_top_row(
     row["blocker_reason"] = evaluation.reasons[0] if evaluation.reasons else None
     row["next_action"] = resolve_next_action(order, versions)
     return row
+
+
+def work_center_snapshot(snapshot: WorkCenterSnapshot) -> dict[str, object]:
+    return {
+        "rueckrufe_open": snapshot.rueckrufe_open,
+        "missed_calls_open": snapshot.missed_calls_open,
+        "offers_waiting": snapshot.offers_waiting,
+        "offers_accepted": snapshot.offers_accepted,
+        "upcoming_orders": snapshot.upcoming_orders,
+        "open_tasks": snapshot.open_tasks,
+        "today_calendar_entries": snapshot.today_calendar_entries,
+    }
