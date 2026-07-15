@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -13,10 +13,14 @@ from catering_system.domain.inquiry import (
     PLANNING_MODES,
 )
 from catering_system.domain.offer import (
+    AcceptanceEvidence,
     Offer,
     OfferPosition,
     OfferVariant,
     OfferVersion,
+    SentEvidence,
+    WithdrawalEvidence,
+    derive_offer_state,
 )
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.offer_snapshot import compute_snapshot_hash
@@ -36,6 +40,8 @@ _SNAPSHOT_ID = "77777777-7777-4777-8777-777777777771"
 _VARIANT_ID = "44444444-4444-4444-8444-444444444441"
 _POSITION_ID = "88888888-8888-4888-8888-888888888881"
 _NOW = datetime(2026, 7, 15, 8, 30, tzinfo=UTC)
+_SENT_AT = datetime(2026, 7, 15, 10, 0, tzinfo=UTC)
+_RECORDED_AT = datetime(2026, 7, 15, 10, 0, 5, tzinfo=UTC)
 _HASH = "sha256:" + ("a" * 64)
 
 
@@ -159,6 +165,16 @@ class _FailingOfferRepository(InMemoryOfferRepository):
         self.save_calls += 1
         raise self._error
 
+
+class _FailingAppendRepository(InMemoryOfferRepository):
+    def __init__(self, error: Exception) -> None:
+        super().__init__()
+        self._error = error
+        self.append_calls = 0
+
+    def append_sent_evidence(self, evidence: SentEvidence) -> Offer:
+        self.append_calls += 1
+        raise self._error
 
 def _existing_offer(*, inquiry_id: str = _INQUIRY_ID) -> Offer:
     version_id = "33333333-3333-4333-8333-333333333333"
@@ -341,3 +357,191 @@ def test_prepare_offer_version_repository_failure_leaves_no_offer() -> None:
 
     assert offers.save_calls == 1
     assert offers.get_by_source_inquiry_id(_INQUIRY_ID) is None
+
+
+def _service(
+    offers: InMemoryOfferRepository,
+) -> OfferService:
+    inquiries = InMemoryInquiryRepository()
+    orders = InMemoryOrderRepository()
+    return OfferService(
+        offers,
+        inquiries,
+        orders,
+        now=lambda: _RECORDED_AT,
+        today=lambda: date(2026, 7, 15),
+    )
+
+
+def _record_args() -> dict[str, object]:
+    return {
+        "sent_at": _SENT_AT,
+        "channel": "email",
+        "recipient_reference": "customer@example.invalid",
+        "evidence_reference": "mail-123",
+        "recorded_by": "office-panel",
+    }
+
+
+def test_record_sent_evidence_prepared_to_sent() -> None:
+    offer = _existing_offer()
+    version_id = offer.versions[0].offer_version_id
+    offers = InMemoryOfferRepository()
+    offers.save(offer)
+    service = _service(offers)
+
+    updated = service.record_sent_evidence(offer.offer_id, version_id, **_record_args())
+
+    assert len(updated.sent_evidence) == 1
+    evidence = updated.sent_evidence[0]
+    assert evidence.sent_at == _SENT_AT
+    assert evidence.recorded_at == _RECORDED_AT
+    assert evidence.recorded_by == "office-panel"
+    assert derive_offer_state(updated, version_id, today=date(2026, 7, 15)) == "Sent"
+
+
+def test_record_sent_evidence_rejects_second_send() -> None:
+    offer = _existing_offer()
+    version_id = offer.versions[0].offer_version_id
+    offers = InMemoryOfferRepository()
+    offers.save(offer)
+    service = _service(offers)
+    service.record_sent_evidence(offer.offer_id, version_id, **_record_args())
+
+    with pytest.raises(ValueError, match="sent evidence already exists"):
+        service.record_sent_evidence(offer.offer_id, version_id, **_record_args())
+
+
+def test_record_sent_evidence_rejects_withdrawn_version() -> None:
+    offer = _existing_offer()
+    version_id = offer.versions[0].offer_version_id
+    withdrawn = Offer(
+        offer_id=offer.offer_id,
+        source_inquiry_id=offer.source_inquiry_id,
+        created_at=offer.created_at,
+        versions=offer.versions,
+        withdrawal_evidence=(
+            WithdrawalEvidence(
+                offer_id=offer.offer_id,
+                offer_version_id=version_id,
+                withdrawn_at=_NOW,
+                recorded_by="office",
+            ),
+        ),
+    )
+    offers = InMemoryOfferRepository()
+    offers.save(withdrawn)
+    service = _service(offers)
+
+    with pytest.raises(ValueError, match="sent recording blocked"):
+        service.record_sent_evidence(offer.offer_id, version_id, **_record_args())
+
+
+def test_record_sent_evidence_rejects_when_acceptance_exists() -> None:
+    offer = _existing_offer()
+    version_id = offer.versions[0].offer_version_id
+    accepted = Offer(
+        offer_id=offer.offer_id,
+        source_inquiry_id=offer.source_inquiry_id,
+        created_at=offer.created_at,
+        versions=offer.versions,
+        sent_evidence=(
+            SentEvidence(
+                offer_id=offer.offer_id,
+                offer_version_id=version_id,
+                sent_at=_SENT_AT,
+                recorded_at=_RECORDED_AT,
+                channel="email",
+                recipient_reference="customer@example.invalid",
+                evidence_reference="mail-123",
+                recorded_by="office-panel",
+            ),
+        ),
+        acceptance_evidence=AcceptanceEvidence(
+            acceptance_id="55555555-5555-4555-8555-555555555551",
+            offer_id=offer.offer_id,
+            accepted_offer_version_id=version_id,
+            accepted_variant_id=_VARIANT_ID,
+            accepted_at=_SENT_AT + timedelta(hours=1),
+            recorded_at=_RECORDED_AT + timedelta(hours=1),
+            channel="email",
+            evidence_reference="reply-1",
+            recorded_by="office-panel",
+        ),
+    )
+    offers = InMemoryOfferRepository()
+    offers.save(accepted)
+    service = _service(offers)
+
+    with pytest.raises(ValueError, match="acceptance blocks sent recording"):
+        service.record_sent_evidence(offer.offer_id, version_id, **_record_args())
+
+
+def test_record_sent_evidence_rejects_superseded_version() -> None:
+    v1_id = _existing_offer().versions[0].offer_version_id
+    v2_id = "44444444-4444-4444-8444-444444444442"
+    v2 = OfferVersion(
+        offer_version_id=v2_id,
+        offer_id="11111111-1111-4111-8111-111111111111",
+        version_number=2,
+        created_at=_NOW + timedelta(hours=1),
+        valid_until=date(2026, 7, 29),
+        snapshot_id="99999999-9999-4999-8999-999999999992",
+        snapshot_hash=_HASH,
+        variants=(
+            OfferVariant(
+                variant_id="55555555-5555-4555-8555-555555555551",
+                offer_version_id=v2_id,
+                label="Variante v2",
+                positions=_existing_offer().versions[0].variants[0].positions,
+            ),
+        ),
+    )
+    offer = Offer(
+        offer_id="11111111-1111-4111-8111-111111111111",
+        source_inquiry_id=_INQUIRY_ID,
+        created_at=_NOW,
+        versions=(_existing_offer().versions[0], v2),
+        sent_evidence=(
+            SentEvidence(
+                offer_id="11111111-1111-4111-8111-111111111111",
+                offer_version_id=v1_id,
+                sent_at=_SENT_AT,
+                recorded_at=_RECORDED_AT,
+                channel="email",
+                recipient_reference="customer@example.invalid",
+                evidence_reference="mail-123",
+                recorded_by="office-panel",
+            ),
+            SentEvidence(
+                offer_id="11111111-1111-4111-8111-111111111111",
+                offer_version_id=v2_id,
+                sent_at=_SENT_AT + timedelta(hours=2),
+                recorded_at=_RECORDED_AT + timedelta(hours=2),
+                channel="email",
+                recipient_reference="customer@example.invalid",
+                evidence_reference="mail-456",
+                recorded_by="office-panel",
+            ),
+        ),
+    )
+    offers = InMemoryOfferRepository()
+    offers.save(offer)
+    service = _service(offers)
+
+    with pytest.raises(ValueError, match="sent evidence already exists"):
+        service.record_sent_evidence(offer.offer_id, v1_id, **_record_args())
+
+
+def test_record_sent_evidence_append_failure_leaves_offer_unchanged() -> None:
+    offer = _existing_offer()
+    version_id = offer.versions[0].offer_version_id
+    offers = _FailingAppendRepository(RuntimeError("append failed"))
+    offers.save(offer)
+    service = _service(offers)
+
+    with pytest.raises(RuntimeError, match="append failed"):
+        service.record_sent_evidence(offer.offer_id, version_id, **_record_args())
+
+    assert offers.append_calls == 1
+    assert offers.get(offer.offer_id) == offer

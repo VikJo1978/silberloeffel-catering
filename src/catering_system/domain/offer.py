@@ -480,6 +480,21 @@ def offer_allows_acceptance(
     return derive_offer_state(offer, offer_version_id, today=today) == "Sent"
 
 
+def offer_allows_sent_recording(
+    offer: Offer, offer_version_id: str, *, today: date
+) -> bool:
+    """True only when one exact OfferVersion may receive its first SentEvidence."""
+    if offer.acceptance_evidence is not None or offer.conversion_link is not None:
+        return False
+    try:
+        _version(offer, offer_version_id)
+    except ValueError:
+        return False
+    if any(item.offer_version_id == offer_version_id for item in offer.sent_evidence):
+        return False
+    return derive_offer_state(offer, offer_version_id, today=today) == "Prepared"
+
+
 def offer_allows_conversion(
     offer: Offer,
     offer_version_id: str,

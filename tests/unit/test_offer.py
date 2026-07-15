@@ -19,6 +19,7 @@ from catering_system.domain.offer import (
     derive_offer_state,
     offer_allows_acceptance,
     offer_allows_conversion,
+    offer_allows_sent_recording,
     offer_blocks_direct_inquiry_conversion,
 )
 
@@ -275,6 +276,45 @@ def test_expired_or_superseded_version_cannot_be_accepted() -> None:
         dual_sent, _V1_ID, _B_ID, today=date(2026, 7, 20)
     )
     assert offer_allows_acceptance(dual_sent, _V2_ID, _C_ID, today=date(2026, 7, 20))
+
+
+def test_offer_allows_sent_recording_only_for_prepared_versions() -> None:
+    prepared = _offer()
+    assert offer_allows_sent_recording(prepared, _V1_ID, today=date(2026, 7, 15))
+
+    sent_offer = _offer(sent=(_sent(),))
+    assert not offer_allows_sent_recording(sent_offer, _V1_ID, today=date(2026, 7, 15))
+
+    withdrawn = WithdrawalEvidence(
+        offer_id=_OFFER_ID,
+        offer_version_id=_V1_ID,
+        withdrawn_at=_NOW + timedelta(minutes=1),
+        recorded_by="office",
+    )
+    withdrawn_offer = _offer(withdrawn=(withdrawn,))
+    assert not offer_allows_sent_recording(
+        withdrawn_offer, _V1_ID, today=date(2026, 7, 15)
+    )
+
+    v1 = _version()
+    v2 = _version(2)
+    prepared_v2 = _offer(versions=(v1, v2), sent=(_sent(_V1_ID),))
+    assert offer_allows_sent_recording(
+        prepared_v2, _V2_ID, today=date(2026, 7, 20)
+    )
+    assert not offer_allows_sent_recording(
+        prepared_v2, _V1_ID, today=date(2026, 7, 20)
+    )
+
+    both_sent = _offer(
+        versions=(v1, v2),
+        sent=(_sent(_V1_ID), _sent(_V2_ID, sent_at=_NOW + timedelta(hours=2))),
+    )
+    assert not offer_allows_sent_recording(both_sent, _V1_ID, today=date(2026, 7, 20))
+    assert not offer_allows_sent_recording(both_sent, _V2_ID, today=date(2026, 7, 20))
+
+    accepted = _offer(sent=(_sent(),), acceptance=_acceptance())
+    assert not offer_allows_sent_recording(accepted, _V1_ID, today=date(2026, 7, 20))
 
 
 def test_sent_then_expired_prefers_expired_over_sent() -> None:

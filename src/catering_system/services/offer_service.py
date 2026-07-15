@@ -1,15 +1,21 @@
-"""Core offer service — first OfferVersion preparation from OfferSnapshot V1."""
+"""Core offer service — OfferVersion preparation and commercial evidence recording."""
 
 from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
+from datetime import UTC, date, datetime
 
 from catering_system.domain.offer import (
     Offer,
     OfferPosition,
     OfferVariant,
     OfferVersion,
+    SentChannel,
+    SentEvidence,
+    derive_offer_state,
+    offer_allows_sent_recording,
 )
 from catering_system.domain.offer_snapshot import (
     OfferSnapshotPosition,
@@ -25,17 +31,22 @@ _log = logging.getLogger(__name__)
 
 
 class OfferService:
-    """Core-owned Offer lifecycle: first OfferVersion preparation only."""
+    """Core-owned Offer lifecycle: preparation and commercial evidence recording."""
 
     def __init__(
         self,
         offer_repository: OfferRepository,
         inquiry_repository: InquiryRepository,
         order_repository: OrderRepository,
+        *,
+        now: Callable[[], datetime] | None = None,
+        today: Callable[[], date] | None = None,
     ) -> None:
         self._offer_repository = offer_repository
         self._inquiry_repository = inquiry_repository
         self._order_repository = order_repository
+        self._now = now or (lambda: datetime.now(UTC))
+        self._today = today or date.today
 
     def prepare_offer_version(
         self,
@@ -78,6 +89,65 @@ class OfferService:
             offer.versions[0].snapshot_id,
         )
         return offer
+
+    def record_sent_evidence(
+        self,
+        offer_id: str,
+        offer_version_id: str,
+        *,
+        sent_at: datetime,
+        channel: SentChannel,
+        recipient_reference: str,
+        evidence_reference: str,
+        recorded_by: str,
+    ) -> Offer:
+        """Append SentEvidence for one Prepared OfferVersion."""
+        offer = self._offer_repository.get(offer_id)
+        if offer is None:
+            raise KeyError(offer_id)
+
+        if not any(version.offer_version_id == offer_version_id for version in offer.versions):
+            raise ValueError(
+                f"offer_version_id {offer_version_id!r} is not a version of "
+                f"offer {offer_id!r}"
+            )
+
+        if offer.acceptance_evidence is not None or offer.conversion_link is not None:
+            raise ValueError("acceptance blocks sent recording")
+
+        if any(item.offer_version_id == offer_version_id for item in offer.sent_evidence):
+            raise ValueError(
+                f"sent evidence already exists for offer_version_id={offer_version_id!r}"
+            )
+
+        if not offer_allows_sent_recording(
+            offer, offer_version_id, today=self._today()
+        ):
+            raise ValueError(
+                f"sent recording blocked (offer_id={offer_id!r}, "
+                f"offer_version_id={offer_version_id!r}, "
+                f"state={derive_offer_state(offer, offer_version_id, today=self._today())!r})"
+            )
+
+        recorded_at = self._now()
+        evidence = SentEvidence(
+            offer_id=offer_id,
+            offer_version_id=offer_version_id,
+            sent_at=sent_at,
+            recorded_at=recorded_at,
+            channel=channel,
+            recipient_reference=recipient_reference,
+            evidence_reference=evidence_reference,
+            recorded_by=recorded_by,
+        )
+        updated = self._offer_repository.append_sent_evidence(evidence)
+        _log.info(
+            "record_sent_evidence offer_id=%s offer_version_id=%s channel=%s",
+            offer_id,
+            offer_version_id,
+            channel,
+        )
+        return updated
 
     def _has_active_order(self, inquiry_id: str) -> bool:
         return any(

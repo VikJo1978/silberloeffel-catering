@@ -34,6 +34,7 @@ from catering_system.domain.inquiry import (
     validate_crm_stage,
     validate_planning_mode,
 )
+from catering_system.domain.offer import SENT_CHANNELS, SentChannel
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_payment_reminder import (
     OrderPaymentReminder,
@@ -194,6 +195,13 @@ def _v_enum(value: object, validator: Callable[[str], _EnumValue]) -> _EnumValue
         raise _invalid() from exc
 
 
+def _v_sent_channel(value: object) -> SentChannel:
+    if not isinstance(value, str) or value not in SENT_CHANNELS:
+        raise _invalid()
+    channel: SentChannel = value
+    return channel
+
+
 def _v_uuid(value: object) -> str:
     if not isinstance(value, str):
         raise _invalid()
@@ -251,7 +259,10 @@ class OfficeApi:
         self.inquiry_service = InquiryService(self.inquiries, event_sink=self.events)
         self.order_service = OrderService(self.orders)
         self.offer_service = OfferService(
-            self.offers, self.inquiries, self.orders
+            self.offers,
+            self.inquiries,
+            self.orders,
+            today=views.berlin_today,
         )
         self.payment_reminder_service = PaymentReminderService(
             self.payment_reminders,
@@ -570,6 +581,49 @@ class OfficeApi:
             "snapshot_id": version.snapshot_id,
         }
 
+    def cmd_mark_sent(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        offer_id = path_ids["offer_id"]
+        offer_version_id = path_ids["version_id"]
+        try:
+            offer = self.offer_service.record_sent_evidence(
+                offer_id,
+                offer_version_id,
+                sent_at=_v_datetime(args["sent_at"]),
+                channel=_v_sent_channel(args["channel"]),
+                recipient_reference=_v_str(args["recipient_reference"], 500),
+                evidence_reference=_v_str(args["evidence_reference"], 1000),
+                recorded_by=CLIENT_ID,
+            )
+        except KeyError as exc:
+            raise ApiError(404, "not_found") from exc
+        except ValueError as exc:
+            message = str(exc)
+            if "sent evidence already exists" in message:
+                raise ApiError(409, "sent_evidence_exists") from exc
+            if "not a version of offer" in message:
+                raise ApiError(422, "version_not_owned") from exc
+            if "acceptance blocks sent recording" in message:
+                raise ApiError(422, "sent_recording_blocked") from exc
+            if "sent recording blocked" in message:
+                raise ApiError(422, "sent_recording_blocked") from exc
+            raise ApiError(422, "invalid_sent_evidence") from exc
+        except sqlite3.IntegrityError:
+            if self.offers.get(offer_id) is None:
+                raise ApiError(404, "not_found") from None
+            raise ApiError(409, "sent_evidence_exists") from None
+        evidence = next(
+            item
+            for item in offer.sent_evidence
+            if item.offer_version_id == offer_version_id
+        )
+        return 200, {
+            "offer_id": offer.offer_id,
+            "offer_version_id": offer_version_id,
+            "sent_at": evidence.sent_at.isoformat(),
+        }
+
     def cmd_create_version(
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict
     ) -> tuple[int, dict[str, object]]:
@@ -758,6 +812,16 @@ _VERSION_ARGS = _ArgKeys(
 )
 _NO_ARGS = _ArgKeys(required=frozenset())
 _SNAPSHOT_ARGS = _ArgKeys(required=frozenset({"snapshot"}))
+_MARK_SENT_ARGS = _ArgKeys(
+    required=frozenset(
+        {
+            "sent_at",
+            "channel",
+            "recipient_reference",
+            "evidence_reference",
+        }
+    )
+)
 _VERSION_ID_ARGS = _ArgKeys(required=frozenset({"order_version_id"}))
 _PAYMENT_REMINDER_ARGS = _ArgKeys(
     required=frozenset(
@@ -779,6 +843,7 @@ _COMMANDS: dict[str, _CommandSpec] = {
     "verify": _CommandSpec("cmd_verify", _NO_ARGS, set()),
     "convert": _CommandSpec("cmd_convert", _NO_ARGS, set()),
     "prepare-offer": _CommandSpec("cmd_prepare_offer", _SNAPSHOT_ARGS, set()),
+    "mark-sent": _CommandSpec("cmd_mark_sent", _MARK_SENT_ARGS, set()),
     "versions": _CommandSpec(
         "cmd_create_version", _VERSION_ARGS, {"latest_version_number"}
     ),
@@ -825,6 +890,14 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/inquiries/(?P<id>[^/]+)/prepare-offer$"),
         "/office/v1/inquiries/{id}/prepare-offer",
         {"POST": "prepare-offer"},
+    ),
+    (
+        re.compile(
+            r"^/office/v1/offers/(?P<offer_id>[^/]+)/versions/"
+            r"(?P<version_id>[^/]+)/mark-sent$"
+        ),
+        "/office/v1/offers/{offer_id}/versions/{version_id}/mark-sent",
+        {"POST": "mark-sent"},
     ),
     (
         re.compile(r"^/office/v1/orders$"),

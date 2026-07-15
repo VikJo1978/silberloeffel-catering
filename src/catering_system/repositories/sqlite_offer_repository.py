@@ -326,6 +326,25 @@ class SQLiteOfferRepository:
             return None
         return self.get(row[0])
 
+    def append_sent_evidence(self, evidence: SentEvidence) -> Offer:
+        with self._write_scope():
+            offer = self.get(evidence.offer_id)
+            if offer is None:
+                raise KeyError(evidence.offer_id)
+            updated = Offer(
+                offer_id=offer.offer_id,
+                source_inquiry_id=offer.source_inquiry_id,
+                created_at=offer.created_at,
+                versions=offer.versions,
+                sent_evidence=(*offer.sent_evidence, evidence),
+                acceptance_evidence=offer.acceptance_evidence,
+                rejection_evidence=offer.rejection_evidence,
+                withdrawal_evidence=offer.withdrawal_evidence,
+                conversion_link=offer.conversion_link,
+            )
+            self._insert_sent_evidence(evidence)
+            return updated
+
     def _insert_version(self, offer_id: str, version: OfferVersion) -> None:
         self._conn.execute(
             """

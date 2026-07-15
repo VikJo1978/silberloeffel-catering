@@ -430,3 +430,84 @@ def test_prepare_offer_ledger_failure_rolls_back_offer(shared) -> None:
         executor.run(work)
     assert offers.get_by_source_inquiry_id(inquiry.inquiry_id) is None
     assert ledger.get(_PREPARE_CMD) is None
+
+
+def test_record_sent_evidence_and_ledger_commit_atomically(shared) -> None:
+    connection, inquiries, orders, ledger = shared
+    offers = SQLiteOfferRepository.from_connection(connection)
+    executor = CoreCommandExecutor(connection)
+    inquiry = replace(
+        _inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222"
+    )
+    executor.run(lambda: inquiries.save(inquiry))
+    service = OfferService(offers, inquiries, orders)
+    offer = executor.run(
+        lambda: service.prepare_offer_version(
+            inquiry.inquiry_id,
+            _valid_offer_snapshot(inquiry_id=inquiry.inquiry_id),
+        )
+    )
+    version_id = offer.versions[0].offer_version_id
+    sent_cmd = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+    def work() -> str:
+        service.record_sent_evidence(
+            offer.offer_id,
+            version_id,
+            sent_at=datetime(2026, 7, 15, 10, 0, tzinfo=timezone.utc),
+            channel="email",
+            recipient_reference="customer@example.invalid",
+            evidence_reference="mail-123",
+            recorded_by="office-panel",
+        )
+        ledger.record(sent_cmd, "fp-sent", 200, '{"offer_id":"x"}')
+        return version_id
+
+    executor.run(work)
+    stored = offers.get(offer.offer_id)
+    assert stored is not None
+    assert len(stored.sent_evidence) == 1
+    assert ledger.get(sent_cmd) is not None
+
+
+def test_record_sent_evidence_append_failure_leaves_no_ledger(shared) -> None:
+    connection, inquiries, orders, ledger = shared
+    offers = SQLiteOfferRepository.from_connection(connection)
+    executor = CoreCommandExecutor(connection)
+    inquiry = replace(
+        _inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222"
+    )
+    executor.run(lambda: inquiries.save(inquiry))
+    service = OfferService(offers, inquiries, orders)
+    offer = executor.run(
+        lambda: service.prepare_offer_version(
+            inquiry.inquiry_id,
+            _valid_offer_snapshot(inquiry_id=inquiry.inquiry_id),
+        )
+    )
+    version_id = offer.versions[0].offer_version_id
+    sent_cmd = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+
+    def failing_append(evidence):  # noqa: ANN001
+        raise sqlite3.IntegrityError("simulated append failure")
+
+    offers.append_sent_evidence = failing_append  # type: ignore[method-assign]
+
+    def work() -> None:
+        service.record_sent_evidence(
+            offer.offer_id,
+            version_id,
+            sent_at=datetime(2026, 7, 15, 10, 0, tzinfo=timezone.utc),
+            channel="email",
+            recipient_reference="customer@example.invalid",
+            evidence_reference="mail-123",
+            recorded_by="office-panel",
+        )
+        ledger.record(sent_cmd, "fp-sent", 200, "{}")
+
+    with pytest.raises(sqlite3.IntegrityError):
+        executor.run(work)
+    assert ledger.get(sent_cmd) is None
+    stored = offers.get(offer.offer_id)
+    assert stored is not None
+    assert stored.sent_evidence == ()

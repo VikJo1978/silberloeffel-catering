@@ -272,6 +272,21 @@ def test_in_memory_offer_duplicate_save_raises_key_error() -> None:
         repo.save(offer)
 
 
+def test_append_sent_evidence_roundtrip_in_memory_and_sqlite(tmp_path: Path) -> None:
+    evidence = _sent()
+    for repo_factory in (
+        lambda: InMemoryOfferRepository(),
+        lambda: SQLiteOfferRepository(tmp_path / "append.db"),
+    ):
+        repo = repo_factory()
+        repo.save(_offer())
+        updated = repo.append_sent_evidence(evidence)
+        assert len(updated.sent_evidence) == 1
+        assert derive_offer_state(updated, _V1_ID, today=date(2026, 7, 20)) == "Sent"
+        reloaded = repo.get(_OFFER_ID)
+        assert reloaded == updated
+
+
 def test_sqlite_offer_version_rows_are_immutable(tmp_path: Path) -> None:
     repo = SQLiteOfferRepository(tmp_path / "offer.db")
     repo.save(_offer())

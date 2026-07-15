@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from catering_system.domain.offer import Offer
+from catering_system.domain.offer import Offer, SentEvidence
 
 
 class InMemoryOfferRepository:
@@ -25,3 +25,21 @@ class InMemoryOfferRepository:
             if offer.source_inquiry_id == inquiry_id:
                 return offer
         return None
+
+    def append_sent_evidence(self, evidence: SentEvidence) -> Offer:
+        offer = self.get(evidence.offer_id)
+        if offer is None:
+            raise KeyError(evidence.offer_id)
+        updated = Offer(
+            offer_id=offer.offer_id,
+            source_inquiry_id=offer.source_inquiry_id,
+            created_at=offer.created_at,
+            versions=offer.versions,
+            sent_evidence=(*offer.sent_evidence, evidence),
+            acceptance_evidence=offer.acceptance_evidence,
+            rejection_evidence=offer.rejection_evidence,
+            withdrawal_evidence=offer.withdrawal_evidence,
+            conversion_link=offer.conversion_link,
+        )
+        self._offers[offer.offer_id] = updated
+        return updated

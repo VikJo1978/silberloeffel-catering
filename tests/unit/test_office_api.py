@@ -1241,3 +1241,87 @@ def test_prepare_offer_failure_leaves_no_offer_or_ledger(api) -> None:
     conn.close()
     assert offer_count == 0
     assert ledger_count == 0
+
+
+_MARK_SENT_ARGS = {
+    "sent_at": "2026-07-15T10:00:00+00:00",
+    "channel": "email",
+    "recipient_reference": "customer@example.invalid",
+    "evidence_reference": "mail-123",
+}
+
+
+def _prepare_offer(api: tuple[str, dict[str, str], Path]) -> tuple[str, str]:
+    base, ids, _db = api
+    inquiry_id = ids["inquiry_cancelled_order"]
+    status, body, _h = _post(
+        f"{base}/office/v1/inquiries/{inquiry_id}/prepare-offer",
+        args={"snapshot": _valid_offer_snapshot(inquiry_id=inquiry_id)},
+    )
+    assert status == 201
+    return body["offer_id"], body["offer_version_id"]
+
+
+def _mark_sent_url(base: str, offer_id: str, version_id: str) -> str:
+    return f"{base}/office/v1/offers/{offer_id}/versions/{version_id}/mark-sent"
+
+
+def test_mark_sent_prepared_to_sent_and_replay(api) -> None:
+    base, _ids, db = api
+    offer_id, version_id = _prepare_offer(api)
+    url = _mark_sent_url(base, offer_id, version_id)
+    command_id = str(uuid.uuid4())
+
+    status, body, _h = _post(url, args=_MARK_SENT_ARGS, command_id=command_id)
+    assert status == 200
+    assert set(body) == {"command_id", "offer_id", "offer_version_id", "sent_at"}
+
+    status2, body2, _h = _post(url, args=_MARK_SENT_ARGS, command_id=command_id)
+    assert (status2, body2) == (status, body)
+
+    offers = SQLiteOfferRepository(db)
+    stored = offers.get(offer_id)
+    assert stored is not None
+    assert len(stored.sent_evidence) == 1
+    offers.close()
+
+
+def test_mark_sent_rejects_second_send(api) -> None:
+    base, _ids, _db = api
+    offer_id, version_id = _prepare_offer(api)
+    url = _mark_sent_url(base, offer_id, version_id)
+    assert _post(url, args=_MARK_SENT_ARGS)[0] == 200
+    status, body, _h = _post(url, args=_MARK_SENT_ARGS)
+    assert (status, body["error"]) == (409, "sent_evidence_exists")
+
+
+def test_mark_sent_rejects_invalid_channel(api) -> None:
+    base, _ids, _db = api
+    offer_id, version_id = _prepare_offer(api)
+    status, body, _h = _post(
+        _mark_sent_url(base, offer_id, version_id),
+        args=dict(_MARK_SENT_ARGS, channel="EMAIL"),
+    )
+    assert (status, body["error"]) == (400, "invalid_request")
+
+
+def test_mark_sent_failure_leaves_no_sent_evidence_or_ledger(api) -> None:
+    base, _ids, db = api
+    offer_id, version_id = _prepare_offer(api)
+    command_id = str(uuid.uuid4())
+    status, body, _h = _post(
+        _mark_sent_url(base, offer_id, version_id),
+        args=dict(_MARK_SENT_ARGS, sent_at="2026-07-16T10:00:00+00:00"),
+        command_id=command_id,
+    )
+    assert (status, body["error"]) == (422, "invalid_sent_evidence")
+
+    conn = sqlite3.connect(db)
+    sent_count = conn.execute("SELECT COUNT(*) FROM offer_sent_evidence").fetchone()[0]
+    ledger_count = conn.execute(
+        "SELECT COUNT(*) FROM office_api_commands WHERE command_id = ?",
+        (command_id,),
+    ).fetchone()[0]
+    conn.close()
+    assert sent_count == 0
+    assert ledger_count == 0
