@@ -3,9 +3,8 @@
 Live deployment last verified: **2026-07-13, Europe/Berlin**.
 
 Local undeployed development last verified: **2026-07-15, Europe/Berlin**.
-The committed baseline is `d210ea8`. UI2B is an uncommitted local working-tree
-slice on top of it. None of these changes alter the live/deployed baseline
-below.
+The committed local baseline matches `origin/main` at **`64d4f06`**. The working
+tree is clean. None of these changes alter the live/deployed baseline below.
 
 ## Live/deployed baseline
 
@@ -94,10 +93,19 @@ Offer workflow development:
   become Core truth
 - the handoff remains dormant until the configurator is deployed and
   `CONFIGURATOR_URL` is set on the office panel
+- **ADR-013** and **`offer_contract_v1.md`** define the commercial Offer layer
+  between Inquiry and Order (`c2d4b13`)
+- **Offer domain skeleton** is committed: immutable facts, derived lifecycle,
+  eligibility helpers; no stored status, no Order/UI/API coupling (`2431dcf`)
+- **Offer persistence** is committed: SQLite + in-memory repositories,
+  immutability triggers, roundtrip tests; no derived state stored (`64d4f06`)
+- runtime Offer **commands are not implemented yet**; the next slice is
+  `PrepareOfferVersion`, then `RecordSentEvidence`, then `RecordAcceptance`.
+  `ConvertAcceptedOffer` remains a separate boundary with Order
 - ADR-012 fixes the future commercial/payment boundary: `Zahlungsart` is agreed
   in the Angebot (`Vorkasse`, `Rechnung`, or `Bar vor Ort`), transferred only
   after Angebot acceptance and Order confirmation, and then drives an Office
-  reminder workflow. A minimal local reminder slice now supplies the truthful
+  reminder workflow. A minimal local reminder slice supplies the truthful
   fallback for legacy/manual Orders without an accepted-offer handoff. The
   Office Panel remains reminder-only; no invoice document, accounting,
   banking or automatic matching implementation exists.
@@ -105,55 +113,40 @@ Offer workflow development:
 ## Local undeployed development baseline
 
 - Phase 2 (`RemoteCoreClient` and Office Panel direct/remote dual mode) is
-  complete locally but has not been deployed. The live Lenovo Office Panel
-  continues to use its existing direct `core.db` mode; no Proxmox cutover has
-  occurred.
+  complete on `origin/main` but has not been deployed. The live Lenovo Office
+  Panel continues to use its existing direct `core.db` mode; no Proxmox cutover
+  has occurred.
 - Phase 3 design is complete locally in
   `PHASE_3_PRINT_ACK_ATTENTION_PACK_V1.md` (`ce499a2`).
-- Phase 3 Slice 3A is complete locally at implementation HEAD `707eb5d`: Core
-  kitchen print jobs are an append-only attempt history with additive immutable
-  facts, with persisted deadlines, tracked reprints, pure state derivation and
-  atomic ACK with the existing OrderVersion confirmation fact.
+- Phase 3 Slice 3A is complete on `origin/main` at `707eb5d`: Core kitchen print
+  jobs are an append-only attempt history with additive immutable facts, with
+  persisted deadlines, tracked reprints, pure state derivation and atomic ACK
+  with the existing OrderVersion confirmation fact.
 - Slice 3A adds no Office UI, HTTP API, dashboard integration, kitchen agent,
   printer integration, heartbeat or external Lenovo monitoring. None of these
   Phase 3 capabilities is live on Lenovo or Proxmox.
-- The `Truthful open-inquiry queue and conversion gate` slice is committed
-  locally at `67e2990`: one pure derivation drives
-  direct and remote queue/action behavior; rejected and converted inquiries are
-  absent from `Offene Anfragen`; rejected conversion is a Core gate; successful
-  conversion sets `Bestätigt / Auftrag` in the same direct/API transaction.
-  It adds no call history, notes, follow-up dates, tables or CRM integration.
-- Two follow-up Office workflow P0 fixes are committed at `20566dd`: an active
-  Order locks its Inquiry to `Bestätigt / Auftrag` in Core and removes
-  incompatible UI choices, and `Wirksam machen` appears only after
-  kitchen-print confirmation. Direct and remote paths are covered.
-- Phase 2, Phase 3 design and Slice 3A, the open-inquiry slice and its P0
-  follow-up are present on `origin/main` through `20566dd`, but none is
-  deployed.
-- The Office Panel UI v2 implementation pack and UI2A foundation/shared shell
-  are complete on `origin/main`. UI2A adds
-  repo-owned styling and inline icons, explicit active navigation, and desktop
-  plus horizontal mobile navigation that works without JavaScript. Core,
-  routes, actions and individual screen layouts are unchanged.
-- UI2A has not been deployed. The Lenovo Office Panel remains on its existing
-  deployed UI and direct-`core.db` mode; no Proxmox Office Panel contains UI2A.
-- UI2B is complete in the local working tree: one shared
-  `office_panel_dashboard.py` renderer consumes the existing QueueView in
-  direct and remote mode. Only `GET /` changes when
-  `OFFICE_UI_VERSION=v2`; `legacy` remains the default. The renderer uses no
-  demonstration data or extra Core reads and distinguishes `0 offen` from an
-  unavailable Rückruf service. Other screens and Phase 3B are untouched.
-- The minimal payment-reminder slice is committed locally at `d210ea8`. It adds
-  one separate `order_payment_reminders` table, one pure
-  derivation and one Order-detail command/block in direct and remote mode.
-  Existing Orders need no backfill: a missing row means `Noch nicht gewählt`
-  and `Zahlungsart auswählen`. Reminder facts neither block nor advance any
-  OrderVersion, kitchen-print, effective-version, `READY_TO_SEND` or kiosk
-  state. The slice is not pushed or deployed.
+- The `Truthful open-inquiry queue and conversion gate` slice is on
+  `origin/main` at `67e2990`.
+- Two follow-up Office workflow P0 fixes are on `origin/main` at `20566dd`.
+- The Office Panel UI v2 implementation pack, UI2A foundation, UI2B
+  Arbeitszentrale, UI3 Anfrage detail, and UI4 Auftrag detail presentation
+  slices are on `origin/main` through `fdc0f5b`. They add repo-owned premium
+  presentation behind `OFFICE_UI_VERSION=v2`; `legacy` remains the default.
+  Core routes, commands and workflow gates are unchanged.
+- UI2A–UI4 have not been deployed. The Lenovo Office Panel remains on its
+  existing deployed UI and direct-`core.db` mode.
+- The minimal payment-reminder slice is on `origin/main` at `d210ea8`. It adds
+  one separate `order_payment_reminders` table, one pure derivation and one
+  Order-detail command/block in direct and remote mode. Reminder facts neither
+  block nor advance any OrderVersion, kitchen-print, effective-version,
+  `READY_TO_SEND` or kiosk state. The slice is not deployed.
+- The Offer layer docs, domain skeleton, and SQLite persistence are on
+  `origin/main` through `64d4f06`. No Offer commands, API routes, Office UI,
+  configurator import, or Order conversion exist yet.
 
 ## Local undeployed quality baseline
 
-- Python tests: **664 passed**
+- Python tests: **702 passed**
 - coverage gate: **90% minimum**
 - last full-project coverage: **90.5%**
 - website intake receiver coverage: **99.2%**
