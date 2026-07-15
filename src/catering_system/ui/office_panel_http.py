@@ -278,6 +278,8 @@ def make_office_panel_handler(
                 self._html(panel.render_kontakte(context=context))
             elif parts == ["email"]:
                 self._html(panel.render_email(context=context))
+            elif parts == ["aufgaben"]:
+                self._html(panel.render_aufgaben(context=context))
             elif parts == ["auftraege"]:
                 search_query = parse_qs(parsed.query).get("q", [""])[0]
                 self._html(panel.render_auftraege(search_query, context=context))

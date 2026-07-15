@@ -96,11 +96,12 @@ def _aufgaben_card(snapshot: WorkCenterSnapshot) -> str:
         else "<p>Keine offenen Aufgaben</p>"
     )
     return (
-        '<section class="wc-card wc-card-static" aria-labelledby="wc-aufgaben">'
+        '<section class="wc-card" aria-labelledby="wc-aufgaben">'
         '<div class="wc-card-head"><span class="wc-card-mark" aria-hidden="true">'
         "🟡</span><h2 id=\"wc-aufgaben\">Aufgaben</h2></div>"
         '<hr class="wc-card-rule">'
         + body
+        + _card_action("/aufgaben", "Öffnen")
         + "</section>"
     )
 

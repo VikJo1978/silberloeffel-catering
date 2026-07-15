@@ -1110,6 +1110,54 @@ class RemoteCoreClient:
             _uuid4(order_id)
         return body
 
+    def list_tasks(self) -> dict[str, object]:
+        body = self.get("/office/v1/tasks")
+        _exact(body, {"tasks"})
+        allowed_categories = {
+            "verify",
+            "convert",
+            "convert_accepted",
+            "order_print",
+            "order_effective",
+            "payment",
+        }
+        allowed_entities = {"inquiry", "offer", "order"}
+        allowed_urgency = {"overdue", "normal"}
+        for raw in _list(body["tasks"]):
+            row = _dict(raw)
+            _exact(
+                row,
+                {
+                    "task_id",
+                    "category",
+                    "title",
+                    "subtitle",
+                    "entity_type",
+                    "entity_id",
+                    "action_label",
+                    "action_href",
+                    "due_at",
+                    "urgency",
+                    "opened_at",
+                },
+            )
+            _str(row["task_id"])
+            if _str(row["category"]) not in allowed_categories:
+                _bad_response()
+            _str(row["title"])
+            _str(row["subtitle"])
+            if _str(row["entity_type"]) not in allowed_entities:
+                _bad_response()
+            _str(row["entity_id"])
+            _str(row["action_label"])
+            _str(row["action_href"])
+            if row["due_at"] is not None:
+                _date(row["due_at"])
+            if _str(row["urgency"]) not in allowed_urgency:
+                _bad_response()
+            _datetime(row["opened_at"])
+        return body
+
     def _validate_page(
         self,
         page: dict[str, object],

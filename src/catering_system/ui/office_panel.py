@@ -61,6 +61,7 @@ from catering_system.services.contact_projection_service import ContactProjectio
 from catering_system.services.email_intake_projection_service import (
     EmailIntakeProjectionService,
 )
+from catering_system.services.task_projection_service import TaskProjectionService
 from catering_system.services.work_center_service import WorkCenterService
 from catering_system.ui.office_panel_dashboard import (
     WorkCenterDashboardUi,
@@ -70,6 +71,7 @@ from catering_system.ui.office_panel_contact_detail import render_kontakt_detail
 from catering_system.ui.office_panel_contacts_list import render_kontakte_list
 from catering_system.ui.office_panel_email_detail import render_email_detail
 from catering_system.ui.office_panel_emails_list import render_email_list
+from catering_system.ui.office_panel_tasks_list import render_aufgaben_list
 from catering_system.ui.office_panel_offer_detail import render_offer_detail
 from catering_system.ui.office_panel_offers_list import render_angebote_list
 from catering_system.ui.office_panel_inquiry_detail import (
@@ -302,7 +304,28 @@ class OfficePanel:
             self._orders,
             today=api_views.berlin_today,
             missed_calls_open=lambda: missed_calls_open,
+            task_projection_service=self._task_projection_service(),
         ).snapshot()
+
+    def _task_projection_service(self) -> TaskProjectionService:
+        return TaskProjectionService(
+            self._inquiries,
+            self._offers,
+            self._orders,
+            self.payment_reminder_service,
+            today=api_views.berlin_today,
+        )
+
+    def _task_list_rows(self) -> list[dict[str, object]]:
+        if self._remote is not None:
+            body = self._remote.list_tasks()
+            return cast(list[dict[str, object]], body["tasks"])
+        return api_views.task_list_view(self._task_projection_service().list_tasks())
+
+    def render_aufgaben(
+        self, *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
+    ) -> str:
+        return render_aufgaben_list(self._task_list_rows(), context=context)
 
     def _render_v2_arbeitszentrale(
         self,

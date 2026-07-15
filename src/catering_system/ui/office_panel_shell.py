@@ -10,6 +10,7 @@ OfficeSection = Literal[
     "offers",
     "contacts",
     "email",
+    "tasks",
     "orders",
     "week",
     "callbacks",

@@ -22,6 +22,7 @@ from catering_system.domain.inquiry import (
     derive_inquiry_offer_projection,
     derive_inquiry_office_state,
 )
+from catering_system.domain.task_projection import TaskProjection
 from catering_system.domain.offer import Offer, OfferState, derive_offer_state
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_payment_reminder import PaymentReminderView
@@ -561,3 +562,25 @@ def email_list_view(projections: list[EmailIntakeProjection]) -> list[dict[str, 
 
 def email_detail_view(projection: EmailIntakeProjection) -> dict[str, object]:
     return email_list_row(projection)
+
+
+def task_list_row(projection: TaskProjection) -> dict[str, object]:
+    return {
+        "task_id": projection.task_id,
+        "category": projection.category,
+        "title": projection.title,
+        "subtitle": projection.subtitle,
+        "entity_type": projection.entity_type,
+        "entity_id": projection.entity_id,
+        "action_label": projection.action_label,
+        "action_href": projection.action_href,
+        "due_at": (
+            projection.due_at.isoformat() if projection.due_at is not None else None
+        ),
+        "urgency": projection.urgency,
+        "opened_at": projection.opened_at.isoformat(),
+    }
+
+
+def task_list_view(projections: list[TaskProjection]) -> list[dict[str, object]]:
+    return [task_list_row(projection) for projection in projections]

@@ -84,6 +84,7 @@ from catering_system.services.contact_projection_service import ContactProjectio
 from catering_system.services.email_intake_projection_service import (
     EmailIntakeProjectionService,
 )
+from catering_system.services.task_projection_service import TaskProjectionService
 from catering_system.services.work_center_service import WorkCenterService
 from catering_system.ui import office_api_views as views
 
@@ -289,12 +290,6 @@ class OfficeApi:
         )
         self.core = OperationalCoreService(self.orders, event_sink=self.events)
         self.week_service = WochenuebersichtService(self.orders)
-        self.work_center_service = WorkCenterService(
-            self.inquiries,
-            self.offers,
-            self.orders,
-            today=views.berlin_today,
-        )
         self.contact_projection_service = ContactProjectionService(
             self.inquiries,
             self.offers,
@@ -305,6 +300,20 @@ class OfficeApi:
             self.inquiries,
             self.offers,
             self.orders,
+        )
+        self.task_projection_service = TaskProjectionService(
+            self.inquiries,
+            self.offers,
+            self.orders,
+            self.payment_reminder_service,
+            today=views.berlin_today,
+        )
+        self.work_center_service = WorkCenterService(
+            self.inquiries,
+            self.offers,
+            self.orders,
+            today=views.berlin_today,
+            task_projection_service=self.task_projection_service,
         )
 
     # -- reads -----------------------------------------------------------
@@ -422,6 +431,11 @@ class OfficeApi:
         if projection is None:
             raise ApiError(404, "not_found")
         return views.email_detail_view(projection)
+
+    def list_tasks(self) -> dict[str, object]:
+        return {
+            "tasks": views.task_list_view(self.task_projection_service.list_tasks())
+        }
 
     def list_inquiries(self, q: str, limit: int, offset: int) -> dict[str, object]:
         orders_by_inquiry: dict[str, list[Order]] = {}
@@ -1145,6 +1159,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         {"POST": "prepare-offer"},
     ),
     (
+        re.compile(r"^/office/v1/tasks$"),
+        "/office/v1/tasks",
+        {"GET": "list_tasks"},
+    ),
+    (
         re.compile(r"^/office/v1/emails$"),
         "/office/v1/emails",
         {"GET": "list_emails"},
@@ -1462,6 +1481,9 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             elif kind == "list_emails":
                 self._query(set())
                 self._respond(200, api.list_emails())
+            elif kind == "list_tasks":
+                self._query(set())
+                self._respond(200, api.list_tasks())
             elif kind == "email_detail":
                 self._query(set())
                 self._respond(200, api.email_detail(path_ids["inquiry_id"]))

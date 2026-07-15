@@ -315,15 +315,18 @@ def test_work_center_schema_and_seed_counts(api) -> None:
     status, body, _h = _get(f"{base}/office/v1/work-center")
     assert status == 200
     assert set(body) == _WORK_CENTER_KEYS
+    tasks_status, tasks_body, _h = _get(f"{base}/office/v1/tasks")
+    assert tasks_status == 200
     assert body == {
         "rueckrufe_open": 2,
         "missed_calls_open": 0,
         "offers_waiting": 0,
         "offers_accepted": 0,
         "upcoming_orders": 1,
-        "open_tasks": 0,
+        "open_tasks": len(tasks_body["tasks"]),
         "today_calendar_entries": 0,
     }
+    assert body["open_tasks"] >= 1
 
 
 def test_work_center_requires_auth(api) -> None:
@@ -540,6 +543,44 @@ def test_email_detail_not_found(api) -> None:
     )
     assert status == 404
     assert body["error"] == "not_found"
+
+
+def test_list_tasks_schema(api) -> None:
+    base, _ids, _db = api
+    status, body, _h = _get(f"{base}/office/v1/tasks")
+    assert status == 200
+    assert isinstance(body["tasks"], list)
+
+
+def test_list_tasks_verify_and_work_center_count(api) -> None:
+    base, ids, _db = api
+    inquiry_id = ids["inquiry_verify"]
+    status, body, _h = _get(f"{base}/office/v1/tasks")
+    assert status == 200
+    verify_rows = [
+        row for row in body["tasks"] if row["task_id"] == f"inquiry:{inquiry_id}:verify"
+    ]
+    assert len(verify_rows) == 1
+    row = verify_rows[0]
+    assert set(row) == {
+        "task_id",
+        "category",
+        "title",
+        "subtitle",
+        "entity_type",
+        "entity_id",
+        "action_label",
+        "action_href",
+        "due_at",
+        "urgency",
+        "opened_at",
+    }
+    assert row["category"] == "verify"
+    assert row["entity_type"] == "inquiry"
+    assert row["action_href"] == f"/inquiry/{inquiry_id}"
+    wc_status, wc_body, _h = _get(f"{base}/office/v1/work-center")
+    assert wc_status == 200
+    assert wc_body["open_tasks"] == len(body["tasks"])
 
 
 def test_inquiry_list_rows_and_search(api) -> None:

@@ -528,6 +528,16 @@ def test_kontakte_parity_direct_vs_remote(parity_world) -> None:
     assert "Kontakte" in d_html
 
 
+def test_aufgaben_parity_direct_vs_remote(parity_world) -> None:
+    direct_url, remote_url, ids = parity_world
+    d_status, d_html = _get(f"{direct_url}/aufgaben")
+    r_status, r_html = _get(f"{remote_url}/aufgaben")
+    assert d_status == r_status == 200
+    _assert_same_modulo_remote_fields(d_html, r_html)
+    assert "Rückrufprüfung durchführen" in d_html
+    assert f'/inquiry/{ids["inquiry_verify"]}' in d_html
+
+
 def test_email_parity_direct_vs_remote(tmp_path: Path) -> None:
     db = tmp_path / "email-list.db"
     _seed(db)
