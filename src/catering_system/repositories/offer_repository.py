@@ -16,3 +16,6 @@ class OfferRepository(Protocol):
 
     def exists(self, offer_id: str) -> bool:
         """Return whether an Offer aggregate is already stored."""
+
+    def get_by_source_inquiry_id(self, inquiry_id: str) -> Offer | None:
+        """Load the Offer linked to an Inquiry, if any."""

@@ -19,3 +19,9 @@ class InMemoryOfferRepository:
 
     def exists(self, offer_id: str) -> bool:
         return offer_id in self._offers
+
+    def get_by_source_inquiry_id(self, inquiry_id: str) -> Offer | None:
+        for offer in self._offers.values():
+            if offer.source_inquiry_id == inquiry_id:
+                return offer
+        return None

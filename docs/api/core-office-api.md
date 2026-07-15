@@ -50,6 +50,7 @@ are minimal (IDs + timestamps, no PII); the panel re-reads details via GET.
 | `POST /office/v1/inquiries/{id}/update` | `updated_at`; with an active linked Order, only `Bestätigt / Auftrag` is compatible (`422 active_order_crm_stage_conflict`) |
 | `POST /office/v1/inquiries/{id}/verify` | – (repeat = success) |
 | `POST /office/v1/inquiries/{id}/convert` | server-side: no active order (`409 already_converted`), not rejected (`422 inquiry_rejected`), verification satisfied; success also sets `Bestätigt / Auftrag` |
+| `POST /office/v1/inquiries/{id}/prepare-offer` | `args.snapshot` is a full `offer_snapshot_v1` envelope; no active order (`409 active_order_exists`), no existing Offer (`409 offer_already_exists`), snapshot `inquiry_id` must match the path (`422 inquiry_id_mismatch`); invalid envelope or hash (`422 invalid_snapshot`); body cap **256 KiB** (not the global 64 KiB) |
 | `POST /office/v1/orders/{id}/versions` | `latest_version_number` |
 | `POST /office/v1/orders/{id}/print-confirm` | – (repeat = success) |
 | `POST /office/v1/orders/{id}/effective` | `current_effective_order_version_id` |
@@ -81,6 +82,8 @@ Error codes (stable, never free text): `unauthorized`, `not_found`,
 `method_not_allowed`, `command_id_conflict`, `stale_state`,
 `already_converted`, `external_ref_conflict`,
 `active_order_crm_stage_conflict`, `inquiry_rejected`, `verification_gate_blocked`,
+`active_order_exists`, `offer_already_exists`, `inquiry_id_mismatch`,
+`invalid_snapshot`,
 `order_cancelled`, `kitchen_print_not_confirmed`, `version_not_owned`,
 `invalid_payment_reminder`, `core_busy`, `internal`.
 

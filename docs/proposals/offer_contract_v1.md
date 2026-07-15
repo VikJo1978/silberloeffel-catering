@@ -173,8 +173,17 @@ business defaults.
 
 ### V1 limits
 
-- The UTF-8 snapshot envelope is at most 1 MiB.
-- A snapshot contains 1–10 variants and each variant contains 1–500 positions.
+- The UTF-8 snapshot envelope is at most 1 MiB in the full contract design.
+- A snapshot contains 1–10 variants and each variant contains 1–500 positions in
+  the full contract design.
+- **Core runtime limits (implementation V1):** the first Offer validation and
+  prepare commands enforce a stricter catering-oriented subset until a later
+  slice explicitly widens them:
+  - UTF-8 envelope at most **256 KiB**;
+  - **1–5** variants per snapshot;
+  - **1–100** positions per variant;
+  - the future `prepare-offer` Office API route may raise its own body cap; the
+    global Core Office API limit remains 64 KiB until that route ships.
 - Snapshot, Offer, OfferVersion, variant, position, acceptance, Order, and
   Inquiry identifiers are canonical UUID strings. Evidence references are at
   most 1,000 characters; email is at most 320 characters.

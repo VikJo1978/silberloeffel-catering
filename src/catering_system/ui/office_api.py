@@ -55,6 +55,9 @@ from catering_system.repositories.office_api_ledger import (
 from catering_system.repositories.sqlite_inquiry_repository import (
     SQLiteInquiryRepository,
 )
+from catering_system.repositories.sqlite_offer_repository import (
+    SQLiteOfferRepository,
+)
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
@@ -65,6 +68,7 @@ from catering_system.services.inquiry_service import (
     InquiryService,
     validate_inquiry_source,
 )
+from catering_system.services.offer_service import OfferService
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
 from catering_system.services.payment_reminder_service import PaymentReminderService
@@ -75,6 +79,7 @@ _log = logging.getLogger(__name__)
 
 CLIENT_ID = "office-panel"  # per-client token identity (pack §6.1)
 _MAX_BODY_BYTES = 64 * 1024
+_MAX_PREPARE_OFFER_BODY_BYTES = 256 * 1024
 _MAX_RESPONSE_BYTES = 512 * 1024  # pack §4.0 hard response cap
 _MAX_Q_CHARS = 200
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -236,6 +241,7 @@ class OfficeApi:
         self._conn = connection
         self.inquiries = SQLiteInquiryRepository.from_connection(connection)
         self.orders = SQLiteOrderRepository.from_connection(connection)
+        self.offers = SQLiteOfferRepository.from_connection(connection)
         self.payment_reminders = SQLitePaymentReminderRepository.from_connection(
             connection
         )
@@ -244,6 +250,9 @@ class OfficeApi:
         self.executor = CoreCommandExecutor(connection, self.events)
         self.inquiry_service = InquiryService(self.inquiries, event_sink=self.events)
         self.order_service = OrderService(self.orders)
+        self.offer_service = OfferService(
+            self.offers, self.inquiries, self.orders
+        )
         self.payment_reminder_service = PaymentReminderService(
             self.payment_reminders,
             self.orders,
@@ -529,6 +538,38 @@ class OfficeApi:
             "order_version_id": version.order_version_id,
         }
 
+    def cmd_prepare_offer(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        snapshot = args.get("snapshot")
+        if not isinstance(snapshot, dict):
+            raise _invalid()
+        try:
+            offer = self.offer_service.prepare_offer_version(
+                path_ids["id"], snapshot
+            )
+        except KeyError as exc:
+            raise ApiError(404, "not_found") from exc
+        except ValueError as exc:
+            message = str(exc)
+            if "snapshot inquiry_id mismatch" in message:
+                raise ApiError(422, "inquiry_id_mismatch") from exc
+            if "active order blocks offer preparation" in message:
+                raise ApiError(409, "active_order_exists") from exc
+            if "offer already exists for inquiry" in message:
+                raise ApiError(409, "offer_already_exists") from exc
+            raise ApiError(422, "invalid_snapshot") from exc
+        except sqlite3.IntegrityError:
+            if self.offers.get_by_source_inquiry_id(path_ids["id"]) is not None:
+                raise ApiError(409, "offer_already_exists") from None
+            raise
+        version = offer.versions[0]
+        return 201, {
+            "offer_id": offer.offer_id,
+            "offer_version_id": version.offer_version_id,
+            "snapshot_id": version.snapshot_id,
+        }
+
     def cmd_create_version(
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict
     ) -> tuple[int, dict[str, object]]:
@@ -716,6 +757,7 @@ _VERSION_ARGS = _ArgKeys(
     )
 )
 _NO_ARGS = _ArgKeys(required=frozenset())
+_SNAPSHOT_ARGS = _ArgKeys(required=frozenset({"snapshot"}))
 _VERSION_ID_ARGS = _ArgKeys(required=frozenset({"order_version_id"}))
 _PAYMENT_REMINDER_ARGS = _ArgKeys(
     required=frozenset(
@@ -736,6 +778,7 @@ _COMMANDS: dict[str, _CommandSpec] = {
     "update_inquiry": _CommandSpec("cmd_update_inquiry", _UPDATE_ARGS, {"updated_at"}),
     "verify": _CommandSpec("cmd_verify", _NO_ARGS, set()),
     "convert": _CommandSpec("cmd_convert", _NO_ARGS, set()),
+    "prepare-offer": _CommandSpec("cmd_prepare_offer", _SNAPSHOT_ARGS, set()),
     "versions": _CommandSpec(
         "cmd_create_version", _VERSION_ARGS, {"latest_version_number"}
     ),
@@ -777,6 +820,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/inquiries/(?P<id>[^/]+)/convert$"),
         "/office/v1/inquiries/{id}/convert",
         {"POST": "convert"},
+    ),
+    (
+        re.compile(r"^/office/v1/inquiries/(?P<id>[^/]+)/prepare-offer$"),
+        "/office/v1/inquiries/{id}/prepare-offer",
+        {"POST": "prepare-offer"},
     ),
     (
         re.compile(r"^/office/v1/orders$"),
@@ -888,7 +936,7 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             self._error(401, "unauthorized")
             return False
 
-        def _read_command_body(self) -> bytes:
+        def _read_command_body(self, max_bytes: int) -> bytes:
             content_type = self.headers.get("Content-Type", "")
             if content_type.split(";")[0].strip() != "application/json":
                 raise ApiError(415, "unsupported_media_type")
@@ -901,7 +949,7 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
                 raise _invalid() from exc
             if length <= 0:
                 raise _invalid()
-            if length > _MAX_BODY_BYTES:
+            if length > max_bytes:
                 raise ApiError(413, "body_too_large")
             body = self.rfile.read(length)
             if len(body) != length:
@@ -1043,7 +1091,12 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
 
         def _command(self, template: str, kind: str, path_ids: dict[str, str]) -> None:
             spec = _COMMANDS[kind]
-            raw = self._read_command_body()
+            max_body = (
+                _MAX_PREPARE_OFFER_BODY_BYTES
+                if kind == "prepare-offer"
+                else _MAX_BODY_BYTES
+            )
+            raw = self._read_command_body(max_body)
             envelope = strict_json_loads(raw)
             _exact_keys(envelope, {"command_id", "expect", "args"})
             command_id = _v_uuid(envelope["command_id"])

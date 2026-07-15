@@ -317,6 +317,15 @@ class SQLiteOfferRepository:
         ).fetchone()
         return row is not None
 
+    def get_by_source_inquiry_id(self, inquiry_id: str) -> Offer | None:
+        row = self._conn.execute(
+            "SELECT offer_id FROM offers WHERE source_inquiry_id = ? LIMIT 1",
+            (inquiry_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return self.get(row[0])
+
     def _insert_version(self, offer_id: str, version: OfferVersion) -> None:
         self._conn.execute(
             """

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -28,11 +29,21 @@ from catering_system.repositories.office_api_ledger import (
 from catering_system.repositories.sqlite_inquiry_repository import (
     SQLiteInquiryRepository,
 )
+from catering_system.repositories.sqlite_offer_repository import (
+    SQLiteOfferRepository,
+)
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
+from catering_system.domain.offer_snapshot import compute_snapshot_hash
+from catering_system.services.offer_service import OfferService
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
+
+_PREPARE_CMD = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+_SNAPSHOT_ID = "77777777-7777-4777-8777-777777777771"
+_VARIANT_ID = "44444444-4444-4444-8444-444444444441"
+_POSITION_ID = "88888888-8888-4888-8888-888888888881"
 
 
 def _inquiry(inquiry_id: str = "11111111-1111-1111-1111-111111111111") -> Inquiry:
@@ -278,3 +289,144 @@ def test_ledger_records_and_replays_minimal_results(shared) -> None:
     assert recorded.result_status == 200
     assert recorded.fingerprint == "fp-9"
     assert ledger.get("missing") is None
+
+
+def _valid_offer_snapshot(*, inquiry_id: str) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schema_version": "offer_snapshot_v1",
+        "source": "fingerfood-configurator-backend",
+        "inquiry_id": inquiry_id,
+        "snapshot_id": _SNAPSHOT_ID,
+        "snapshot_created_at": "2026-07-15T08:30:00+00:00",
+        "valid_until": "2026-07-29",
+        "currency": "EUR",
+        "recipient": {
+            "company_name": "Example company",
+            "contact_name": "Example contact",
+            "email": "customer@example.invalid",
+            "postal_address": "Customer-visible recipient address",
+        },
+        "event": {
+            "event_date": "2026-08-20",
+            "time_window_text": "18:00–22:00",
+            "location_text": "Hamburg",
+            "guest_count": 80,
+            "planning_mode": "caterer_suggestion",
+        },
+        "customer_text": {
+            "title": "Sommerfest",
+            "introduction": "Customer-visible introduction",
+            "notes": "Customer-visible conditions and notes",
+        },
+        "payment_terms": {
+            "method": "RECHNUNG",
+            "customer_visible_text": "Zahlung per Rechnung",
+        },
+        "calculator": {
+            "name": "fingerfood-backend",
+            "calculator_revision": "future-revision",
+            "catalog_revision": "future-revision",
+            "tax_revision": "future-revision",
+        },
+        "variants": [
+            {
+                "variant_id": _VARIANT_ID,
+                "label": "Variante A",
+                "description": "Customer-visible alternative",
+                "positions": [
+                    {
+                        "position_id": _POSITION_ID,
+                        "kind": "catalog",
+                        "name": "Fingerfood Paket",
+                        "quantity_mode": "total",
+                        "quantity": "80",
+                        "unit_label": "Stück",
+                        "unit_net_cents": 290,
+                        "net_total_cents": 23200,
+                        "vat_rate_percent": 7,
+                        "vat_amount_cents": 1624,
+                        "gross_total_cents": 24824,
+                        "related_position_id": None,
+                    }
+                ],
+                "totals": {
+                    "net_cents": 23200,
+                    "vat_7_base_cents": 23200,
+                    "vat_7_amount_cents": 1624,
+                    "vat_19_base_cents": 0,
+                    "vat_19_amount_cents": 0,
+                    "gross_cents": 24824,
+                },
+            }
+        ],
+    }
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+    return payload
+
+
+def test_prepare_offer_write_and_ledger_commit_atomically(shared) -> None:
+    connection, inquiries, orders, ledger = shared
+    offers = SQLiteOfferRepository.from_connection(connection)
+    executor = CoreCommandExecutor(connection)
+    inquiry = replace(
+        _inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222"
+    )
+    executor.run(lambda: inquiries.save(inquiry))
+    service = OfferService(offers, inquiries, orders)
+    snapshot = _valid_offer_snapshot(inquiry_id=inquiry.inquiry_id)
+
+    def work() -> str:
+        offer = service.prepare_offer_version(inquiry.inquiry_id, snapshot)
+        ledger.record(_PREPARE_CMD, "fp-prepare", 201, '{"offer_id":"x"}')
+        return offer.offer_id
+
+    offer_id = executor.run(work)
+    assert offers.get(offer_id) is not None
+    assert ledger.get(_PREPARE_CMD) is not None
+
+
+def test_prepare_offer_save_failure_leaves_no_ledger(shared) -> None:
+    connection, inquiries, orders, ledger = shared
+    offers = SQLiteOfferRepository.from_connection(connection)
+    executor = CoreCommandExecutor(connection)
+    inquiry = replace(
+        _inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222"
+    )
+    executor.run(lambda: inquiries.save(inquiry))
+    service = OfferService(offers, inquiries, orders)
+    snapshot = _valid_offer_snapshot(inquiry_id=inquiry.inquiry_id)
+
+    def failing_save(offer):  # noqa: ANN001
+        raise sqlite3.IntegrityError("simulated offer save failure")
+
+    offers.save = failing_save  # type: ignore[method-assign]
+
+    def work() -> None:
+        service.prepare_offer_version(inquiry.inquiry_id, snapshot)
+        ledger.record(_PREPARE_CMD, "fp-prepare", 201, "{}")
+
+    with pytest.raises(sqlite3.IntegrityError):
+        executor.run(work)
+    assert ledger.get(_PREPARE_CMD) is None
+    assert offers.get_by_source_inquiry_id(inquiry.inquiry_id) is None
+
+
+def test_prepare_offer_ledger_failure_rolls_back_offer(shared) -> None:
+    connection, inquiries, orders, ledger = shared
+    offers = SQLiteOfferRepository.from_connection(connection)
+    executor = CoreCommandExecutor(connection)
+    inquiry = replace(
+        _inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222"
+    )
+    executor.run(lambda: inquiries.save(inquiry))
+    service = OfferService(offers, inquiries, orders)
+    snapshot = _valid_offer_snapshot(inquiry_id=inquiry.inquiry_id)
+
+    def work() -> None:
+        service.prepare_offer_version(inquiry.inquiry_id, snapshot)
+        raise RuntimeError("ledger path aborted before record")
+
+    with pytest.raises(RuntimeError):
+        executor.run(work)
+    assert offers.get_by_source_inquiry_id(inquiry.inquiry_id) is None
+    assert ledger.get(_PREPARE_CMD) is None

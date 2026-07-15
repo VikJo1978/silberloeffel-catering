@@ -18,12 +18,20 @@ import pytest
 from catering_system.repositories.sqlite_inquiry_repository import (
     SQLiteInquiryRepository,
 )
+from catering_system.repositories.sqlite_offer_repository import (
+    SQLiteOfferRepository,
+)
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
+from catering_system.domain.offer_snapshot import compute_snapshot_hash
 from catering_system.services.inquiry_service import InquiryService
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
+
+_SNAPSHOT_ID = "77777777-7777-4777-8777-777777777771"
+_VARIANT_ID = "44444444-4444-4444-8444-444444444441"
+_POSITION_ID = "88888888-8888-4888-8888-888888888881"
 
 _TOKEN = "test-office-api-token"
 _AUTH = {"Authorization": f"Bearer {_TOKEN}"}
@@ -1015,3 +1023,221 @@ def test_update_intake_merge_preserve_clear_reject_null(api) -> None:
         expect={"updated_at": cleared["updated_at"]},
     )
     assert (status, body["error"]) == (400, "invalid_request")
+
+
+def _valid_offer_snapshot(*, inquiry_id: str) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schema_version": "offer_snapshot_v1",
+        "source": "fingerfood-configurator-backend",
+        "source_draft_id": "draft-1",
+        "inquiry_id": inquiry_id,
+        "snapshot_id": _SNAPSHOT_ID,
+        "snapshot_created_at": "2026-07-15T08:30:00+00:00",
+        "valid_until": "2026-07-29",
+        "currency": "EUR",
+        "recipient": {
+            "company_name": "Example company",
+            "contact_name": "Example contact",
+            "email": "customer@example.invalid",
+            "postal_address": "Customer-visible recipient address",
+        },
+        "event": {
+            "event_date": "2026-08-20",
+            "time_window_text": "18:00–22:00",
+            "location_text": "Hamburg",
+            "guest_count": 80,
+            "planning_mode": "caterer_suggestion",
+        },
+        "customer_text": {
+            "title": "Sommerfest",
+            "introduction": "Customer-visible introduction",
+            "notes": "Customer-visible conditions and notes",
+        },
+        "payment_terms": {
+            "method": "RECHNUNG",
+            "customer_visible_text": "Zahlung per Rechnung",
+        },
+        "calculator": {
+            "name": "fingerfood-backend",
+            "calculator_revision": "future-revision",
+            "catalog_revision": "future-revision",
+            "tax_revision": "future-revision",
+        },
+        "variants": [
+            {
+                "variant_id": _VARIANT_ID,
+                "label": "Variante A",
+                "description": "Customer-visible alternative",
+                "positions": [
+                    {
+                        "position_id": _POSITION_ID,
+                        "kind": "catalog",
+                        "catalog_item_id": "catalog-1",
+                        "name": "Fingerfood Paket",
+                        "description": "Frozen description",
+                        "composition": "Frozen composition",
+                        "quantity_mode": "total",
+                        "quantity": "80",
+                        "unit_label": "Stück",
+                        "unit_net_cents": 290,
+                        "net_total_cents": 23200,
+                        "vat_rate_percent": 7,
+                        "vat_amount_cents": 1624,
+                        "gross_total_cents": 24824,
+                        "notes": "Frozen customization",
+                        "related_position_id": None,
+                    }
+                ],
+                "totals": {
+                    "net_cents": 23200,
+                    "vat_7_base_cents": 23200,
+                    "vat_7_amount_cents": 1624,
+                    "vat_19_base_cents": 0,
+                    "vat_19_amount_cents": 0,
+                    "gross_cents": 24824,
+                },
+            }
+        ],
+    }
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+    return payload
+
+
+def _prepare_offer_url(base: str, inquiry_id: str) -> str:
+    return f"{base}/office/v1/inquiries/{inquiry_id}/prepare-offer"
+
+
+def test_prepare_offer_happy_path_and_replay(api) -> None:
+    base, ids, db = api
+    inquiry_id = ids["inquiry_convertible"]
+    url = _prepare_offer_url(base, inquiry_id)
+    snapshot = _valid_offer_snapshot(inquiry_id=inquiry_id)
+    command_id = str(uuid.uuid4())
+
+    status, body, _h = _post(
+        url, args={"snapshot": snapshot}, command_id=command_id
+    )
+    assert status == 201
+    assert set(body) == {
+        "command_id",
+        "offer_id",
+        "offer_version_id",
+        "snapshot_id",
+    }
+    assert body["snapshot_id"] == _SNAPSHOT_ID
+
+    status2, body2, _h = _post(
+        url, args={"snapshot": snapshot}, command_id=command_id
+    )
+    assert (status2, body2) == (status, body)
+
+    offers = SQLiteOfferRepository(db)
+    stored = offers.get_by_source_inquiry_id(inquiry_id)
+    assert stored is not None
+    assert stored.offer_id == body["offer_id"]
+    offers.close()
+
+
+def test_prepare_offer_active_order_blocks(api) -> None:
+    base, ids, _db = api
+    inquiry_id = ids["inquiry_unprinted"]
+    status, body, _h = _post(
+        _prepare_offer_url(base, inquiry_id),
+        args={"snapshot": _valid_offer_snapshot(inquiry_id=inquiry_id)},
+    )
+    assert (status, body["error"]) == (409, "active_order_exists")
+
+
+def test_prepare_offer_existing_offer_blocks(api) -> None:
+    base, ids, _db = api
+    inquiry_id = ids["inquiry_convertible"]
+    url = _prepare_offer_url(base, inquiry_id)
+    snapshot = _valid_offer_snapshot(inquiry_id=inquiry_id)
+    assert _post(url, args={"snapshot": snapshot})[0] == 201
+    status, body, _h = _post(url, args={"snapshot": snapshot})
+    assert (status, body["error"]) == (409, "offer_already_exists")
+
+
+def test_prepare_offer_invalid_snapshot_and_inquiry_mismatch(api) -> None:
+    base, ids, _db = api
+    inquiry_id = ids["inquiry_convertible"]
+    bad_hash = _valid_offer_snapshot(inquiry_id=inquiry_id)
+    bad_hash["snapshot_hash"] = "sha256:" + ("f" * 64)
+    status, body, _h = _post(
+        _prepare_offer_url(base, inquiry_id),
+        args={"snapshot": bad_hash},
+    )
+    assert (status, body["error"]) == (422, "invalid_snapshot")
+
+    other_id = str(uuid.uuid4())
+    status, body, _h = _post(
+        _prepare_offer_url(base, other_id),
+        args={"snapshot": _valid_offer_snapshot(inquiry_id=inquiry_id)},
+    )
+    assert (status, body["error"]) == (422, "inquiry_id_mismatch")
+
+
+def test_prepare_offer_same_command_id_different_snapshot_conflicts(api) -> None:
+    base, ids, _db = api
+    inquiry_id = ids["inquiry_cancelled_order"]
+    url = _prepare_offer_url(base, inquiry_id)
+    command_id = str(uuid.uuid4())
+    first = _valid_offer_snapshot(inquiry_id=inquiry_id)
+    assert _post(url, args={"snapshot": first}, command_id=command_id)[0] == 201
+    second = _valid_offer_snapshot(inquiry_id=inquiry_id)
+    second["snapshot_id"] = "99999999-9999-4999-8999-999999999991"
+    second["snapshot_hash"] = compute_snapshot_hash(second)
+    status, body, _h = _post(
+        url, args={"snapshot": second}, command_id=command_id
+    )
+    assert (status, body["error"]) == (409, "command_id_conflict")
+
+
+def test_prepare_offer_accepts_body_above_global_limit(api) -> None:
+    base, ids, _db = api
+    inquiry_id = ids["inquiry_convertible"]
+    over_global = b"x" * (64 * 1024 + 1)
+    create_url = f"{base}/office/v1/inquiries"
+    prepare_url = _prepare_offer_url(base, inquiry_id)
+    status, body, _h = _post(create_url, raw_body=over_global)
+    assert (status, body["error"]) == (413, "body_too_large")
+    status, body, _h = _post(prepare_url, raw_body=over_global)
+    assert status == 400
+    assert body.get("error") == "invalid_request"
+
+
+def test_prepare_offer_rejects_body_above_route_limit(api) -> None:
+    from catering_system.ui.office_api import _MAX_PREPARE_OFFER_BODY_BYTES
+
+    base, ids, _db = api
+    inquiry_id = ids["inquiry_convertible"]
+    huge = b"x" * (_MAX_PREPARE_OFFER_BODY_BYTES + 1)
+    status, body, _h = _post(
+        _prepare_offer_url(base, inquiry_id),
+        raw_body=huge,
+    )
+    assert (status, body["error"]) == (413, "body_too_large")
+
+
+def test_prepare_offer_failure_leaves_no_offer_or_ledger(api) -> None:
+    base, ids, db = api
+    inquiry_id = ids["inquiry_convertible"]
+    snapshot = _valid_offer_snapshot(inquiry_id=inquiry_id)
+    snapshot["snapshot_hash"] = "sha256:" + ("f" * 64)
+    command_id = str(uuid.uuid4())
+    status, body, _h = _post(
+        _prepare_offer_url(base, inquiry_id),
+        args={"snapshot": snapshot},
+        command_id=command_id,
+    )
+    assert (status, body["error"]) == (422, "invalid_snapshot")
+
+    conn = sqlite3.connect(db)
+    offer_count = conn.execute("SELECT COUNT(*) FROM offers").fetchone()[0]
+    ledger_count = conn.execute(
+        "SELECT COUNT(*) FROM office_api_commands WHERE command_id = ?",
+        (command_id,),
+    ).fetchone()[0]
+    conn.close()
+    assert offer_count == 0
+    assert ledger_count == 0
