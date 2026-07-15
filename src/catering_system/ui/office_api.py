@@ -84,6 +84,9 @@ from catering_system.services.contact_projection_service import ContactProjectio
 from catering_system.services.email_intake_projection_service import (
     EmailIntakeProjectionService,
 )
+from catering_system.services.calendar_projection_service import (
+    CalendarProjectionService,
+)
 from catering_system.services.task_projection_service import TaskProjectionService
 from catering_system.services.work_center_service import WorkCenterService
 from catering_system.ui import office_api_views as views
@@ -308,12 +311,19 @@ class OfficeApi:
             self.payment_reminder_service,
             today=views.berlin_today,
         )
+        self.calendar_projection_service = CalendarProjectionService(
+            self.inquiries,
+            self.offers,
+            self.orders,
+            today=views.berlin_today,
+        )
         self.work_center_service = WorkCenterService(
             self.inquiries,
             self.offers,
             self.orders,
             today=views.berlin_today,
             task_projection_service=self.task_projection_service,
+            calendar_projection_service=self.calendar_projection_service,
         )
 
     # -- reads -----------------------------------------------------------
@@ -435,6 +445,13 @@ class OfficeApi:
     def list_tasks(self) -> dict[str, object]:
         return {
             "tasks": views.task_list_view(self.task_projection_service.list_tasks())
+        }
+
+    def list_calendar(self, from_date: date, to_date: date) -> dict[str, object]:
+        return {
+            "entries": views.calendar_list_view(
+                self.calendar_projection_service.list_entries(from_date, to_date)
+            )
         }
 
     def list_inquiries(self, q: str, limit: int, offset: int) -> dict[str, object]:
@@ -1164,6 +1181,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         {"GET": "list_tasks"},
     ),
     (
+        re.compile(r"^/office/v1/calendar$"),
+        "/office/v1/calendar",
+        {"GET": "list_calendar"},
+    ),
+    (
         re.compile(r"^/office/v1/emails$"),
         "/office/v1/emails",
         {"GET": "list_emails"},
@@ -1484,6 +1506,17 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             elif kind == "list_tasks":
                 self._query(set())
                 self._respond(200, api.list_tasks())
+            elif kind == "list_calendar":
+                params = self._query({"from", "to"})
+                if "from" not in params or "to" not in params:
+                    raise _invalid()
+                self._respond(
+                    200,
+                    api.list_calendar(
+                        _v_date(params["from"]),
+                        _v_date(params["to"]),
+                    ),
+                )
             elif kind == "email_detail":
                 self._query(set())
                 self._respond(200, api.email_detail(path_ids["inquiry_id"]))

@@ -14,6 +14,9 @@ from catering_system.domain.work_center import WorkCenterSnapshot
 from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.repositories.offer_repository import OfferRepository
 from catering_system.repositories.order_repository import OrderRepository
+from catering_system.services.calendar_projection_service import (
+    CalendarProjectionService,
+)
 from catering_system.services.task_projection_service import TaskProjectionService
 from catering_system.ui.office_api_views import berlin_today
 
@@ -28,6 +31,7 @@ class WorkCenterService:
         today: Callable[[], date] | None = None,
         missed_calls_open: Callable[[], int] | None = None,
         task_projection_service: TaskProjectionService | None = None,
+        calendar_projection_service: CalendarProjectionService | None = None,
     ) -> None:
         self._inquiries = inquiry_repository
         self._offers = offer_repository
@@ -35,6 +39,7 @@ class WorkCenterService:
         self._today = today or berlin_today
         self._missed_calls_open = missed_calls_open or (lambda: 0)
         self._tasks = task_projection_service
+        self._calendar = calendar_projection_service
 
     def snapshot(self) -> WorkCenterSnapshot:
         operating_today = self._today()
@@ -81,6 +86,11 @@ class WorkCenterService:
         open_tasks = (
             len(self._tasks.list_tasks()) if self._tasks is not None else 0
         )
+        today_calendar_entries = (
+            self._calendar.count_on(operating_today)
+            if self._calendar is not None
+            else 0
+        )
         return WorkCenterSnapshot(
             rueckrufe_open=rueckrufe_open,
             missed_calls_open=self._missed_calls_open(),
@@ -88,5 +98,5 @@ class WorkCenterService:
             offers_accepted=offers_accepted,
             upcoming_orders=upcoming_orders,
             open_tasks=open_tasks,
-            today_calendar_entries=0,
+            today_calendar_entries=today_calendar_entries,
         )

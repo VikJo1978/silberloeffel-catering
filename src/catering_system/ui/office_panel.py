@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import argparse
 import os
-from datetime import date
+from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote
@@ -61,6 +61,9 @@ from catering_system.services.contact_projection_service import ContactProjectio
 from catering_system.services.email_intake_projection_service import (
     EmailIntakeProjectionService,
 )
+from catering_system.services.calendar_projection_service import (
+    CalendarProjectionService,
+)
 from catering_system.services.task_projection_service import TaskProjectionService
 from catering_system.services.work_center_service import WorkCenterService
 from catering_system.ui.office_panel_dashboard import (
@@ -71,6 +74,7 @@ from catering_system.ui.office_panel_contact_detail import render_kontakt_detail
 from catering_system.ui.office_panel_contacts_list import render_kontakte_list
 from catering_system.ui.office_panel_email_detail import render_email_detail
 from catering_system.ui.office_panel_emails_list import render_email_list
+from catering_system.ui.office_panel_calendar_list import render_kalender_list
 from catering_system.ui.office_panel_tasks_list import render_aufgaben_list
 from catering_system.ui.office_panel_offer_detail import render_offer_detail
 from catering_system.ui.office_panel_offers_list import render_angebote_list
@@ -305,7 +309,16 @@ class OfficePanel:
             today=api_views.berlin_today,
             missed_calls_open=lambda: missed_calls_open,
             task_projection_service=self._task_projection_service(),
+            calendar_projection_service=self._calendar_projection_service(),
         ).snapshot()
+
+    def _calendar_projection_service(self) -> CalendarProjectionService:
+        return CalendarProjectionService(
+            self._inquiries,
+            self._offers,
+            self._orders,
+            today=api_views.berlin_today,
+        )
 
     def _task_projection_service(self) -> TaskProjectionService:
         return TaskProjectionService(
@@ -326,6 +339,22 @@ class OfficePanel:
         self, *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
     ) -> str:
         return render_aufgaben_list(self._task_list_rows(), context=context)
+
+    def _calendar_list_rows(self) -> list[dict[str, object]]:
+        operating_today = api_views.berlin_today()
+        from_date = operating_today
+        to_date = operating_today + timedelta(days=90)
+        if self._remote is not None:
+            body = self._remote.list_calendar(from_date, to_date)
+            return cast(list[dict[str, object]], body["entries"])
+        return api_views.calendar_list_view(
+            self._calendar_projection_service().list_entries(from_date, to_date)
+        )
+
+    def render_kalender(
+        self, *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
+    ) -> str:
+        return render_kalender_list(self._calendar_list_rows(), context=context)
 
     def _render_v2_arbeitszentrale(
         self,

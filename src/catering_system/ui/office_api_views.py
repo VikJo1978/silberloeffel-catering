@@ -22,6 +22,10 @@ from catering_system.domain.inquiry import (
     derive_inquiry_offer_projection,
     derive_inquiry_office_state,
 )
+from catering_system.domain.calendar_entry_projection import (
+    CALENDAR_ENTRY_KIND_LABELS,
+    CalendarEntryProjection,
+)
 from catering_system.domain.task_projection import TaskProjection
 from catering_system.domain.offer import Offer, OfferState, derive_offer_state
 from catering_system.domain.order import Order, OrderVersion
@@ -584,3 +588,27 @@ def task_list_row(projection: TaskProjection) -> dict[str, object]:
 
 def task_list_view(projections: list[TaskProjection]) -> list[dict[str, object]]:
     return [task_list_row(projection) for projection in projections]
+
+
+def calendar_list_row(projection: CalendarEntryProjection) -> dict[str, object]:
+    return {
+        "entry_id": projection.entry_id,
+        "entry_kind": projection.entry_kind,
+        "status_label": CALENDAR_ENTRY_KIND_LABELS[projection.entry_kind],
+        "title": projection.title,
+        "event_date": projection.event_date.isoformat(),
+        "time_window_text": projection.time_window_text,
+        "location_text": projection.location_text,
+        "guest_count_estimate": projection.guest_count_estimate,
+        "entity_type": projection.entity_type,
+        "entity_id": projection.entity_id,
+        "action_label": projection.action_label,
+        "action_href": projection.action_href,
+        "source_inquiry_id": projection.source_inquiry_id,
+    }
+
+
+def calendar_list_view(
+    projections: list[CalendarEntryProjection],
+) -> list[dict[str, object]]:
+    return [calendar_list_row(projection) for projection in projections]

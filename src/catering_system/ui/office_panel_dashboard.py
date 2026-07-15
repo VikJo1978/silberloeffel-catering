@@ -113,11 +113,12 @@ def _kalender_card(snapshot: WorkCenterSnapshot) -> str:
         else "<p>Keine Termine heute</p>"
     )
     return (
-        '<section class="wc-card wc-card-static" aria-labelledby="wc-kalender">'
+        '<section class="wc-card" aria-labelledby="wc-kalender">'
         '<div class="wc-card-head"><span class="wc-card-mark" aria-hidden="true">'
         "📅</span><h2 id=\"wc-kalender\">Kalender</h2></div>"
         '<hr class="wc-card-rule">'
         + body
+        + _card_action("/kalender", "Öffnen")
         + "</section>"
     )
 

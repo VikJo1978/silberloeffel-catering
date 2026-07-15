@@ -552,6 +552,45 @@ def test_list_tasks_schema(api) -> None:
     assert isinstance(body["tasks"], list)
 
 
+def test_list_calendar_schema(api) -> None:
+    base, ids, _db = api
+    status, body, _h = _get(
+        f"{base}/office/v1/calendar?from=2026-10-01&to=2026-10-31"
+    )
+    assert status == 200
+    assert isinstance(body["entries"], list)
+    assert len(body["entries"]) == 5
+    by_inquiry = {row["source_inquiry_id"]: row for row in body["entries"]}
+    assert ids["inquiry_rejected"] not in by_inquiry
+    assert ids["inquiry_cancelled_order"] not in by_inquiry
+    assert by_inquiry[ids["inquiry_printed"]]["entry_kind"] == "event_confirmed"
+    assert by_inquiry[ids["inquiry_unprinted"]]["entry_kind"] == "event_planned"
+    row = next(row for row in body["entries"] if row["entry_kind"] == "event_confirmed")
+    assert set(row) == {
+        "entry_id",
+        "entry_kind",
+        "status_label",
+        "title",
+        "event_date",
+        "time_window_text",
+        "location_text",
+        "guest_count_estimate",
+        "entity_type",
+        "entity_id",
+        "action_label",
+        "action_href",
+        "source_inquiry_id",
+    }
+    assert row["status_label"] == "Bestätigt"
+
+
+def test_list_calendar_requires_from_and_to(api) -> None:
+    base, _ids, _db = api
+    status, body, _h = _get(f"{base}/office/v1/calendar")
+    assert status == 400
+    assert body["error"] == "invalid_request"
+
+
 def test_list_tasks_verify_and_work_center_count(api) -> None:
     base, ids, _db = api
     inquiry_id = ids["inquiry_verify"]

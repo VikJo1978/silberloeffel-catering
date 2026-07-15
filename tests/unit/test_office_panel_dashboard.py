@@ -56,6 +56,7 @@ def test_work_center_dashboard_renders_cards_and_links() -> None:
     assert "Keine offenen Aufgaben" in page
     assert 'href="/aufgaben"' in page
     assert "Keine Termine heute" in page
+    assert 'href="/kalender"' in page
     assert "<form" not in page
     assert "<script" not in page
 
@@ -69,6 +70,7 @@ def test_work_center_dashboard_placeholder_sections_when_counts_present() -> Non
     assert "2 offene Aufgaben" in page
     assert 'href="/aufgaben"' in page
     assert "1 Termine heute" in page
+    assert 'href="/kalender"' in page
 
 
 def test_v2_panel_uses_work_center_snapshot() -> None:

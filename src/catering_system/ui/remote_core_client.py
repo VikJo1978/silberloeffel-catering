@@ -1158,6 +1158,55 @@ class RemoteCoreClient:
             _datetime(row["opened_at"])
         return body
 
+    def list_calendar(
+        self, from_date: date, to_date: date
+    ) -> dict[str, object]:
+        params = {
+            "from": from_date.isoformat(),
+            "to": to_date.isoformat(),
+        }
+        body = self.get("/office/v1/calendar", query=params)
+        _exact(body, {"entries"})
+        allowed_kinds = {"event_confirmed", "event_planned", "event_tentative"}
+        allowed_entities = {"inquiry", "offer", "order"}
+        for raw in _list(body["entries"]):
+            row = _dict(raw)
+            _exact(
+                row,
+                {
+                    "entry_id",
+                    "entry_kind",
+                    "status_label",
+                    "title",
+                    "event_date",
+                    "time_window_text",
+                    "location_text",
+                    "guest_count_estimate",
+                    "entity_type",
+                    "entity_id",
+                    "action_label",
+                    "action_href",
+                    "source_inquiry_id",
+                },
+            )
+            _str(row["entry_id"])
+            if _str(row["entry_kind"]) not in allowed_kinds:
+                _bad_response()
+            _str(row["status_label"])
+            _str(row["title"])
+            _date(row["event_date"])
+            _str(row["time_window_text"])
+            _str(row["location_text"])
+            if row["guest_count_estimate"] is not None:
+                _nonnegative_int(row["guest_count_estimate"])
+            if _str(row["entity_type"]) not in allowed_entities:
+                _bad_response()
+            _str(row["entity_id"])
+            _str(row["action_label"])
+            _str(row["action_href"])
+            _uuid4(row["source_inquiry_id"])
+        return body
+
     def _validate_page(
         self,
         page: dict[str, object],
