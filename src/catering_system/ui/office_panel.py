@@ -28,6 +28,7 @@ from catering_system.domain.inquiry import (
     inquiry_crm_stage_is_compatible_with_active_order,
     validate_crm_stage,
 )
+from catering_system.domain.offer import offer_blocks_direct_inquiry_conversion
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_payment_reminder import (
     PAYMENT_METHOD_LABELS,
@@ -35,10 +36,14 @@ from catering_system.domain.order_payment_reminder import (
     OrderPaymentReminder,
     validate_payment_method,
 )
+from catering_system.repositories.in_memory_offer_repository import (
+    InMemoryOfferRepository,
+)
 from catering_system.repositories.in_memory_payment_reminder_repository import (
     InMemoryPaymentReminderRepository,
 )
 from catering_system.repositories.inquiry_repository import InquiryRepository
+from catering_system.repositories.offer_repository import OfferRepository
 from catering_system.repositories.order_repository import OrderRepository
 from catering_system.repositories.payment_reminder_repository import (
     PaymentReminderRepository,
@@ -244,12 +249,14 @@ class OfficePanel:
         remote: "RemoteCoreClient | None" = None,
         command_executor: "CoreCommandExecutor | None" = None,
         payment_reminder_repo: PaymentReminderRepository | None = None,
+        offer_repo: OfferRepository | None = None,
         ui_version: str = "legacy",
     ) -> None:
         if ui_version not in {"legacy", "v2"}:
             raise ValueError("ui_version must be 'legacy' or 'v2'")
         self._inquiries = inquiry_repo
         self._orders = order_repo
+        self._offers = offer_repo or InMemoryOfferRepository()
         # Phase 2 dual mode (PROXMOX_OFFICE_SERVER_CORE_API_PACK_V1 §7): when
         # `remote` is given, `inquiry_repo`/`order_repo` are the same
         # RemoteCoreClient instance, used here only for its repo-shaped reads
@@ -1236,6 +1243,11 @@ class OfficePanel:
                 raise ValueError("rejected inquiry cannot be converted")
             if state.next_action != "convert":
                 raise ValueError("inquiry conversion gate is not satisfied")
+            offer = self._offers.get_by_source_inquiry_id(inquiry_id)
+            if offer is not None and offer_blocks_direct_inquiry_conversion(
+                offer, today=api_views.berlin_today()
+            ):
+                raise ValueError("offer blocks conversion")
             order, version = self.order_service.convert_inquiry_to_order(inquiry)
             if self._remote is None:
                 self.inquiry_service.update_inquiry(
@@ -1554,6 +1566,7 @@ def make_office_panel_handler(
     remote: "RemoteCoreClient | None" = None,
     command_executor: "CoreCommandExecutor | None" = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
+    offer_repo: OfferRepository | None = None,
     ui_version: str = "legacy",
 ) -> type[BaseHTTPRequestHandler]:
     """Compatibility wrapper; HTTP routing lives in office_panel_http."""
@@ -1573,6 +1586,7 @@ def make_office_panel_handler(
         remote=remote,
         command_executor=command_executor,
         payment_reminder_repo=payment_reminder_repo,
+        offer_repo=offer_repo,
         ui_version=ui_version,
     )
 
@@ -1592,6 +1606,7 @@ def create_office_panel_server(
     remote: "RemoteCoreClient | None" = None,
     command_executor: "CoreCommandExecutor | None" = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
+    offer_repo: OfferRepository | None = None,
     ui_version: str = "legacy",
 ) -> HTTPServer:
     """Compatibility wrapper; server construction lives in office_panel_http."""
@@ -1613,6 +1628,7 @@ def create_office_panel_server(
         remote=remote,
         command_executor=command_executor,
         payment_reminder_repo=payment_reminder_repo,
+        offer_repo=offer_repo,
         ui_version=ui_version,
     )
 
@@ -1733,6 +1749,9 @@ def main() -> None:
         from catering_system.repositories.sqlite_inquiry_repository import (
             SQLiteInquiryRepository,
         )
+        from catering_system.repositories.sqlite_offer_repository import (
+            SQLiteOfferRepository,
+        )
         from catering_system.repositories.sqlite_order_repository import (
             SQLiteOrderRepository,
         )
@@ -1743,6 +1762,7 @@ def main() -> None:
         connection = open_core_connection(args.db)
         inquiry_repo = SQLiteInquiryRepository.from_connection(connection)
         order_repo = SQLiteOrderRepository.from_connection(connection)
+        offer_repo = SQLiteOfferRepository.from_connection(connection)
         payment_reminder_repo = SQLitePaymentReminderRepository.from_connection(
             connection
         )
@@ -1760,6 +1780,7 @@ def main() -> None:
             args.configurator_url,
             command_executor=CoreCommandExecutor(connection),
             payment_reminder_repo=payment_reminder_repo,
+            offer_repo=offer_repo,
             ui_version=args.ui_version,
         )
         print(f"Office panel on http://{args.host}:{args.port}/ (user: office)")

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
 
 from catering_system.repositories.inquiry_repository import InquiryRepository
+from catering_system.repositories.offer_repository import OfferRepository
 from catering_system.repositories.order_repository import OrderRepository
 from catering_system.repositories.payment_reminder_repository import (
     PaymentReminderRepository,
@@ -65,6 +66,7 @@ def make_office_panel_handler(
     remote: "RemoteCoreClient | None" = None,
     command_executor: "CoreCommandExecutor | None" = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
+    offer_repo: OfferRepository | None = None,
     ui_version: str = "legacy",
 ) -> type[BaseHTTPRequestHandler]:
     panel = OfficePanel(
@@ -75,6 +77,7 @@ def make_office_panel_handler(
         remote=remote,
         command_executor=command_executor,
         payment_reminder_repo=payment_reminder_repo,
+        offer_repo=offer_repo,
         ui_version=ui_version,
     )
     expected = "Basic " + base64.b64encode(f"office:{password}".encode()).decode()
@@ -403,6 +406,7 @@ def create_office_panel_server(
     remote: "RemoteCoreClient | None" = None,
     command_executor: "CoreCommandExecutor | None" = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
+    offer_repo: OfferRepository | None = None,
     ui_version: str = "legacy",
 ) -> HTTPServer:
     """Create the intentionally single-threaded office HTTP server."""
@@ -420,6 +424,7 @@ def create_office_panel_server(
             remote=remote,
             command_executor=command_executor,
             payment_reminder_repo=payment_reminder_repo,
+            offer_repo=offer_repo,
             ui_version=ui_version,
         ),
     )

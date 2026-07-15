@@ -35,7 +35,13 @@ from catering_system.domain.inquiry import (
     validate_crm_stage,
     validate_planning_mode,
 )
-from catering_system.domain.offer import ACCEPTANCE_CHANNELS, SENT_CHANNELS, AcceptanceChannel, SentChannel
+from catering_system.domain.offer import (
+    ACCEPTANCE_CHANNELS,
+    SENT_CHANNELS,
+    AcceptanceChannel,
+    SentChannel,
+    offer_blocks_direct_inquiry_conversion,
+)
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_payment_reminder import (
     OrderPaymentReminder,
@@ -539,6 +545,11 @@ class OfficeApi:
             raise ApiError(422, "inquiry_rejected")
         if state.next_action != "convert":
             raise ApiError(422, "verification_gate_blocked")
+        offer = self.offers.get_by_source_inquiry_id(inquiry.inquiry_id)
+        if offer is not None and offer_blocks_direct_inquiry_conversion(
+            offer, today=views.berlin_today()
+        ):
+            raise ApiError(422, "offer_blocks_conversion")
         try:
             order, version = self.order_service.convert_inquiry_to_order(inquiry)
         except sqlite3.IntegrityError:

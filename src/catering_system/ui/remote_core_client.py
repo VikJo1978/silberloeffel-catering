@@ -129,6 +129,7 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
             "version_not_owned",
             "invalid_payment_reminder",
             "conversion_blocked",
+            "offer_blocks_conversion",
         }
     ),
     500: frozenset({"internal"}),

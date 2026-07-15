@@ -677,6 +677,95 @@ def test_reconvert_after_storno_via_api(api) -> None:
     assert status == 201
 
 
+def test_legacy_convert_blocked_with_prepared_offer(api) -> None:
+    base, ids, db = api
+    offer_id, _version_id = _prepare_offer(api)
+    inquiry_id = ids["inquiry_cancelled_order"]
+    status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
+    assert (status, body["error"]) == (422, "offer_blocks_conversion")
+    conn = sqlite3.connect(db)
+    order_count = conn.execute(
+        """
+        SELECT COUNT(*) FROM orders
+        WHERE source_inquiry_id = ? AND cancelled_at IS NULL
+        """,
+        (inquiry_id,),
+    ).fetchone()[0]
+    conn.close()
+    assert order_count == 0
+    offers = SQLiteOfferRepository(db)
+    stored = offers.get(offer_id)
+    assert stored is not None
+    assert stored.conversion_link is None
+    offers.close()
+
+
+def test_legacy_convert_blocked_with_accepted_offer(api) -> None:
+    base, ids, db = api
+    offer_id, _version_id, _acceptance_id, _variant_id = _prepare_send_accept(api)
+    inquiry_id = ids["inquiry_cancelled_order"]
+    status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
+    assert (status, body["error"]) == (422, "offer_blocks_conversion")
+    conn = sqlite3.connect(db)
+    order_count = conn.execute(
+        """
+        SELECT COUNT(*) FROM orders
+        WHERE source_inquiry_id = ? AND cancelled_at IS NULL
+        """,
+        (inquiry_id,),
+    ).fetchone()[0]
+    conn.close()
+    assert order_count == 0
+    offers = SQLiteOfferRepository(db)
+    stored = offers.get(offer_id)
+    assert stored is not None
+    assert stored.conversion_link is None
+    offers.close()
+
+
+def test_legacy_convert_without_offer_still_works(api) -> None:
+    base, ids, _db = api
+    inquiry_id = ids["inquiry_convertible"]
+    status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
+    assert status == 201
+    assert set(body) == {"command_id", "order_id", "order_version_id"}
+
+
+def test_legacy_convert_allowed_with_expired_offer(api) -> None:
+    base, ids, db = api
+    inquiry_id = ids["inquiry_cancelled_order"]
+    snapshot = _valid_offer_snapshot(inquiry_id=inquiry_id)
+    snapshot["valid_until"] = "2020-01-01"
+    snapshot["snapshot_hash"] = compute_snapshot_hash(snapshot)
+    prepare_status, prepare_body, _h = _post(
+        _prepare_offer_url(base, inquiry_id),
+        args={"snapshot": snapshot},
+    )
+    assert prepare_status == 201
+    offer_id = prepare_body["offer_id"]
+    version_id = prepare_body["offer_version_id"]
+    assert (
+        _post(
+            _mark_sent_url(base, offer_id, version_id),
+            args=_MARK_SENT_ARGS,
+        )[0]
+        == 200
+    )
+    status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
+    assert status == 201
+    assert set(body) == {"command_id", "order_id", "order_version_id"}
+    conn = sqlite3.connect(db)
+    order_count = conn.execute(
+        """
+        SELECT COUNT(*) FROM orders
+        WHERE source_inquiry_id = ? AND cancelled_at IS NULL
+        """,
+        (inquiry_id,),
+    ).fetchone()[0]
+    conn.close()
+    assert order_count == 1
+
+
 def test_versions_expect_and_cancelled_gate(api) -> None:
     base, ids, _db = api
     args = {
@@ -1563,11 +1652,16 @@ def test_convert_accepted_rejects_wrong_variant_or_acceptance(api) -> None:
 
 
 def test_convert_accepted_active_order_without_link_blocks(api) -> None:
-    base, ids, _db = api
+    base, ids, db = api
     offer_id, version_id, acceptance_id, variant_id = _prepare_send_accept(api)
     inquiry_id = ids["inquiry_cancelled_order"]
-    status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
-    assert status == 201
+    inquiries = SQLiteInquiryRepository(db)
+    orders = SQLiteOrderRepository(db)
+    inquiry = inquiries.get_by_id(inquiry_id)
+    assert inquiry is not None
+    OrderService(orders).convert_inquiry_to_order(inquiry)
+    inquiries.close()
+    orders.close()
     status, body, _h = _post(
         _convert_accepted_url(base, offer_id, version_id),
         args={"accepted_variant_id": variant_id, "acceptance_id": acceptance_id},

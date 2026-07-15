@@ -9,6 +9,7 @@ never opening core.db in remote mode, and half-config startup rejection.
 from __future__ import annotations
 
 import base64
+import json
 import os
 import queue
 import re
@@ -18,6 +19,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from datetime import date
 from http.server import HTTPServer
 from pathlib import Path
@@ -27,9 +29,13 @@ import pytest
 from catering_system.repositories.sqlite_inquiry_repository import (
     SQLiteInquiryRepository,
 )
+from catering_system.repositories.sqlite_offer_repository import (
+    SQLiteOfferRepository,
+)
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
+from catering_system.domain.offer_snapshot import compute_snapshot_hash
 from catering_system.services.inquiry_service import InquiryService
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
@@ -44,6 +50,8 @@ _PASSWORD = "test-pw"
 _AUTH = "Basic " + base64.b64encode(f"office:{_PASSWORD}".encode()).decode()
 _CSRF_TOKEN = csrf_token_for_password(_PASSWORD)
 _API_TOKEN = "test-remote-api-token"
+_API_AUTH = {"Authorization": f"Bearer {_API_TOKEN}"}
+_SNAPSHOT_ID = "77777777-7777-4777-8777-777777777771"
 
 _HIDDEN_REMOTE_FIELD = re.compile(
     r'<input type="hidden" name="_(?:command_id|expect_[a-zA-Z_]+)" value="[^"]*">'
@@ -89,6 +97,9 @@ def _seed(db_path: Path) -> dict[str, str]:
     )
     ids["inquiry_verify"] = needs_verify.inquiry_id
 
+    convertible = make_inquiry(intake_subject="Sommerfest Catering")
+    ids["inquiry_convertible"] = convertible.inquiry_id
+
     printed_src = make_inquiry(location_text="Bremen")
     order_printed, v1 = order_service.convert_inquiry_to_order(printed_src)
     core.confirm_kitchen_print(order_printed.order_id, v1.order_version_id)
@@ -105,6 +116,7 @@ def _seed(db_path: Path) -> dict[str, str]:
     order_cancelled, _v1c = order_service.convert_inquiry_to_order(cancelled_src)
     core.cancel_order(order_cancelled.order_id)
     ids["order_cancelled"] = order_cancelled.order_id
+    ids["inquiry_cancelled_order"] = cancelled_src.inquiry_id
 
     website = make_inquiry(
         inquiry_source="website_form",
@@ -153,6 +165,7 @@ def _start_direct_panel(
             _PASSWORD,
             host="127.0.0.1",
             port=0,
+            offer_repo=SQLiteOfferRepository(db),
             ui_version=ui_version,
         )
     )
@@ -203,6 +216,185 @@ def _post_form(url: str, fields: dict[str, str]) -> tuple[int, str]:
             return resp.status, resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read().decode("utf-8")
+
+
+_VARIANT_ID = "44444444-4444-4444-8444-444444444441"
+_POSITION_ID = "88888888-8888-4888-8888-888888888881"
+
+
+def _api_post(
+    url: str,
+    *,
+    args: dict | None = None,
+    command_id: str | None = None,
+) -> tuple[int, dict]:
+    body = json.dumps(
+        {
+            "command_id": command_id or str(uuid.uuid4()),
+            "expect": {},
+            "args": args or {},
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=body,
+        headers={**_API_AUTH, "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return resp.status, json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode() or "{}")
+
+
+def _valid_offer_snapshot(*, inquiry_id: str) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "schema_version": "offer_snapshot_v1",
+        "source": "fingerfood-configurator-backend",
+        "source_draft_id": "draft-1",
+        "inquiry_id": inquiry_id,
+        "snapshot_id": _SNAPSHOT_ID,
+        "snapshot_created_at": "2026-07-15T08:30:00+00:00",
+        "valid_until": "2026-07-29",
+        "currency": "EUR",
+        "recipient": {
+            "company_name": "Example company",
+            "contact_name": "Example contact",
+            "email": "customer@example.invalid",
+            "postal_address": "Customer-visible recipient address",
+        },
+        "event": {
+            "event_date": "2026-08-20",
+            "time_window_text": "18:00–22:00",
+            "location_text": "Hamburg",
+            "guest_count": 80,
+            "planning_mode": "caterer_suggestion",
+        },
+        "customer_text": {
+            "title": "Sommerfest",
+            "introduction": "Customer-visible introduction",
+            "notes": "Customer-visible conditions and notes",
+        },
+        "payment_terms": {
+            "method": "RECHNUNG",
+            "customer_visible_text": "Zahlung per Rechnung",
+        },
+        "calculator": {
+            "name": "fingerfood-backend",
+            "calculator_revision": "future-revision",
+            "catalog_revision": "future-revision",
+            "tax_revision": "future-revision",
+        },
+        "variants": [
+            {
+                "variant_id": _VARIANT_ID,
+                "label": "Variante A",
+                "description": "Customer-visible alternative",
+                "positions": [
+                    {
+                        "position_id": _POSITION_ID,
+                        "kind": "catalog",
+                        "catalog_item_id": "catalog-1",
+                        "name": "Fingerfood Paket",
+                        "description": "Frozen description",
+                        "composition": "Frozen composition",
+                        "quantity_mode": "total",
+                        "quantity": "80",
+                        "unit_label": "Stück",
+                        "unit_net_cents": 290,
+                        "net_total_cents": 23200,
+                        "vat_rate_percent": 7,
+                        "vat_amount_cents": 1624,
+                        "gross_total_cents": 24824,
+                        "notes": "Frozen customization",
+                        "related_position_id": None,
+                    }
+                ],
+                "totals": {
+                    "net_cents": 23200,
+                    "vat_7_base_cents": 23200,
+                    "vat_7_amount_cents": 1624,
+                    "vat_19_base_cents": 0,
+                    "vat_19_amount_cents": 0,
+                    "gross_cents": 24824,
+                },
+            }
+        ],
+    }
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+    return payload
+
+
+def _post_panel_convert(
+    panel_url: str, inquiry_id: str, *, remote: bool
+) -> tuple[int, str]:
+    _status, detail_html = _get(f"{panel_url}/inquiry/{inquiry_id}")
+    fields = {"_csrf_token": _CSRF_TOKEN}
+    if remote:
+        convert_form = re.search(
+            r'(<form[^>]*action="/inquiry/[^"]*/convert"[^>]*>.*?</form>)',
+            detail_html,
+            re.DOTALL,
+        )
+        assert convert_form is not None
+        fields["_command_id"] = _extract_hidden(convert_form.group(0), "_command_id")
+    return _post_form(f"{panel_url}/inquiry/{inquiry_id}/convert", fields)
+
+
+def _active_orders_for_inquiry(db: Path, inquiry_id: str) -> int:
+    orders = SQLiteOrderRepository(db)
+    try:
+        return len(
+            [
+                order
+                for order in orders.list_orders()
+                if order.source_inquiry_id == inquiry_id
+                and order.cancelled_at is None
+            ]
+        )
+    finally:
+        orders.close()
+
+
+def test_legacy_convert_offer_gate_parity_direct_vs_remote(tmp_path: Path) -> None:
+    """Direct panel work() and remote panel → Core API must both refuse legacy
+    convert while a Prepared Offer blocks the inquiry path."""
+    db = tmp_path / "offer-gate.db"
+    ids = _seed(db)
+    inquiry_id = ids["inquiry_cancelled_order"]
+
+    api_url, api_server = _start_api_server(db)
+    try:
+        status, _body = _api_post(
+            f"{api_url}/office/v1/inquiries/{inquiry_id}/prepare-offer",
+            args={"snapshot": _valid_offer_snapshot(inquiry_id=inquiry_id)},
+        )
+        assert status == 201
+
+        direct_url, direct_server = _start_direct_panel(db)
+        remote = RemoteCoreClient(api_url, _API_TOKEN)
+        remote_url, remote_server = _start_remote_panel(remote)
+        try:
+            direct_status, direct_body = _post_panel_convert(
+                direct_url, inquiry_id, remote=False
+            )
+            remote_status, remote_body = _post_panel_convert(
+                remote_url, inquiry_id, remote=True
+            )
+
+            assert direct_status == 400
+            assert "offer blocks conversion" in direct_body
+            assert remote_status == 422
+            assert "offer_blocks_conversion" in remote_body
+            assert _active_orders_for_inquiry(db, inquiry_id) == 0
+        finally:
+            for server in (direct_server, remote_server):
+                server.shutdown()
+                server.server_close()
+    finally:
+        api_server.shutdown()
+        api_server.server_close()
 
 
 # --- read parity: same seeded core.db, direct-mode HTML vs remote-mode HTML -

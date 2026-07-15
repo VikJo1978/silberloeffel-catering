@@ -49,7 +49,7 @@ are minimal (IDs + timestamps, no PII); the panel re-reads details via GET.
 | `POST /office/v1/inquiries` | – |
 | `POST /office/v1/inquiries/{id}/update` | `updated_at`; with an active linked Order, only `Bestätigt / Auftrag` is compatible (`422 active_order_crm_stage_conflict`) |
 | `POST /office/v1/inquiries/{id}/verify` | – (repeat = success) |
-| `POST /office/v1/inquiries/{id}/convert` | server-side: no active order (`409 already_converted`), not rejected (`422 inquiry_rejected`), verification satisfied; success also sets `Bestätigt / Auftrag` |
+| `POST /office/v1/inquiries/{id}/convert` | server-side: no active order (`409 already_converted`), not rejected (`422 inquiry_rejected`), verification satisfied, no blocking Offer (`422 offer_blocks_conversion`); success also sets `Bestätigt / Auftrag` |
 | `POST /office/v1/inquiries/{id}/prepare-offer` | `args.snapshot` is a full `offer_snapshot_v1` envelope; no active order (`409 active_order_exists`), no existing Offer (`409 offer_already_exists`), snapshot `inquiry_id` must match the path (`422 inquiry_id_mismatch`); invalid envelope or hash (`422 invalid_snapshot`); body cap **256 KiB** (not the global 64 KiB) |
 | `POST /office/v1/offers/{offer_id}/versions/{version_id}/mark-sent` | `args.sent_at`, `channel`, `recipient_reference`, `evidence_reference`; version must be `Prepared` (`422 sent_recording_blocked`); duplicate send (`409 sent_evidence_exists`); Core mints `recorded_at` and sets `recorded_by` from the authenticated client |
 | `POST /office/v1/offers/{offer_id}/versions/{version_id}/record-acceptance` | `args.accepted_variant_id`, `accepted_at`, `channel`, `evidence_reference`, optional `note`; version must be `Sent` (`422 acceptance_blocked`); duplicate acceptance (`409 acceptance_already_exists`); wrong variant (`422 invalid_variant`); Core mints `acceptance_id`, `recorded_at`, and sets `recorded_by` from the authenticated client |
@@ -89,6 +89,7 @@ Error codes (stable, never free text): `unauthorized`, `not_found`,
 `invalid_snapshot`, `sent_evidence_exists`, `sent_recording_blocked`,
 `invalid_sent_evidence`, `acceptance_already_exists`, `acceptance_blocked`,
 `invalid_acceptance_evidence`, `conversion_already_exists`, `conversion_blocked`,
+`offer_blocks_conversion`,
 `order_cancelled`, `kitchen_print_not_confirmed`, `version_not_owned`,
 `invalid_payment_reminder`, `core_busy`, `internal`.
 
