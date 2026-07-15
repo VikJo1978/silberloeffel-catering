@@ -917,6 +917,128 @@ class RemoteCoreClient:
             _str(entry["label"])
         return body
 
+    def list_contacts(self) -> dict[str, object]:
+        body = self.get("/office/v1/contacts")
+        _exact(body, {"contacts"})
+        allowed_sources = {
+            "linkage_contact",
+            "linkage_customer",
+            "intake_email",
+            "intake_phone",
+            "inquiry",
+        }
+        for raw in _list(body["contacts"]):
+            row = _dict(raw)
+            _exact(
+                row,
+                {
+                    "contact_key",
+                    "identity_source",
+                    "display_name",
+                    "email",
+                    "phone",
+                    "inquiry_count",
+                    "open_inquiries",
+                    "active_orders",
+                    "last_activity",
+                },
+            )
+            _str(row["contact_key"])
+            source = _str(row["identity_source"])
+            if source not in allowed_sources:
+                _bad_response()
+            _str(row["display_name"])
+            _optional_str(row["email"])
+            _optional_str(row["phone"])
+            _nonnegative_int(row["inquiry_count"])
+            _nonnegative_int(row["open_inquiries"])
+            _nonnegative_int(row["active_orders"])
+            _datetime(row["last_activity"])
+        return body
+
+    def contact_detail(self, contact_key: str) -> dict[str, object] | None:
+        try:
+            body = self.get(
+                f"/office/v1/contacts/{quote(contact_key, safe='')}"
+            )
+        except RemoteCoreError as exc:
+            if exc.status == 404:
+                return None
+            raise
+        allowed_sources = {
+            "linkage_contact",
+            "linkage_customer",
+            "intake_email",
+            "intake_phone",
+            "inquiry",
+        }
+        allowed_offer_states = {
+            "Prepared",
+            "Sent",
+            "Accepted",
+            "Converted",
+            "Expired",
+            "Withdrawn",
+            "Rejected",
+            "Superseded",
+        }
+        _exact(
+            body,
+            {
+                "contact_key",
+                "identity_source",
+                "display_name",
+                "email",
+                "phone",
+                "inquiry_count",
+                "open_inquiries",
+                "active_orders",
+                "last_activity",
+                "inquiry_ids",
+                "inquiries",
+                "offers",
+                "orders",
+            },
+        )
+        if _str(body["contact_key"]) != contact_key:
+            _bad_response()
+        if _str(body["identity_source"]) not in allowed_sources:
+            _bad_response()
+        _datetime(body["last_activity"])
+        for raw in _list(body["inquiry_ids"]):
+            _uuid4(raw)
+        for raw in _list(body["inquiries"]):
+            row = _dict(raw)
+            _exact(
+                row,
+                {
+                    "inquiry_id",
+                    "intake_subject",
+                    "event_date",
+                    "crm_stage",
+                    "is_open",
+                },
+            )
+            _uuid4(row["inquiry_id"])
+            _optional_str(row["intake_subject"])
+            _date(row["event_date"])
+            _str(row["crm_stage"])
+            _bool(row["is_open"])
+        for raw in _list(body["offers"]):
+            row = _dict(raw)
+            _exact(row, {"offer_id", "inquiry_id", "state"})
+            _uuid4(row["offer_id"])
+            _uuid4(row["inquiry_id"])
+            if _str(row["state"]) not in allowed_offer_states:
+                _bad_response()
+        for raw in _list(body["orders"]):
+            row = _dict(raw)
+            _exact(row, {"order_id", "inquiry_id", "cancelled_at"})
+            _uuid4(row["order_id"])
+            _uuid4(row["inquiry_id"])
+            _optional_datetime(row["cancelled_at"])
+        return body
+
     def _validate_page(
         self,
         page: dict[str, object],

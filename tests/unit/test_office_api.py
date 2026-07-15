@@ -415,6 +415,68 @@ def test_offer_detail_schema_sent(api) -> None:
     assert "Angebot gesendet" in labels
 
 
+def test_list_contacts_schema(api) -> None:
+    base, _ids, _db = api
+    status, body, _h = _get(f"{base}/office/v1/contacts")
+    assert status == 200
+    assert len(body["contacts"]) >= 1
+    row = body["contacts"][0]
+    assert set(row) == {
+        "contact_key",
+        "identity_source",
+        "display_name",
+        "email",
+        "phone",
+        "inquiry_count",
+        "open_inquiries",
+        "active_orders",
+        "last_activity",
+    }
+
+
+def test_list_contacts_grouped_by_email(api) -> None:
+    base, ids, _db = api
+    inquiry_id = ids["inquiry_convertible"]
+    _status, detail, _h = _get(f"{base}/office/v1/inquiries/{inquiry_id}")
+    status, body, _h = _post(
+        f"{base}/office/v1/inquiries/{inquiry_id}/update",
+        args={
+            "event_date": detail["event_date"],
+            "crm_stage": detail["crm_stage"],
+            "time_window_text": detail["time_window_text"],
+            "location_text": detail["location_text"],
+            "guest_count_estimate": detail["guest_count_estimate"],
+            "planning_mode": detail["planning_mode"],
+            "intake_message": (
+                "Firma: Test GmbH\n"
+                "Name: Max Mustermann\n"
+                "E-Mail: kontakt@example.invalid\n"
+                "Telefon: 0151 2345678\n"
+            ),
+        },
+        expect={"updated_at": detail["updated_at"]},
+    )
+    assert status == 200
+    status, body, _h = _get(f"{base}/office/v1/contacts")
+    assert status == 200
+    assert len(body["contacts"]) >= 1
+    row = next(
+        item
+        for item in body["contacts"]
+        if item["contact_key"] == "intake:email:kontakt@example.invalid"
+    )
+    assert row["identity_source"] == "intake_email"
+    assert row["email"] == "kontakt@example.invalid"
+    assert row["inquiry_count"] >= 1
+
+
+def test_contact_detail_not_found(api) -> None:
+    base, _ids, _db = api
+    status, body, _h = _get(f"{base}/office/v1/contacts/inquiry%3Amissing-id")
+    assert status == 404
+    assert body["error"] == "not_found"
+
+
 def test_inquiry_list_rows_and_search(api) -> None:
     base, ids, _db = api
     status, body, _h = _get(f"{base}/office/v1/inquiries")

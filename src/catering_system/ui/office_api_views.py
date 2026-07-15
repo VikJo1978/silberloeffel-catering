@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+from catering_system.domain.contact_projection import ContactProjection
 from catering_system.domain.inquiry import (
     Inquiry,
     InquiryOfferProjection,
@@ -27,6 +28,7 @@ from catering_system.domain.ready_to_send import ReadyToSendEvaluation
 from catering_system.domain.wochenuebersicht import Wochenuebersicht
 from catering_system.domain.work_center import WorkCenterSnapshot
 from catering_system.ui.office_panel_offer_prefill import offer_prefill_payload
+
 
 BERLIN = ZoneInfo("Europe/Berlin")
 
@@ -455,3 +457,83 @@ def work_center_snapshot(snapshot: WorkCenterSnapshot) -> dict[str, object]:
         "open_tasks": snapshot.open_tasks,
         "today_calendar_entries": snapshot.today_calendar_entries,
     }
+
+
+def contact_list_row(projection: ContactProjection) -> dict[str, object]:
+    return {
+        "contact_key": projection.contact_key,
+        "identity_source": projection.identity_source,
+        "display_name": projection.display_name,
+        "email": projection.email,
+        "phone": projection.phone,
+        "inquiry_count": projection.inquiry_count,
+        "open_inquiries": projection.open_inquiries,
+        "active_orders": projection.active_orders,
+        "last_activity": projection.last_activity.isoformat(),
+    }
+
+
+def contact_list_view(projections: list[ContactProjection]) -> list[dict[str, object]]:
+    return [contact_list_row(projection) for projection in projections]
+
+
+def contact_detail_view(
+    projection: ContactProjection,
+    inquiries: list[Inquiry],
+    offers: list[Offer],
+    orders: list[Order],
+    *,
+    today: date | None = None,
+) -> dict[str, object]:
+    operating_today = today or berlin_today()
+    orders_by_inquiry: dict[str, list[Order]] = {}
+    for order in orders:
+        orders_by_inquiry.setdefault(order.source_inquiry_id, []).append(order)
+    offers_by_inquiry = {offer.source_inquiry_id: offer for offer in offers}
+    inquiry_rows: list[dict[str, object]] = []
+    for inquiry in inquiries:
+        linked = orders_by_inquiry.get(inquiry.inquiry_id, [])
+        offer = offers_by_inquiry.get(inquiry.inquiry_id)
+        state = inquiry_office_state(
+            inquiry,
+            linked,
+            offer=offer,
+            today=operating_today,
+        )
+        inquiry_rows.append(
+            {
+                "inquiry_id": inquiry.inquiry_id,
+                "intake_subject": inquiry.intake_subject,
+                "event_date": inquiry.event_date.isoformat(),
+                "crm_stage": inquiry.crm_stage,
+                "is_open": state.is_open,
+            }
+        )
+    offer_rows = [
+        {
+            "offer_id": offer.offer_id,
+            "inquiry_id": offer.source_inquiry_id,
+            "state": derive_inquiry_offer_projection(
+                offer, today=operating_today
+            ).commercial_state,
+        }
+        for offer in offers
+    ]
+    order_rows = [
+        {
+            "order_id": order.order_id,
+            "inquiry_id": order.source_inquiry_id,
+            "cancelled_at": (
+                order.cancelled_at.isoformat()
+                if order.cancelled_at is not None
+                else None
+            ),
+        }
+        for order in orders
+    ]
+    detail = contact_list_row(projection)
+    detail["inquiry_ids"] = list(projection.inquiry_ids)
+    detail["inquiries"] = inquiry_rows
+    detail["offers"] = offer_rows
+    detail["orders"] = order_rows
+    return detail

@@ -7,6 +7,7 @@ import json
 from urllib.parse import urlsplit, urlunsplit
 
 from catering_system.domain.inquiry import Inquiry
+from catering_system.intake.intake_contact import labelled_intake_context
 
 OFFER_PREFILL_SCHEMA_VERSION = "core_inquiry_offer_prefill_v1"
 _FRAGMENT_KEY = "core-inquiry"
@@ -34,34 +35,9 @@ def _clip(value: str | None, limit: int = _MAX_SHORT_TEXT) -> str:
     return (value or "").strip()[:limit]
 
 
-def _labelled_context(message: str | None) -> tuple[dict[str, str], list[str]]:
-    labelled: dict[str, str] = {}
-    remaining: list[str] = []
-    known = {
-        "Firma",
-        "Name",
-        "Veranstaltungsart",
-        "Telefon",
-        "E-Mail",
-        "Wunsch",
-    }
-    for raw_line in (message or "").splitlines():
-        line = raw_line.strip()
-        if not line:
-            continue
-        label, separator, value = line.partition(":")
-        label = label.strip()
-        value = value.strip()
-        if separator and label in known and value:
-            labelled.setdefault(label, value)
-        else:
-            remaining.append(line)
-    return labelled, remaining
-
-
 def offer_prefill_payload(inquiry: Inquiry) -> dict[str, object]:
     """Build proposal-phase copy only; this performs no Core write."""
-    labelled, remaining = _labelled_context(inquiry.intake_message)
+    labelled, remaining = labelled_intake_context(inquiry.intake_message)
     context_parts = []
     if inquiry.intake_subject:
         context_parts.append(f"Betreff: {_clip(inquiry.intake_subject, 1000)}")

@@ -222,16 +222,26 @@ _VARIANT_ID = "44444444-4444-4444-8444-444444444441"
 _POSITION_ID = "88888888-8888-4888-8888-888888888881"
 
 
+def _api_get(url: str) -> tuple[int, dict]:
+    req = urllib.request.Request(url, headers=_API_AUTH, method="GET")
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return resp.status, json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode() or "{}")
+
+
 def _api_post(
     url: str,
     *,
     args: dict | None = None,
+    expect: dict | None = None,
     command_id: str | None = None,
 ) -> tuple[int, dict]:
     body = json.dumps(
         {
             "command_id": command_id or str(uuid.uuid4()),
-            "expect": {},
+            "expect": expect or {},
             "args": args or {},
         }
     ).encode("utf-8")
@@ -507,6 +517,51 @@ def test_angebote_parity_direct_vs_remote(parity_world) -> None:
     assert d_status == r_status == 200
     _assert_same_modulo_remote_fields(d_html, r_html)
     assert "Keine Angebote vorhanden" in d_html
+
+
+def test_kontakte_parity_direct_vs_remote(parity_world) -> None:
+    direct_url, remote_url, _ids = parity_world
+    d_status, d_html = _get(f"{direct_url}/kontakte")
+    r_status, r_html = _get(f"{remote_url}/kontakte")
+    assert d_status == r_status == 200
+    _assert_same_modulo_remote_fields(d_html, r_html)
+    assert "Kontakte" in d_html
+
+
+def test_kontakt_detail_parity_direct_vs_remote(tmp_path: Path) -> None:
+    db = tmp_path / "kontakt-detail.db"
+    ids = _seed(db)
+    inquiry_id = ids["inquiry_convertible"]
+    from catering_system.repositories.sqlite_inquiry_repository import (
+        SQLiteInquiryRepository,
+    )
+    from catering_system.services.inquiry_service import InquiryService
+
+    inquiry_repo = SQLiteInquiryRepository(db)
+    inquiry = inquiry_repo.get_by_id(inquiry_id)
+    assert inquiry is not None
+    InquiryService(inquiry_repo).update_inquiry(
+        inquiry.inquiry_id,
+        intake_message="Firma: Parity GmbH\nE-Mail: parity@example.invalid\n",
+    )
+    inquiry_repo.close()
+    contact_key = "intake:email:parity@example.invalid"
+    direct_url, direct_server = _start_direct_panel(db)
+    api_url, api_server = _start_api_server(db)
+    remote = RemoteCoreClient(api_url, _API_TOKEN)
+    remote_url, remote_server = _start_remote_panel(remote)
+    try:
+        encoded = urllib.parse.quote(contact_key, safe="")
+        d_status, d_html = _get(f"{direct_url}/kontakt/{encoded}")
+        r_status, r_html = _get(f"{remote_url}/kontakt/{encoded}")
+        assert d_status == r_status == 200
+        _assert_same_modulo_remote_fields(d_html, r_html)
+        assert "Parity GmbH" in d_html
+        assert "Kontakt-Profil" in d_html
+    finally:
+        for server in (direct_server, remote_server, api_server):
+            server.shutdown()
+            server.server_close()
 
 
 def test_offer_detail_parity_direct_vs_remote(tmp_path: Path) -> None:

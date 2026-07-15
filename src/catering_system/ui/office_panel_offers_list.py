@@ -46,4 +46,4 @@ def render_angebote_list(
         + "</table>"
         + '<p><a href="/">← Zurück zur Arbeitszentrale</a></p>'
     )
-    return _page("Angebote", body, active_section="inquiries", context=context)
+    return _page("Angebote", body, active_section="offers", context=context)

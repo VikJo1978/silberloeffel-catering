@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TypeVar
-from urllib.parse import parse_qsl, urlparse
+from urllib.parse import parse_qsl, unquote, urlparse
 
 from catering_system.domain.inquiry import (
     ACTIVE_ORDER_CRM_STAGE,
@@ -80,6 +80,7 @@ from catering_system.services.operational_core_service import OperationalCoreSer
 from catering_system.services.order_service import OrderService
 from catering_system.services.payment_reminder_service import PaymentReminderService
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
+from catering_system.services.contact_projection_service import ContactProjectionService
 from catering_system.services.work_center_service import WorkCenterService
 from catering_system.ui import office_api_views as views
 
@@ -291,6 +292,12 @@ class OfficeApi:
             self.orders,
             today=views.berlin_today,
         )
+        self.contact_projection_service = ContactProjectionService(
+            self.inquiries,
+            self.offers,
+            self.orders,
+            today=views.berlin_today,
+        )
 
     # -- reads -----------------------------------------------------------
 
@@ -375,6 +382,25 @@ class OfficeApi:
         if offer is None:
             raise ApiError(404, "not_found")
         return views.offer_detail(offer, today=views.berlin_today())
+
+    def list_contacts(self) -> dict[str, object]:
+        return {
+            "contacts": views.contact_list_view(
+                self.contact_projection_service.list_contacts()
+            )
+        }
+
+    def contact_detail(self, contact_key: str) -> dict[str, object]:
+        detail = self.contact_projection_service.contact_detail(unquote(contact_key))
+        if detail is None:
+            raise ApiError(404, "not_found")
+        return views.contact_detail_view(
+            detail.contact,
+            list(detail.inquiries),
+            list(detail.offers),
+            list(detail.orders),
+            today=views.berlin_today(),
+        )
 
     def list_inquiries(self, q: str, limit: int, offset: int) -> dict[str, object]:
         orders_by_inquiry: dict[str, list[Order]] = {}
@@ -1098,6 +1124,16 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         {"POST": "prepare-offer"},
     ),
     (
+        re.compile(r"^/office/v1/contacts$"),
+        "/office/v1/contacts",
+        {"GET": "list_contacts"},
+    ),
+    (
+        re.compile(r"^/office/v1/contacts/(?P<contact_key>[^/]+)$"),
+        "/office/v1/contacts/{contact_key}",
+        {"GET": "contact_detail"},
+    ),
+    (
         re.compile(r"^/office/v1/offers$"),
         "/office/v1/offers",
         {"GET": "list_offers"},
@@ -1386,6 +1422,12 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             elif kind == "list_offers":
                 self._query(set())
                 self._respond(200, api.list_offers())
+            elif kind == "list_contacts":
+                self._query(set())
+                self._respond(200, api.list_contacts())
+            elif kind == "contact_detail":
+                self._query(set())
+                self._respond(200, api.contact_detail(path_ids["contact_key"]))
             elif kind == "offer_detail":
                 self._query(set())
                 self._respond(200, api.offer_detail(path_ids["offer_id"]))

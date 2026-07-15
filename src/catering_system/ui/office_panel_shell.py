@@ -7,6 +7,8 @@ from typing import Literal
 OfficeSection = Literal[
     "home",
     "inquiries",
+    "offers",
+    "contacts",
     "orders",
     "week",
     "callbacks",
@@ -38,6 +40,11 @@ stroke-linejoin="round"><path d="M7 4H4v4c0 6.6 5.4 12 12 12h4v-3l-4-2-2
 <symbol id="office-i-import" viewBox="0 0 24 24" fill="none"
 stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
 stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5M5 15v5h14v-5"/></symbol>
+<symbol id="office-i-users" viewBox="0 0 24 24" fill="none"
+stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+stroke-linejoin="round"><path d="M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1M12
+11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm8 8v-1a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0
+7.75"/></symbol>
 </svg>"""
 
 OFFICE_PANEL_STYLE = """
