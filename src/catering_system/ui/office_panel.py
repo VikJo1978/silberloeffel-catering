@@ -46,9 +46,13 @@ from catering_system.domain.order_payment_reminder import (
 from catering_system.repositories.in_memory_offer_repository import (
     InMemoryOfferRepository,
 )
+from catering_system.repositories.in_memory_catalog_repository import (
+    InMemoryCatalogRepository,
+)
 from catering_system.repositories.in_memory_payment_reminder_repository import (
     InMemoryPaymentReminderRepository,
 )
+from catering_system.repositories.catalog_repository import CatalogRepository
 from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.repositories.offer_repository import OfferRepository
 from catering_system.repositories.order_repository import OrderRepository
@@ -64,6 +68,7 @@ from catering_system.services.wochenuebersicht_service import WochenuebersichtSe
 from catering_system.ui import office_api_views as api_views
 from catering_system.domain.work_center import WorkCenterSnapshot
 from catering_system.services.contact_projection_service import ContactProjectionService
+from catering_system.services.catalog_dish_service import CatalogDishService
 from catering_system.services.email_intake_projection_service import (
     EmailIntakeProjectionService,
 )
@@ -78,6 +83,8 @@ from catering_system.ui.office_panel_dashboard import (
 )
 from catering_system.ui.office_panel_contact_detail import render_kontakt_detail
 from catering_system.ui.office_panel_contacts_list import render_kontakte_list
+from catering_system.ui.office_panel_catalog_list import render_gerichte_list
+from catering_system.ui.office_panel_catalog_detail import render_gericht_detail
 from catering_system.ui.office_panel_email_detail import render_email_detail
 from catering_system.ui.office_panel_emails_list import render_email_list
 from catering_system.ui.office_panel_calendar_list import render_kalender_list
@@ -233,6 +240,7 @@ class OfficePanel:
         command_executor: "CoreCommandExecutor | None" = None,
         payment_reminder_repo: PaymentReminderRepository | None = None,
         offer_repo: OfferRepository | None = None,
+        catalog_repo: CatalogRepository | None = None,
         ui_version: str = "legacy",
     ) -> None:
         if ui_version not in {"legacy", "v2"}:
@@ -240,6 +248,7 @@ class OfficePanel:
         self._inquiries = inquiry_repo
         self._orders = order_repo
         self._offers = offer_repo or InMemoryOfferRepository()
+        self._catalog = catalog_repo or InMemoryCatalogRepository()
         # Phase 2 dual mode (PROXMOX_OFFICE_SERVER_CORE_API_PACK_V1 §7): when
         # `remote` is given, `inquiry_repo`/`order_repo` are the same
         # RemoteCoreClient instance, used here only for its repo-shaped reads
@@ -662,6 +671,33 @@ class OfficePanel:
                 today=api_views.berlin_today(),
             )
         return render_kontakt_detail(detail, context=context)
+
+    def _catalog_list_payload(self) -> dict[str, object]:
+        if self._remote is not None:
+            return self._remote.list_catalog_dishes()
+        service = CatalogDishService(self._catalog)
+        return api_views.catalog_dish_list_view(service.list_dishes())
+
+    def render_gerichte(
+        self, *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
+    ) -> str:
+        return render_gerichte_list(self._catalog_list_payload(), context=context)
+
+    def render_gericht(
+        self, dish_id: str, *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
+    ) -> str | None:
+        if self._remote is not None:
+            detail = self._remote.catalog_dish_detail(dish_id)
+            if detail is None:
+                return None
+        else:
+            service = CatalogDishService(self._catalog)
+            dish = service.get_dish(dish_id)
+            if dish is None:
+                return None
+            history = service.list_price_history(dish_id)
+            detail = api_views.catalog_dish_detail_view(dish, history)
+        return render_gericht_detail(detail, context=context)
 
     def _email_list_rows(self) -> list[dict[str, object]]:
         if self._remote is not None:
@@ -2156,6 +2192,7 @@ def make_office_panel_handler(
     command_executor: "CoreCommandExecutor | None" = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
     offer_repo: OfferRepository | None = None,
+    catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
 ) -> type[BaseHTTPRequestHandler]:
     """Compatibility wrapper; HTTP routing lives in office_panel_http."""
@@ -2176,6 +2213,7 @@ def make_office_panel_handler(
         command_executor=command_executor,
         payment_reminder_repo=payment_reminder_repo,
         offer_repo=offer_repo,
+        catalog_repo=catalog_repo,
         ui_version=ui_version,
     )
 
@@ -2196,6 +2234,7 @@ def create_office_panel_server(
     command_executor: "CoreCommandExecutor | None" = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
     offer_repo: OfferRepository | None = None,
+    catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
 ) -> HTTPServer:
     """Compatibility wrapper; server construction lives in office_panel_http."""
@@ -2218,6 +2257,7 @@ def create_office_panel_server(
         command_executor=command_executor,
         payment_reminder_repo=payment_reminder_repo,
         offer_repo=offer_repo,
+        catalog_repo=catalog_repo,
         ui_version=ui_version,
     )
 
@@ -2347,6 +2387,15 @@ def main() -> None:
         from catering_system.repositories.sqlite_payment_reminder_repository import (
             SQLitePaymentReminderRepository,
         )
+        from catering_system.repositories.sqlite_catalog_repository import (
+            SQLiteCatalogRepository,
+        )
+
+        connection = open_core_connection(args.db)
+        inquiry_repo = SQLiteInquiryRepository.from_connection(connection)
+        order_repo = SQLiteOrderRepository.from_connection(connection)
+        offer_repo = SQLiteOfferRepository.from_connection(connection)
+        catalog_repo = SQLiteCatalogRepository.from_connection(connection)
         payment_reminder_repo = SQLitePaymentReminderRepository.from_connection(
             connection
         )

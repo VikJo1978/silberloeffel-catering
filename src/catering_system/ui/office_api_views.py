@@ -33,6 +33,12 @@ from catering_system.services.order_print_projection_service import (
     PrintPositionLine,
 )
 from catering_system.services.buffet_cards_service import BuffetCard, BuffetCardsView
+from catering_system.domain.catalog import allergen_labels
+from catering_system.services.catalog_dish_service import (
+    AllergenCodeDefinition,
+    CatalogDishListResult,
+)
+from catering_system.domain.catalog import CatalogDish, CatalogPriceHistoryEntry
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_payment_reminder import PaymentReminderView
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
@@ -698,3 +704,71 @@ def buffet_cards_data_shape(view: BuffetCardsView) -> dict[str, object]:
         "effective_version_number": view.effective_version_number,
     }
 
+
+def format_catalog_price_eur(cents: int) -> str:
+    whole, fraction = divmod(cents, 100)
+    return f"{whole},{fraction:02d} €"
+
+
+def catalog_dish_list_row(dish: CatalogDish) -> dict[str, object]:
+    return {
+        "dish_id": dish.dish_id,
+        "name": dish.name,
+        "current_unit_net_cents": dish.current_unit_net_cents,
+        "price_display": format_catalog_price_eur(dish.current_unit_net_cents),
+        "allergens": list(dish.allergens),
+        "allergen_labels": list(allergen_labels(dish.allergens)),
+        "active": dish.active,
+    }
+
+
+def catalog_dish_list_view(result: CatalogDishListResult) -> dict[str, object]:
+    return {
+        "dishes": [catalog_dish_list_row(dish) for dish in result.dishes],
+        "total_count": result.total_count,
+        "truncated": result.truncated,
+    }
+
+
+def _price_history_shape(entry: CatalogPriceHistoryEntry) -> dict[str, object]:
+    return {
+        "entry_id": entry.entry_id,
+        "dish_id": entry.dish_id,
+        "old_unit_net_cents": entry.old_unit_net_cents,
+        "new_unit_net_cents": entry.new_unit_net_cents,
+        "changed_at": entry.changed_at.isoformat(),
+        "changed_by": entry.changed_by,
+        "effective_from": (
+            entry.effective_from.isoformat()
+            if entry.effective_from is not None
+            else None
+        ),
+    }
+
+
+def catalog_dish_detail_view(
+    dish: CatalogDish,
+    history: tuple[CatalogPriceHistoryEntry, ...],
+) -> dict[str, object]:
+    detail = catalog_dish_list_row(dish)
+    detail.update(
+        {
+            "description": dish.description,
+            "composition": dish.composition,
+            "notes": dish.notes,
+            "created_at": dish.created_at.isoformat(),
+            "updated_at": dish.updated_at.isoformat(),
+            "price_history": [_price_history_shape(entry) for entry in history],
+        }
+    )
+    return detail
+
+
+def allergen_codes_view(
+    definitions: tuple[AllergenCodeDefinition, ...],
+) -> dict[str, object]:
+    return {
+        "allergen_codes": [
+            {"code": item.code, "label": item.label} for item in definitions
+        ]
+    }

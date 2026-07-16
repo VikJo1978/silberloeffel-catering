@@ -65,6 +65,9 @@ from catering_system.repositories.sqlite_inquiry_repository import (
 from catering_system.repositories.sqlite_offer_repository import (
     SQLiteOfferRepository,
 )
+from catering_system.repositories.sqlite_catalog_repository import (
+    SQLiteCatalogRepository,
+)
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
@@ -95,6 +98,7 @@ from catering_system.services.order_print_projection_service import (
     PrintProjectionNotFoundError,
 )
 from catering_system.services.buffet_cards_service import BuffetCardsService
+from catering_system.services.catalog_dish_service import CatalogDishService
 from catering_system.ui import office_api_views as views
 
 _log = logging.getLogger(__name__)
@@ -278,6 +282,7 @@ class OfficeApi:
         self.inquiries = SQLiteInquiryRepository.from_connection(connection)
         self.orders = SQLiteOrderRepository.from_connection(connection)
         self.offers = SQLiteOfferRepository.from_connection(connection)
+        self.catalog = SQLiteCatalogRepository.from_connection(connection)
         self.payment_reminders = SQLitePaymentReminderRepository.from_connection(
             connection
         )
@@ -339,6 +344,8 @@ class OfficeApi:
             self.orders,
             self.print_projection_service,
         )
+        self.catalog_dish_service = CatalogDishService(self.catalog)
+
     # -- reads -----------------------------------------------------------
 
     def work_center(self) -> dict[str, object]:
@@ -440,6 +447,37 @@ class OfficeApi:
             list(detail.offers),
             list(detail.orders),
             today=views.berlin_today(),
+        )
+
+    def list_catalog_dishes(
+        self,
+        *,
+        active_only: bool = False,
+        q: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, object]:
+        if q is not None and len(q) > _MAX_Q_CHARS:
+            raise _invalid()
+        return views.catalog_dish_list_view(
+            self.catalog_dish_service.list_dishes(
+                active_only=active_only,
+                q=q,
+                limit=limit,
+                offset=offset,
+            )
+        )
+
+    def catalog_dish_detail(self, dish_id: str) -> dict[str, object]:
+        dish = self.catalog_dish_service.get_dish(dish_id)
+        if dish is None:
+            raise ApiError(404, "not_found")
+        history = self.catalog_dish_service.list_price_history(dish_id)
+        return views.catalog_dish_detail_view(dish, history)
+
+    def list_allergen_codes(self) -> dict[str, object]:
+        return views.allergen_codes_view(
+            self.catalog_dish_service.list_allergen_codes()
         )
 
     def list_emails(self) -> dict[str, object]:
@@ -1562,6 +1600,33 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             elif kind == "contact_detail":
                 self._query(set())
                 self._respond(200, api.contact_detail(path_ids["contact_key"]))
+            elif kind == "list_catalog_dishes":
+                params = self._query({"active_only", "q", "limit", "offset"})
+                active_only = (
+                    _v_bool(params["active_only"])
+                    if "active_only" in params
+                    else False
+                )
+                q_raw = params.get("q")
+                q = _v_str(q_raw, _MAX_Q_CHARS).strip() if q_raw is not None else None
+                if q == "":
+                    q = None
+                limit, offset = self._pagination(params)
+                self._respond(
+                    200,
+                    api.list_catalog_dishes(
+                        active_only=active_only,
+                        q=q,
+                        limit=limit,
+                        offset=offset,
+                    ),
+                )
+            elif kind == "catalog_dish_detail":
+                self._query(set())
+                self._respond(200, api.catalog_dish_detail(_v_uuid(path_ids["id"])))
+            elif kind == "list_allergen_codes":
+                self._query(set())
+                self._respond(200, api.list_allergen_codes())
             elif kind == "list_emails":
                 self._query(set())
                 self._respond(200, api.list_emails())

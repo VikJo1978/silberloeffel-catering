@@ -15,6 +15,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.repositories.offer_repository import OfferRepository
+from catering_system.repositories.catalog_repository import CatalogRepository
 from catering_system.repositories.order_repository import OrderRepository
 from catering_system.repositories.payment_reminder_repository import (
     PaymentReminderRepository,
@@ -139,6 +140,7 @@ def make_office_panel_handler(
     command_executor: "CoreCommandExecutor | None" = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
     offer_repo: OfferRepository | None = None,
+    catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
 ) -> type[BaseHTTPRequestHandler]:
     panel = OfficePanel(
@@ -150,6 +152,7 @@ def make_office_panel_handler(
         command_executor=command_executor,
         payment_reminder_repo=payment_reminder_repo,
         offer_repo=offer_repo,
+        catalog_repo=catalog_repo,
         ui_version=ui_version,
     )
     expected = "Basic " + base64.b64encode(f"office:{password}".encode()).decode()
@@ -317,6 +320,8 @@ def make_office_panel_handler(
                 self._html(panel.render_angebote(context=context))
             elif parts == ["kontakte"]:
                 self._html(panel.render_kontakte(context=context))
+            elif parts == ["gerichte"]:
+                self._html(panel.render_gerichte(context=context))
             elif parts == ["email"]:
                 self._html(panel.render_email(context=context))
             elif parts == ["aufgaben"]:
@@ -351,6 +356,9 @@ def make_office_panel_handler(
                 self._html(page) if page else self.send_error(404)
             elif len(parts) == 2 and parts[0] == "kontakt":
                 page = panel.render_kontakt(unquote(parts[1]), context=context)
+                self._html(page) if page else self.send_error(404)
+            elif len(parts) == 2 and parts[0] == "gerichte":
+                page = panel.render_gericht(parts[1], context=context)
                 self._html(page) if page else self.send_error(404)
             elif len(parts) == 2 and parts[0] == "email":
                 page = panel.render_email_detail(parts[1], context=context)
@@ -561,6 +569,7 @@ def create_office_panel_server(
     command_executor: "CoreCommandExecutor | None" = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
     offer_repo: OfferRepository | None = None,
+    catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
 ) -> HTTPServer:
     """Create the intentionally single-threaded office HTTP server."""

@@ -32,6 +32,9 @@ from catering_system.repositories.sqlite_inquiry_repository import (
 from catering_system.repositories.sqlite_offer_repository import (
     SQLiteOfferRepository,
 )
+from catering_system.repositories.sqlite_catalog_repository import (
+    SQLiteCatalogRepository,
+)
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
@@ -166,6 +169,7 @@ def _start_direct_panel(
             host="127.0.0.1",
             port=0,
             offer_repo=SQLiteOfferRepository(db),
+            catalog_repo=SQLiteCatalogRepository(db),
             ui_version=ui_version,
         )
     )
@@ -892,6 +896,13 @@ def test_buffet_cards_direct_remote_parity(parity_world) -> None:
     assert d_status == r_status == 200
     assert d_html == r_html
 
+
+def test_gerichte_direct_remote_parity(parity_world) -> None:
+    direct_url, remote_url, _ids = parity_world
+    d_status, d_html = _get(f"{direct_url}/gerichte")
+    r_status, r_html = _get(f"{remote_url}/gerichte")
+    assert d_status == r_status == 200
+    assert d_html == r_html
 
 
 def test_rueckruf_stays_local_not_routed_through_core(parity_world) -> None:

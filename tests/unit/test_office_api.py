@@ -24,6 +24,10 @@ from catering_system.repositories.sqlite_offer_repository import (
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
+from catering_system.repositories.sqlite_catalog_repository import (
+    SQLiteCatalogRepository,
+)
+from catering_system.domain.catalog import CatalogDish
 from catering_system.domain.offer_snapshot import compute_snapshot_hash
 from catering_system.services.inquiry_service import InquiryService
 from catering_system.services.operational_core_service import OperationalCoreService
@@ -2095,3 +2099,64 @@ def test_convert_accepted_failure_leaves_no_conversion_or_ledger(api) -> None:
     assert stored.conversion_link is None
     offers.close()
 
+
+_CATALOG_DISH_ID = "11111111-1111-4111-8111-111111111111"
+
+
+def _seed_catalog_dish(db: Path) -> None:
+    repo = SQLiteCatalogRepository(db)
+    try:
+        repo.insert_dish_if_absent(
+            CatalogDish(
+                dish_id=_CATALOG_DISH_ID,
+                name="Kartoffelsalat",
+                description="Hausgemacht",
+                composition="Kartoffeln",
+                notes=None,
+                current_unit_net_cents=320,
+                allergens=("G", "J"),
+                active=True,
+                created_at=datetime(2026, 7, 16, 8, 0, tzinfo=UTC),
+                updated_at=datetime(2026, 7, 16, 8, 0, tzinfo=UTC),
+            )
+        )
+    finally:
+        repo.close()
+
+
+def test_list_catalog_dishes_schema(api) -> None:
+    base, _ids, db = api
+    _seed_catalog_dish(db)
+    status, body, _h = _get(f"{base}/office/v1/catalog/dishes")
+    assert status == 200
+    assert body["total_count"] >= 1
+    row = body["dishes"][0]
+    assert set(row) == {
+        "dish_id",
+        "name",
+        "current_unit_net_cents",
+        "price_display",
+        "allergens",
+        "allergen_labels",
+        "active",
+    }
+    assert row["price_display"] == "3,20 €"
+
+
+def test_catalog_dish_detail_schema(api) -> None:
+    base, _ids, db = api
+    _seed_catalog_dish(db)
+    status, body, _h = _get(
+        f"{base}/office/v1/catalog/dishes/{_CATALOG_DISH_ID}"
+    )
+    assert status == 200
+    assert body["name"] == "Kartoffelsalat"
+    assert body["price_history"] == []
+
+
+def test_list_allergen_codes_schema(api) -> None:
+    base, _ids, _db = api
+    status, body, _h = _get(f"{base}/office/v1/catalog/allergen-codes")
+    assert status == 200
+    assert len(body["allergen_codes"]) == 14
+    assert body["allergen_codes"][0]["code"] == "A"

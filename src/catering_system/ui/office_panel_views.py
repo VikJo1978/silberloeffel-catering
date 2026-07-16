@@ -182,6 +182,8 @@ def _page(
                 "proposal",
                 active_section,
             ),
+            '<div class="office-nav-label">Verwaltung</div>',
+            _nav_link("/gerichte", "Gerichte", "doc", "catalog", active_section),
         )
     )
     page_title = f"<h1>{_e(title)}</h1>" if show_title else ""

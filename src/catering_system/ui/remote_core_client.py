@@ -1199,6 +1199,107 @@ class RemoteCoreClient:
             _datetime(row["last_activity"])
         return body
 
+    def list_catalog_dishes(
+        self,
+        *,
+        active_only: bool = False,
+        q: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, object]:
+        params: dict[str, str] = {}
+        if active_only:
+            params["active_only"] = "true"
+        if q:
+            params["q"] = q
+        if limit != 100:
+            params["limit"] = str(limit)
+        if offset:
+            params["offset"] = str(offset)
+        body = self.get("/office/v1/catalog/dishes", params or None)
+        _exact(body, {"dishes", "total_count", "truncated"})
+        for raw in _list(body["dishes"]):
+            row = _dict(raw)
+            _exact(
+                row,
+                {
+                    "dish_id",
+                    "name",
+                    "current_unit_net_cents",
+                    "price_display",
+                    "allergens",
+                    "allergen_labels",
+                    "active",
+                },
+            )
+            _uuid4(row["dish_id"])
+            _str(row["name"])
+            _nonnegative_int(row["current_unit_net_cents"])
+            _str(row["price_display"])
+            for code in _list(row["allergens"]):
+                _str(code)
+            for label in _list(row["allergen_labels"]):
+                _str(label)
+            _bool(row["active"])
+        _nonnegative_int(body["total_count"])
+        _bool(body["truncated"])
+        return body
+
+    def catalog_dish_detail(self, dish_id: str) -> dict[str, object] | None:
+        try:
+            body = self.get(
+                f"/office/v1/catalog/dishes/{quote(dish_id, safe='')}"
+            )
+        except RemoteCoreError as exc:
+            if exc.status == 404:
+                return None
+            raise
+        _exact(
+            body,
+            {
+                "dish_id",
+                "name",
+                "current_unit_net_cents",
+                "price_display",
+                "allergens",
+                "allergen_labels",
+                "active",
+                "description",
+                "composition",
+                "notes",
+                "created_at",
+                "updated_at",
+                "price_history",
+            },
+        )
+        if _uuid4(body["dish_id"]) != dish_id:
+            _bad_response()
+        for raw in _list(body["price_history"]):
+            entry = _dict(raw)
+            _exact(
+                entry,
+                {
+                    "entry_id",
+                    "dish_id",
+                    "old_unit_net_cents",
+                    "new_unit_net_cents",
+                    "changed_at",
+                    "changed_by",
+                    "effective_from",
+                },
+            )
+        return body
+
+    def list_allergen_codes(self) -> dict[str, object]:
+        body = self.get("/office/v1/catalog/allergen-codes")
+        _exact(body, {"allergen_codes"})
+        for raw in _list(body["allergen_codes"]):
+            row = _dict(raw)
+            _exact(row, {"code", "label"})
+            _str(row["code"])
+            _str(row["label"])
+        return body
+
     def contact_detail(self, contact_key: str) -> dict[str, object] | None:
         try:
             body = self.get(
