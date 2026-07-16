@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Literal
 from zoneinfo import ZoneInfo
 
+from catering_system.domain.catalog import AllergenCode, validate_allergen_codes
 from catering_system.domain.inquiry import PlanningMode, validate_planning_mode
 from catering_system.domain.order_payment_reminder import (
     PaymentMethod,
@@ -104,6 +105,10 @@ class OfferPosition:
     quantity: Decimal | None = None
     quantity_mode: PositionQuantityMode | None = None
     unit_label: str | None = None
+    catalog_item_id: str | None = None
+    allergens: tuple[AllergenCode, ...] | None = None
+    vegan: bool | None = None
+    vegetarian: bool | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.position_id, "position_id")
@@ -131,6 +136,12 @@ class OfferPosition:
                 raise ValueError("surcharge requires related_position_id")
         elif self.related_position_id is not None:
             raise ValueError("related_position_id is only valid for surcharges")
+        if self.catalog_item_id is not None:
+            _require_text(self.catalog_item_id, "catalog_item_id")
+        if self.allergens is not None:
+            object.__setattr__(
+                self, "allergens", validate_allergen_codes(self.allergens)
+            )
 
 
 @dataclass(frozen=True)

@@ -273,6 +273,24 @@ def test_float_money_values_are_rejected() -> None:
         validate_offer_snapshot(body)
 
 
+def test_v2_empty_allergens_list_is_valid() -> None:
+    from catering_system.domain.offer_snapshot import SCHEMA_VERSION_V2, compute_snapshot_hash
+    from catering_system.services.offer_snapshot_validation import validate_offer_snapshot
+
+    dish_id = "11111111-1111-4111-8111-111111111111"
+    position = _position()
+    position["catalog_item_id"] = dish_id
+    position["allergens"] = []
+    variant = _variant(positions=[position])
+    body = _snapshot_body(variants=[variant])
+    body["schema_version"] = SCHEMA_VERSION_V2
+    body["snapshot_hash"] = compute_snapshot_hash(body)
+    snapshot = validate_offer_snapshot(body)
+    assert snapshot.schema_version == SCHEMA_VERSION_V2
+    assert snapshot.variants[0].positions[0].allergens == ()
+    assert snapshot.variants[0].positions[0].catalog_item_id == dish_id
+
+
 def test_domain_module_has_no_repository_or_api_imports() -> None:
     from pathlib import Path
 

@@ -1,9 +1,9 @@
 # 6D-2 — Catalog Write Model (design pack)
 
-Status: **implemented** — pending commit `Add catalog editing and price history`  
+Status: **implemented** — `d91c84c Add catalog editing and price history`  
 Prerequisite: `CATALOG_SCOPE_V1.md` (6D-0), **6D-1 implemented** (`c8662ad Add catalog read model`)  
 Scope owner: Catalog Stammdaten — **Büro write surface + PriceHistory append**  
-Next slice: **6D-3 Snapshot V2** (allergens copied to OfferPosition at prepare-offer)
+Next slice: **6D-3 Snapshot V2** — see `CATALOG_SNAPSHOT_V2_6D3.md`
 
 ---
 

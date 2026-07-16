@@ -7,12 +7,14 @@ for ``derive_offer_state()`` on read.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import nullcontext
 from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
+from catering_system.domain.catalog import validate_allergen_codes
 from catering_system.domain.inquiry import validate_planning_mode
 from catering_system.domain.offer import (
     ACCEPTANCE_CHANNELS,
@@ -262,6 +264,24 @@ def _migration_5_offer_variant_and_position_print_fields(
             )
 
 
+def _migration_6_offer_position_catalog_snapshot_fields(
+    connection: sqlite3.Connection,
+) -> None:
+    position_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(offer_positions)")
+    }
+    for name, column_type in (
+        ("catalog_item_id", "TEXT"),
+        ("allergens_json", "TEXT"),
+        ("vegan", "INTEGER"),
+        ("vegetarian", "INTEGER"),
+    ):
+        if name not in position_columns:
+            connection.execute(
+                f"ALTER TABLE offer_positions ADD COLUMN {name} {column_type}"
+            )
+
+
 _MIGRATIONS = (
     (1, "create_offer_tables", _migration_1_create_tables),
     (2, "unique_source_inquiry", _migration_2_unique_source_inquiry),
@@ -276,7 +296,39 @@ _MIGRATIONS = (
         "offer_variant_and_position_print_fields",
         _migration_5_offer_variant_and_position_print_fields,
     ),
+    (
+        6,
+        "offer_position_catalog_snapshot_fields",
+        _migration_6_offer_position_catalog_snapshot_fields,
+    ),
 )
+
+
+def _optional_bool_storage(value: bool | None) -> int | None:
+    if value is None:
+        return None
+    return 1 if value else 0
+
+
+def _stored_bool(value: int | None) -> bool | None:
+    if value is None:
+        return None
+    return bool(value)
+
+
+def _allergens_storage(value: tuple[str, ...] | None) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(list(value), ensure_ascii=False)
+
+
+def _optional_allergens(value: str | None) -> tuple[str, ...] | None:
+    if value is None:
+        return None
+    parsed = json.loads(value)
+    if not isinstance(parsed, list):
+        raise ValueError("allergens_json must decode to a list")
+    return validate_allergen_codes([str(item) for item in parsed])
 
 
 def _dt(value: str) -> datetime:
@@ -527,7 +579,7 @@ class SQLiteOfferRepository:
             for position_order, position in enumerate(variant.positions):
                 self._conn.execute(
                     """
-                    INSERT INTO offer_positions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO offer_positions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         position.position_id,
@@ -548,6 +600,10 @@ class SQLiteOfferRepository:
                         _quantity_storage(position.quantity),
                         position.quantity_mode,
                         position.unit_label,
+                        position.catalog_item_id,
+                        _allergens_storage(position.allergens),
+                        _optional_bool_storage(position.vegan),
+                        _optional_bool_storage(position.vegetarian),
                     ),
                 )
 
@@ -710,7 +766,8 @@ class SQLiteOfferRepository:
             SELECT p.variant_id, p.position_id, p.kind, p.name, p.unit_net_cents,
                    p.net_total_cents, p.vat_rate_percent, p.vat_amount_cents,
                    p.gross_total_cents, p.related_position_id, p.description,
-                   p.composition, p.notes, p.quantity, p.quantity_mode, p.unit_label
+                   p.composition, p.notes, p.quantity, p.quantity_mode, p.unit_label,
+                   p.catalog_item_id, p.allergens_json, p.vegan, p.vegetarian
             FROM offer_positions p
             JOIN offer_variants v ON v.variant_id = p.variant_id
             WHERE v.offer_id = ?
@@ -737,6 +794,10 @@ class SQLiteOfferRepository:
                     quantity=_optional_quantity(row[13]),
                     quantity_mode=_position_quantity_mode(row[14]),
                     unit_label=row[15],
+                    catalog_item_id=row[16],
+                    allergens=_optional_allergens(row[17]),
+                    vegan=_stored_bool(row[18]),
+                    vegetarian=_stored_bool(row[19]),
                 )
             )
         return {

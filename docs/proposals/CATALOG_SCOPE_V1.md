@@ -405,12 +405,14 @@ See: `CATALOG_READ_MODEL_6D1.md`.
 
 See: `CATALOG_WRITE_MODEL_6D2.md`.
 
-### Phase 3 — Snapshot extension (6D-3 or part of 6D-2)
+### Phase 3 — Snapshot extension (6D-3)
 
-- Extend `offer_snapshot_v2` position shape with allergen/dietary fields.
-- Persist `catalog_item_id` + new nullable fields on `OfferPosition` (SQLite migration, **no backfill**).
-- `_map_position()` copies all snapshot fields.
-- Legacy positions: `allergens = null`, print unchanged.
+- Extend `offer_snapshot_v2` position shape with allergen fields + persist `catalog_item_id`.
+- `_map_position()` copies snapshot fields; nullable OfferPosition columns (no backfill).
+- Configurator Catalog adapter (6D-3a) with `items.json` fallback; remove fallback in 6D-3b.
+- Legacy positions: `allergens = null` → *nicht bekannt*; print unchanged until 6E.
+
+See: `CATALOG_SNAPSHOT_V2_6D3.md`.
 
 ### Phase 4 — Print enrichment (optional, after Catalog stable)
 
@@ -497,7 +499,7 @@ Menu changes for a customer require a **new Angebot** (new OfferVersion via conf
 |---|---|
 | **6D-1** Catalog Read Model | This scope doc + `CATALOG_READ_MODEL_6D1.md` |
 | **6D-2** Catalog Editing | 6D-1 + §4.3 frozen (Nur Büro) |
-| **6D-3** Snapshot V2 + OfferPosition persist | 6D-2 + configurator reads Catalog |
+| **6D-3** Snapshot V2 + OfferPosition persist | 6D-2 — see `CATALOG_SNAPSHOT_V2_6D3.md` |
 | **6E** Buffetschilder allergen badges | Phase 3 snapshotted allergens on OfferPosition |
 | **6F** Küchenzettel production groups | Phase 3 snapshotted production_group |
 

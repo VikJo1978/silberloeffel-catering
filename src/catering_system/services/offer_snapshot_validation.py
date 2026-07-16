@@ -7,6 +7,7 @@ import uuid
 from datetime import date, datetime, timedelta
 from typing import Literal, cast
 
+from catering_system.domain.catalog import validate_allergen_codes
 from catering_system.domain.inquiry import validate_planning_mode
 from catering_system.domain.offer_snapshot import (
     CURRENCY,
@@ -19,6 +20,7 @@ from catering_system.domain.offer_snapshot import (
     MIN_POSITIONS_PER_VARIANT,
     MIN_VARIANTS,
     SCHEMA_VERSION,
+    SCHEMA_VERSION_V2,
     SOURCE,
     OfferSnapshotCalculator,
     OfferSnapshotCustomerText,
@@ -27,6 +29,7 @@ from catering_system.domain.offer_snapshot import (
     OfferSnapshotPosition,
     OfferSnapshotRecipient,
     OfferSnapshotV1,
+    OfferSnapshotV2,
     OfferSnapshotVariant,
     OfferSnapshotVariantTotals,
     SnapshotPositionKind,
@@ -95,6 +98,7 @@ _POSITION_KEYS = frozenset(
         "related_position_id",
     }
 )
+_POSITION_KEYS_V2 = _POSITION_KEYS | frozenset({"allergens", "vegan", "vegetarian"})
 _TOTALS_KEYS = frozenset(
     {
         "net_cents",
@@ -107,7 +111,7 @@ _TOTALS_KEYS = frozenset(
 )
 
 
-def validate_offer_snapshot_bytes(raw: bytes) -> OfferSnapshotV1:
+def validate_offer_snapshot_bytes(raw: bytes) -> OfferSnapshotV1 | OfferSnapshotV2:
     """Parse UTF-8 JSON bytes and validate an OfferSnapshot V1 envelope."""
     if len(raw) > MAX_PAYLOAD_BYTES:
         raise ValueError("snapshot payload exceeds size limit")
@@ -122,12 +126,13 @@ def validate_offer_snapshot_bytes(raw: bytes) -> OfferSnapshotV1:
     return validate_offer_snapshot(payload)
 
 
-def validate_offer_snapshot(payload: dict[str, object]) -> OfferSnapshotV1:
-    """Validate a parsed OfferSnapshot V1 envelope and verify its content hash."""
+def validate_offer_snapshot(payload: dict[str, object]) -> OfferSnapshotV1 | OfferSnapshotV2:
+    """Validate a parsed OfferSnapshot envelope and verify its content hash."""
     _reject_unknown_keys(payload, _ENVELOPE_KEYS, "envelope")
     schema_version = _require_exact_str(payload.get("schema_version"), "schema_version")
-    if schema_version != SCHEMA_VERSION:
+    if schema_version not in (SCHEMA_VERSION, SCHEMA_VERSION_V2):
         raise ValueError("invalid schema_version")
+    v2 = schema_version == SCHEMA_VERSION_V2
     source = _require_exact_str(payload.get("source"), "source")
     if source != SOURCE:
         raise ValueError("invalid source")
@@ -153,7 +158,7 @@ def validate_offer_snapshot(payload: dict[str, object]) -> OfferSnapshotV1:
         _require_object(payload.get("calculator"), "calculator")
     )
     variants = _parse_variants(
-        _require_list(payload.get("variants"), "variants"), event
+        _require_list(payload.get("variants"), "variants"), event, v2=v2
     )
     source_draft_id = _optional_short_text(
         payload.get("source_draft_id"), "source_draft_id"
@@ -163,7 +168,7 @@ def validate_offer_snapshot(payload: dict[str, object]) -> OfferSnapshotV1:
     if snapshot_hash != computed_hash:
         raise ValueError("snapshot_hash mismatch")
 
-    return OfferSnapshotV1(
+    envelope = dict(
         schema_version=schema_version,
         source=source,
         source_draft_id=source_draft_id,
@@ -180,6 +185,9 @@ def validate_offer_snapshot(payload: dict[str, object]) -> OfferSnapshotV1:
         calculator=calculator,
         variants=variants,
     )
+    if v2:
+        return OfferSnapshotV2(**envelope)
+    return OfferSnapshotV1(**envelope)
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -403,7 +411,7 @@ def _parse_calculator(payload: dict[str, object]) -> OfferSnapshotCalculator:
 
 
 def _parse_variants(
-    items: list[object], event: OfferSnapshotEvent
+    items: list[object], event: OfferSnapshotEvent, *, v2: bool = False
 ) -> tuple[OfferSnapshotVariant, ...]:
     if not MIN_VARIANTS <= len(items) <= MAX_VARIANTS:
         raise ValueError("variant count exceeds limit")
@@ -412,7 +420,7 @@ def _parse_variants(
     for index, item in enumerate(items):
         if not isinstance(item, dict):
             raise ValueError("variant must be an object")
-        variant = _parse_variant(item, event, label=f"variants[{index}]")
+        variant = _parse_variant(item, event, label=f"variants[{index}]", v2=v2)
         if variant.variant_id in variant_ids:
             raise ValueError("variant_id must be unique within snapshot")
         variant_ids.add(variant.variant_id)
@@ -421,13 +429,18 @@ def _parse_variants(
 
 
 def _parse_variant(
-    payload: dict[str, object], event: OfferSnapshotEvent, *, label: str
+    payload: dict[str, object],
+    event: OfferSnapshotEvent,
+    *,
+    label: str,
+    v2: bool = False,
 ) -> OfferSnapshotVariant:
     _reject_unknown_keys(payload, _VARIANT_KEYS, label)
     positions = _parse_positions(
         _require_list(payload.get("positions"), f"{label}.positions"),
         event,
         label=f"{label}.positions",
+        v2=v2,
     )
     return OfferSnapshotVariant(
         variant_id=_require_uuid(payload.get("variant_id"), f"{label}.variant_id"),
@@ -465,7 +478,11 @@ def _parse_totals(payload: dict[str, object], label: str) -> OfferSnapshotVarian
 
 
 def _parse_positions(
-    items: list[object], event: OfferSnapshotEvent, *, label: str
+    items: list[object],
+    event: OfferSnapshotEvent,
+    *,
+    label: str,
+    v2: bool = False,
 ) -> tuple[OfferSnapshotPosition, ...]:
     if not MIN_POSITIONS_PER_VARIANT <= len(items) <= MAX_POSITIONS_PER_VARIANT:
         raise ValueError("position count exceeds limit")
@@ -474,7 +491,7 @@ def _parse_positions(
     for index, item in enumerate(items):
         if not isinstance(item, dict):
             raise ValueError("position must be an object")
-        position = _parse_position(item, label=f"{label}[{index}]")
+        position = _parse_position(item, label=f"{label}[{index}]", v2=v2)
         if position.position_id in position_ids:
             raise ValueError("position_id must be unique within variant")
         position_ids.add(position.position_id)
@@ -500,8 +517,10 @@ def _parse_positions(
     return tuple(positions)
 
 
-def _parse_position(payload: dict[str, object], *, label: str) -> OfferSnapshotPosition:
-    _reject_unknown_keys(payload, _POSITION_KEYS, label)
+def _parse_position(
+    payload: dict[str, object], *, label: str, v2: bool = False
+) -> OfferSnapshotPosition:
+    _reject_unknown_keys(payload, _POSITION_KEYS_V2 if v2 else _POSITION_KEYS, label)
     kind_value = _require_exact_str(payload.get("kind"), f"{label}.kind")
     if kind_value not in _POSITION_KINDS:
         raise ValueError("invalid position kind")
@@ -520,10 +539,30 @@ def _parse_position(payload: dict[str, object], *, label: str) -> OfferSnapshotP
         related_position_id = _require_uuid(related_raw, f"{label}.related_position_id")
     catalog_raw = payload.get("catalog_item_id")
     catalog_item_id: str | None
-    if catalog_raw is None:
-        catalog_item_id = None
+    allergens: tuple[str, ...] | None = None
+    vegan: bool | None = None
+    vegetarian: bool | None = None
+    if v2 and kind == "catalog":
+        if catalog_raw is None:
+            raise ValueError("catalog position requires catalog_item_id")
+        catalog_item_id = _require_uuid(catalog_raw, f"{label}.catalog_item_id")
+        allergens_raw = payload.get("allergens")
+        if allergens_raw is None:
+            raise ValueError("catalog position requires allergens")
+        allergens = _parse_allergens(allergens_raw, f"{label}.allergens")
+        vegan = _optional_bool(payload.get("vegan"), f"{label}.vegan")
+        vegetarian = _optional_bool(payload.get("vegetarian"), f"{label}.vegetarian")
     else:
-        catalog_item_id = _optional_short_text(catalog_raw, f"{label}.catalog_item_id")
+        if catalog_raw is None:
+            catalog_item_id = None
+        else:
+            catalog_item_id = _optional_short_text(catalog_raw, f"{label}.catalog_item_id")
+        if v2:
+            allergens_raw = payload.get("allergens")
+            if allergens_raw is not None:
+                allergens = _parse_allergens(allergens_raw, f"{label}.allergens")
+            vegan = _optional_bool(payload.get("vegan"), f"{label}.vegan")
+            vegetarian = _optional_bool(payload.get("vegetarian"), f"{label}.vegetarian")
     return OfferSnapshotPosition(
         position_id=_require_uuid(payload.get("position_id"), f"{label}.position_id"),
         kind=kind,
@@ -557,4 +596,21 @@ def _parse_position(payload: dict[str, object], *, label: str) -> OfferSnapshotP
         ),
         notes=_optional_long_text(payload.get("notes"), f"{label}.notes"),
         related_position_id=related_position_id,
+        allergens=allergens,
+        vegan=vegan,
+        vegetarian=vegetarian,
     )
+
+
+def _parse_allergens(value: object, field: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"{field} must be an array")
+    return validate_allergen_codes([str(item) for item in value])
+
+
+def _optional_bool(value: object, field: str) -> bool | None:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise ValueError(f"{field} must be a boolean")
+    return value

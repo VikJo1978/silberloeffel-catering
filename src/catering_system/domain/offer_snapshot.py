@@ -13,6 +13,7 @@ from catering_system.domain.inquiry import PlanningMode
 from catering_system.domain.order_payment_reminder import PaymentMethod
 
 SCHEMA_VERSION = "offer_snapshot_v1"
+SCHEMA_VERSION_V2 = "offer_snapshot_v2"
 SOURCE = "fingerfood-configurator-backend"
 CURRENCY = "EUR"
 
@@ -92,6 +93,9 @@ class OfferSnapshotPosition:
     composition: str | None = None
     notes: str | None = None
     related_position_id: str | None = None
+    allergens: tuple[str, ...] | None = None
+    vegan: bool | None = None
+    vegetarian: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -114,8 +118,8 @@ class OfferSnapshotVariant:
 
 
 @dataclass(frozen=True)
-class OfferSnapshotV1:
-    """Validated OfferSnapshot V1 envelope ready for OfferVersion mapping."""
+class OfferSnapshotEnvelope:
+    """Shared validated OfferSnapshot envelope (V1 or V2)."""
 
     schema_version: str
     source: str
@@ -132,6 +136,16 @@ class OfferSnapshotV1:
     calculator: OfferSnapshotCalculator
     variants: tuple[OfferSnapshotVariant, ...]
     source_draft_id: str | None = None
+
+
+@dataclass(frozen=True)
+class OfferSnapshotV1(OfferSnapshotEnvelope):
+    """Validated OfferSnapshot V1 envelope ready for OfferVersion mapping."""
+
+
+@dataclass(frozen=True)
+class OfferSnapshotV2(OfferSnapshotEnvelope):
+    """Validated OfferSnapshot V2 envelope with catalog allergen facts."""
 
 
 def canonical_snapshot_json(value: object) -> str:
@@ -194,9 +208,11 @@ __all__ = [
     "OfferSnapshotPosition",
     "OfferSnapshotRecipient",
     "OfferSnapshotV1",
+    "OfferSnapshotV2",
     "OfferSnapshotVariant",
     "OfferSnapshotVariantTotals",
     "SCHEMA_VERSION",
+    "SCHEMA_VERSION_V2",
     "SOURCE",
     "canonical_snapshot_json",
     "compute_snapshot_hash",

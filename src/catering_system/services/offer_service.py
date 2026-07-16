@@ -28,6 +28,7 @@ from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.offer_snapshot import (
     OfferSnapshotPosition,
     OfferSnapshotV1,
+    OfferSnapshotV2,
     OfferSnapshotVariant,
 )
 from catering_system.repositories.inquiry_repository import InquiryRepository
@@ -61,12 +62,12 @@ class OfferService:
     def prepare_offer_version(
         self,
         inquiry_id: str,
-        snapshot: dict[str, object] | OfferSnapshotV1,
+        snapshot: dict[str, object] | OfferSnapshotV1 | OfferSnapshotV2,
     ) -> Offer:
         """Validate a snapshot and persist Offer + OfferVersion 1 for one Inquiry."""
         validated = (
             snapshot
-            if isinstance(snapshot, OfferSnapshotV1)
+            if isinstance(snapshot, (OfferSnapshotV1, OfferSnapshotV2))
             else validate_offer_snapshot(snapshot)
         )
         if validated.inquiry_id != inquiry_id:
@@ -336,7 +337,7 @@ class OfferService:
         )
 
 
-def _build_offer_from_snapshot(snapshot: OfferSnapshotV1) -> Offer:
+def _build_offer_from_snapshot(snapshot: OfferSnapshotV1 | OfferSnapshotV2) -> Offer:
     offer_id = str(uuid.uuid4())
     offer_version_id = str(uuid.uuid4())
     created_at = snapshot.snapshot_created_at
@@ -396,4 +397,8 @@ def _map_position(position: OfferSnapshotPosition) -> OfferPosition:
         quantity=Decimal(position.quantity),
         quantity_mode=position.quantity_mode,
         unit_label=position.unit_label,
+        catalog_item_id=position.catalog_item_id,
+        allergens=position.allergens,
+        vegan=position.vegan,
+        vegetarian=position.vegetarian,
     )

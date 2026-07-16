@@ -423,6 +423,7 @@ def test_offer_component_migrations_are_recorded_once(tmp_path: Path) -> None:
         (3, "offer_immutability_triggers"),
         (4, "offer_version_event_and_payment_facts"),
         (5, "offer_variant_and_position_print_fields"),
+        (6, "offer_position_catalog_snapshot_fields"),
     ]
     conn = sqlite3.connect(db)
     apply_migrations(conn, "offers", _MIGRATIONS)
@@ -430,4 +431,4 @@ def test_offer_component_migrations_are_recorded_once(tmp_path: Path) -> None:
         "SELECT COUNT(*) FROM schema_migrations WHERE component = 'offers'"
     ).fetchone()
     conn.close()
-    assert rows_after == (5,)
+    assert rows_after == (6,)
