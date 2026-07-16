@@ -1176,6 +1176,8 @@ class RemoteCoreClient:
                             "unit_net_cents",
                             "net_total_cents",
                             "catalog_item_id",
+                            "description",
+                            "composition",
                             "allergens",
                             "allergen_labels",
                             "allergens_unknown",
@@ -1188,6 +1190,10 @@ class RemoteCoreClient:
                     _nonnegative_int(position["net_total_cents"])
                     if position["catalog_item_id"] is not None:
                         _str(position["catalog_item_id"])
+                    if position["description"] is not None:
+                        _str(position["description"])
+                    if position["composition"] is not None:
+                        _str(position["composition"])
                     allergens = position["allergens"]
                     if allergens is not None:
                         for code in _list(allergens):

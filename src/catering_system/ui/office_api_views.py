@@ -170,6 +170,8 @@ def _position_detail(position: OfferPosition) -> dict[str, object]:
         "unit_net_cents": position.unit_net_cents,
         "net_total_cents": position.net_total_cents,
         "catalog_item_id": position.catalog_item_id,
+        "description": position.description,
+        "composition": position.composition,
     }
     if position.allergens is None:
         row["allergens"] = None

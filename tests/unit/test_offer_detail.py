@@ -177,12 +177,16 @@ def test_offer_detail_exposes_v2_allergens() -> None:
                 gross_total_cents=12840,
                 catalog_item_id="11111111-1111-4111-8111-111111111111",
                 allergens=("A", "G"),
+                description="description_v1",
+                composition="composition_v1",
             ),
         ),
     )
     detail = offer_detail(offer, today=_TODAY)
     position = detail["versions"][0]["variants"][0]["positions"][0]
     assert position["unit_net_cents"] == 1200
+    assert position["description"] == "description_v1"
+    assert position["composition"] == "composition_v1"
     assert position["allergens"] == ["A", "G"]
     assert position["allergens_unknown"] is False
     assert "Gluten" in position["allergen_labels"]

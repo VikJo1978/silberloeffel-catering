@@ -1661,6 +1661,8 @@ def test_prepare_offer_v2_persists_allergens(api) -> None:
     position = detail["versions"][0]["variants"][0]["positions"][0]
     assert position["name"] == "Pasta"
     assert position["unit_net_cents"] == 1200
+    assert position["description"] == "Catalog description"
+    assert position["composition"] == "Catalog composition"
     assert position["allergens"] == ["A", "G"]
     assert position["allergens_unknown"] is False
 
