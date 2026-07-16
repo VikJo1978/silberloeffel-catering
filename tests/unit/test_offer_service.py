@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 
 import pytest
 
@@ -296,6 +297,13 @@ def test_prepare_offer_version_happy_path() -> None:
     assert position.position_id == _POSITION_ID
     assert position.name == "Fingerfood Paket"
     assert position.unit_net_cents == 290
+    assert position.description == "Frozen description"
+    assert position.composition == "Frozen composition"
+    assert position.notes == "Frozen customization"
+    assert position.quantity == Decimal("80")
+    assert position.quantity_mode == "total"
+    assert position.unit_label == "Stück"
+    assert version.variants[0].description == "Customer-visible alternative"
     stored = offers.get(offer.offer_id)
     assert stored == offer
     assert offers.get_by_source_inquiry_id(_INQUIRY_ID) == offer

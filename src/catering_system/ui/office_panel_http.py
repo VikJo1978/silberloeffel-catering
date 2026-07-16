@@ -31,10 +31,16 @@ from catering_system.ui.office_panel import (
     fetch_rueckruf_count,
     parse_proposal_payload,
     render_print_sheet,
+    render_buffet_cards,
     render_proposal_preview,
     render_proposal_preview_form,
     render_rueckruf,
 )
+from catering_system.services.order_print_projection_service import (
+    OrderPrintProjectionService,
+    PrintProjectionNotFoundError,
+)
+from catering_system.services.buffet_cards_service import BuffetCardsService
 from catering_system.ui.remote_core_client import RemoteCoreError
 
 if TYPE_CHECKING:
@@ -351,23 +357,62 @@ def make_office_panel_handler(
                 self._html(page) if page else self.send_error(404)
             elif len(parts) == 3 and parts[0] == "order" and parts[2] == "print":
                 self._print_sheet(parts[1], parsed.query)
+            elif len(parts) == 3 and parts[0] == "order" and parts[2] == "buffet-cards":
+                self._buffet_cards(parts[1], parsed.query)
             else:
                 self.send_error(404)
 
+        def _resolve_print_projection(self, order_id: str, version_id: str):
+            if remote is not None:
+                return remote.print_data(order_id, version_id)
+            return OrderPrintProjectionService(
+                order_repo,
+                panel._offers,
+            ).resolve(order_id, version_id, intent="preview")
+
+        def _resolve_buffet_cards_view(self, order_id: str, version_id: str):
+            if remote is not None:
+                return remote.buffet_cards_data(order_id, version_id)
+            return BuffetCardsService(
+                order_repo,
+                OrderPrintProjectionService(order_repo, panel._offers),
+            ).resolve(order_id, version_id)
+
         def _print_sheet(self, order_id: str, query: str) -> None:
             version_id = parse_qs(query).get("version", [""])[0]
-            if remote is not None and version_id:
-                data = remote.print_data(order_id, version_id)
-                order, version = data if data is not None else (None, None)
-            else:
-                order = order_repo.get_order(order_id)
-                version = (
-                    order_repo.get_order_version(version_id) if version_id else None
-                )
-            if order is None or version is None or version.order_id != order_id:
+            if not version_id:
                 self.send_error(404)
                 return
-            self._html(render_print_sheet(order, version))
+            try:
+                projection = self._resolve_print_projection(order_id, version_id)
+            except PrintProjectionNotFoundError:
+                self.send_error(404)
+                return
+            if projection is None:
+                self.send_error(404)
+                return
+            self._html(render_print_sheet(projection))
+
+        def _buffet_cards(self, order_id: str, query: str) -> None:
+            version_id = parse_qs(query).get("version", [""])[0]
+            if not version_id:
+                self.send_error(404)
+                return
+            try:
+                view = self._resolve_buffet_cards_view(order_id, version_id)
+            except PrintProjectionNotFoundError:
+                self.send_error(404)
+                return
+            if view is None:
+                self.send_error(404)
+                return
+            self._html(
+                render_buffet_cards(
+                    view.projection,
+                    view.cards,
+                    effective_version_number=view.effective_version_number,
+                )
+            )
 
         def do_POST(self) -> None:  # noqa: N802
             if not self._authorized():
@@ -534,6 +579,7 @@ def create_office_panel_server(
             command_executor=command_executor,
             payment_reminder_repo=payment_reminder_repo,
             offer_repo=offer_repo,
+            catalog_repo=catalog_repo,
             ui_version=ui_version,
         ),
     )

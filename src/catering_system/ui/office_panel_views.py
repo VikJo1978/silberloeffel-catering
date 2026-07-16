@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import html
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 
 from catering_system.domain.inquiry import CRM_PIPELINE, PLANNING_MODES
-from catering_system.domain.order import Order, OrderVersion
+from catering_system.services.buffet_cards_service import BuffetCard, buffet_card_body
+from catering_system.services.order_print_projection_service import OrderPrintProjection
 from catering_system.ui.office_panel_shell import (
     OFFICE_PANEL_ICON_SPRITE,
     OFFICE_PANEL_STYLE,
@@ -220,33 +221,165 @@ def _crm_stage_select(selected: str) -> str:
     return f'<select name="crm_stage">{opts}</select>'
 
 
-def render_print_sheet(order: Order, version: OrderVersion) -> str:
-    """Kitchen order sheet — read-only printable rendering of one version (pack §4)."""
+def _format_print_date(value: date) -> str:
+    return value.strftime("%d.%m.%Y")
+
+
+def _render_menu_section(projection: OrderPrintProjection) -> str:
+    positions = projection.commercial.positions
+    if not positions:
+        return '<p class="menu-empty">Kein Menü hinterlegt</p>'
+    blocks: list[str] = []
+    for line in positions:
+        detail = line.description or line.composition
+        detail_html = (
+            f'<p class="menu-detail">{_e(detail)}</p>' if detail else ""
+        )
+        quantity_html = (
+            f'<p class="menu-qty">Menge: {_e(line.quantity_display)}</p>'
+            if line.quantity_display
+            else ""
+        )
+        blocks.append(
+            f'<div class="menu-item"><p class="menu-name">• {_e(line.name)}</p>'
+            f"{detail_html}{quantity_html}</div>"
+        )
+    return "".join(blocks)
+
+
+def render_print_sheet(projection: OrderPrintProjection) -> str:
+    """Kitchen order sheet — read-only printable rendering from OrderPrintProjection."""
+    event = projection.event
     guests = (
-        str(version.guest_count_estimate)
-        if version.guest_count_estimate is not None
+        str(event.guest_count_estimate)
+        if event.guest_count_estimate is not None
         else "–"
     )
     cancelled_banner = (
-        '<p style="color:#a00;font-size:2rem;border:4px solid #a00;padding:0.5rem">STORNIERT</p>'
-        if order.cancelled_at is not None
+        '<p class="cancelled">STORNIERT</p>'
+        if event.order_cancelled_at is not None
         else ""
     )
+    watermark = projection.flags.watermark
+    watermark_html = (
+        f'<p class="watermark">{_e(watermark)}</p>' if watermark is not None else ""
+    )
+    menu_html = _render_menu_section(projection)
     return f"""<!DOCTYPE html>
 <html lang="de"><head><meta charset="utf-8"><title>Küchenzettel</title>
-<style>body{{font-family:sans-serif;font-size:1.6rem;margin:2rem}}
-td,th{{border:1px solid #000;padding:0.6rem 1rem;text-align:left}}
-table{{border-collapse:collapse}}h1{{font-size:1.8rem}}</style></head><body>
+<style>
+body{{font-family:monospace;font-size:1.25rem;margin:2rem;max-width:40rem;line-height:1.5}}
+hr{{border:none;border-top:2px solid #000;margin:1.25rem 0}}
+.brand{{font-size:1.5rem;font-weight:bold;letter-spacing:0.08em}}
+.label{{margin:0.75rem 0 0.15rem;font-weight:bold}}
+.value{{margin:0 0 0.5rem}}
+.menu-title{{font-weight:bold;margin:0.5rem 0}}
+.menu-item{{margin:0.75rem 0 1rem}}
+.menu-name{{margin:0}}
+.menu-detail,.menu-qty{{margin:0.15rem 0 0 1.25rem}}
+.menu-empty{{margin:0.5rem 0;font-style:italic}}
+.stand{{margin-top:1rem}}
+.cancelled{{color:#a00;font-size:2rem;border:4px solid #a00;padding:0.5rem;text-align:center}}
+.watermark{{color:#666;font-size:2rem;border:3px dashed #666;padding:0.5rem;text-align:center;margin-bottom:1rem}}
+button{{font-size:1rem;margin-top:1.5rem;padding:0.5rem 1rem}}
+</style></head><body>
 {cancelled_banner}
-<h1>Küchenzettel — Version {version.version_number}</h1>
-<table>
-<tr><th>Datum</th><td>{_e(version.event_date.isoformat())}</td></tr>
-<tr><th>Zeitfenster</th><td>{_e(version.time_window_text)}</td></tr>
-<tr><th>Ort</th><td>{_e(version.location_text)}</td></tr>
-<tr><th>Gäste</th><td>{_e(guests)}</td></tr>
-<tr><th>Planungsmodus</th><td>{_e(version.planning_mode)}</td></tr>
-<tr><th>Auftrag</th><td>{_e(order.order_id)}</td></tr>
-<tr><th>Version erstellt</th><td>{_e(version.created_at.isoformat())}</td></tr>
-</table>
+{watermark_html}
+<p class="brand">SILBERLÖFFEL</p>
+<hr>
+<p class="label">Datum:</p>
+<p class="value">{_e(_format_print_date(event.event_date))}</p>
+<p class="label">Ort:</p>
+<p class="value">{_e(event.location_text)}</p>
+<p class="label">Gäste:</p>
+<p class="value">{_e(guests)}</p>
+<hr>
+<p class="menu-title">MENÜ</p>
+{menu_html}
+<hr>
+<p class="stand">Stand:<br>Version {event.version_number}</p>
+<p><button onclick="window.print()">Drucken</button></p>
+</body></html>"""
+
+
+def _buffet_card_html(card: BuffetCard, version_number: int) -> str:
+    body = buffet_card_body(card)
+    body_html = (
+        "".join(f"<p>{_e(line)}</p>" for line in body.splitlines() if line.strip())
+        if body
+        else ""
+    )
+    return (
+        '<section class="buffet-card">'
+        '<p class="brand">SILBERLÖFFEL</p>'
+        '<hr class="rule">'
+        f'<h2 class="dish">{_e(card.name)}</h2>'
+        f"{body_html}"
+        '<hr class="rule">'
+        f'<p class="stand">Version {version_number}</p>'
+        "</section>"
+    )
+
+
+def _buffet_banner_html(
+    projection: OrderPrintProjection,
+    *,
+    effective_version_number: int | None,
+) -> str:
+    watermark = projection.flags.watermark
+    if watermark == "ENTWURF":
+        return (
+            '<div class="buffet-banner">'
+            '<p class="watermark">ENTWURF</p>'
+            f'<p class="stand-label">Stand Version {projection.event.version_number}</p>'
+            "</div>"
+        )
+    if watermark == "VERALTET" and effective_version_number is not None:
+        return (
+            '<div class="buffet-banner">'
+            '<p class="watermark stale">VERALTET</p>'
+            "<p class=\"stand-label\">Aktueller Küchenstand:<br>"
+            f"Version {effective_version_number}</p>"
+            "</div>"
+        )
+    return ""
+
+
+def render_buffet_cards(
+    projection: OrderPrintProjection,
+    cards: tuple[BuffetCard, ...] | list[BuffetCard],
+    *,
+    effective_version_number: int | None = None,
+) -> str:
+    """Guest buffet cards — one HTML page, one card per menu position."""
+    version_number = projection.event.version_number
+    banner_html = _buffet_banner_html(
+        projection,
+        effective_version_number=effective_version_number,
+    )
+    if not cards:
+        cards_html = '<p class="menu-empty">Kein Menü hinterlegt</p>'
+    else:
+        cards_html = "".join(_buffet_card_html(card, version_number) for card in cards)
+    return f"""<!DOCTYPE html>
+<html lang="de"><head><meta charset="utf-8"><title>Buffetschilder</title>
+<style>
+body{{font-family:serif;font-size:1.4rem;margin:2rem;color:#000;background:#fff}}
+.buffet-card{{border:2px solid #000;padding:2rem;margin:0 0 2rem;max-width:32rem}}
+.brand{{font-size:1.1rem;font-weight:bold;letter-spacing:0.12em;margin:0 0 1rem;text-align:center}}
+.rule{{border:none;border-top:2px solid #000;margin:1rem 0}}
+.dish{{font-size:1.8rem;font-weight:normal;margin:0.5rem 0 1rem;text-align:center}}
+.dish + p{{margin:0.25rem 0;text-align:center;line-height:1.4}}
+.stand{{margin:0;text-align:center;font-size:1rem}}
+.menu-empty{{font-style:italic;margin:2rem 0}}
+.buffet-banner{{margin-bottom:2rem;text-align:center}}
+.watermark{{font-size:1.6rem;font-weight:bold;border:3px dashed #666;padding:0.5rem;margin:0 0 0.5rem}}
+.watermark.stale{{border-style:solid}}
+.stand-label{{margin:0;font-size:1.1rem}}
+button{{font-family:sans-serif;font-size:1rem;margin-top:1rem;padding:0.5rem 1rem}}
+@media print{{button{{display:none}} .buffet-card{{page-break-inside:avoid}}}}
+</style></head><body>
+{banner_html}
+{cards_html}
 <p><button onclick="window.print()">Drucken</button></p>
 </body></html>"""

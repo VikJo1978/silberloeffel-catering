@@ -34,6 +34,14 @@ from catering_system.domain.order_payment_reminder import (
 )
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
 from catering_system.services.inquiry_service import validate_inquiry_source
+from catering_system.services.order_print_projection_service import (
+    OrderPrintProjection,
+    PrintCommercialBlock,
+    PrintEventBlock,
+    PrintFlagsBlock,
+    PrintPositionLine,
+)
+from catering_system.services.buffet_cards_service import BuffetCard, BuffetCardsView
 
 _MAX_RESPONSE_BYTES = 512 * 1024
 _READ_TIMEOUT_SECONDS = 3
@@ -409,6 +417,172 @@ def _version(data: Mapping[str, object]) -> OrderVersion:
         kitchen_print_confirmed_at=_optional_datetime(
             data.get("kitchen_print_confirmed_at")
         ),
+    )
+
+
+_PRINT_POSITION_KEYS = frozenset(
+    {
+        "position_id",
+        "kind",
+        "name",
+        "description",
+        "composition",
+        "notes",
+        "quantity_display",
+        "unit_label",
+    }
+)
+_PRINT_EVENT_KEYS = frozenset(
+    {
+        "order_id",
+        "order_version_id",
+        "version_number",
+        "event_date",
+        "time_window_text",
+        "location_text",
+        "guest_count_estimate",
+        "planning_mode",
+        "kitchen_print_confirmed_at",
+        "order_cancelled_at",
+        "is_candidate",
+        "is_effective",
+    }
+)
+_PRINT_COMMERCIAL_KEYS = frozenset(
+    {
+        "source",
+        "offer_id",
+        "offer_version_id",
+        "accepted_variant_id",
+        "variant_label",
+        "positions",
+    }
+)
+_PRINT_FLAGS_KEYS = frozenset(
+    {
+        "intent",
+        "is_preview",
+        "is_final_allowed",
+        "is_stale",
+        "watermark",
+    }
+)
+_PRINT_PROJECTION_KEYS = frozenset({"event", "commercial", "flags"})
+
+
+def _print_position_line(data: Mapping[str, object]) -> PrintPositionLine:
+    _exact(data, _PRINT_POSITION_KEYS)
+    return PrintPositionLine(
+        position_id=_uuid4(data["position_id"]),
+        kind=_str(data["kind"]),
+        name=_str(data["name"]),
+        description=_optional_str(data.get("description")),
+        composition=_optional_str(data.get("composition")),
+        notes=_optional_str(data.get("notes")),
+        quantity_display=_optional_str(data.get("quantity_display")),
+        unit_label=_optional_str(data.get("unit_label")),
+    )
+
+
+def _print_projection(data: Mapping[str, object]) -> OrderPrintProjection:
+    _exact(data, _PRINT_PROJECTION_KEYS)
+    event_data = _dict(data["event"])
+    _exact(event_data, _PRINT_EVENT_KEYS)
+    commercial_data = _dict(data["commercial"])
+    _exact(commercial_data, _PRINT_COMMERCIAL_KEYS)
+    flags_data = _dict(data["flags"])
+    _exact(flags_data, _PRINT_FLAGS_KEYS)
+    source = _str(commercial_data["source"])
+    if source not in {"offer_conversion", "none"}:
+        _bad_response()
+    intent = _str(flags_data["intent"])
+    if intent not in {"preview", "final"}:
+        _bad_response()
+    watermark = flags_data.get("watermark")
+    if watermark is not None and watermark not in {"ENTWURF", "VERALTET"}:
+        _bad_response()
+    try:
+        planning_mode = validate_planning_mode(_str(event_data["planning_mode"]))
+    except ValueError:
+        _bad_response()
+    return OrderPrintProjection(
+        event=PrintEventBlock(
+            order_id=_uuid4(event_data["order_id"]),
+            order_version_id=_uuid4(event_data["order_version_id"]),
+            version_number=_nonnegative_int(event_data["version_number"]),
+            event_date=_date(event_data["event_date"]),
+            time_window_text=_str(event_data["time_window_text"]),
+            location_text=_str(event_data["location_text"]),
+            guest_count_estimate=_guest_count(event_data.get("guest_count_estimate")),
+            planning_mode=planning_mode,
+            kitchen_print_confirmed_at=_optional_datetime(
+                event_data.get("kitchen_print_confirmed_at")
+            ),
+            order_cancelled_at=_optional_datetime(event_data.get("order_cancelled_at")),
+            is_candidate=_bool(event_data["is_candidate"]),
+            is_effective=_bool(event_data["is_effective"]),
+        ),
+        commercial=PrintCommercialBlock(
+            source=source,  # type: ignore[arg-type]
+            offer_id=_optional_uuid4(commercial_data.get("offer_id")),
+            offer_version_id=_optional_uuid4(commercial_data.get("offer_version_id")),
+            accepted_variant_id=_optional_uuid4(
+                commercial_data.get("accepted_variant_id")
+            ),
+            variant_label=_optional_str(commercial_data.get("variant_label")),
+            positions=tuple(
+                _print_position_line(_dict(item))
+                for item in _list(commercial_data["positions"])
+            ),
+        ),
+        flags=PrintFlagsBlock(
+            intent=intent,  # type: ignore[arg-type]
+            is_preview=_bool(flags_data["is_preview"]),
+            is_final_allowed=_bool(flags_data["is_final_allowed"]),
+            is_stale=_bool(flags_data["is_stale"]),
+            watermark=watermark,  # type: ignore[arg-type]
+        ),
+    )
+
+
+_BUFFET_CARD_KEYS = frozenset(
+    {
+        "position_id",
+        "name",
+        "description",
+        "composition",
+        "notes",
+    }
+)
+_BUFFET_CARDS_DATA_KEYS = frozenset(
+    {
+        "projection",
+        "cards",
+        "effective_version_number",
+    }
+)
+
+
+def _buffet_card(data: Mapping[str, object]) -> BuffetCard:
+    _exact(data, _BUFFET_CARD_KEYS)
+    return BuffetCard(
+        position_id=_uuid4(data["position_id"]),
+        name=_str(data["name"]),
+        description=_optional_str(data.get("description")),
+        composition=_optional_str(data.get("composition")),
+        notes=_optional_str(data.get("notes")),
+    )
+
+
+def _buffet_cards_view(data: Mapping[str, object]) -> BuffetCardsView:
+    _exact(data, _BUFFET_CARDS_DATA_KEYS)
+    effective = data.get("effective_version_number")
+    if effective is not None and not isinstance(effective, int):
+        _bad_response()
+    return BuffetCardsView(
+        projection=_print_projection(_dict(data["projection"])),
+        cards=tuple(_buffet_card(_dict(item)) for item in _list(data["cards"])),
+        effective_version_number=effective,
     )
 
 
@@ -1495,7 +1669,7 @@ class RemoteCoreClient:
 
     def print_data(
         self, order_id: str, version_id: str
-    ) -> tuple[Order, OrderVersion] | None:
+    ) -> OrderPrintProjection | None:
         try:
             body = self.get(
                 f"/office/v1/orders/{quote(order_id, safe='')}/print-data",
@@ -1505,12 +1679,32 @@ class RemoteCoreClient:
             if exc.status == 404:
                 return None
             raise
-        _exact(body, {"order", "version"})
-        order = _order(_dict(body["order"]))
-        version = _version(_dict(body["version"]))
-        if order.order_id != order_id or version.order_id != order_id:
+        _exact(body, {"order", "version", "projection"})
+        projection = _print_projection(_dict(body["projection"]))
+        if projection.event.order_id != order_id:
             _bad_response()
-        return order, version
+        if projection.event.order_version_id != version_id:
+            _bad_response()
+        return projection
+
+    def buffet_cards_data(
+        self, order_id: str, version_id: str
+    ) -> BuffetCardsView | None:
+        try:
+            body = self.get(
+                f"/office/v1/orders/{quote(order_id, safe='')}/buffet-cards-data",
+                {"version": version_id},
+            )
+        except RemoteCoreError as exc:
+            if exc.status == 404:
+                return None
+            raise
+        view = _buffet_cards_view(body)
+        if view.projection.event.order_id != order_id:
+            _bad_response()
+        if view.projection.event.order_version_id != version_id:
+            _bad_response()
+        return view
 
     # Writes must never fall through repository semantics in remote mode: the
     # panel is wired to use the _Remote*Service facades below for every

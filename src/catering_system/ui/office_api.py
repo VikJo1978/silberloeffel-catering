@@ -89,6 +89,12 @@ from catering_system.services.calendar_projection_service import (
 )
 from catering_system.services.task_projection_service import TaskProjectionService
 from catering_system.services.work_center_service import WorkCenterService
+from catering_system.services.order_print_projection_service import (
+    OrderPrintProjectionService,
+    PrintFinalRequiresEffectiveError,
+    PrintProjectionNotFoundError,
+)
+from catering_system.services.buffet_cards_service import BuffetCardsService
 from catering_system.ui import office_api_views as views
 
 _log = logging.getLogger(__name__)
@@ -325,7 +331,14 @@ class OfficeApi:
             task_projection_service=self.task_projection_service,
             calendar_projection_service=self.calendar_projection_service,
         )
-
+        self.print_projection_service = OrderPrintProjectionService(
+            self.orders,
+            self.offers,
+        )
+        self.buffet_cards_service = BuffetCardsService(
+            self.orders,
+            self.print_projection_service,
+        )
     # -- reads -----------------------------------------------------------
 
     def work_center(self) -> dict[str, object]:
@@ -510,15 +523,41 @@ class OfficeApi:
             self.payment_reminder_service.view(order_id),
         )
 
-    def print_data(self, order_id: str, version_id: str) -> dict[str, object]:
+    def print_data(
+        self,
+        order_id: str,
+        version_id: str,
+        *,
+        intent: str = "preview",
+    ) -> dict[str, object]:
+        if intent not in {"preview", "final"}:
+            raise _invalid()
         order = self.orders.get_order(order_id)
         version = self.orders.get_order_version(version_id)
         if order is None or version is None or version.order_id != order_id:
             raise ApiError(404, "not_found")  # no unknown/unowned distinction
+        try:
+            projection = self.print_projection_service.resolve(
+                order_id,
+                version_id,
+                intent=intent,  # type: ignore[arg-type]
+            )
+        except PrintFinalRequiresEffectiveError:
+            raise ApiError(400, "invalid_request") from None
+        except PrintProjectionNotFoundError:
+            raise ApiError(404, "not_found") from None
         return {
             "order": views.order_summary(order),
             "version": views.order_version_shape(version),
+            "projection": views.order_print_projection_shape(projection),
         }
+
+    def buffet_cards_data(self, order_id: str, version_id: str) -> dict[str, object]:
+        try:
+            view = self.buffet_cards_service.resolve(order_id, version_id)
+        except PrintProjectionNotFoundError:
+            raise ApiError(404, "not_found") from None
+        return views.buffet_cards_data_shape(view)
 
     # -- command helpers ---------------------------------------------------
 
@@ -900,6 +939,9 @@ class OfficeApi:
                 guest_count_estimate=_v_guest_count(args["guest_count_estimate"]),
                 planning_mode=_v_enum(args["planning_mode"], validate_planning_mode),
             )
+            self.order_service.set_candidate_order_version(
+                order.order_id, version.order_version_id
+            )
         except ValueError as exc:
             raise ApiError(422, "order_cancelled") from exc
         return 201, {
@@ -1206,6 +1248,21 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         {"GET": "contact_detail"},
     ),
     (
+        re.compile(r"^/office/v1/catalog/dishes$"),
+        "/office/v1/catalog/dishes",
+        {"GET": "list_catalog_dishes"},
+    ),
+    (
+        re.compile(r"^/office/v1/catalog/dishes/(?P<id>[^/]+)$"),
+        "/office/v1/catalog/dishes/{id}",
+        {"GET": "catalog_dish_detail"},
+    ),
+    (
+        re.compile(r"^/office/v1/catalog/allergen-codes$"),
+        "/office/v1/catalog/allergen-codes",
+        {"GET": "list_allergen_codes"},
+    ),
+    (
         re.compile(r"^/office/v1/offers$"),
         "/office/v1/offers",
         {"GET": "list_offers"},
@@ -1253,6 +1310,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/print-data$"),
         "/office/v1/orders/{id}/print-data",
         {"GET": "print_data"},
+    ),
+    (
+        re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/buffet-cards-data$"),
+        "/office/v1/orders/{id}/buffet-cards-data",
+        {"GET": "buffet_cards_data"},
     ),
     (
         re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/versions$"),
@@ -1535,6 +1597,14 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
                     raise _invalid()
                 self._respond(
                     200, api.print_data(path_ids["id"], _v_uuid(params["version"]))
+                )
+            elif kind == "buffet_cards_data":
+                params = self._query({"version"})
+                if "version" not in params:
+                    raise _invalid()
+                self._respond(
+                    200,
+                    api.buffet_cards_data(path_ids["id"], _v_uuid(params["version"])),
                 )
 
         def _command(self, template: str, kind: str, path_ids: dict[str, str]) -> None:

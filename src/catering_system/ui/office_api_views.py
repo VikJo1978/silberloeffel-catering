@@ -28,6 +28,11 @@ from catering_system.domain.calendar_entry_projection import (
 )
 from catering_system.domain.task_projection import TaskProjection
 from catering_system.domain.offer import Offer, OfferState, derive_offer_state
+from catering_system.services.order_print_projection_service import (
+    OrderPrintProjection,
+    PrintPositionLine,
+)
+from catering_system.services.buffet_cards_service import BuffetCard, BuffetCardsView
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_payment_reminder import PaymentReminderView
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
@@ -614,3 +619,82 @@ def calendar_list_view(
     projections: list[CalendarEntryProjection],
 ) -> list[dict[str, object]]:
     return [calendar_list_row(projection) for projection in projections]
+
+
+def _print_position_line_shape(line: PrintPositionLine) -> dict[str, object]:
+    return {
+        "position_id": line.position_id,
+        "kind": line.kind,
+        "name": line.name,
+        "description": line.description,
+        "composition": line.composition,
+        "notes": line.notes,
+        "quantity_display": line.quantity_display,
+        "unit_label": line.unit_label,
+    }
+
+
+def order_print_projection_shape(projection: OrderPrintProjection) -> dict[str, object]:
+    event = projection.event
+    commercial = projection.commercial
+    flags = projection.flags
+    return {
+        "event": {
+            "order_id": event.order_id,
+            "order_version_id": event.order_version_id,
+            "version_number": event.version_number,
+            "event_date": event.event_date.isoformat(),
+            "time_window_text": event.time_window_text,
+            "location_text": event.location_text,
+            "guest_count_estimate": event.guest_count_estimate,
+            "planning_mode": event.planning_mode,
+            "kitchen_print_confirmed_at": (
+                event.kitchen_print_confirmed_at.isoformat()
+                if event.kitchen_print_confirmed_at is not None
+                else None
+            ),
+            "order_cancelled_at": (
+                event.order_cancelled_at.isoformat()
+                if event.order_cancelled_at is not None
+                else None
+            ),
+            "is_candidate": event.is_candidate,
+            "is_effective": event.is_effective,
+        },
+        "commercial": {
+            "source": commercial.source,
+            "offer_id": commercial.offer_id,
+            "offer_version_id": commercial.offer_version_id,
+            "accepted_variant_id": commercial.accepted_variant_id,
+            "variant_label": commercial.variant_label,
+            "positions": [
+                _print_position_line_shape(line) for line in commercial.positions
+            ],
+        },
+        "flags": {
+            "intent": flags.intent,
+            "is_preview": flags.is_preview,
+            "is_final_allowed": flags.is_final_allowed,
+            "is_stale": flags.is_stale,
+            "watermark": flags.watermark,
+        },
+    }
+
+
+def buffet_card_shape(card: BuffetCard) -> dict[str, object]:
+    return {
+        "position_id": card.position_id,
+        "name": card.name,
+        "description": card.description,
+        "composition": card.composition,
+        "notes": card.notes,
+    }
+
+
+def buffet_cards_data_shape(view: BuffetCardsView) -> dict[str, object]:
+    return {
+        "projection": order_print_projection_shape(view.projection),
+        "cards": [buffet_card_shape(card) for card in view.cards],
+        "effective_version_number": view.effective_version_number,
+    }
+

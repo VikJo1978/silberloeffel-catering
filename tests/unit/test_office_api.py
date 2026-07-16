@@ -10,7 +10,7 @@ import threading
 import urllib.error
 import urllib.request
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -742,7 +742,17 @@ def test_order_detail_and_print_data(api) -> None:
         f"?version={ids['version_ready']}"
     )
     assert status == 200
-    assert set(body) == {"order", "version"}
+    assert set(body) == {"order", "version", "projection"}
+    assert body["projection"]["commercial"]["source"] == "none"
+
+    status, body, _h = _get(
+        f"{base}/office/v1/orders/{ids['order_ready']}/buffet-cards-data"
+        f"?version={ids['version_ready']}"
+    )
+    assert status == 200
+    assert set(body) == {"projection", "cards", "effective_version_number"}
+    assert body["cards"] == []
+    assert body["effective_version_number"] == 1
 
     # unknown and unowned are the same 404 (no distinction leaked)
     status, _b, _h = _get(
@@ -1132,6 +1142,8 @@ def test_versions_expect_and_cancelled_gate(api) -> None:
     assert status == 201
     assert set(body) == {"command_id", "order_version_id", "version_number"}
     assert body["version_number"] == 2
+    status, detail, _h = _get(f"{base}/office/v1/orders/{ids['order_ready']}")
+    assert detail["candidate_order_version_id"] == body["order_version_id"]
 
     status, body, _h = _post(
         f"{base}/office/v1/orders/{ids['order_cancelled']}/versions",
@@ -2082,3 +2094,4 @@ def test_convert_accepted_failure_leaves_no_conversion_or_ledger(api) -> None:
     assert stored is not None
     assert stored.conversion_link is None
     offers.close()
+

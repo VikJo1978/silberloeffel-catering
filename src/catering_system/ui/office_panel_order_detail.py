@@ -33,6 +33,18 @@ _READY_BLOCKER_LABELS = {
 
 
 @dataclass(frozen=True)
+class OrderVersionChangePrefill:
+    """Defaults for the append-only OrderVersion change form."""
+
+    event_date: str
+    time_window_text: str
+    location_text: str
+    guest_count_estimate: str
+    planning_mode: str
+    latest_version_number: int
+
+
+@dataclass(frozen=True)
 class OrderDetailFormFields:
     """Trusted hidden fields produced by the existing Office Panel helpers."""
 
@@ -43,6 +55,7 @@ class OrderDetailFormFields:
     cancel_command_fields: str
     version_command_fields: str
     payment_command_fields: str
+    version_change_prefill: OrderVersionChangePrefill | None = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +85,36 @@ def _planning_label(value: str) -> str:
 def _ready_blocker_label(value: str) -> str:
     return _READY_BLOCKER_LABELS.get(
         value, "Die Versandfreigabe kann derzeit nicht bestätigt werden."
+    )
+
+
+def target_order_version(
+    order: Order, versions: Sequence[OrderVersion]
+) -> OrderVersion | None:
+    """Office progression target: explicit candidate, else highest version_number."""
+    return _target_version(order, versions)
+
+
+def version_change_prefill(
+    order: Order,
+    versions: Sequence[OrderVersion],
+    *,
+    latest_version_number: int,
+) -> OrderVersionChangePrefill | None:
+    target = _target_version(order, versions)
+    if target is None:
+        return None
+    return OrderVersionChangePrefill(
+        event_date=target.event_date.isoformat(),
+        time_window_text=target.time_window_text,
+        location_text=target.location_text,
+        guest_count_estimate=(
+            str(target.guest_count_estimate)
+            if target.guest_count_estimate is not None
+            else ""
+        ),
+        planning_mode=target.planning_mode,
+        latest_version_number=latest_version_number,
     )
 
 
@@ -160,6 +203,9 @@ def _primary_action(
             f'<a class="order-button secondary" target="_blank" rel="noopener" '
             f'href="/order/{_e(order.order_id)}/print?version='
             f'{_e(target.order_version_id)}">Küchenzettel öffnen</a>'
+            f'<a class="order-button secondary" target="_blank" rel="noopener" '
+            f'href="/order/{_e(order.order_id)}/buffet-cards?version='
+            f'{_e(target.order_version_id)}">Buffetschilder öffnen</a>'
             f'<form method="post" action="/order/{_e(order.order_id)}/print-confirm">'
             f"{forms.csrf_input}{command_fields}"
             f'<input type="hidden" name="order_version_id" '
@@ -279,7 +325,10 @@ def _version_actions(
     actions = [
         f'<a class="order-button ghost" target="_blank" rel="noopener" '
         f'href="/order/{_e(order.order_id)}/print?version='
-        f'{_e(version.order_version_id)}">Küchenzettel öffnen</a>'
+        f'{_e(version.order_version_id)}">Küchenzettel öffnen</a>',
+        f'<a class="order-button ghost" target="_blank" rel="noopener" '
+        f'href="/order/{_e(order.order_id)}/buffet-cards?version='
+        f'{_e(version.order_version_id)}">Buffetschilder öffnen</a>',
     ]
     print_fields = forms.print_confirm_command_fields.get(version.order_version_id)
     if print_fields is not None:
@@ -432,12 +481,45 @@ def _payment_card(
     )
 
 
-def _planning_mode_select() -> str:
-    options = "".join(
-        f'<option value="{_e(value)}">{_e(_PLANNING_MODE_LABELS[value])}</option>'
-        for value in PLANNING_MODES
+def _planning_mode_select(selected: str) -> str:
+    options = []
+    for value in PLANNING_MODES:
+        mark = " selected" if value == selected else ""
+        options.append(
+            f'<option value="{_e(value)}"{mark}>'
+            f"{_e(_PLANNING_MODE_LABELS[value])}</option>"
+        )
+    return f'<select name="planning_mode">{''.join(options)}</select>'
+
+
+def _version_change_form(
+    order: Order,
+    forms: OrderDetailFormFields,
+) -> str:
+    prefill = forms.version_change_prefill
+    if prefill is None:
+        return ""
+    return (
+        '<details class="order-version-edit"><summary>Neuen Stand anlegen</summary>'
+        "<p>Die Felder übernehmen den aktuellen Bearbeitungsstand. "
+        "Speichern legt einen neuen unveränderlichen Stand an.</p>"
+        f'<form method="post" action="/order/{_e(order.order_id)}/version">'
+        f"{forms.csrf_input}{forms.version_command_fields}"
+        f'<input type="hidden" name="latest_version_number" '
+        f'value="{_e(prefill.latest_version_number)}"><fieldset>'
+        f'<p><label>Datum*</label><input type="date" name="event_date" '
+        f'required value="{_e(prefill.event_date)}"></p>'
+        f'<p><label>Zeitfenster</label><input name="time_window_text" '
+        f'value="{_e(prefill.time_window_text)}"></p>'
+        f'<p><label>Ort</label><input name="location_text" '
+        f'value="{_e(prefill.location_text)}"></p>'
+        f'<p><label>Gäste (ca.)</label><input name="guest_count_estimate" '
+        f'inputmode="numeric" value="{_e(prefill.guest_count_estimate)}"></p>'
+        f"<p><label>Planung</label>"
+        f"{_planning_mode_select(prefill.planning_mode)}</p>"
+        '<p><button type="submit">Stand anlegen</button></p>'
+        "</fieldset></form></details>"
     )
-    return f'<select name="planning_mode">{options}</select>'
 
 
 def _secondary_actions(
@@ -458,18 +540,8 @@ def _secondary_actions(
         '<section class="order-card order-content-card">'
         "<h2>Weitere Aktionen</h2>"
         f"<p>{inquiry_link}</p>"
-        '<details class="order-version-edit"><summary>Neuen Stand anlegen</summary>'
-        f'<form method="post" action="/order/{_e(order.order_id)}/version">'
-        f"{forms.csrf_input}{forms.version_command_fields}<fieldset>"
-        '<p><label>Datum*</label><input type="date" name="event_date" required></p>'
-        '<p><label>Zeitfenster</label><input name="time_window_text"></p>'
-        '<p><label>Ort</label><input name="location_text"></p>'
-        '<p><label>Gäste (ca.)</label><input name="guest_count_estimate" '
-        'inputmode="numeric"></p>'
-        f"<p><label>Planung</label>{_planning_mode_select()}</p>"
-        '<p><button type="submit">Stand anlegen</button></p>'
-        "</fieldset></form></details>"
-        '<details class="order-danger"><summary>Auftrag stornieren</summary>'
+        + _version_change_form(order, forms)
+        + '<details class="order-danger"><summary>Auftrag stornieren</summary>'
         "<p>Dieser Schritt kann nicht rückgängig gemacht werden. Historie und "
         "Küchenzettel bleiben zur Einsicht erhalten.</p>"
         f'<form method="post" action="/order/{_e(order.order_id)}/cancel">'

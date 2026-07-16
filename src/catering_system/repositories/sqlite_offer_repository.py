@@ -10,12 +10,14 @@ from __future__ import annotations
 import sqlite3
 from contextlib import nullcontext
 from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 from catering_system.domain.inquiry import validate_planning_mode
 from catering_system.domain.offer import (
     ACCEPTANCE_CHANNELS,
     POSITION_KINDS,
+    POSITION_QUANTITY_MODES,
     SENT_CHANNELS,
     VAT_RATES,
     AcceptanceChannel,
@@ -26,6 +28,7 @@ from catering_system.domain.offer import (
     OfferVariant,
     OfferVersion,
     PositionKind,
+    PositionQuantityMode,
     RejectionEvidence,
     SentChannel,
     SentEvidence,
@@ -233,6 +236,32 @@ def _migration_4_offer_version_event_and_payment_facts(
             )
 
 
+def _migration_5_offer_variant_and_position_print_fields(
+    connection: sqlite3.Connection,
+) -> None:
+    variant_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(offer_variants)")
+    }
+    if "description" not in variant_columns:
+        connection.execute("ALTER TABLE offer_variants ADD COLUMN description TEXT")
+
+    position_columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(offer_positions)")
+    }
+    for name in (
+        "description",
+        "composition",
+        "notes",
+        "quantity",
+        "quantity_mode",
+        "unit_label",
+    ):
+        if name not in position_columns:
+            connection.execute(
+                f"ALTER TABLE offer_positions ADD COLUMN {name} TEXT"
+            )
+
+
 _MIGRATIONS = (
     (1, "create_offer_tables", _migration_1_create_tables),
     (2, "unique_source_inquiry", _migration_2_unique_source_inquiry),
@@ -242,11 +271,36 @@ _MIGRATIONS = (
         "offer_version_event_and_payment_facts",
         _migration_4_offer_version_event_and_payment_facts,
     ),
+    (
+        5,
+        "offer_variant_and_position_print_fields",
+        _migration_5_offer_variant_and_position_print_fields,
+    ),
 )
 
 
 def _dt(value: str) -> datetime:
     return datetime.fromisoformat(value)
+
+
+def _optional_quantity(value: str | None) -> Decimal | None:
+    if value is None:
+        return None
+    return Decimal(value)
+
+
+def _quantity_storage(value: Decimal | None) -> str | None:
+    if value is None:
+        return None
+    return format(value, "f")
+
+
+def _position_quantity_mode(value: str | None) -> PositionQuantityMode | None:
+    if value is None:
+        return None
+    if value not in POSITION_QUANTITY_MODES:
+        raise ValueError("invalid stored quantity_mode")
+    return value  # type: ignore[return-value]
 
 
 def _position_kind(value: str) -> PositionKind:
@@ -460,19 +514,20 @@ class SQLiteOfferRepository:
         )
         for sort_order, variant in enumerate(version.variants):
             self._conn.execute(
-                "INSERT INTO offer_variants VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO offer_variants VALUES (?, ?, ?, ?, ?, ?)",
                 (
                     variant.variant_id,
                     version.offer_version_id,
                     offer_id,
                     variant.label,
                     sort_order,
+                    variant.description,
                 ),
             )
             for position_order, position in enumerate(variant.positions):
                 self._conn.execute(
                     """
-                    INSERT INTO offer_positions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO offer_positions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         position.position_id,
@@ -487,6 +542,12 @@ class SQLiteOfferRepository:
                         position.gross_total_cents,
                         position.related_position_id,
                         position_order,
+                        position.description,
+                        position.composition,
+                        position.notes,
+                        _quantity_storage(position.quantity),
+                        position.quantity_mode,
+                        position.unit_label,
                     ),
                 )
 
@@ -598,6 +659,7 @@ class SQLiteOfferRepository:
                     variant_id=variant_row[0],
                     offer_version_id=version_id,
                     label=variant_row[1],
+                    description=variant_row[2],
                     positions=positions_by_variant.get(variant_row[0], ()),
                 )
                 for variant_row in variant_rows
@@ -625,19 +687,19 @@ class SQLiteOfferRepository:
 
     def _load_variants_by_version(
         self, offer_id: str
-    ) -> dict[str, list[tuple[str, str]]]:
+    ) -> dict[str, list[tuple[str, str, str | None]]]:
         rows = self._conn.execute(
             """
-            SELECT offer_version_id, variant_id, label
+            SELECT offer_version_id, variant_id, label, description
             FROM offer_variants
             WHERE offer_id = ?
             ORDER BY sort_order
             """,
             (offer_id,),
         ).fetchall()
-        grouped: dict[str, list[tuple[str, str]]] = {}
-        for version_id, variant_id, label in rows:
-            grouped.setdefault(version_id, []).append((variant_id, label))
+        grouped: dict[str, list[tuple[str, str, str | None]]] = {}
+        for version_id, variant_id, label, description in rows:
+            grouped.setdefault(version_id, []).append((variant_id, label, description))
         return grouped
 
     def _load_positions_by_variant(
@@ -647,7 +709,8 @@ class SQLiteOfferRepository:
             """
             SELECT p.variant_id, p.position_id, p.kind, p.name, p.unit_net_cents,
                    p.net_total_cents, p.vat_rate_percent, p.vat_amount_cents,
-                   p.gross_total_cents, p.related_position_id
+                   p.gross_total_cents, p.related_position_id, p.description,
+                   p.composition, p.notes, p.quantity, p.quantity_mode, p.unit_label
             FROM offer_positions p
             JOIN offer_variants v ON v.variant_id = p.variant_id
             WHERE v.offer_id = ?
@@ -668,6 +731,12 @@ class SQLiteOfferRepository:
                     vat_amount_cents=row[7],
                     gross_total_cents=row[8],
                     related_position_id=row[9],
+                    description=row[10],
+                    composition=row[11],
+                    notes=row[12],
+                    quantity=_optional_quantity(row[13]),
+                    quantity_mode=_position_quantity_mode(row[14]),
+                    unit_label=row[15],
                 )
             )
         return {

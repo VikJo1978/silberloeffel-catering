@@ -6,6 +6,7 @@ import logging
 import uuid
 from collections.abc import Callable
 from datetime import UTC, date, datetime
+from decimal import Decimal
 
 from catering_system.domain.inquiry import inquiry_allows_order_conversion
 from catering_system.domain.offer import (
@@ -373,6 +374,7 @@ def _map_variant(
         variant_id=variant.variant_id,
         offer_version_id=offer_version_id,
         label=variant.label,
+        description=variant.description,
         positions=tuple(_map_position(position) for position in variant.positions),
     )
 
@@ -388,4 +390,10 @@ def _map_position(position: OfferSnapshotPosition) -> OfferPosition:
         vat_amount_cents=position.vat_amount_cents,
         gross_total_cents=position.gross_total_cents,
         related_position_id=position.related_position_id,
+        description=position.description,
+        composition=position.composition,
+        notes=position.notes,
+        quantity=Decimal(position.quantity),
+        quantity_mode=position.quantity_mode,
+        unit_label=position.unit_label,
     )

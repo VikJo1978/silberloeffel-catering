@@ -883,6 +883,17 @@ def test_print_data_parity_direct_vs_remote(parity_world) -> None:
     assert d_html == r_html  # print sheet embeds no command form at all
 
 
+def test_buffet_cards_direct_remote_parity(parity_world) -> None:
+    direct_url, remote_url, ids = parity_world
+    order_id, version_id = ids["order_ready"], ids["version_ready"]
+    q = urllib.parse.urlencode({"version": version_id})
+    d_status, d_html = _get(f"{direct_url}/order/{order_id}/buffet-cards?{q}")
+    r_status, r_html = _get(f"{remote_url}/order/{order_id}/buffet-cards?{q}")
+    assert d_status == r_status == 200
+    assert d_html == r_html
+
+
+
 def test_rueckruf_stays_local_not_routed_through_core(parity_world) -> None:
     """Rückruf/Auerswald stays outside Core.  On Proxmox, an unconfigured
     local integration must carry the frozen "only on premises" explanation

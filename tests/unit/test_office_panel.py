@@ -882,7 +882,7 @@ def test_print_sheet_renders(panel: str) -> None:
     vid = body.split("print?version=")[1].split('"')[0]
     status, sheet = _get(f"{panel}/order/{oid}/print?version={vid}")
     assert status == 200
-    assert "Küchenzettel" in sheet and "Hamburg" in sheet and "mittags" in sheet
+    assert "Küchenzettel" in sheet and "Hamburg" in sheet and "MENÜ" in sheet
 
 
 def test_cancel_shows_storniert_and_hides_actions(panel: str) -> None:
@@ -955,9 +955,18 @@ def test_v2_order_detail_prefers_new_candidate_over_ready_old_stand(
         f"{premium_panel}/order/{order_id}/effective",
         {"order_version_id": version_id},
     )
+    _status, before_change = _get(f"{premium_panel}/order/{order_id}")
+    latest_version_number = re.search(
+        r'name="latest_version_number" value="([^"]+)"',
+        before_change,
+    ).group(1)
+    assert 'value="2026-10-01"' in before_change
+    assert 'value="mittags"' in before_change
+    assert 'value="Hamburg"' in before_change
     _post(
         f"{premium_panel}/order/{order_id}/version",
         {
+            "latest_version_number": latest_version_number,
             "event_date": "2026-10-03",
             "time_window_text": "18:00–22:00",
             "location_text": "Hamburg-Altona",
@@ -972,12 +981,50 @@ def test_v2_order_detail_prefers_new_candidate_over_ready_old_stand(
     assert "Küchenzettel für Stand 2 drucken" in body
     assert "Hamburg-Altona" in body
     assert "Auswahl durch den Kunden" in body
+    assert "Nächster Stand" in body
     assert (
         "Die Versandfreigabe gilt für den bisherigen Küchenstand. "
         "Der neue Stand ist noch nicht übernommen."
     ) in body
     assert "Aktueller Küchenstand" in body
     assert "Aktueller Bearbeitungsstand" in body
+
+
+def test_v2_create_version_rejects_stale_latest_version_number(
+    premium_panel: str,
+) -> None:
+    inquiry_id = _create_inquiry(premium_panel)
+    order_id = _convert(premium_panel, inquiry_id)
+    _status, initial = _get(f"{premium_panel}/order/{order_id}")
+    latest_version_number = re.search(
+        r'name="latest_version_number" value="([^"]+)"',
+        initial,
+    ).group(1)
+    _post(
+        f"{premium_panel}/order/{order_id}/version",
+        {
+            "latest_version_number": latest_version_number,
+            "event_date": "2026-10-02",
+            "time_window_text": "abends",
+            "location_text": "Kiel",
+            "guest_count_estimate": "30",
+            "planning_mode": "caterer_suggestion",
+        },
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _post(
+            f"{premium_panel}/order/{order_id}/version",
+            {
+                "latest_version_number": latest_version_number,
+                "event_date": "2026-10-03",
+                "time_window_text": "spät",
+                "location_text": "Lübeck",
+                "guest_count_estimate": "35",
+                "planning_mode": "caterer_suggestion",
+            },
+        )
+    assert exc.value.code == 400
+    assert "zwischenzeitlich geändert" in exc.value.read().decode("utf-8")
 
 
 def test_v2_order_detail_keeps_payment_separate_and_cancelled_read_only(

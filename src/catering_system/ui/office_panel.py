@@ -94,6 +94,7 @@ from catering_system.ui.office_panel_inquiry_detail import (
 from catering_system.ui.office_panel_order_detail import (
     OrderDetailFormFields,
     render_order_detail,
+    version_change_prefill,
 )
 from catering_system.ui.office_panel_proposal import (
     parse_proposal_payload,
@@ -123,6 +124,7 @@ from catering_system.ui.office_panel_views import (
     _source_label,
     _verification_label,
     render_print_sheet,
+    render_buffet_cards,
 )
 
 if TYPE_CHECKING:
@@ -136,6 +138,7 @@ __all__ = [
     "SOURCE_LABELS",
     "parse_proposal_payload",
     "render_print_sheet",
+    "render_buffet_cards",
     "render_proposal_preview",
     "render_proposal_preview_form",
 ]
@@ -1859,6 +1862,11 @@ class OfficePanel:
             latest_version_number = versions_total_count or max(
                 (version.version_number for version in versions), default=0
             )
+            change_prefill = version_change_prefill(
+                order,
+                versions,
+                latest_version_number=latest_version_number,
+            )
             detail = render_order_detail(
                 order,
                 versions,
@@ -1899,6 +1907,7 @@ class OfficePanel:
                         if not cancelled
                         else ""
                     ),
+                    version_change_prefill=change_prefill if not cancelled else None,
                 ),
                 versions_total_count=versions_total_count,
                 versions_truncated=versions_truncated,
@@ -1923,7 +1932,8 @@ class OfficePanel:
             if v.order_version_id == order.candidate_order_version_id:
                 marks.append("Kandidat")
             actions = [
-                f'<a href="/order/{_e(order_id)}/print?version={_e(v.order_version_id)}">Küchenzettel</a>'
+                f'<a href="/order/{_e(order_id)}/print?version={_e(v.order_version_id)}">Küchenzettel</a>',
+                f'<a href="/order/{_e(order_id)}/buffet-cards?version={_e(v.order_version_id)}">Buffetschilder</a>',
             ]
             if not cancelled:
                 if v.kitchen_print_confirmed_at is None:
@@ -2018,18 +2028,24 @@ class OfficePanel:
             latest_version_number = versions_total_count or max(
                 (v.version_number for v in versions), default=0
             )
+            prefill = version_change_prefill(
+                order,
+                versions,
+                latest_version_number=latest_version_number,
+            )
+            assert prefill is not None
             actions_block = f"""
 <p>
 <form class="inline" method="post" action="/order/{_e(order_id)}/ready">{_csrf_input(context)}{self._command_fields()}<button>Freigabe anfordern</button></form>
 <form class="inline" method="post" action="/order/{_e(order_id)}/cancel">{_csrf_input(context)}{self._command_fields({"updated_at": order.updated_at.isoformat()})}<button>Auftrag stornieren</button></form>
 </p>
 <h2>Neue Version</h2>
-<form method="post" action="/order/{_e(order_id)}/version">{_csrf_input(context)}{self._command_fields({"latest_version_number": str(latest_version_number)})}<fieldset>
-<p><label>Datum*</label><input type="date" name="event_date" required></p>
-<p><label>Zeitfenster</label><input name="time_window_text"></p>
-<p><label>Ort</label><input name="location_text"></p>
-<p><label>Gäste (ca.)</label><input name="guest_count_estimate" inputmode="numeric"></p>
-<p><label>Planungsmodus</label>{_planning_mode_select(PLANNING_MODES[0])}</p>
+<form method="post" action="/order/{_e(order_id)}/version">{_csrf_input(context)}{self._command_fields({"latest_version_number": str(latest_version_number)})}<input type="hidden" name="latest_version_number" value="{_e(prefill.latest_version_number)}"><fieldset>
+<p><label>Datum*</label><input type="date" name="event_date" required value="{_e(prefill.event_date)}"></p>
+<p><label>Zeitfenster</label><input name="time_window_text" value="{_e(prefill.time_window_text)}"></p>
+<p><label>Ort</label><input name="location_text" value="{_e(prefill.location_text)}"></p>
+<p><label>Gäste (ca.)</label><input name="guest_count_estimate" inputmode="numeric" value="{_e(prefill.guest_count_estimate)}"></p>
+<p><label>Planungsmodus</label>{_planning_mode_select(prefill.planning_mode)}</p>
 <p><button type="submit">Version anlegen</button></p>
 </fieldset></form>"""
         truncation_warning = (
@@ -2084,14 +2100,39 @@ class OfficePanel:
         order = self._orders.get_order(order_id)
         if order is None:
             raise ValueError(f"no order with id {order_id!r}")
-        self.order_service.create_relevant_order_change_version(
-            order,
-            event_date=date.fromisoformat(form["event_date"]),
-            time_window_text=form.get("time_window_text", ""),
-            location_text=form.get("location_text", ""),
-            guest_count_estimate=_opt_int(form.get("guest_count_estimate", "")),
-            planning_mode=form.get("planning_mode", PLANNING_MODES[0]),
-        )
+        if self._remote is None:
+            versions = self._orders.list_order_versions(order_id)
+            latest = max((version.version_number for version in versions), default=0)
+            expected_raw = (
+                form.get("_expect_latest_version_number", "").strip()
+                or form.get("latest_version_number", "").strip()
+            )
+            if expected_raw and int(expected_raw) != latest:
+                raise ValueError(
+                    "Der Auftrag wurde zwischenzeitlich geändert. "
+                    "Bitte laden Sie die Seite neu."
+                )
+
+        def work() -> None:
+            version = self.order_service.create_relevant_order_change_version(
+                order,
+                event_date=date.fromisoformat(form["event_date"]),
+                time_window_text=form.get("time_window_text", ""),
+                location_text=form.get("location_text", ""),
+                guest_count_estimate=_opt_int(form.get("guest_count_estimate", "")),
+                planning_mode=form.get("planning_mode", PLANNING_MODES[0]),
+            )
+            if self._remote is None:
+                self.order_service.set_candidate_order_version(
+                    order_id, version.order_version_id
+                )
+
+        if self._remote is not None:
+            work()
+        elif self._command_executor is not None:
+            self._command_executor.run(work)
+        else:
+            work()
 
 
 def _opt_int(raw: str) -> int | None:
@@ -2306,11 +2347,6 @@ def main() -> None:
         from catering_system.repositories.sqlite_payment_reminder_repository import (
             SQLitePaymentReminderRepository,
         )
-
-        connection = open_core_connection(args.db)
-        inquiry_repo = SQLiteInquiryRepository.from_connection(connection)
-        order_repo = SQLiteOrderRepository.from_connection(connection)
-        offer_repo = SQLiteOfferRepository.from_connection(connection)
         payment_reminder_repo = SQLitePaymentReminderRepository.from_connection(
             connection
         )
@@ -2329,6 +2365,7 @@ def main() -> None:
             command_executor=CoreCommandExecutor(connection),
             payment_reminder_repo=payment_reminder_repo,
             offer_repo=offer_repo,
+            catalog_repo=catalog_repo,
             ui_version=args.ui_version,
         )
         print(f"Office panel on http://{args.host}:{args.port}/ (user: office)")

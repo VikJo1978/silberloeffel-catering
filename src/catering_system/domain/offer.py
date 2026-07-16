@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Literal
 from zoneinfo import ZoneInfo
 
@@ -28,10 +29,12 @@ OfferState = Literal[
     "Expired",
 ]
 PositionKind = Literal["catalog", "surcharge", "fee", "custom"]
+PositionQuantityMode = Literal["total", "per_person"]
 VatRatePercent = Literal[7, 19]
 SentChannel = Literal["email", "postal", "in_person", "other"]
 AcceptanceChannel = Literal["email", "phone", "signed_document", "in_person", "other"]
 POSITION_KINDS: tuple[PositionKind, ...] = ("catalog", "surcharge", "fee", "custom")
+POSITION_QUANTITY_MODES: tuple[PositionQuantityMode, ...] = ("total", "per_person")
 VAT_RATES: tuple[VatRatePercent, ...] = (7, 19)
 SENT_CHANNELS: tuple[SentChannel, ...] = ("email", "postal", "in_person", "other")
 ACCEPTANCE_CHANNELS: tuple[AcceptanceChannel, ...] = (
@@ -67,6 +70,21 @@ def _require_bounded_text(value: str, field: str, *, max_len: int) -> None:
         raise ValueError(f"{field} exceeds length limit")
 
 
+def _optional_bounded_text(value: str | None, field: str, *, max_len: int) -> None:
+    if value is None:
+        return
+    _require_bounded_text(value, field, max_len=max_len)
+
+
+def _validate_optional_quantity(value: Decimal | None) -> None:
+    if value is None:
+        return
+    if value < 0:
+        raise ValueError("quantity must be non-negative")
+    if value.as_tuple().exponent < -3:
+        raise ValueError("quantity exceeds fractional precision")
+
+
 @dataclass(frozen=True)
 class OfferPosition:
     """Frozen customer-visible line within one variant snapshot."""
@@ -80,6 +98,12 @@ class OfferPosition:
     vat_amount_cents: int
     gross_total_cents: int
     related_position_id: str | None = None
+    description: str | None = None
+    composition: str | None = None
+    notes: str | None = None
+    quantity: Decimal | None = None
+    quantity_mode: PositionQuantityMode | None = None
+    unit_label: str | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.position_id, "position_id")
@@ -95,6 +119,13 @@ class OfferPosition:
             ("gross_total_cents", self.gross_total_cents),
         ):
             _require_non_negative_cents(value, field)
+        _optional_bounded_text(self.description, "description", max_len=20_000)
+        _optional_bounded_text(self.composition, "composition", max_len=20_000)
+        _optional_bounded_text(self.notes, "notes", max_len=20_000)
+        _optional_bounded_text(self.unit_label, "unit_label", max_len=500)
+        _validate_optional_quantity(self.quantity)
+        if self.quantity_mode is not None and self.quantity_mode not in POSITION_QUANTITY_MODES:
+            raise ValueError("invalid quantity_mode")
         if self.kind == "surcharge":
             if self.related_position_id is None:
                 raise ValueError("surcharge requires related_position_id")
@@ -110,11 +141,13 @@ class OfferVariant:
     offer_version_id: str
     label: str
     positions: tuple[OfferPosition, ...]
+    description: str | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.variant_id, "variant_id")
         _require_text(self.offer_version_id, "offer_version_id")
         _require_text(self.label, "label")
+        _optional_bounded_text(self.description, "description", max_len=20_000)
         if not self.positions:
             raise ValueError("an OfferVariant requires at least one position")
         position_ids: set[str] = set()
