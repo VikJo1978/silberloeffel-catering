@@ -13,6 +13,7 @@ needed.
 | Design | [Architecture](architecture.md) | Components, data flow, invariants |
 | Production | [Lenovo runbook](runbooks/lenovo-production.md) | Deploy, verify, troubleshoot, roll back |
 | Staging | [VPS runbook](runbooks/vps-staging.md) | Temporary site at the public IP |
+| Staging | [6D-3a smoke test](runbooks/STAGING_SMOKE_6D3A.md) | Catalog → Configurator → Offer → Print manual checklist |
 | Data safety | [Backup and restore](runbooks/backup-restore.md) | SQLite backup, verification, recovery |
 | Integration | [Website intake API](api/website-intake.md) | Payloads, responses, authentication |
 | Integration | [Kiosk order feed API](api/kiosk-order-feed.md) | Per-date courier feed contract |
