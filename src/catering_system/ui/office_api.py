@@ -167,6 +167,15 @@ def _v_bool(value: object) -> bool:
     return value
 
 
+def _v_query_bool(value: str) -> bool:
+    normalized = value.lower()
+    if normalized in {"true", "1", "yes"}:
+        return True
+    if normalized in {"false", "0", "no"}:
+        return False
+    raise _invalid()
+
+
 def _v_date(value: object) -> date:
     if not isinstance(value, str) or not _DATE_RE.fullmatch(value):
         raise _invalid()
@@ -253,6 +262,18 @@ def _v_uuid(value: object) -> str:
     if parsed.version != 4:
         raise _invalid()
     return value
+
+
+def _v_catalog_uuid(value: object) -> str:
+    if not isinstance(value, str):
+        raise _invalid()
+    try:
+        parsed = uuid.UUID(value)
+    except ValueError as exc:
+        raise _invalid() from exc
+    if parsed.version not in {4, 5}:
+        raise _invalid()
+    return str(parsed)
 
 
 def _exact_keys(mapping: dict[str, object], keys: set[str]) -> None:
@@ -507,7 +528,7 @@ class OfficeApi:
     def cmd_update_catalog_dish(
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict
     ) -> tuple[int, dict[str, object]]:
-        dish_id = _v_uuid(path_ids["id"])
+        dish_id = _v_catalog_uuid(path_ids["id"])
         current = self.catalog_dish_service.get_dish(dish_id)
         if current is None:
             raise ApiError(404, "not_found")
@@ -1700,7 +1721,7 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             elif kind == "list_catalog_dishes":
                 params = self._query({"active_only", "q", "limit", "offset"})
                 active_only = (
-                    _v_bool(params["active_only"])
+                    _v_query_bool(params["active_only"])
                     if "active_only" in params
                     else False
                 )
@@ -1720,7 +1741,9 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
                 )
             elif kind == "catalog_dish_detail":
                 self._query(set())
-                self._respond(200, api.catalog_dish_detail(_v_uuid(path_ids["id"])))
+                self._respond(
+                    200, api.catalog_dish_detail(_v_catalog_uuid(path_ids["id"]))
+                )
             elif kind == "list_allergen_codes":
                 self._query(set())
                 self._respond(200, api.list_allergen_codes())

@@ -2216,22 +2216,29 @@ def test_convert_accepted_failure_leaves_no_conversion_or_ledger(api) -> None:
     offers.close()
 
 
-_CATALOG_DISH_ID = "11111111-1111-4111-8111-111111111111"
+_CATALOG_DISH_ID = "0aee1cec-c09e-5675-835b-2622af2ddb8a"
+_INACTIVE_CATALOG_DISH_ID = "728927f2-4265-542b-92d7-cb168e2bc48d"
 
 
-def _seed_catalog_dish(db: Path) -> None:
+def _seed_catalog_dish(
+    db: Path,
+    *,
+    dish_id: str = _CATALOG_DISH_ID,
+    name: str = "Kartoffelsalat",
+    active: bool = True,
+) -> None:
     repo = SQLiteCatalogRepository(db)
     try:
         repo.insert_dish_if_absent(
             CatalogDish(
-                dish_id=_CATALOG_DISH_ID,
-                name="Kartoffelsalat",
+                dish_id=dish_id,
+                name=name,
                 description="Hausgemacht",
                 composition="Kartoffeln",
                 notes=None,
                 current_unit_net_cents=320,
                 allergens=("G", "J"),
-                active=True,
+                active=active,
                 created_at=datetime(2026, 7, 16, 8, 0, tzinfo=UTC),
                 updated_at=datetime(2026, 7, 16, 8, 0, tzinfo=UTC),
             )
@@ -2257,6 +2264,45 @@ def test_list_catalog_dishes_schema(api) -> None:
         "active",
     }
     assert row["price_display"] == "3,20 €"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    (
+        ("true", True),
+        ("1", True),
+        ("yes", True),
+        ("false", False),
+        ("0", False),
+        ("no", False),
+    ),
+)
+def test_list_catalog_dishes_parses_boolean_query(
+    api, value: str, expected: bool
+) -> None:
+    base, _ids, db = api
+    _seed_catalog_dish(db)
+    _seed_catalog_dish(
+        db,
+        dish_id=_INACTIVE_CATALOG_DISH_ID,
+        name="Inaktives Gericht",
+        active=False,
+    )
+    status, body, _h = _get(
+        f"{base}/office/v1/catalog/dishes?active_only={value}"
+    )
+    assert status == 200
+    returned_ids = {row["dish_id"] for row in body["dishes"]}
+    assert _CATALOG_DISH_ID in returned_ids
+    assert (_INACTIVE_CATALOG_DISH_ID not in returned_ids) is expected
+
+
+def test_list_catalog_dishes_rejects_invalid_boolean_query(api) -> None:
+    base, _ids, _db = api
+    status, body, _h = _get(
+        f"{base}/office/v1/catalog/dishes?active_only=maybe"
+    )
+    assert (status, body["error"]) == (400, "invalid_request")
 
 
 def test_catalog_dish_detail_schema(api) -> None:
