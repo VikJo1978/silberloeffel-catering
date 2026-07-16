@@ -34,7 +34,8 @@ def render_gerichte_list(
         table_rows.append(
             "<tr>"
             f"<td>{_e(str(row['name']))}</td>"
-            f"<td>{_e(str(row.get('price_display', '–')))}</td>"
+            '<td class="catalog-price">'
+            f"{_e(str(row.get('price_display', '–')))}</td>"
             f"<td>{_allergen_cell(row.get('allergen_labels'))}</td>"
             f"<td>{_e(status)}</td>"
             f'<td><a href="/gerichte/{_e(quote(dish_id, safe=""))}">Öffnen</a></td>'
@@ -45,8 +46,7 @@ def render_gerichte_list(
         "<table><tr><th>Name</th><th>Preis</th><th>Allergene</th>"
         "<th>Status</th><th></th></tr>"
         + "".join(
-            table_rows
-            or ['<tr><td colspan="5">Keine Gerichte vorhanden.</td></tr>']
+            table_rows or ['<tr><td colspan="5">Keine Gerichte vorhanden.</td></tr>']
         )
         + "</table>"
         + '<p><a href="/">← Zurück zur Arbeitszentrale</a></p>'

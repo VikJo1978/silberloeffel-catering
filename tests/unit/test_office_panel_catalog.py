@@ -39,7 +39,7 @@ def catalog_panel():
     catalog.insert_dish_if_absent(
         CatalogDish(
             dish_id=_DISH_ID,
-            name='Schnitzel <test>',
+            name="Schnitzel <test>",
             description="Beschreibung",
             composition="Zusammensetzung",
             notes=None,
@@ -94,6 +94,8 @@ def test_gerichte_list_renders(catalog_panel: str) -> None:
     assert "Gerichte" in body
     assert "Schnitzel" in body
     assert "8,50 €" in body
+    assert '<td class="catalog-price">8,50 €</td>' in body
+    assert ".office-content .catalog-price { white-space: nowrap; }" in body
     assert "<script" not in body
     assert "&lt;test&gt;" in body
 

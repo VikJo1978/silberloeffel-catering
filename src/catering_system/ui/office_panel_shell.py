@@ -234,6 +234,7 @@ svg { display: block; }
 }
 .office-content tr:last-child th,
 .office-content tr:last-child td { border-bottom: 0; }
+.office-content .catalog-price { white-space: nowrap; }
 .office-content th {
   color: #33413a;
   background: var(--accent-soft);
