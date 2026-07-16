@@ -158,7 +158,9 @@ def offer_detail(offer: Offer, *, today: date | None = None) -> dict[str, object
     detail: dict[str, object] = {
         "offer_id": offer.offer_id,
         "inquiry_id": offer.source_inquiry_id,
+        "offer_version_id": projection.offer_version_id,
         "commercial_state": projection.commercial_state,
+        "acceptance_id": projection.acceptance_id,
         "versions": [
             {
                 "version": version.version_number,

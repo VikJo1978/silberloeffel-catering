@@ -664,7 +664,8 @@ def test_offer_detail_parity_direct_vs_remote(tmp_path: Path) -> None:
             assert "Angebot gesendet" in d_html
             assert f'href="/inquiry/{inquiry_id}"' in d_html
             assert 'name="_command_id"' not in d_html
-            assert 'name="_command_id"' not in r_html
+            assert 'name="_command_id"' in r_html
+            assert "Annahme erfassen" in d_html
         finally:
             for server in (direct_server, remote_server):
                 server.shutdown()

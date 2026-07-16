@@ -137,6 +137,8 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
             "already_converted",
             "external_ref_conflict",
             "conversion_already_exists",
+            "sent_evidence_exists",
+            "acceptance_already_exists",
         }
     ),
     413: frozenset({"body_too_large"}),
@@ -152,6 +154,11 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
             "invalid_payment_reminder",
             "conversion_blocked",
             "offer_blocks_conversion",
+            "sent_recording_blocked",
+            "invalid_sent_evidence",
+            "acceptance_blocked",
+            "invalid_variant",
+            "invalid_acceptance_evidence",
         }
     ),
     500: frozenset({"internal"}),
@@ -711,6 +718,63 @@ class RemoteCoreClient:
             _bad_response()
         return _uuid4(result["order_id"]), _uuid4(result["order_version_id"])
 
+    def mark_offer_sent(
+        self,
+        offer_id: str,
+        offer_version_id: str,
+        *,
+        sent_at: str,
+        channel: str,
+        recipient_reference: str,
+        evidence_reference: str,
+    ) -> None:
+        self.command(
+            f"/office/v1/offers/{quote(offer_id, safe='')}/versions/"
+            f"{quote(offer_version_id, safe='')}/mark-sent",
+            {
+                "sent_at": sent_at,
+                "channel": channel,
+                "recipient_reference": recipient_reference,
+                "evidence_reference": evidence_reference,
+            },
+            {},
+            expected={200},
+            result_keys={"offer_id", "offer_version_id", "sent_at"},
+        )
+
+    def record_offer_acceptance(
+        self,
+        offer_id: str,
+        offer_version_id: str,
+        *,
+        accepted_variant_id: str,
+        accepted_at: str,
+        channel: str,
+        evidence_reference: str,
+        note: str | None = None,
+    ) -> None:
+        args: dict[str, object] = {
+            "accepted_variant_id": accepted_variant_id,
+            "accepted_at": accepted_at,
+            "channel": channel,
+            "evidence_reference": evidence_reference,
+        }
+        if note is not None:
+            args["note"] = note
+        self.command(
+            f"/office/v1/offers/{quote(offer_id, safe='')}/versions/"
+            f"{quote(offer_version_id, safe='')}/record-acceptance",
+            args,
+            {},
+            expected={200},
+            result_keys={
+                "offer_id",
+                "offer_version_id",
+                "accepted_variant_id",
+                "acceptance_id",
+            },
+        )
+
     # -- reads / repository-shaped facade ---------------------------------
 
     def queue_view(self) -> dict[str, object]:
@@ -852,7 +916,9 @@ class RemoteCoreClient:
             {
                 "offer_id",
                 "inquiry_id",
+                "offer_version_id",
                 "commercial_state",
+                "acceptance_id",
                 "versions",
                 "sent_evidence",
                 "acceptance",
@@ -861,6 +927,9 @@ class RemoteCoreClient:
         )
         _uuid4(body["offer_id"])
         _uuid4(body["inquiry_id"])
+        _uuid4(body["offer_version_id"])
+        if body["acceptance_id"] is not None:
+            _uuid4(body["acceptance_id"])
         state = _str(body["commercial_state"])
         if state not in allowed_states:
             _bad_response()

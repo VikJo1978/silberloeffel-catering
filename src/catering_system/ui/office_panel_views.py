@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 from dataclasses import dataclass
+from datetime import datetime
 
 from catering_system.domain.inquiry import CRM_PIPELINE, PLANNING_MODES
 from catering_system.domain.order import Order, OrderVersion
@@ -18,6 +19,32 @@ _LOGO_DATA_URI = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/4gHYSUNDX1B
 
 def _e(text: object) -> str:
     return html.escape(str(text))
+
+
+def parse_datetime_local_berlin(value: str) -> datetime:
+    """Parse HTML ``datetime-local`` as Europe/Berlin wall time."""
+    from catering_system.ui.office_api_views import BERLIN
+
+    raw = value.strip()
+    if not raw:
+        raise ValueError("datetime is required")
+    if len(raw) < 16 or raw[10] != "T":
+        raise ValueError("invalid datetime-local value")
+    parsed = datetime.strptime(raw[:16], "%Y-%m-%dT%H:%M")
+    return parsed.replace(tzinfo=BERLIN)
+
+
+def default_datetime_local_berlin() -> str:
+    from catering_system.ui.office_api_views import BERLIN
+
+    return datetime.now(BERLIN).strftime("%Y-%m-%dT%H:%M")
+
+
+def format_datetime_utc_iso(value: datetime) -> str:
+    """Office API timestamps must be UTC (pack §4.1)."""
+    from datetime import UTC
+
+    return value.astimezone(UTC).isoformat()
 
 
 # UI-only display labels (OFFICE_PANEL_SAFE_UX_LABELS_AND_GROUPING_V1,

@@ -60,12 +60,43 @@ _INQUIRY_COMMAND_ERROR_LABELS: dict[str, str] = {
 }
 
 
-def inquiry_command_error_message(code_or_text: str) -> str:
+_OFFER_COMMAND_ERROR_LABELS: dict[str, str] = {
+    "sent_evidence_exists": (
+        "Für diese Angebotsversion ist bereits ein Versand vermerkt."
+    ),
+    "acceptance_already_exists": "Für dieses Angebot ist bereits eine Annahme erfasst.",
+    "invalid_variant": "Die gewählte Variante gehört nicht zu dieser Angebotsversion.",
+    "acceptance_blocked": "Die Annahme kann in diesem Angebotsstatus nicht erfasst werden.",
+    "sent_recording_blocked": (
+        "Der Versand kann in diesem Angebotsstatus nicht vermerkt werden."
+    ),
+    "conversion_already_exists": "Dieses Angebot wurde bereits in einen Auftrag umgewandelt.",
+    "conversion_blocked": (
+        "Das angenommene Angebot kann derzeit nicht in einen Auftrag umgewandelt werden."
+    ),
+}
+
+
+def office_command_error_message(code_or_text: str) -> str:
     if code_or_text in _INQUIRY_COMMAND_ERROR_LABELS:
         return _INQUIRY_COMMAND_ERROR_LABELS[code_or_text]
+    if code_or_text in _OFFER_COMMAND_ERROR_LABELS:
+        return _OFFER_COMMAND_ERROR_LABELS[code_or_text]
     lowered = code_or_text.lower()
-    if "accepted offer conversion gate" in lowered:
-        return _INQUIRY_COMMAND_ERROR_LABELS["conversion_blocked"]
+    if "sent evidence already exists" in lowered:
+        return _OFFER_COMMAND_ERROR_LABELS["sent_evidence_exists"]
+    if "acceptance already exists" in lowered:
+        return _OFFER_COMMAND_ERROR_LABELS["acceptance_already_exists"]
+    if "accepted variant does not belong" in lowered:
+        return _OFFER_COMMAND_ERROR_LABELS["invalid_variant"]
+    if "acceptance blocked" in lowered or "acceptance blocks sent" in lowered:
+        return _OFFER_COMMAND_ERROR_LABELS["acceptance_blocked"]
+    if "sent recording blocked" in lowered:
+        return _OFFER_COMMAND_ERROR_LABELS["sent_recording_blocked"]
+    if "conversion link already exists" in lowered or "conversion already" in lowered:
+        return _OFFER_COMMAND_ERROR_LABELS["conversion_already_exists"]
+    if "accepted offer conversion gate" in lowered or "conversion blocked" in lowered:
+        return _OFFER_COMMAND_ERROR_LABELS["conversion_blocked"]
     if "offer blocks conversion" in lowered:
         return _INQUIRY_COMMAND_ERROR_LABELS["offer_blocks_conversion"]
     if "inquiry conversion gate" in lowered or "verification" in lowered:
@@ -73,6 +104,10 @@ def inquiry_command_error_message(code_or_text: str) -> str:
     if "already converted" in lowered or "active order blocks" in lowered:
         return _INQUIRY_COMMAND_ERROR_LABELS["already_converted"]
     return code_or_text
+
+
+def inquiry_command_error_message(code_or_text: str) -> str:
+    return office_command_error_message(code_or_text)
 
 
 class FormBodyTooLargeError(ValueError):
@@ -367,6 +402,8 @@ def make_office_panel_handler(
                 self._redirect(f"/inquiry/{inquiry.inquiry_id}")
             elif len(parts) == 3 and parts[0] == "inquiry":
                 self._inquiry_action(parts[1], parts[2])
+            elif len(parts) == 3 and parts[0] == "offer":
+                self._offer_action(parts[1], parts[2])
             elif len(parts) == 3 and parts[0] == "order":
                 self._order_action(parts[1], parts[2])
             elif parts == ["proposal-preview"]:
@@ -420,6 +457,20 @@ def make_office_panel_handler(
                 order, _initial_version = panel.convert_accepted_offer_for_inquiry(
                     inquiry_id
                 )
+                self._redirect(f"/order/{order.order_id}")
+            else:
+                self.send_error(404)
+
+        def _offer_action(self, offer_id: str, action: str) -> None:
+            form = self._form()
+            if action == "mark-sent":
+                panel.mark_offer_sent(offer_id, form)
+                self._redirect(f"/offer/{offer_id}")
+            elif action == "record-acceptance":
+                panel.record_offer_acceptance(offer_id, form)
+                self._redirect(f"/offer/{offer_id}")
+            elif action == "convert":
+                order, _version = panel.convert_accepted_offer(offer_id, form)
                 self._redirect(f"/order/{order.order_id}")
             else:
                 self.send_error(404)

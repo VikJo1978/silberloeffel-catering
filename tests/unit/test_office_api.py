@@ -379,7 +379,9 @@ def test_offer_detail_schema_prepared(api) -> None:
     assert set(body) == {
         "offer_id",
         "inquiry_id",
+        "offer_version_id",
         "commercial_state",
+        "acceptance_id",
         "versions",
         "sent_evidence",
         "acceptance",

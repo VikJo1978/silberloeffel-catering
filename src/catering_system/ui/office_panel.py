@@ -29,7 +29,13 @@ from catering_system.domain.inquiry import (
     validate_crm_stage,
 )
 from catering_system.services.offer_service import OfferService
-from catering_system.domain.offer import offer_blocks_direct_inquiry_conversion
+from catering_system.domain.offer import (
+    ACCEPTANCE_CHANNELS,
+    SENT_CHANNELS,
+    AcceptanceChannel,
+    SentChannel,
+    offer_blocks_direct_inquiry_conversion,
+)
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_payment_reminder import (
     PAYMENT_METHOD_LABELS,
@@ -76,7 +82,10 @@ from catering_system.ui.office_panel_email_detail import render_email_detail
 from catering_system.ui.office_panel_emails_list import render_email_list
 from catering_system.ui.office_panel_calendar_list import render_kalender_list
 from catering_system.ui.office_panel_tasks_list import render_aufgaben_list
-from catering_system.ui.office_panel_offer_detail import render_offer_detail
+from catering_system.ui.office_panel_offer_detail import (
+    OfferDetailFormFields,
+    render_offer_detail,
+)
 from catering_system.ui.office_panel_offers_list import render_angebote_list
 from catering_system.ui.office_panel_inquiry_detail import (
     InquiryDetailFormFields,
@@ -104,6 +113,8 @@ from catering_system.ui.office_panel_views import (
     _csrf_input,
     _e,
     _EMPTY_PAGE_CONTEXT,
+    parse_datetime_local_berlin,
+    format_datetime_utc_iso,
     _crm_stage_select,
     _page,
     _planning_mode_select,
@@ -417,7 +428,194 @@ class OfficePanel:
             if offer is None:
                 return None
             detail = api_views.offer_detail(offer, today=api_views.berlin_today())
-        return render_offer_detail(detail, context=context)
+        forms = OfferDetailFormFields(
+            csrf_input=_csrf_input(context),
+            command_fields=self._command_fields(),
+        )
+        return render_offer_detail(detail, context=context, forms=forms)
+
+    def _offer_detail_dict(self, offer_id: str) -> dict[str, object]:
+        if self._remote is not None:
+            detail = self._remote.offer_detail(offer_id)
+            if detail is None:
+                raise KeyError(offer_id)
+            return detail
+        offer = self._offers.get(offer_id)
+        if offer is None:
+            raise KeyError(offer_id)
+        return api_views.offer_detail(offer, today=api_views.berlin_today())
+
+    @staticmethod
+    def _require_form_text(form: dict[str, str], key: str, *, max_len: int) -> str:
+        value = form.get(key, "").strip()
+        if not value:
+            raise ValueError(f"{key} is required")
+        if len(value) > max_len:
+            raise ValueError(f"{key} exceeds length limit")
+        return value
+
+    @staticmethod
+    def _require_channel(
+        form: dict[str, str], key: str, allowed: tuple[str, ...]
+    ) -> str:
+        channel = form.get(key, "").strip()
+        if channel not in allowed:
+            raise ValueError(f"invalid {key}")
+        return channel
+
+    def mark_offer_sent(self, offer_id: str, form: dict[str, str]) -> None:
+        detail = self._offer_detail_dict(offer_id)
+        if str(detail["commercial_state"]) != "Prepared":
+            raise ValueError("sent recording blocked")
+        offer_version_id = str(detail["offer_version_id"])
+        sent_at = parse_datetime_local_berlin(form.get("sent_at", ""))
+        channel = self._require_channel(form, "channel", SENT_CHANNELS)
+        recipient_reference = self._require_form_text(
+            form, "recipient_reference", max_len=500
+        )
+        evidence_reference = self._require_form_text(
+            form, "evidence_reference", max_len=1000
+        )
+
+        def work() -> None:
+            offer_service = OfferService(
+                self._offers,
+                self._inquiries,
+                self._orders,
+                today=api_views.berlin_today,
+            )
+            offer_service.record_sent_evidence(
+                offer_id,
+                offer_version_id,
+                sent_at=sent_at,
+                channel=cast(SentChannel, channel),
+                recipient_reference=recipient_reference,
+                evidence_reference=evidence_reference,
+                recorded_by="office-panel",
+            )
+
+        if self._remote is not None:
+            self._remote.mark_offer_sent(
+                offer_id,
+                offer_version_id,
+                sent_at=format_datetime_utc_iso(sent_at),
+                channel=channel,
+                recipient_reference=recipient_reference,
+                evidence_reference=evidence_reference,
+            )
+            return
+        if self._command_executor is not None:
+            self._command_executor.run(work)
+            return
+        work()
+
+    def record_offer_acceptance(self, offer_id: str, form: dict[str, str]) -> None:
+        detail = self._offer_detail_dict(offer_id)
+        if str(detail["commercial_state"]) != "Sent":
+            raise ValueError("acceptance blocked")
+        offer_version_id = str(detail["offer_version_id"])
+        accepted_variant_id = self._require_form_text(
+            form, "accepted_variant_id", max_len=36
+        )
+        accepted_at = parse_datetime_local_berlin(form.get("accepted_at", ""))
+        channel = self._require_channel(form, "channel", ACCEPTANCE_CHANNELS)
+        evidence_reference = self._require_form_text(
+            form, "evidence_reference", max_len=1000
+        )
+        note_raw = form.get("note", "").strip()
+        note = note_raw or None
+        if note is not None and len(note) > 20000:
+            raise ValueError("note exceeds length limit")
+
+        def work() -> None:
+            offer_service = OfferService(
+                self._offers,
+                self._inquiries,
+                self._orders,
+                today=api_views.berlin_today,
+            )
+            offer_service.record_acceptance_evidence(
+                offer_id,
+                offer_version_id,
+                accepted_variant_id,
+                accepted_at=accepted_at,
+                channel=cast(AcceptanceChannel, channel),
+                evidence_reference=evidence_reference,
+                recorded_by="office-panel",
+                note=note,
+            )
+
+        if self._remote is not None:
+            self._remote.record_offer_acceptance(
+                offer_id,
+                offer_version_id,
+                accepted_variant_id=accepted_variant_id,
+                accepted_at=format_datetime_utc_iso(accepted_at),
+                channel=channel,
+                evidence_reference=evidence_reference,
+                note=note,
+            )
+            return
+        if self._command_executor is not None:
+            self._command_executor.run(work)
+            return
+        work()
+
+    def convert_accepted_offer(
+        self, offer_id: str, form: dict[str, str]
+    ) -> tuple[Order, OrderVersion]:
+        detail = self._offer_detail_dict(offer_id)
+        if str(detail["commercial_state"]) != "Accepted":
+            raise ValueError("conversion blocked")
+        offer_version_id = str(detail["offer_version_id"])
+        accepted_variant_id = form.get("accepted_variant_id", "").strip()
+        acceptance_id = form.get("acceptance_id", "").strip()
+        if not accepted_variant_id or not acceptance_id:
+            raise ValueError("conversion blocked")
+
+        def work() -> tuple[Order, OrderVersion]:
+            offer_service = OfferService(
+                self._offers,
+                self._inquiries,
+                self._orders,
+                today=api_views.berlin_today,
+            )
+            converted, order, order_version = offer_service.convert_accepted_offer(
+                offer_id,
+                offer_version_id,
+                accepted_variant_id,
+                acceptance_id,
+            )
+            commercial_version = next(
+                item
+                for item in converted.versions
+                if item.offer_version_id == offer_version_id
+            )
+            self.payment_reminder_service.seed_from_conversion(
+                order.order_id,
+                commercial_version.payment_method,
+            )
+            self.inquiry_service.update_inquiry(
+                str(detail["inquiry_id"]),
+                crm_stage=ACTIVE_ORDER_CRM_STAGE,
+            )
+            return order, order_version
+
+        if self._remote is not None:
+            order_id, order_version_id = self._remote.convert_accepted_offer(
+                offer_id,
+                offer_version_id,
+                accepted_variant_id=accepted_variant_id,
+                acceptance_id=acceptance_id,
+            )
+            order = self._orders.get_order(order_id)
+            order_version = self._orders.get_order_version(order_version_id)
+            if order is None or order_version is None:
+                raise ValueError("accepted offer conversion response incomplete")
+            return order, order_version
+        if self._command_executor is not None:
+            return self._command_executor.run(work)
+        return work()
 
     def _contact_list_rows(self) -> list[dict[str, object]]:
         if self._remote is not None:

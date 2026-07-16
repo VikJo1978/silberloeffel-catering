@@ -162,6 +162,8 @@ def test_prepared_offer_detail_shape() -> None:
     detail = offer_detail(_offer(inquiry.inquiry_id), today=_TODAY)
     assert detail["offer_id"] == _OFFER_ID
     assert detail["inquiry_id"] == inquiry.inquiry_id
+    assert detail["offer_version_id"] == _V1_ID
+    assert detail["acceptance_id"] is None
     assert detail["commercial_state"] == "Prepared"
     assert detail["sent_evidence"] is None
     assert detail["acceptance"] is None
@@ -192,6 +194,7 @@ def test_accepted_offer_detail() -> None:
         today=_TODAY,
     )
     assert detail["commercial_state"] == "Accepted"
+    assert detail["acceptance_id"] == _ACCEPTANCE_ID
     acceptance = detail["acceptance"]
     assert acceptance is not None
     assert acceptance["accepted_variant_id"] == _VARIANT_ID
