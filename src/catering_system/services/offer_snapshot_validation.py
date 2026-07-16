@@ -273,6 +273,19 @@ def _require_uuid(value: object, field: str) -> str:
     return str(parsed)
 
 
+def _require_catalog_item_id(value: object, field: str) -> str:
+    """Catalog dish_id may be UUID v5 (seed from items.json slug) — not only v4."""
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be a UUID string")
+    try:
+        parsed = uuid.UUID(value)
+    except ValueError as exc:
+        raise ValueError(f"{field} must be a UUID string") from exc
+    if parsed.version not in {4, 5}:
+        raise ValueError(f"{field} must be a UUID string")
+    return str(parsed)
+
+
 def _require_snapshot_hash(value: object) -> str:
     if not isinstance(value, str) or not _SNAPSHOT_HASH_RE.fullmatch(value):
         raise ValueError("snapshot_hash must be a lowercase sha256 digest")
@@ -545,7 +558,7 @@ def _parse_position(
     if v2 and kind == "catalog":
         if catalog_raw is None:
             raise ValueError("catalog position requires catalog_item_id")
-        catalog_item_id = _require_uuid(catalog_raw, f"{label}.catalog_item_id")
+        catalog_item_id = _require_catalog_item_id(catalog_raw, f"{label}.catalog_item_id")
         allergens_raw = payload.get("allergens")
         if allergens_raw is None:
             raise ValueError("catalog position requires allergens")

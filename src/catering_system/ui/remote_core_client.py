@@ -262,6 +262,17 @@ def _uuid4(value: object) -> str:
     return raw
 
 
+def _catalog_item_id(value: object) -> str:
+    raw = _str(value)
+    try:
+        parsed = uuid.UUID(raw)
+    except ValueError:
+        _bad_response()
+    if parsed.version not in {4, 5} or str(parsed) != raw:
+        _bad_response()
+    return raw
+
+
 def _optional_str(value: object) -> str | None:
     if value is None:
         return None
@@ -1151,9 +1162,39 @@ class RemoteCoreClient:
             _str(version["planning_mode"])
             for variant_raw in _list(version["variants"]):
                 variant = _dict(variant_raw)
-                _exact(variant, {"variant_id", "name"})
+                _exact(variant, {"variant_id", "name", "positions"})
                 _uuid4(variant["variant_id"])
                 _str(variant["name"])
+                for position_raw in _list(variant["positions"]):
+                    position = _dict(position_raw)
+                    _exact(
+                        position,
+                        {
+                            "position_id",
+                            "kind",
+                            "name",
+                            "unit_net_cents",
+                            "net_total_cents",
+                            "catalog_item_id",
+                            "allergens",
+                            "allergen_labels",
+                            "allergens_unknown",
+                        },
+                    )
+                    _uuid4(position["position_id"])
+                    _str(position["kind"])
+                    _str(position["name"])
+                    _nonnegative_int(position["unit_net_cents"])
+                    _nonnegative_int(position["net_total_cents"])
+                    if position["catalog_item_id"] is not None:
+                        _str(position["catalog_item_id"])
+                    allergens = position["allergens"]
+                    if allergens is not None:
+                        for code in _list(allergens):
+                            _str(code)
+                        for label in _list(position["allergen_labels"]):
+                            _str(label)
+                    _bool(position["allergens_unknown"])
         for raw in _list(body["history"]):
             entry = _dict(raw)
             _exact(entry, {"at", "label"})

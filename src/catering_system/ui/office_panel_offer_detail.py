@@ -70,6 +70,45 @@ def _surface_version(detail: dict[str, object]) -> dict[str, object]:
     return versions[-1]
 
 
+def _allergen_block(labels: object, *, unknown: bool = False) -> str:
+    if unknown:
+        return "<p><strong>Allergene:</strong> nicht bekannt</p>"
+    if isinstance(labels, list) and labels:
+        items = "".join(f"<li>{_e(str(label))}</li>" for label in labels)
+        return f"<p><strong>Allergene:</strong></p><ul>{items}</ul>"
+    return "<p><strong>Allergene:</strong> keine deklarierten Allergene</p>"
+
+
+def _position_rows(variants: list[dict[str, object]]) -> str:
+    rows: list[str] = []
+    for variant in variants:
+        positions = variant.get("positions")
+        if not isinstance(positions, list):
+            continue
+        for position in positions:
+            if not isinstance(position, dict):
+                continue
+            name = _e(str(position.get("name", "Position")))
+            unit_cents = position.get("unit_net_cents")
+            unit_text = (
+                f"{int(unit_cents) / 100:.2f} €"
+                if isinstance(unit_cents, int)
+                else "–"
+            )
+            allergen_html = _allergen_block(
+                position.get("allergen_labels"),
+                unknown=bool(position.get("allergens_unknown")),
+            )
+            rows.append(
+                "<li>"
+                f"<strong>{name}</strong> "
+                f"<span>({ _e(unit_text) } netto / Einheit)</span>"
+                f"{allergen_html}"
+                "</li>"
+            )
+    return "".join(rows) or "<li>Keine Positionen</li>"
+
+
 def _select_options(
     values: tuple[str, ...],
     labels: dict[str, str],
@@ -236,6 +275,10 @@ def render_offer_detail(
         f"<p><span>Gäste</span><strong>{_e(guest_text)}</strong></p>"
         f"<p><span>Zeitfenster</span><strong>{_e(str(surface['time_window_text']))}</strong></p>"
         f"<p><span>Planung</span><strong>{_e(planning)}</strong></p>"
+        "</section>"
+        '<section class="offer-detail-section">'
+        "<h2>Positionen (Snapshot)</h2>"
+        f'<ul class="offer-position-list">{_position_rows(variants)}</ul>'
         "</section>"
         '<section class="offer-detail-section">'
         "<h2>Angebotsvarianten</h2>"

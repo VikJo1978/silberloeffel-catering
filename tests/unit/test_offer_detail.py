@@ -157,6 +157,37 @@ def _offer(
     )
 
 
+def test_offer_detail_exposes_v2_allergens() -> None:
+    inquiry = _inquiry()
+    offer = _offer(inquiry.inquiry_id)
+    version = offer.versions[0]
+    variant = version.variants[0]
+    object.__setattr__(
+        variant,
+        "positions",
+        (
+            OfferPosition(
+                position_id="88888888-8888-4888-8888-888888888881",
+                kind="catalog",
+                name="Pasta",
+                unit_net_cents=1200,
+                net_total_cents=12000,
+                vat_rate_percent=7,
+                vat_amount_cents=840,
+                gross_total_cents=12840,
+                catalog_item_id="11111111-1111-4111-8111-111111111111",
+                allergens=("A", "G"),
+            ),
+        ),
+    )
+    detail = offer_detail(offer, today=_TODAY)
+    position = detail["versions"][0]["variants"][0]["positions"][0]
+    assert position["unit_net_cents"] == 1200
+    assert position["allergens"] == ["A", "G"]
+    assert position["allergens_unknown"] is False
+    assert "Gluten" in position["allergen_labels"]
+
+
 def test_prepared_offer_detail_shape() -> None:
     inquiry = _inquiry()
     detail = offer_detail(_offer(inquiry.inquiry_id), today=_TODAY)
@@ -170,9 +201,10 @@ def test_prepared_offer_detail_shape() -> None:
     assert "order_id" not in detail
     version = detail["versions"][0]
     assert version["state"] == "Prepared"
-    assert version["variants"] == [
-        {"variant_id": _VARIANT_ID, "name": "Variante A"}
-    ]
+    variant = version["variants"][0]
+    assert variant["variant_id"] == _VARIANT_ID
+    assert variant["name"] == "Variante A"
+    assert variant["positions"][0]["allergens_unknown"] is True
     assert offer_state_label("Prepared") == "Vorbereitet"
 
 

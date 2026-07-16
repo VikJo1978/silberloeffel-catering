@@ -408,6 +408,10 @@ def test_offer_detail_schema_prepared(api) -> None:
         "variants",
     }
     assert version["variants"][0]["name"] == "Variante A"
+    assert "positions" in version["variants"][0]
+    position = version["variants"][0]["positions"][0]
+    assert position["allergens_unknown"] is True
+    assert position["allergens"] is None
     assert body["history"][0]["label"] == "Angebot erstellt"
 
 
@@ -1556,6 +1560,117 @@ def _valid_offer_snapshot(*, inquiry_id: str) -> dict[str, object]:
     }
     payload["snapshot_hash"] = compute_snapshot_hash(payload)
     return payload
+
+
+def _valid_offer_snapshot_v2(*, inquiry_id: str, unit_net_cents: int = 1200) -> dict[str, object]:
+    net = unit_net_cents * 10
+    vat = (net * 7) // 100
+    gross = net + vat
+    payload: dict[str, object] = {
+        "schema_version": "offer_snapshot_v2",
+        "source": "fingerfood-configurator-backend",
+        "source_draft_id": "draft-v2",
+        "inquiry_id": inquiry_id,
+        "snapshot_id": _SNAPSHOT_ID,
+        "snapshot_created_at": "2026-07-16T08:30:00+00:00",
+        "valid_until": "2026-07-29",
+        "currency": "EUR",
+        "recipient": {
+            "company_name": "Example company",
+            "contact_name": "Example contact",
+            "email": "customer@example.invalid",
+            "postal_address": "Customer-visible recipient address",
+        },
+        "event": {
+            "event_date": "2026-08-20",
+            "time_window_text": "18:00–22:00",
+            "location_text": "Hamburg",
+            "guest_count": 80,
+            "planning_mode": "caterer_suggestion",
+        },
+        "customer_text": {
+            "title": "Sommerfest",
+            "introduction": "Customer-visible introduction",
+            "notes": "Customer-visible conditions and notes",
+        },
+        "payment_terms": {
+            "method": "RECHNUNG",
+            "customer_visible_text": "Zahlung per Rechnung",
+        },
+        "calculator": {
+            "name": "fingerfood-backend",
+            "calculator_revision": "v2-catalog-adapter",
+            "catalog_revision": "core-catalog-v1",
+            "tax_revision": "v1",
+        },
+        "variants": [
+            {
+                "variant_id": _VARIANT_ID,
+                "label": "Variante A",
+                "description": "Catalog snapshot",
+                "positions": [
+                    {
+                        "position_id": _POSITION_ID,
+                        "kind": "catalog",
+                        "catalog_item_id": "11111111-1111-4111-8111-111111111111",
+                        "name": "Pasta",
+                        "description": "Catalog description",
+                        "composition": "Catalog composition",
+                        "quantity_mode": "total",
+                        "quantity": "10",
+                        "unit_label": "Portion",
+                        "unit_net_cents": unit_net_cents,
+                        "net_total_cents": net,
+                        "vat_rate_percent": 7,
+                        "vat_amount_cents": vat,
+                        "gross_total_cents": gross,
+                        "notes": None,
+                        "related_position_id": None,
+                        "allergens": ["A", "G"],
+                        "vegan": None,
+                        "vegetarian": None,
+                    }
+                ],
+                "totals": {
+                    "net_cents": net,
+                    "vat_7_base_cents": net,
+                    "vat_7_amount_cents": vat,
+                    "vat_19_base_cents": 0,
+                    "vat_19_amount_cents": 0,
+                    "gross_cents": gross,
+                },
+            }
+        ],
+    }
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+    return payload
+
+
+def test_prepare_offer_v2_persists_allergens(api) -> None:
+    base, ids, db = api
+    inquiry_id = ids["inquiry_convertible"]
+    status, body, _h = _post(
+        _prepare_offer_url(base, inquiry_id),
+        args={"snapshot": _valid_offer_snapshot_v2(inquiry_id=inquiry_id)},
+    )
+    assert status == 201
+    offer_id = body["offer_id"]
+
+    detail_status, detail, _h = _get(f"{base}/office/v1/offers/{offer_id}")
+    assert detail_status == 200
+    position = detail["versions"][0]["variants"][0]["positions"][0]
+    assert position["name"] == "Pasta"
+    assert position["unit_net_cents"] == 1200
+    assert position["allergens"] == ["A", "G"]
+    assert position["allergens_unknown"] is False
+
+    offers = SQLiteOfferRepository(db)
+    stored = offers.get(offer_id)
+    assert stored is not None
+    stored_position = stored.versions[0].variants[0].positions[0]
+    assert stored_position.unit_net_cents == 1200
+    assert stored_position.allergens == ("A", "G")
+    offers.close()
 
 
 def _prepare_offer_url(base: str, inquiry_id: str) -> str:

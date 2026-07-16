@@ -27,7 +27,7 @@ from catering_system.domain.calendar_entry_projection import (
     CalendarEntryProjection,
 )
 from catering_system.domain.task_projection import TaskProjection
-from catering_system.domain.offer import Offer, OfferState, derive_offer_state
+from catering_system.domain.offer import Offer, OfferPosition, OfferState, derive_offer_state
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjection,
     PrintPositionLine,
@@ -162,6 +162,26 @@ def _offer_history(offer: Offer) -> list[dict[str, object]]:
     return [{"at": at.isoformat(), "label": label} for at, label in entries]
 
 
+def _position_detail(position: OfferPosition) -> dict[str, object]:
+    row: dict[str, object] = {
+        "position_id": position.position_id,
+        "kind": position.kind,
+        "name": position.name,
+        "unit_net_cents": position.unit_net_cents,
+        "net_total_cents": position.net_total_cents,
+        "catalog_item_id": position.catalog_item_id,
+    }
+    if position.allergens is None:
+        row["allergens"] = None
+        row["allergen_labels"] = None
+        row["allergens_unknown"] = True
+    else:
+        row["allergens"] = list(position.allergens)
+        row["allergen_labels"] = list(allergen_labels(position.allergens))
+        row["allergens_unknown"] = False
+    return row
+
+
 def offer_detail(offer: Offer, *, today: date | None = None) -> dict[str, object]:
     operating_today = today or berlin_today()
     projection = derive_inquiry_offer_projection(offer, today=operating_today)
@@ -185,7 +205,13 @@ def offer_detail(offer: Offer, *, today: date | None = None) -> dict[str, object
                 "guest_count": version.guest_count,
                 "planning_mode": version.planning_mode,
                 "variants": [
-                    {"variant_id": variant.variant_id, "name": variant.label}
+                    {
+                        "variant_id": variant.variant_id,
+                        "name": variant.label,
+                        "positions": [
+                            _position_detail(position) for position in variant.positions
+                        ],
+                    }
                     for variant in version.variants
                 ],
             }

@@ -385,6 +385,53 @@ Policy: **whole Angebot must not fail** because Catalog is down; fallback preser
 
 Remove fallback from production path; `items.json` not read at compose runtime.
 
+### 9.5 Configurator adapter frozen rules (6D-3a Step 4)
+
+**Catalog API is read-only for selection — never a write path.**
+
+```text
+Configurator  →  GET CatalogDish  →  OfferSnapshot V2   ✅
+Configurator  →  POST/PUT Catalog                   ❌
+```
+
+**Fallback is non-fatal.**
+
+```text
+Catalog API reachable     →  Catalog is price + allergen source
+Catalog API unreachable   →  items.json row for that line (log warning)
+Whole Angebot             →  must not fail because Catalog is down
+```
+
+`CATALOG_ADAPTER_STRICT=1` (dev/staging only) disables fallback.
+
+**Active gate at compose.**
+
+```text
+active=false  →  excluded from catalog list / new line selection
+Existing Offers →  unchanged (Core snapshot, not Configurator)
+```
+
+**Price authority when Catalog is used.**
+
+```text
+Catalog.current_unit_net_cents  →  snapshot unit_net_cents
+items.json price                →  ignored for that line
+```
+
+**Traceability.**
+
+```text
+OfferSnapshot V2 catalog line:
+  catalog_item_id = Catalog dish_id (UUID)
+  allergens       = Catalog tuple (explicit [], never omitted on V2)
+  vegan/vegetarian = null until Catalog gains fields
+```
+
+**6D-3b prep (do not implement in Step 4).**
+
+- Keep `items.json` for seed (`seed_catalog_from_items.py`) and fallback.
+- Do not remove runtime JSON until Catalog DB exists in every environment.
+
 ---
 
 ## 10. Print & Order (unchanged in 6D-3)
