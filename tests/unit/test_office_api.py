@@ -10,7 +10,7 @@ import threading
 import urllib.error
 import urllib.request
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -1879,9 +1879,10 @@ def test_mark_sent_failure_leaves_no_sent_evidence_or_ledger(api) -> None:
     base, _ids, db = api
     offer_id, version_id = _prepare_offer(api)
     command_id = str(uuid.uuid4())
+    future_sent_at = (datetime.now(UTC) + timedelta(days=1)).isoformat()
     status, body, _h = _post(
         _mark_sent_url(base, offer_id, version_id),
-        args=dict(_MARK_SENT_ARGS, sent_at="2026-07-16T10:00:00+00:00"),
+        args=dict(_MARK_SENT_ARGS, sent_at=future_sent_at),
         command_id=command_id,
     )
     assert (status, body["error"]) == (422, "invalid_sent_evidence")
