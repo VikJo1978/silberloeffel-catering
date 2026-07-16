@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from datetime import datetime
+
 from catering_system.domain.catalog import CatalogDish, CatalogPriceHistoryEntry
 
 
@@ -32,6 +34,16 @@ class CatalogRepository(Protocol):
 
     def insert_dish_if_absent(self, dish: CatalogDish) -> bool:
         """Seed-only: return False when dish_id already exists."""
+        ...
+
+    def update_dish(
+        self,
+        dish: CatalogDish,
+        *,
+        expected_updated_at: datetime,
+        price_history_entry: CatalogPriceHistoryEntry | None = None,
+    ) -> None:
+        """Persist dish update; append history when entry is provided."""
         ...
 
     def close(self) -> None: ...

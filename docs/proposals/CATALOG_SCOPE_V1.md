@@ -399,9 +399,11 @@ See: `CATALOG_READ_MODEL_6D1.md`.
 
 ### Phase 2 — 6D-2 Catalog Editing
 
-- Büro-only write commands: dish CRUD, Stammpreis change, active toggle, allergen update.
-- Every price change: `PriceHistory` event → `CatalogDish.current_unit_net_cents`.
-- Configurator switched to read Catalog API instead of `items.json`.
+- Büro-only write command: **update existing dish** (not full CRUD in v1).
+- Every price change: `PriceHistory` append → `CatalogDish.current_unit_net_cents`.
+- Configurator **unchanged** (`items.json → OfferSnapshot` until 6D-3 migration slice).
+
+See: `CATALOG_WRITE_MODEL_6D2.md`.
 
 ### Phase 3 — Snapshot extension (6D-3 or part of 6D-2)
 

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import argparse
 import os
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote
@@ -69,6 +69,12 @@ from catering_system.ui import office_api_views as api_views
 from catering_system.domain.work_center import WorkCenterSnapshot
 from catering_system.services.contact_projection_service import ContactProjectionService
 from catering_system.services.catalog_dish_service import CatalogDishService
+from catering_system.services.catalog_dish_write_service import CatalogDishWriteService
+from catering_system.domain.catalog import (
+    ALLERGEN_CODES,
+    CatalogDishStaleError,
+    CatalogDishUpdatePayload,
+)
 from catering_system.services.email_intake_projection_service import (
     EmailIntakeProjectionService,
 )
@@ -85,6 +91,7 @@ from catering_system.ui.office_panel_contact_detail import render_kontakt_detail
 from catering_system.ui.office_panel_contacts_list import render_kontakte_list
 from catering_system.ui.office_panel_catalog_list import render_gerichte_list
 from catering_system.ui.office_panel_catalog_detail import render_gericht_detail
+from catering_system.ui.office_panel_catalog_edit import render_gericht_edit
 from catering_system.ui.office_panel_email_detail import render_email_detail
 from catering_system.ui.office_panel_emails_list import render_email_list
 from catering_system.ui.office_panel_calendar_list import render_kalender_list
@@ -249,6 +256,7 @@ class OfficePanel:
         self._orders = order_repo
         self._offers = offer_repo or InMemoryOfferRepository()
         self._catalog = catalog_repo or InMemoryCatalogRepository()
+        self.catalog_dish_write_service = CatalogDishWriteService(self._catalog)
         # Phase 2 dual mode (PROXMOX_OFFICE_SERVER_CORE_API_PACK_V1 §7): when
         # `remote` is given, `inquiry_repo`/`order_repo` are the same
         # RemoteCoreClient instance, used here only for its repo-shaped reads
@@ -284,6 +292,7 @@ class OfficePanel:
             self.order_service = remote.order_service  # type: ignore[assignment]
             self.core = remote.core  # type: ignore[assignment]
             self.payment_reminder_service = remote.payment_reminder_service  # type: ignore[assignment]
+            self.catalog_dish_write_service = remote.catalog_dish_write_service  # type: ignore[assignment]
         self._remote = remote
         self._command_executor = command_executor
         self._ui_version = ui_version
@@ -698,6 +707,116 @@ class OfficePanel:
             history = service.list_price_history(dish_id)
             detail = api_views.catalog_dish_detail_view(dish, history)
         return render_gericht_detail(detail, context=context)
+
+    def _catalog_detail_payload(self, dish_id: str) -> dict[str, object] | None:
+        if self._remote is not None:
+            return self._remote.catalog_dish_detail(dish_id)
+        service = CatalogDishService(self._catalog)
+        dish = service.get_dish(dish_id)
+        if dish is None:
+            return None
+        history = service.list_price_history(dish_id)
+        return api_views.catalog_dish_detail_view(dish, history)
+
+    def _catalog_update_command_fields(self, updated_at: str) -> str:
+        expect = {"updated_at": updated_at}
+        fields = self._command_fields(expect)
+        if self._remote is None:
+            fields += (
+                f'<input type="hidden" name="_expect_updated_at" '
+                f'value="{_e(updated_at)}">'
+            )
+        return fields
+
+    def render_gericht_edit(
+        self,
+        dish_id: str,
+        *,
+        context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
+        error_message: str | None = None,
+    ) -> str | None:
+        detail = self._catalog_detail_payload(dish_id)
+        if detail is None:
+            return None
+        detail = dict(detail)
+        detail["effective_from_default"] = api_views.berlin_today().isoformat()
+        return render_gericht_edit(
+            detail,
+            command_fields=self._catalog_update_command_fields(
+                str(detail["updated_at"])
+            ),
+            context=context,
+            error_message=error_message,
+        )
+
+    @staticmethod
+    def _catalog_allergens_from_form(form: dict[str, str]) -> list[str]:
+        return [
+            code for code in ALLERGEN_CODES if form.get(f"allergen_{code}") == "1"
+        ]
+
+    def update_catalog_dish(self, dish_id: str, form: dict[str, str]) -> None:
+        expected_raw = form.get("_expect_updated_at", "").strip()
+        if not expected_raw:
+            raise ValueError("missing catalog updated_at precondition")
+        expected_updated_at = datetime.fromisoformat(expected_raw)
+        current = self._catalog_detail_payload(dish_id)
+        if current is None:
+            raise ValueError(f"no catalog dish with id {dish_id!r}")
+        new_cents = api_views.parse_catalog_price_cents(form.get("price_net", ""))
+        effective_raw = form.get("effective_from", "").strip()
+        effective_from = (
+            date.fromisoformat(effective_raw) if effective_raw else None
+        )
+        if new_cents != int(current["current_unit_net_cents"]) and effective_from is None:
+            effective_from = api_views.berlin_today()
+        args = {
+            "name": form.get("name", "").strip(),
+            "description": form.get("description", "").strip() or None,
+            "composition": form.get("composition", "").strip() or None,
+            "notes": form.get("notes", "").strip() or None,
+            "current_unit_net_cents": new_cents,
+            "allergens": self._catalog_allergens_from_form(form),
+            "active": form.get("active") == "1",
+        }
+        if effective_from is not None:
+            args["effective_from"] = effective_from.isoformat()
+
+        def work() -> None:
+            if self._remote is not None:
+                self.catalog_dish_write_service.update(
+                    dish_id,
+                    args=args,
+                    expected_updated_at=expected_raw,
+                )
+                return
+            try:
+                self.catalog_dish_write_service.update_dish(
+                    dish_id,
+                    update=CatalogDishUpdatePayload(
+                        name=str(args["name"]),
+                        description=args["description"],
+                        composition=args["composition"],
+                        notes=args["notes"],
+                        current_unit_net_cents=new_cents,
+                        allergens=tuple(args["allergens"]),
+                        active=bool(args["active"]),
+                        effective_from=effective_from,
+                    ),
+                    expected_updated_at=expected_updated_at,
+                )
+            except CatalogDishStaleError as exc:
+                raise ValueError(
+                    "Das Gericht wurde zwischenzeitlich geändert. "
+                    "Bitte laden Sie die Seite neu."
+                ) from exc
+
+        if self._remote is not None:
+            work()
+        elif self._command_executor is not None:
+            self._command_executor.run(work)
+        else:
+            work()
 
     def _email_list_rows(self) -> list[dict[str, object]]:
         if self._remote is not None:

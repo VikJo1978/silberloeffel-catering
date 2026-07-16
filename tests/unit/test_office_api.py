@@ -2160,3 +2160,79 @@ def test_list_allergen_codes_schema(api) -> None:
     assert status == 200
     assert len(body["allergen_codes"]) == 14
     assert body["allergen_codes"][0]["code"] == "A"
+
+
+def test_update_catalog_dish_command_success(api) -> None:
+    base, _ids, db = api
+    _seed_catalog_dish(db)
+    repo = SQLiteCatalogRepository(db)
+    try:
+        dish = repo.get_dish(_CATALOG_DISH_ID)
+        assert dish is not None
+        updated_at = dish.updated_at.isoformat()
+    finally:
+        repo.close()
+    url = f"{base}/office/v1/catalog/dishes/{_CATALOG_DISH_ID}/update"
+    args = {
+        "name": "Kartoffelsalat",
+        "description": "Neu",
+        "composition": "mit Dill",
+        "notes": None,
+        "current_unit_net_cents": 400,
+        "allergens": ["G", "J"],
+        "active": True,
+        "effective_from": "2026-08-01",
+    }
+    status, body, _h = _post(url, args=args, expect={"updated_at": updated_at})
+    assert status == 200
+    assert body["price_changed"] is True
+    assert "price_history_entry_id" in body
+    status, detail, _h = _get(f"{base}/office/v1/catalog/dishes/{_CATALOG_DISH_ID}")
+    assert status == 200
+    assert detail["current_unit_net_cents"] == 400
+    assert len(detail["price_history"]) == 1
+
+
+def test_update_catalog_dish_text_only_no_history(api) -> None:
+    base, _ids, db = api
+    _seed_catalog_dish(db)
+    repo = SQLiteCatalogRepository(db)
+    try:
+        dish = repo.get_dish(_CATALOG_DISH_ID)
+        assert dish is not None
+        updated_at = dish.updated_at.isoformat()
+    finally:
+        repo.close()
+    url = f"{base}/office/v1/catalog/dishes/{_CATALOG_DISH_ID}/update"
+    args = {
+        "name": "Kartoffelsalat",
+        "description": "Nur Text",
+        "composition": "Kartoffeln",
+        "notes": None,
+        "current_unit_net_cents": 320,
+        "allergens": ["G", "J"],
+        "active": True,
+    }
+    status, body, _h = _post(url, args=args, expect={"updated_at": updated_at})
+    assert status == 200
+    assert body["price_changed"] is False
+    status, detail, _h = _get(f"{base}/office/v1/catalog/dishes/{_CATALOG_DISH_ID}")
+    assert detail["price_history"] == []
+
+
+def test_update_catalog_dish_stale_state_409(api) -> None:
+    base, _ids, db = api
+    _seed_catalog_dish(db)
+    url = f"{base}/office/v1/catalog/dishes/{_CATALOG_DISH_ID}/update"
+    args = {
+        "name": "Kartoffelsalat",
+        "current_unit_net_cents": 320,
+        "allergens": [],
+        "active": True,
+    }
+    status, body, _h = _post(
+        url,
+        args=args,
+        expect={"updated_at": "2020-01-01T00:00:00+00:00"},
+    )
+    assert (status, body["error"]) == (409, "stale_state")

@@ -30,14 +30,22 @@ def _price_history_block(history: object) -> str:
     for entry in history:
         if not isinstance(entry, dict):
             continue
-        old_cents = entry.get("old_unit_net_cents")
-        new_cents = entry.get("new_unit_net_cents")
+        old_display = entry.get("old_price_display")
+        new_display = entry.get("new_price_display")
+        if old_display is None and entry.get("old_unit_net_cents") is not None:
+            old_display = str(entry.get("old_unit_net_cents"))
+        if new_display is None:
+            new_display = str(entry.get("new_unit_net_cents"))
         changed_at = _e(str(entry.get("changed_at", "")))
         changed_by = _e(str(entry.get("changed_by", "")))
+        effective = entry.get("effective_from")
+        effective_html = (
+            f", gültig ab {_e(str(effective))}" if effective is not None else ""
+        )
         items.append(
             "<li>"
-            f"{_e(str(old_cents))} → {_e(str(new_cents))} Cent "
-            f"({changed_at}, {changed_by})"
+            f"{_e(str(old_display))} → {_e(str(new_display))} "
+            f"({changed_at}, {changed_by}{effective_html})"
             "</li>"
         )
     if not items:
@@ -59,6 +67,7 @@ def render_gericht_detail(
         + _allergen_block(detail.get("allergen_labels"))
         + f"<p><strong>Preis:</strong> {_e(str(detail.get('price_display', '–')))}</p>"
         + _price_history_block(detail.get("price_history"))
+        + f'<p><a href="/gerichte/{_e(str(detail.get("dish_id", "")))}/edit">Bearbeiten</a></p>'
         + '<p><a href="/gerichte">← Zurück zu Gerichte</a></p>'
     )
     return _page(name, body, active_section="catalog", context=context)

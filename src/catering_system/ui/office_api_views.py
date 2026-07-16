@@ -710,6 +710,28 @@ def format_catalog_price_eur(cents: int) -> str:
     return f"{whole},{fraction:02d} €"
 
 
+def catalog_price_input_value(cents: int) -> str:
+    whole, fraction = divmod(cents, 100)
+    return f"{whole},{fraction:02d}"
+
+
+def parse_catalog_price_cents(raw: str) -> int:
+    text = raw.strip().replace(",", ".")
+    if text.endswith("€"):
+        text = text[:-1].strip()
+    if not text:
+        raise ValueError("price is required")
+    if "." in text:
+        from decimal import Decimal, InvalidOperation
+
+        try:
+            value = Decimal(text)
+        except InvalidOperation as exc:
+            raise ValueError("invalid price") from exc
+        return int((value * 100).quantize(Decimal("1")))
+    return int(text)
+
+
 def catalog_dish_list_row(dish: CatalogDish) -> dict[str, object]:
     return {
         "dish_id": dish.dish_id,
@@ -731,11 +753,18 @@ def catalog_dish_list_view(result: CatalogDishListResult) -> dict[str, object]:
 
 
 def _price_history_shape(entry: CatalogPriceHistoryEntry) -> dict[str, object]:
+    old_cents = entry.old_unit_net_cents
     return {
         "entry_id": entry.entry_id,
         "dish_id": entry.dish_id,
-        "old_unit_net_cents": entry.old_unit_net_cents,
+        "old_unit_net_cents": old_cents,
         "new_unit_net_cents": entry.new_unit_net_cents,
+        "old_price_display": (
+            format_catalog_price_eur(old_cents)
+            if old_cents is not None
+            else None
+        ),
+        "new_price_display": format_catalog_price_eur(entry.new_unit_net_cents),
         "changed_at": entry.changed_at.isoformat(),
         "changed_by": entry.changed_by,
         "effective_from": (

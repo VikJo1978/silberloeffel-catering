@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from catering_system.domain.catalog import CatalogDish
@@ -69,5 +69,48 @@ def test_sqlite_catalog_active_only_filter(tmp_path: Path) -> None:
         )
         active_rows = repo.list_dishes(active_only=True)
         assert [row.dish_id for row in active_rows] == [_DISH_ID]
+    finally:
+        repo.close()
+
+
+def test_sqlite_catalog_update_and_price_history(tmp_path: Path) -> None:
+    db = tmp_path / "core.db"
+    repo = SQLiteCatalogRepository(db)
+    later = datetime(2026, 7, 16, 9, 0, tzinfo=UTC)
+    try:
+        repo.insert_dish_if_absent(_dish())
+        updated = CatalogDish(
+            dish_id=_DISH_ID,
+            name="Schnitzel",
+            description="Neu",
+            composition="mit Rosmarinkartoffeln",
+            notes=None,
+            current_unit_net_cents=900,
+            allergens=("A", "G"),
+            active=True,
+            created_at=_NOW,
+            updated_at=later,
+        )
+        from catering_system.domain.catalog import CatalogPriceHistoryEntry
+
+        repo.update_dish(
+            updated,
+            expected_updated_at=_NOW,
+            price_history_entry=CatalogPriceHistoryEntry(
+                entry_id="99999999-9999-4999-8999-999999999999",
+                dish_id=_DISH_ID,
+                old_unit_net_cents=850,
+                new_unit_net_cents=900,
+                changed_at=later,
+                changed_by="office",
+                effective_from=date(2026, 8, 1),
+            ),
+        )
+        loaded = repo.get_dish(_DISH_ID)
+        assert loaded is not None
+        assert loaded.current_unit_net_cents == 900
+        history = repo.list_price_history(_DISH_ID)
+        assert len(history) == 1
+        assert history[0].new_unit_net_cents == 900
     finally:
         repo.close()

@@ -99,6 +99,13 @@ from catering_system.services.order_print_projection_service import (
 )
 from catering_system.services.buffet_cards_service import BuffetCardsService
 from catering_system.services.catalog_dish_service import CatalogDishService
+from catering_system.services.catalog_dish_write_service import CatalogDishWriteService
+from catering_system.domain.catalog import (
+    CatalogDishNotFoundError,
+    CatalogDishStaleError,
+    CatalogDishUpdatePayload,
+    validate_allergen_codes,
+)
 from catering_system.ui import office_api_views as views
 
 _log = logging.getLogger(__name__)
@@ -256,6 +263,22 @@ def _exact_keys(mapping: dict[str, object], keys: set[str]) -> None:
 _ABSENT = object()
 
 
+def _v_allergen_codes(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise _invalid()
+    try:
+        return validate_allergen_codes([str(item) for item in value])
+    except ValueError as exc:
+        raise _invalid() from exc
+
+
+def _v_catalog_text(value: object, max_len: int) -> str | None:
+    if value is None:
+        return None
+    text = _v_str(value, max_len).strip()
+    return text or None
+
+
 def _v_intake(
     args: dict[str, object], key: str, cap: int, keep: str | None
 ) -> str | None:
@@ -345,6 +368,7 @@ class OfficeApi:
             self.print_projection_service,
         )
         self.catalog_dish_service = CatalogDishService(self.catalog)
+        self.catalog_dish_write_service = CatalogDishWriteService(self.catalog)
 
     # -- reads -----------------------------------------------------------
 
@@ -479,6 +503,58 @@ class OfficeApi:
         return views.allergen_codes_view(
             self.catalog_dish_service.list_allergen_codes()
         )
+
+    def cmd_update_catalog_dish(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        dish_id = _v_uuid(path_ids["id"])
+        current = self.catalog_dish_service.get_dish(dish_id)
+        if current is None:
+            raise ApiError(404, "not_found")
+        if _v_datetime(expect["updated_at"]) != current.updated_at:
+            raise ApiError(409, "stale_state")
+        new_cents = _v_int(args["current_unit_net_cents"])
+        if new_cents < 0:
+            raise _invalid()
+        price_will_change = new_cents != current.current_unit_net_cents
+        effective_from: date | None
+        if price_will_change:
+            effective_from = (
+                _v_optional_date(args["effective_from"])
+                if "effective_from" in args
+                else views.berlin_today()
+            )
+        else:
+            effective_from = None
+        try:
+            result = self.catalog_dish_write_service.update_dish(
+                dish_id,
+                update=CatalogDishUpdatePayload(
+                    name=_v_str(args["name"], 500),
+                    description=_v_catalog_text(args.get("description"), 20_000),
+                    composition=_v_catalog_text(args.get("composition"), 20_000),
+                    notes=_v_catalog_text(args.get("notes"), 20_000),
+                    current_unit_net_cents=new_cents,
+                    allergens=_v_allergen_codes(args["allergens"]),
+                    active=_v_bool(args["active"]),
+                    effective_from=effective_from,
+                ),
+                expected_updated_at=current.updated_at,
+            )
+        except CatalogDishNotFoundError as exc:
+            raise ApiError(404, "not_found") from exc
+        except CatalogDishStaleError as exc:
+            raise ApiError(409, "stale_state") from exc
+        except ValueError as exc:
+            raise ApiError(422, "validation_error") from exc
+        body: dict[str, object] = {
+            "dish_id": result.dish.dish_id,
+            "updated_at": result.dish.updated_at.isoformat(),
+            "price_changed": result.price_changed,
+        }
+        if result.price_history_entry_id is not None:
+            body["price_history_entry_id"] = result.price_history_entry_id
+        return 200, body
 
     def list_emails(self) -> dict[str, object]:
         return {
@@ -1189,6 +1265,19 @@ _PAYMENT_REMINDER_ARGS = _ArgKeys(
         }
     )
 )
+_CATALOG_DISH_UPDATE_ARGS = _ArgKeys(
+    required=frozenset(
+        {
+            "name",
+            "current_unit_net_cents",
+            "allergens",
+            "active",
+        }
+    ),
+    optional=frozenset(
+        {"description", "composition", "notes", "effective_from"}
+    ),
+)
 
 _COMMANDS: dict[str, _CommandSpec] = {
     "create_inquiry": _CommandSpec("cmd_create_inquiry", _CREATE_ARGS, set()),
@@ -1214,6 +1303,9 @@ _COMMANDS: dict[str, _CommandSpec] = {
     "cancel": _CommandSpec("cmd_cancel", _NO_ARGS, {"updated_at"}),
     "payment-reminder": _CommandSpec(
         "cmd_payment_reminder", _PAYMENT_REMINDER_ARGS, {"updated_at"}
+    ),
+    "update_catalog_dish": _CommandSpec(
+        "cmd_update_catalog_dish", _CATALOG_DISH_UPDATE_ARGS, {"updated_at"}
     ),
 }
 
@@ -1299,6 +1391,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/catalog/allergen-codes$"),
         "/office/v1/catalog/allergen-codes",
         {"GET": "list_allergen_codes"},
+    ),
+    (
+        re.compile(r"^/office/v1/catalog/dishes/(?P<id>[^/]+)/update$"),
+        "/office/v1/catalog/dishes/{id}/update",
+        {"POST": "update_catalog_dish"},
     ),
     (
         re.compile(r"^/office/v1/offers$"),

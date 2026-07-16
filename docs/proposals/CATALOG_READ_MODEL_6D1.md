@@ -1,9 +1,9 @@
 # 6D-1 — Catalog Read Model (design pack)
 
-Status: **design proposal only — no production code authorized until approved**  
+Status: **implemented** — `c8662ad Add catalog read model`  
 Prerequisite: `CATALOG_SCOPE_V1.md` (6D-0 frozen)  
 Scope owner: Catalog Stammdaten — **read-only** office surface  
-Next slice: **6D-2 Catalog Editing** (Büro write + PriceHistory append)
+Next slice: **6D-2 Catalog Editing** — see `CATALOG_WRITE_MODEL_6D2.md`
 
 ---
 

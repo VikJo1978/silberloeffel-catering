@@ -35,6 +35,8 @@ from catering_system.repositories.sqlite_offer_repository import (
 from catering_system.repositories.sqlite_catalog_repository import (
     SQLiteCatalogRepository,
 )
+from catering_system.domain.catalog import CatalogDish
+from datetime import UTC, datetime
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
@@ -127,6 +129,25 @@ def _seed(db_path: Path) -> dict[str, str]:
         intake_subject="Sommerfest",
     )
     ids["inquiry_website"] = website.inquiry_id
+
+    catalog = SQLiteCatalogRepository(db_path)
+    catalog_dish_id = "11111111-1111-4111-8111-111111111111"
+    catalog.insert_dish_if_absent(
+        CatalogDish(
+            dish_id=catalog_dish_id,
+            name="Kartoffelsalat",
+            description="Hausgemacht",
+            composition="Kartoffeln",
+            notes=None,
+            current_unit_net_cents=320,
+            allergens=("G", "J"),
+            active=True,
+            created_at=datetime(2026, 7, 16, 8, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 7, 16, 8, 0, tzinfo=UTC),
+        )
+    )
+    catalog.close()
+    ids["catalog_dish_id"] = catalog_dish_id
 
     inquiries.close()
     orders.close()
@@ -903,6 +924,15 @@ def test_gerichte_direct_remote_parity(parity_world) -> None:
     r_status, r_html = _get(f"{remote_url}/gerichte")
     assert d_status == r_status == 200
     assert d_html == r_html
+
+
+def test_gericht_edit_direct_remote_parity(parity_world) -> None:
+    direct_url, remote_url, ids = parity_world
+    dish_id = ids["catalog_dish_id"]
+    d_status, d_html = _get(f"{direct_url}/gerichte/{dish_id}/edit")
+    r_status, r_html = _get(f"{remote_url}/gerichte/{dish_id}/edit")
+    assert d_status == r_status == 200
+    assert _strip_remote_fields(d_html) == _strip_remote_fields(r_html)
 
 
 def test_rueckruf_stays_local_not_routed_through_core(parity_world) -> None:

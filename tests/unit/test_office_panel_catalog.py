@@ -19,7 +19,10 @@ from catering_system.repositories.in_memory_catalog_repository import (
 )
 from catering_system.ui.office_panel import create_office_panel_server
 
+from catering_system.ui.office_panel_http import csrf_token_for_password
+
 _PASSWORD = "test-pw"
+_CSRF_TOKEN = csrf_token_for_password(_PASSWORD)
 _DISH_ID = "11111111-1111-4111-8111-111111111111"
 _NOW = datetime(2026, 7, 16, 8, 0, tzinfo=UTC)
 
@@ -73,6 +76,18 @@ def _get(url: str) -> tuple[int, str]:
         return resp.status, resp.read().decode("utf-8")
 
 
+def _post(url: str, fields: dict[str, str]) -> tuple[int, str]:
+    import urllib.parse
+    import urllib.request
+
+    data = urllib.parse.urlencode(fields).encode("utf-8")
+    req = urllib.request.Request(url, data=data, method="POST")
+    req.add_header("Authorization", _auth_header())
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+    with urllib.request.urlopen(req) as resp:
+        return resp.status, resp.read().decode("utf-8")
+
+
 def test_gerichte_list_renders(catalog_panel: str) -> None:
     status, body = _get(f"{catalog_panel}/gerichte")
     assert status == 200
@@ -91,3 +106,47 @@ def test_gericht_detail_renders_and_escapes(catalog_panel: str) -> None:
     assert "Preisänderungen:" in body
     assert "noch keine" in body
     assert "8,50 €" in body
+    assert "Bearbeiten" in body
+
+
+def test_gericht_edit_form_renders(catalog_panel: str) -> None:
+    status, body = _get(f"{catalog_panel}/gerichte/{_DISH_ID}/edit")
+    assert status == 200
+    assert "Speichern" in body
+    assert 'name="allergen_A"' in body
+    assert 'name="price_net"' in body
+    assert 'name="_expect_updated_at"' in body
+
+
+def test_gericht_update_post_success(catalog_panel: str) -> None:
+    _status, edit_html = _get(f"{catalog_panel}/gerichte/{_DISH_ID}/edit")
+    import re
+
+    updated_at = re.search(
+        r'name="_expect_updated_at" value="([^"]+)"',
+        edit_html,
+    ).group(1)
+    status, _body = _post(
+        f"{catalog_panel}/gerichte/{_DISH_ID}/update",
+        {
+            "_csrf_token": _CSRF_TOKEN,
+            "_expect_updated_at": updated_at,
+            "name": "Schnitzel Wiener Art",
+            "description": "Neu",
+            "composition": "mit Gurken",
+            "notes": "",
+            "price_net": "9,00",
+            "allergen_A": "1",
+            "allergen_G": "1",
+            "active": "1",
+            "effective_from": "2026-08-01",
+        },
+    )
+    assert status == 200
+    status, detail = _get(f"{catalog_panel}/gerichte/{_DISH_ID}")
+    assert status == 200
+    assert "Schnitzel Wiener Art" in detail
+    assert "9,00 €" in detail
+    assert "Preisänderungen:" in detail
+    assert "8,50 €" in detail
+    assert "noch keine" not in detail

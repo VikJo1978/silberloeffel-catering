@@ -2,7 +2,14 @@
 
 from __future__ import annotations
 
-from catering_system.domain.catalog import CatalogDish, CatalogPriceHistoryEntry
+from datetime import datetime
+
+from catering_system.domain.catalog import (
+    CatalogDish,
+    CatalogDishNotFoundError,
+    CatalogDishStaleError,
+    CatalogPriceHistoryEntry,
+)
 
 
 class InMemoryCatalogRepository:
@@ -46,6 +53,22 @@ class InMemoryCatalogRepository:
 
     def append_price_history(self, entry: CatalogPriceHistoryEntry) -> None:
         self._history.setdefault(entry.dish_id, []).append(entry)
+
+    def update_dish(
+        self,
+        dish: CatalogDish,
+        *,
+        expected_updated_at: datetime,
+        price_history_entry: CatalogPriceHistoryEntry | None = None,
+    ) -> None:
+        current = self._dishes.get(dish.dish_id)
+        if current is None:
+            raise CatalogDishNotFoundError(dish.dish_id)
+        if current.updated_at != expected_updated_at:
+            raise CatalogDishStaleError(dish.dish_id)
+        self._dishes[dish.dish_id] = dish
+        if price_history_entry is not None:
+            self.append_price_history(price_history_entry)
 
     def close(self) -> None:
         return None

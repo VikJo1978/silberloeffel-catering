@@ -10,6 +10,8 @@ from pathlib import Path
 
 from catering_system.domain.catalog import (
     CatalogDish,
+    CatalogDishNotFoundError,
+    CatalogDishStaleError,
     CatalogPriceHistoryEntry,
     validate_allergen_codes,
 )
@@ -159,14 +161,14 @@ class SQLiteCatalogRepository:
         return [_row_to_history(row) for row in rows]
 
     def insert_dish_if_absent(self, dish: CatalogDish) -> bool:
-        with self._write_scope() as conn:
-            cursor = conn.execute(
+        with self._write_scope():
+            cursor = self._conn.execute(
                 "SELECT 1 FROM catalog_dishes WHERE dish_id = ?",
                 (dish.dish_id,),
             )
             if cursor.fetchone() is not None:
                 return False
-            conn.execute(
+            self._conn.execute(
                 """
                 INSERT INTO catalog_dishes (
                     dish_id, name, description, composition, notes,
@@ -188,8 +190,72 @@ class SQLiteCatalogRepository:
                 ),
             )
             if self._manage_transactions:
-                conn.commit()
+                self._conn.commit()
         return True
+
+    def update_dish(
+        self,
+        dish: CatalogDish,
+        *,
+        expected_updated_at: datetime,
+        price_history_entry: CatalogPriceHistoryEntry | None = None,
+    ) -> None:
+        with self._write_scope():
+            row = self._conn.execute(
+                """
+                SELECT updated_at FROM catalog_dishes WHERE dish_id = ?
+                """,
+                (dish.dish_id,),
+            ).fetchone()
+            if row is None:
+                raise CatalogDishNotFoundError(dish.dish_id)
+            stored_at = datetime.fromisoformat(str(row[0]))
+            if stored_at != expected_updated_at:
+                raise CatalogDishStaleError(dish.dish_id)
+            self._conn.execute(
+                """
+                UPDATE catalog_dishes
+                SET name = ?, description = ?, composition = ?, notes = ?,
+                    current_unit_net_cents = ?, allergens_json = ?, active = ?,
+                    updated_at = ?
+                WHERE dish_id = ?
+                """,
+                (
+                    dish.name,
+                    dish.description,
+                    dish.composition,
+                    dish.notes,
+                    dish.current_unit_net_cents,
+                    json.dumps(list(dish.allergens)),
+                    int(dish.active),
+                    dish.updated_at.isoformat(),
+                    dish.dish_id,
+                ),
+            )
+            if price_history_entry is not None:
+                self._conn.execute(
+                    """
+                    INSERT INTO catalog_price_history (
+                        entry_id, dish_id, old_unit_net_cents, new_unit_net_cents,
+                        changed_at, changed_by, effective_from
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        price_history_entry.entry_id,
+                        price_history_entry.dish_id,
+                        price_history_entry.old_unit_net_cents,
+                        price_history_entry.new_unit_net_cents,
+                        price_history_entry.changed_at.isoformat(),
+                        price_history_entry.changed_by,
+                        (
+                            price_history_entry.effective_from.isoformat()
+                            if price_history_entry.effective_from is not None
+                            else None
+                        ),
+                    ),
+                )
+            if self._manage_transactions:
+                self._conn.commit()
 
     @staticmethod
     def _filters(

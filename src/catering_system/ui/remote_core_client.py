@@ -739,6 +739,7 @@ class RemoteCoreClient:
         self.inquiry_service = _RemoteInquiryService(self)
         self.order_service = _RemoteOrderService(self)
         self.payment_reminder_service = _RemotePaymentReminderService(self)
+        self.catalog_dish_write_service = _RemoteCatalogDishWriteService(self)
         self.core = _RemoteOperationalCoreService(self)
 
     def begin_request(self, form: Mapping[str, str] | None = None) -> None:
@@ -1299,6 +1300,30 @@ class RemoteCoreClient:
             _str(row["code"])
             _str(row["label"])
         return body
+
+    def update_catalog_dish(
+        self,
+        dish_id: str,
+        *,
+        args: dict[str, object],
+        expected_updated_at: str,
+        command_id: str | None = None,
+    ) -> dict[str, object]:
+        result = self.command(
+            f"/office/v1/catalog/dishes/{quote(dish_id, safe='')}/update",
+            args,
+            {"updated_at": expected_updated_at},
+            command_id=command_id,
+            expected={200},
+            result_keys={"dish_id", "updated_at", "price_changed"},
+        )
+        if _uuid4(result["dish_id"]) != dish_id:
+            _bad_response()
+        _datetime(result["updated_at"])
+        _bool(result["price_changed"])
+        if "price_history_entry_id" in result:
+            _uuid4(result["price_history_entry_id"])
+        return result
 
     def contact_detail(self, contact_key: str) -> dict[str, object] | None:
         try:
@@ -2032,6 +2057,25 @@ class _RemoteOrderService:
             location_text=values["location_text"],
             guest_count_estimate=values["guest_count_estimate"],
             planning_mode=validate_planning_mode(values["planning_mode"]),
+        )
+
+
+class _RemoteCatalogDishWriteService:
+    def __init__(self, client: RemoteCoreClient) -> None:
+        self._client = client
+
+    def update(
+        self,
+        dish_id: str,
+        *,
+        args: dict[str, object],
+        expected_updated_at: str,
+    ) -> None:
+        self._client.update_catalog_dish(
+            dish_id,
+            args=args,
+            expected_updated_at=expected_updated_at,
+            command_id=self._client._id(),
         )
 
 

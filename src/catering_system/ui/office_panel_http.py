@@ -360,6 +360,9 @@ def make_office_panel_handler(
             elif len(parts) == 2 and parts[0] == "gerichte":
                 page = panel.render_gericht(parts[1], context=context)
                 self._html(page) if page else self.send_error(404)
+            elif len(parts) == 3 and parts[0] == "gerichte" and parts[2] == "edit":
+                page = panel.render_gericht_edit(parts[1], context=context)
+                self._html(page) if page else self.send_error(404)
             elif len(parts) == 2 and parts[0] == "email":
                 page = panel.render_email_detail(parts[1], context=context)
                 self._html(page) if page else self.send_error(404)
@@ -493,6 +496,9 @@ def make_office_panel_handler(
                     call_id,
                 )
                 self._redirect("/rueckruf")
+            elif len(parts) == 3 and parts[0] == "gerichte" and parts[2] == "update":
+                panel.update_catalog_dish(parts[1], self._form())
+                self._redirect(f"/gerichte/{parts[1]}")
             else:
                 self.send_error(404)
 

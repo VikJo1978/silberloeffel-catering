@@ -151,3 +151,48 @@ class CatalogPriceHistoryEntry:
 def _require_aware(value: datetime, field: str) -> None:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError(f"{field} must be timezone-aware")
+
+
+class CatalogDishNotFoundError(LookupError):
+    """Raised when a catalog dish id does not exist."""
+
+
+class CatalogDishStaleError(ValueError):
+    """Raised when optimistic concurrency on updated_at fails."""
+
+
+@dataclass(frozen=True)
+class CatalogDishUpdatePayload:
+    name: str
+    description: str | None
+    composition: str | None
+    notes: str | None
+    current_unit_net_cents: int
+    allergens: tuple[AllergenCode, ...]
+    active: bool
+    effective_from: date | None = None
+
+    def __post_init__(self) -> None:
+        if not self.name.strip():
+            raise ValueError("name is required")
+        if len(self.name) > _MAX_NAME_LEN:
+            raise ValueError("name exceeds length limit")
+        for field_name, value in (
+            ("description", self.description),
+            ("composition", self.composition),
+            ("notes", self.notes),
+        ):
+            if value is not None and len(value) > _MAX_TEXT_LEN:
+                raise ValueError(f"{field_name} exceeds length limit")
+        if self.current_unit_net_cents < 0:
+            raise ValueError("current_unit_net_cents must be non-negative")
+        object.__setattr__(
+            self, "allergens", validate_allergen_codes(self.allergens)
+        )
+
+
+@dataclass(frozen=True)
+class CatalogDishUpdateResult:
+    dish: CatalogDish
+    price_changed: bool
+    price_history_entry_id: str | None
