@@ -26,6 +26,24 @@ _UUID_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Configurator items.json legacy allergen tokens → EU codes A–N.
+LEGACY_ALLERGEN_MAP: dict[str, str] = {
+    "gluten": "A",
+    "crustaceans": "B",
+    "egg": "C",
+    "fish": "D",
+    "peanuts": "E",
+    "soy": "F",
+    "milk": "G",
+    "nuts": "H",
+    "celery": "I",
+    "mustard": "J",
+    "sesame": "K",
+    "sulfites": "L",
+    "lupin": "M",
+    "molluscs": "N",
+}
+
 
 def _dish_id_from_source(source_id: str) -> str:
     if _UUID_RE.match(source_id):
@@ -33,14 +51,41 @@ def _dish_id_from_source(source_id: str) -> str:
     return str(uuid.uuid5(_CATALOG_NAMESPACE, source_id))
 
 
+def _normalize_legacy_allergen_token(token: str) -> str:
+    text = token.strip()
+    if not text:
+        raise ValueError("allergen token must not be empty")
+    upper = text.upper()
+    if len(upper) == 1 and upper in LEGACY_ALLERGEN_MAP.values():
+        return upper
+    mapped = LEGACY_ALLERGEN_MAP.get(text.lower())
+    if mapped is not None:
+        return mapped
+    return upper
+
+
+def _normalize_legacy_allergens(tokens: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        code = _normalize_legacy_allergen_token(token)
+        if code in seen:
+            continue
+        seen.add(code)
+        out.append(code)
+    return out
+
+
 def _parse_allergens(raw: object) -> tuple[str, ...]:
     if raw is None:
         return ()
     if isinstance(raw, str):
-        parts = [part.strip() for part in raw.replace(",", " ").split()]
-        return validate_allergen_codes(parts)
+        parts = [part.strip() for part in raw.replace(",", " ").split() if part.strip()]
+        return validate_allergen_codes(_normalize_legacy_allergens(parts))
     if isinstance(raw, list):
-        return validate_allergen_codes([str(item) for item in raw])
+        return validate_allergen_codes(
+            _normalize_legacy_allergens([str(item) for item in raw])
+        )
     raise ValueError(f"unsupported allergens value: {raw!r}")
 
 

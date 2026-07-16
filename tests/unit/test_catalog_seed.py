@@ -21,6 +21,12 @@ def _load_seed_module():
     return module
 
 
+def test_seed_maps_legacy_allergen_names_to_eu_codes() -> None:
+    module = _load_seed_module()
+    assert module._parse_allergens(["gluten", "milk", "fish"]) == ("A", "G", "D")
+    assert module._parse_allergens(["A", "G", "D"]) == ("A", "G", "D")
+
+
 def test_seed_import_idempotent(tmp_path: Path) -> None:
     seed_catalog = _load_seed_module().seed_catalog
     db = tmp_path / "core.db"
