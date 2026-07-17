@@ -1,10 +1,11 @@
-"""Validate incoming OfferSnapshot V1 envelopes before Core persistence."""
+"""Validate incoming OfferSnapshot V1/V2 envelopes before Core persistence."""
 
 from __future__ import annotations
 
 import json
 import uuid
 from datetime import date, datetime, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Literal, cast
 
 from catering_system.domain.catalog import validate_allergen_codes
@@ -126,7 +127,9 @@ def validate_offer_snapshot_bytes(raw: bytes) -> OfferSnapshotV1 | OfferSnapshot
     return validate_offer_snapshot(payload)
 
 
-def validate_offer_snapshot(payload: dict[str, object]) -> OfferSnapshotV1 | OfferSnapshotV2:
+def validate_offer_snapshot(
+    payload: dict[str, object],
+) -> OfferSnapshotV1 | OfferSnapshotV2:
     """Validate a parsed OfferSnapshot envelope and verify its content hash."""
     _reject_unknown_keys(payload, _ENVELOPE_KEYS, "envelope")
     schema_version = _require_exact_str(payload.get("schema_version"), "schema_version")
@@ -455,6 +458,10 @@ def _parse_variant(
         label=f"{label}.positions",
         v2=v2,
     )
+    totals = _parse_totals(
+        _require_object(payload.get("totals"), f"{label}.totals"), label
+    )
+    _validate_variant_arithmetic(positions, totals)
     return OfferSnapshotVariant(
         variant_id=_require_uuid(payload.get("variant_id"), f"{label}.variant_id"),
         label=_require_short_text(payload.get("label"), f"{label}.label"),
@@ -462,9 +469,7 @@ def _parse_variant(
             payload.get("description"), f"{label}.description"
         ),
         positions=positions,
-        totals=_parse_totals(
-            _require_object(payload.get("totals"), f"{label}.totals"), label
-        ),
+        totals=totals,
     )
 
 
@@ -517,17 +522,86 @@ def _parse_positions(
             if position.related_position_id is None:
                 raise ValueError("surcharge requires related_position_id")
             base = by_id.get(position.related_position_id)
-            if base is None or base.kind == "surcharge":
-                raise ValueError(
-                    "surcharge must reference a base position in the variant"
-                )
+            if base is None or base.kind != "catalog":
+                raise ValueError("surcharge must reference a catalog position")
             if position.vat_rate_percent != base.vat_rate_percent:
                 raise ValueError(
                     "surcharge must use the same VAT rate as its base position"
                 )
         elif position.related_position_id is not None:
             raise ValueError("related_position_id is only valid for surcharges")
+        _validate_position_arithmetic(position, event)
     return tuple(positions)
+
+
+def _round_half_up(value: Decimal) -> int:
+    return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+
+
+def _validate_position_arithmetic(
+    position: OfferSnapshotPosition, event: OfferSnapshotEvent
+) -> None:
+    effective_quantity = Decimal(position.quantity)
+    if position.quantity_mode == "per_person":
+        if event.guest_count is None:
+            raise ValueError("quantity_mode=per_person requires event.guest_count")
+        effective_quantity *= Decimal(event.guest_count)
+
+    expected_net = _round_half_up(Decimal(position.unit_net_cents) * effective_quantity)
+    if position.net_total_cents != expected_net:
+        raise ValueError("offer snapshot position net total mismatch")
+
+    expected_vat = _round_half_up(
+        Decimal(position.net_total_cents)
+        * Decimal(position.vat_rate_percent)
+        / Decimal(100)
+    )
+    if position.vat_amount_cents != expected_vat:
+        raise ValueError("offer snapshot position VAT mismatch")
+
+    if (
+        position.gross_total_cents
+        != position.net_total_cents + position.vat_amount_cents
+    ):
+        raise ValueError("offer snapshot position gross total mismatch")
+
+
+def _validate_variant_arithmetic(
+    positions: tuple[OfferSnapshotPosition, ...],
+    totals: OfferSnapshotVariantTotals,
+) -> None:
+    net_cents = sum(position.net_total_cents for position in positions)
+    vat_7_positions = tuple(
+        position for position in positions if position.vat_rate_percent == 7
+    )
+    vat_19_positions = tuple(
+        position for position in positions if position.vat_rate_percent == 19
+    )
+    vat_7_base_cents = sum(position.net_total_cents for position in vat_7_positions)
+    vat_7_amount_cents = sum(position.vat_amount_cents for position in vat_7_positions)
+    vat_19_base_cents = sum(position.net_total_cents for position in vat_19_positions)
+    vat_19_amount_cents = sum(
+        position.vat_amount_cents for position in vat_19_positions
+    )
+    gross_cents = sum(position.gross_total_cents for position in positions)
+
+    if totals.net_cents != net_cents:
+        raise ValueError("offer snapshot net total mismatch")
+    if totals.vat_7_base_cents != vat_7_base_cents:
+        raise ValueError("offer snapshot 7% VAT base mismatch")
+    if totals.vat_7_amount_cents != vat_7_amount_cents:
+        raise ValueError("offer snapshot 7% VAT amount mismatch")
+    if totals.vat_19_base_cents != vat_19_base_cents:
+        raise ValueError("offer snapshot 19% VAT base mismatch")
+    if totals.vat_19_amount_cents != vat_19_amount_cents:
+        raise ValueError("offer snapshot 19% VAT amount mismatch")
+    if totals.gross_cents != gross_cents:
+        raise ValueError("offer snapshot gross total mismatch")
+    if (
+        totals.gross_cents
+        != totals.net_cents + totals.vat_7_amount_cents + totals.vat_19_amount_cents
+    ):
+        raise ValueError("offer snapshot gross arithmetic mismatch")
 
 
 def _parse_position(
@@ -558,7 +632,9 @@ def _parse_position(
     if v2 and kind == "catalog":
         if catalog_raw is None:
             raise ValueError("catalog position requires catalog_item_id")
-        catalog_item_id = _require_catalog_item_id(catalog_raw, f"{label}.catalog_item_id")
+        catalog_item_id = _require_catalog_item_id(
+            catalog_raw, f"{label}.catalog_item_id"
+        )
         allergens_raw = payload.get("allergens")
         if allergens_raw is None:
             raise ValueError("catalog position requires allergens")
@@ -569,13 +645,17 @@ def _parse_position(
         if catalog_raw is None:
             catalog_item_id = None
         else:
-            catalog_item_id = _optional_short_text(catalog_raw, f"{label}.catalog_item_id")
+            catalog_item_id = _optional_short_text(
+                catalog_raw, f"{label}.catalog_item_id"
+            )
         if v2:
             allergens_raw = payload.get("allergens")
             if allergens_raw is not None:
                 allergens = _parse_allergens(allergens_raw, f"{label}.allergens")
             vegan = _optional_bool(payload.get("vegan"), f"{label}.vegan")
-            vegetarian = _optional_bool(payload.get("vegetarian"), f"{label}.vegetarian")
+            vegetarian = _optional_bool(
+                payload.get("vegetarian"), f"{label}.vegetarian"
+            )
     return OfferSnapshotPosition(
         position_id=_require_uuid(payload.get("position_id"), f"{label}.position_id"),
         kind=kind,

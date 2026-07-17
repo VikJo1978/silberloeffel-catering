@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
-import pytest
-
 from catering_system.domain.offer_snapshot import compute_snapshot_hash
 from catering_system.services.buffet_cards_service import BuffetCardsService
 from catering_system.services.operational_core_service import OperationalCoreService
@@ -96,7 +94,7 @@ def _position_line(
 def _three_position_snapshot() -> dict[str, object]:
     payload = _valid_snapshot()
     variant = dict(payload["variants"][0])  # type: ignore[index]
-    variant["positions"] = [
+    positions = [
         _position(),
         {
             **_position(),
@@ -113,6 +111,15 @@ def _three_position_snapshot() -> dict[str, object]:
             "composition": "Saisonobst",
         },
     ]
+    variant["positions"] = positions
+    variant["totals"] = {
+        "net_cents": 69600,
+        "vat_7_base_cents": 69600,
+        "vat_7_amount_cents": 4872,
+        "vat_19_base_cents": 0,
+        "vat_19_amount_cents": 0,
+        "gross_cents": 74472,
+    }
     payload["variants"] = [variant]
     payload["snapshot_hash"] = compute_snapshot_hash(payload)
     return payload
@@ -204,9 +211,16 @@ def test_buffet_cards_candidate_has_entwurf() -> None:
 
 
 def test_buffet_cards_effective_is_final() -> None:
-    offer, version_id, variant_id, acceptance_id, offers, orders, _inq, offer_service = (
-        _accepted_offer_state()
-    )
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        _inq,
+        offer_service,
+    ) = _accepted_offer_state()
     _converted, order, order_version = offer_service.convert_accepted_offer(
         offer.offer_id,
         version_id,
@@ -235,9 +249,16 @@ def test_buffet_cards_effective_is_final() -> None:
 
 
 def test_buffet_cards_old_version_is_veraltet() -> None:
-    offer, version_id, variant_id, acceptance_id, offers, orders, _inq, offer_service = (
-        _accepted_offer_state()
-    )
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        _inq,
+        offer_service,
+    ) = _accepted_offer_state()
     _converted, order, v1 = offer_service.convert_accepted_offer(
         offer.offer_id,
         version_id,
@@ -272,9 +293,16 @@ def test_buffet_cards_old_version_is_veraltet() -> None:
 
 
 def test_buffet_cards_from_conversion_link() -> None:
-    offer, version_id, variant_id, acceptance_id, offers, orders, _inq, offer_service = (
-        _accepted_offer_state()
-    )
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        _inq,
+        offer_service,
+    ) = _accepted_offer_state()
     _converted, order, order_version = offer_service.convert_accepted_offer(
         offer.offer_id,
         version_id,

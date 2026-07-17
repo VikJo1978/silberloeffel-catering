@@ -32,7 +32,12 @@ def _position(
     position_id: str = _POSITION_ID,
     kind: str = "catalog",
     quantity_mode: str = "total",
+    quantity: str = "80",
+    unit_net_cents: int = 290,
+    net_total_cents: int = 23200,
     vat_rate_percent: int = 7,
+    vat_amount_cents: int = 1624,
+    gross_total_cents: int = 24824,
     related_position_id: str | None = None,
 ) -> dict[str, object]:
     return {
@@ -43,32 +48,54 @@ def _position(
         "description": "Frozen description",
         "composition": "Frozen composition",
         "quantity_mode": quantity_mode,
-        "quantity": "80",
+        "quantity": quantity,
         "unit_label": "Stück",
-        "unit_net_cents": 290,
-        "net_total_cents": 23200,
+        "unit_net_cents": unit_net_cents,
+        "net_total_cents": net_total_cents,
         "vat_rate_percent": vat_rate_percent,
-        "vat_amount_cents": 1624,
-        "gross_total_cents": 24824,
+        "vat_amount_cents": vat_amount_cents,
+        "gross_total_cents": gross_total_cents,
         "notes": "Frozen customization",
         "related_position_id": related_position_id,
     }
 
 
 def _variant(*, positions: list[dict[str, object]] | None = None) -> dict[str, object]:
-    items = positions or [_position()]
+    items = positions if positions is not None else [_position()]
+    net_cents = sum(cast(int, item["net_total_cents"]) for item in items)
+    vat_7_base_cents = sum(
+        cast(int, item["net_total_cents"])
+        for item in items
+        if item["vat_rate_percent"] == 7
+    )
+    vat_7_amount_cents = sum(
+        cast(int, item["vat_amount_cents"])
+        for item in items
+        if item["vat_rate_percent"] == 7
+    )
+    vat_19_base_cents = sum(
+        cast(int, item["net_total_cents"])
+        for item in items
+        if item["vat_rate_percent"] == 19
+    )
+    vat_19_amount_cents = sum(
+        cast(int, item["vat_amount_cents"])
+        for item in items
+        if item["vat_rate_percent"] == 19
+    )
+    gross_cents = sum(cast(int, item["gross_total_cents"]) for item in items)
     return {
         "variant_id": _VARIANT_ID,
         "label": "Variante A",
         "description": "Customer-visible alternative",
         "positions": items,
         "totals": {
-            "net_cents": 23200,
-            "vat_7_base_cents": 23200,
-            "vat_7_amount_cents": 1624,
-            "vat_19_base_cents": 0,
-            "vat_19_amount_cents": 0,
-            "gross_cents": 24824,
+            "net_cents": net_cents,
+            "vat_7_base_cents": vat_7_base_cents,
+            "vat_7_amount_cents": vat_7_amount_cents,
+            "vat_19_base_cents": vat_19_base_cents,
+            "vat_19_amount_cents": vat_19_amount_cents,
+            "gross_cents": gross_cents,
         },
     }
 
@@ -142,6 +169,131 @@ def test_valid_snapshot_bytes_roundtrip() -> None:
     raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     snapshot = validate_offer_snapshot_bytes(raw)
     assert snapshot.snapshot_hash == payload["snapshot_hash"]
+
+
+def test_position_net_total_mismatch_is_rejected() -> None:
+    payload = _valid_snapshot()
+    variants = cast(list[dict[str, object]], payload["variants"])
+    positions = cast(list[dict[str, object]], variants[0]["positions"])
+    positions[0]["net_total_cents"] = 23201
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+
+    with pytest.raises(ValueError, match="offer snapshot position net total mismatch"):
+        validate_offer_snapshot(payload)
+
+
+def test_position_vat_mismatch_is_rejected() -> None:
+    payload = _valid_snapshot()
+    variants = cast(list[dict[str, object]], payload["variants"])
+    positions = cast(list[dict[str, object]], variants[0]["positions"])
+    positions[0]["vat_amount_cents"] = 100
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+
+    with pytest.raises(ValueError, match="offer snapshot position VAT mismatch"):
+        validate_offer_snapshot(payload)
+
+
+def test_position_gross_total_mismatch_is_rejected() -> None:
+    payload = _valid_snapshot()
+    variants = cast(list[dict[str, object]], payload["variants"])
+    positions = cast(list[dict[str, object]], variants[0]["positions"])
+    positions[0]["gross_total_cents"] = 24825
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+
+    with pytest.raises(
+        ValueError, match="offer snapshot position gross total mismatch"
+    ):
+        validate_offer_snapshot(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    [
+        ("net_cents", "offer snapshot net total mismatch"),
+        ("vat_7_base_cents", "offer snapshot 7% VAT base mismatch"),
+        ("vat_7_amount_cents", "offer snapshot 7% VAT amount mismatch"),
+        ("vat_19_base_cents", "offer snapshot 19% VAT base mismatch"),
+        ("vat_19_amount_cents", "offer snapshot 19% VAT amount mismatch"),
+        ("gross_cents", "offer snapshot gross total mismatch"),
+    ],
+)
+def test_variant_total_mismatch_is_rejected(field: str, message: str) -> None:
+    payload = _valid_snapshot()
+    variants = cast(list[dict[str, object]], payload["variants"])
+    totals = cast(dict[str, object], variants[0]["totals"])
+    totals[field] = cast(int, totals[field]) + 1
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+
+    with pytest.raises(ValueError, match=message):
+        validate_offer_snapshot(payload)
+
+
+def test_mixed_vat_snapshot_passes_arithmetic_validation() -> None:
+    catalog = _position(
+        quantity="100",
+        unit_net_cents=100,
+        net_total_cents=10000,
+        vat_rate_percent=7,
+        vat_amount_cents=700,
+        gross_total_cents=10700,
+    )
+    fee = _position(
+        position_id=_BASE_POSITION_ID,
+        kind="fee",
+        quantity="1",
+        unit_net_cents=5000,
+        net_total_cents=5000,
+        vat_rate_percent=19,
+        vat_amount_cents=950,
+        gross_total_cents=5950,
+    )
+    payload = _valid_snapshot(variants=[_variant(positions=[catalog, fee])])
+
+    snapshot = validate_offer_snapshot(payload)
+
+    assert snapshot.variants[0].totals.net_cents == 15000
+    assert snapshot.variants[0].totals.vat_7_base_cents == 10000
+    assert snapshot.variants[0].totals.vat_19_base_cents == 5000
+    assert snapshot.variants[0].totals.gross_cents == 16650
+
+
+def test_fractional_quantity_uses_round_half_up() -> None:
+    position = _position(
+        quantity="2.5",
+        unit_net_cents=1,
+        net_total_cents=3,
+        vat_amount_cents=0,
+        gross_total_cents=3,
+    )
+    payload = _valid_snapshot(variants=[_variant(positions=[position])])
+
+    snapshot = validate_offer_snapshot(payload)
+
+    assert snapshot.variants[0].positions[0].net_total_cents == 3
+
+
+def test_position_vat_uses_round_half_up() -> None:
+    position = _position(
+        quantity="1",
+        unit_net_cents=50,
+        net_total_cents=50,
+        vat_amount_cents=4,
+        gross_total_cents=54,
+    )
+    payload = _valid_snapshot(variants=[_variant(positions=[position])])
+
+    snapshot = validate_offer_snapshot(payload)
+
+    assert snapshot.variants[0].positions[0].vat_amount_cents == 4
+
+
+def test_per_person_quantity_uses_event_guest_count() -> None:
+    position = _position(quantity_mode="per_person", quantity="1")
+    payload = _valid_snapshot(guest_count=80, variants=[_variant(positions=[position])])
+
+    snapshot = validate_offer_snapshot(payload)
+
+    assert snapshot.variants[0].positions[0].net_total_cents == 23200
 
 
 def test_invalid_vat_rate_is_rejected() -> None:
@@ -218,9 +370,7 @@ def test_unknown_envelope_field_is_rejected() -> None:
 
 
 def test_duplicate_json_key_is_rejected() -> None:
-    raw = (
-        b'{"schema_version":"offer_snapshot_v1","schema_version":"offer_snapshot_v1"}'
-    )
+    raw = b'{"schema_version":"offer_snapshot_v1","schema_version":"offer_snapshot_v1"}'
     with pytest.raises(ValueError, match="invalid snapshot JSON"):
         validate_offer_snapshot_bytes(raw)
 
@@ -252,6 +402,19 @@ def test_surcharge_must_be_separate_position_with_base_reference() -> None:
         validate_offer_snapshot(bad)
 
 
+def test_surcharge_must_reference_catalog_position() -> None:
+    fee = _position(position_id=_BASE_POSITION_ID, kind="fee")
+    surcharge = _position(
+        position_id=_SURCHARGE_ID,
+        kind="surcharge",
+        related_position_id=_BASE_POSITION_ID,
+    )
+    payload = _valid_snapshot(variants=[_variant(positions=[fee, surcharge])])
+
+    with pytest.raises(ValueError, match="surcharge must reference a catalog position"):
+        validate_offer_snapshot(payload)
+
+
 def test_non_surcharge_cannot_carry_related_position_id() -> None:
     variant = _variant(
         positions=[_position(related_position_id=_POSITION_ID)],
@@ -274,8 +437,13 @@ def test_float_money_values_are_rejected() -> None:
 
 
 def test_v2_empty_allergens_list_is_valid() -> None:
-    from catering_system.domain.offer_snapshot import SCHEMA_VERSION_V2, compute_snapshot_hash
-    from catering_system.services.offer_snapshot_validation import validate_offer_snapshot
+    from catering_system.domain.offer_snapshot import (
+        SCHEMA_VERSION_V2,
+        compute_snapshot_hash,
+    )
+    from catering_system.services.offer_snapshot_validation import (
+        validate_offer_snapshot,
+    )
 
     dish_id = "11111111-1111-4111-8111-111111111111"
     position = _position()
