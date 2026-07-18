@@ -631,6 +631,7 @@ def create_office_panel_server(
             remote=remote,
             command_executor=command_executor,
             payment_reminder_repo=payment_reminder_repo,
+            confirmation_document_repo=confirmation_document_repo,
             offer_repo=offer_repo,
             catalog_repo=catalog_repo,
             ui_version=ui_version,

@@ -116,6 +116,7 @@ from catering_system.ui.office_panel_inquiry_detail import (
 )
 from catering_system.ui.office_panel_order_detail import (
     OrderDetailFormFields,
+    render_confirmation_card,
     render_order_detail,
     version_change_prefill,
 )
@@ -2315,12 +2316,37 @@ class OfficePanel:
             if versions_truncated
             else ""
         )
+        confirmation_card = render_confirmation_card(
+            order,
+            confirmation,
+            OrderDetailFormFields(
+                csrf_input=_csrf_input(context),
+                print_confirm_command_fields={},
+                effective_command_fields={},
+                ready_command_fields="",
+                cancel_command_fields="",
+                version_command_fields="",
+                payment_command_fields="",
+                confirmation_command_fields=(
+                    self._command_fields(
+                        {
+                            "current_effective_order_version_id": (
+                                order.effective_order_version_id or ""
+                            ),
+                        }
+                    )
+                    if not cancelled
+                    else ""
+                ),
+            ),
+        )
         body = f"""{header}{truncation_warning}
 <p>Anfrage: <a href="/inquiry/{_e(order.source_inquiry_id)}">{_e(order.source_inquiry_id[:8])}</a></p>
 <h2>Versionen</h2>
 <table><tr><th>Nr</th><th>Datum</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th>
 <th>Druck bestätigt</th><th>Status</th><th>Aktionen</th></tr>{"".join(rows)}</table>
 <h2>Zahlung</h2>{"".join(payment_rows)}{payment_form}
+{confirmation_card}
 <h2>Freigabe (READY_TO_SEND)</h2>{release}
 {actions_block}"""
         return _page(

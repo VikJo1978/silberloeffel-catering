@@ -580,6 +580,15 @@ def _confirmation_card(
     )
 
 
+def render_confirmation_card(
+    order: Order,
+    confirmation: OrderConfirmationDocumentEligibility,
+    forms: OrderDetailFormFields,
+) -> str:
+    """Shared Auftragsbestätigung card for v2 and legacy Order Detail."""
+    return _confirmation_card(order, confirmation, forms)
+
+
 def _planning_mode_select(selected: str) -> str:
     options = []
     for value in PLANNING_MODES:
