@@ -26,6 +26,7 @@ class WochenuebersichtEntry:
     location_text: str
     guest_count_estimate: int | None
     planning_mode: PlanningMode
+    operational_pause_active: bool = False
 
 
 @dataclass(frozen=True)
@@ -38,7 +39,10 @@ class Wochenuebersicht:
 
 
 def entry_from_effective(
-    order: Order, effective: OrderVersion
+    order: Order,
+    effective: OrderVersion,
+    *,
+    operational_pause_active: bool = False,
 ) -> WochenuebersichtEntry:
     return WochenuebersichtEntry(
         order_id=order.order_id,
@@ -49,6 +53,7 @@ def entry_from_effective(
         location_text=effective.location_text,
         guest_count_estimate=effective.guest_count_estimate,
         planning_mode=effective.planning_mode,
+        operational_pause_active=operational_pause_active,
     )
 
 

@@ -67,6 +67,14 @@ from catering_system.repositories.order_confirmation_outbound_repository import 
 from catering_system.repositories.catalog_repository import CatalogRepository
 from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.repositories.offer_repository import OfferRepository
+from uuid import uuid4
+
+from catering_system.repositories.in_memory_order_operational_pause_repository import (
+    InMemoryOrderOperationalPauseRepository,
+)
+from catering_system.repositories.order_operational_pause_repository import (
+    OrderOperationalPauseRepository,
+)
 from catering_system.repositories.order_repository import OrderRepository
 from catering_system.repositories.payment_reminder_repository import (
     PaymentReminderRepository,
@@ -128,6 +136,7 @@ from catering_system.ui.office_panel_order_detail import (
     OrderDetailFormFields,
     render_confirmation_card,
     render_confirmation_outbound_card,
+    render_operational_pause_card,
     render_order_detail,
     version_change_prefill,
 )
@@ -269,6 +278,7 @@ class OfficePanel:
         payment_reminder_repo: PaymentReminderRepository | None = None,
         confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
         confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
+        pause_repository: OrderOperationalPauseRepository | None = None,
         offer_repo: OfferRepository | None = None,
         catalog_repo: CatalogRepository | None = None,
         ui_version: str = "legacy",
@@ -279,6 +289,7 @@ class OfficePanel:
         self._orders = order_repo
         self._offers = offer_repo or InMemoryOfferRepository()
         self._catalog = catalog_repo or InMemoryCatalogRepository()
+        self._pause_repository: OrderOperationalPauseRepository | None
         self.catalog_dish_write_service = CatalogDishWriteService(self._catalog)
         # Phase 2 dual mode (PROXMOX_OFFICE_SERVER_CORE_API_PACK_V1 §7): when
         # `remote` is given, `inquiry_repo`/`order_repo` are the same
@@ -294,9 +305,13 @@ class OfficePanel:
         # is completely unchanged — same objects, same construction, byte-
         # identical behavior.
         if remote is None:
+            pause_repo = pause_repository or InMemoryOrderOperationalPauseRepository()
             self.inquiry_service = InquiryService(inquiry_repo)
             self.order_service = OrderService(order_repo)
-            self.core = OperationalCoreService(order_repo)
+            self.core = OperationalCoreService(
+                order_repo, pause_repository=pause_repo
+            )
+            self._pause_repository = pause_repo
             self.payment_reminder_service = PaymentReminderService(
                 payment_reminder_repo or InMemoryPaymentReminderRepository(),
                 order_repo,
@@ -338,6 +353,7 @@ class OfficePanel:
             self.confirmation_document_service = remote.confirmation_document_service  # type: ignore[assignment]
             self.confirmation_outbound_service = remote.confirmation_outbound_service  # type: ignore[assignment]
             self.catalog_dish_write_service = remote.catalog_dish_write_service  # type: ignore[assignment]
+            self._pause_repository = None
         self._remote = remote
         self._command_executor = command_executor
         self._ui_version = ui_version
@@ -346,7 +362,9 @@ class OfficePanel:
         # get_order/get_order_version/list_orders/list_order_versions —
         # never a write.
         self.progression = ProgressionService(order_repo)
-        self.wochenuebersicht = WochenuebersichtService(order_repo)
+        self.wochenuebersicht = WochenuebersichtService(
+            order_repo, pause_repository=self._pause_repository
+        )
         # Single source of truth for the "full week" deep link — the kitchen
         # kiosk (catering_system.ui.kiosk_server) already owns that view via
         # the same WochenuebersichtService (OFFICE_PANEL_EXECUTION_PACK_V1
@@ -358,6 +376,78 @@ class OfficePanel:
         # The payload travels in a URL fragment (never an HTTP request) and
         # opening it performs no Core write.
         self.configurator_url = normalize_configurator_url(configurator_url)
+
+    def _operational_pause_view(self, order_id: str) -> dict[str, object]:
+        getter = getattr(self.core, "get_operational_pause_projection", None)
+        if getter is not None:
+            return getter(order_id)
+        active = self.core.get_active_operational_pause(order_id)
+        if active is None:
+            return {"active": False, "latest_pause_event_id": None}
+        if isinstance(active, dict):
+            return active
+        return api_views.operational_pause_projection_from_active(active)
+
+    @staticmethod
+    def _optional_expect_uuid(form: dict[str, str], key: str) -> str | None:
+        raw = form.get(f"_expect_{key}")
+        if raw is None:
+            return None
+        stripped = raw.strip()
+        return stripped or None
+
+    def _pause_expect_fields(self, pause_view: dict[str, object]) -> dict[str, str]:
+        latest = pause_view.get("latest_pause_event_id")
+        return {
+            "operational_pause_active": "false",
+            "latest_pause_event_id": str(latest or ""),
+        }
+
+    def _resume_expect_fields(self, pause_view: dict[str, object]) -> dict[str, str]:
+        return {
+            "operational_pause_active": "true",
+            "current_pause_event_id": str(pause_view["current_pause_event_id"]),
+            "latest_pause_event_id": str(pause_view["latest_pause_event_id"]),
+        }
+
+    def pause_order(self, order_id: str, form: dict[str, str]) -> None:
+        note = form.get("note", "").strip() or None
+        command_id = form.get("_command_id") or str(uuid4())
+        expected_latest = self._optional_expect_uuid(form, "latest_pause_event_id")
+        if expected_latest is None and self._remote is None:
+            projection_latest = self._operational_pause_view(order_id).get(
+                "latest_pause_event_id"
+            )
+            expected_latest = (
+                projection_latest if isinstance(projection_latest, str) else None
+            )
+        self.core.pause_order(
+            order_id,
+            reason_code=form["reason_code"],
+            note=note,
+            actor_reference="office-panel",
+            command_id=command_id,
+            expected_latest_pause_event_id=expected_latest,
+        )
+
+    def resume_order(self, order_id: str, form: dict[str, str]) -> None:
+        note = form.get("note", "").strip() or None
+        command_id = form.get("_command_id") or str(uuid4())
+        expected_current = self._optional_expect_uuid(form, "current_pause_event_id")
+        expected_latest = self._optional_expect_uuid(form, "latest_pause_event_id")
+        if expected_current is None or expected_latest is None:
+            projection = self._operational_pause_view(order_id)
+            expected_current = str(projection["current_pause_event_id"])
+            expected_latest = str(projection["latest_pause_event_id"])
+        self.core.resume_order(
+            order_id,
+            reason_code=form["reason_code"],
+            note=note,
+            actor_reference="office-panel",
+            command_id=command_id,
+            expected_current_pause_event_id=expected_current,
+            expected_latest_pause_event_id=expected_latest,
+        )
 
     @staticmethod
     def _missed_calls_open(
@@ -1107,6 +1197,11 @@ class OfficePanel:
             for o in active_orders
         }
         blockiert = [o for o in active_orders if not evaluations[o.order_id].ready]
+        paused = [
+            o
+            for o in active_orders
+            if self._operational_pause_view(o.order_id).get("active")
+        ]
         pending_changes = [
             o
             for o in active_orders
@@ -1145,6 +1240,7 @@ class OfficePanel:
             f'<a href="#auftraege"><strong>{len(nicht_wirksam)}</strong> Aufträge noch nicht wirksam</a>'
             f'<a href="#auftraege"><strong>{len(pending_changes)}</strong> Änderungen warten auf Küchendruck</a>'
             f'<a href="#auftraege"><strong>{len(blockiert)}</strong> Versandfreigabe blockiert</a>'
+            f'<a href="#auftraege"><strong>{len(paused)}</strong> Betrieblich pausiert</a>'
             + storniert_card
             + "</div>"
         )
@@ -1295,6 +1391,7 @@ class OfficePanel:
             f'<a href="#auftraege"><strong>{attention_view["nicht_wirksam"]}</strong> Aufträge noch nicht wirksam</a>'
             f'<a href="#auftraege"><strong>{attention_view["aenderungen_warten_auf_kuechendruck"]}</strong> Änderungen warten auf Küchendruck</a>'
             f'<a href="#auftraege"><strong>{attention_view["versand_blockiert"]}</strong> Versandfreigabe blockiert</a>'
+            f'<a href="#auftraege"><strong>{attention_view["pausiert"]}</strong> Betrieblich pausiert</a>'
             + storniert_card
             + "</div>"
         )
@@ -2061,6 +2158,7 @@ class OfficePanel:
                 order_id
             )
         cancelled = order.cancelled_at is not None
+        pause_view = self._operational_pause_view(order_id)
         ev = self.core.evaluate_ready_to_send(order_id)
         payment = self.payment_reminder_service.view(order_id)
         confirmation = self.confirmation_document_service.eligibility(order_id)
@@ -2193,10 +2291,21 @@ class OfficePanel:
                         if not cancelled
                         else ""
                     ),
+                    pause_command_fields=(
+                        self._command_fields(self._pause_expect_fields(pause_view))
+                        if not cancelled and not pause_view.get("active")
+                        else ""
+                    ),
+                    resume_command_fields=(
+                        self._command_fields(self._resume_expect_fields(pause_view))
+                        if not cancelled and pause_view.get("active")
+                        else ""
+                    ),
                     version_change_prefill=change_prefill if not cancelled else None,
                 ),
                 confirmation=confirmation,
                 outbound=outbound,
+                operational_pause=pause_view,
                 versions_total_count=versions_total_count,
                 versions_truncated=versions_truncated,
             )
@@ -2393,6 +2502,16 @@ class OfficePanel:
                 if not cancelled
                 else ""
             ),
+            pause_command_fields=(
+                self._command_fields(self._pause_expect_fields(pause_view))
+                if not cancelled and not pause_view.get("active")
+                else ""
+            ),
+            resume_command_fields=(
+                self._command_fields(self._resume_expect_fields(pause_view))
+                if not cancelled and pause_view.get("active")
+                else ""
+            ),
         )
         confirmation_card = render_confirmation_card(
             order,
@@ -2404,8 +2523,15 @@ class OfficePanel:
             confirmation,
             outbound,
             detail_forms,
+            operational_pause=pause_view,
         )
-        body = f"""{header}{truncation_warning}
+        pause_card = render_operational_pause_card(order, pause_view, detail_forms)
+        paused_header = (
+            '<p class="blocked"><strong>Auftrag pausiert</strong></p>'
+            if pause_view.get("active")
+            else ""
+        )
+        body = f"""{header}{paused_header}{truncation_warning}
 <p>Anfrage: <a href="/inquiry/{_e(order.source_inquiry_id)}">{_e(order.source_inquiry_id[:8])}</a></p>
 <h2>Versionen</h2>
 <table><tr><th>Nr</th><th>Datum</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th>
@@ -2413,6 +2539,7 @@ class OfficePanel:
 <h2>Zahlung</h2>{"".join(payment_rows)}{payment_form}
 {confirmation_card}
 {outbound_card}
+{pause_card}
 <h2>Freigabe (READY_TO_SEND)</h2>{release}
 {actions_block}"""
         return _page(
@@ -2594,6 +2721,7 @@ def make_office_panel_handler(
     payment_reminder_repo: PaymentReminderRepository | None = None,
     confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
     confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
+    pause_repository: OrderOperationalPauseRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
@@ -2617,6 +2745,7 @@ def make_office_panel_handler(
         payment_reminder_repo=payment_reminder_repo,
         confirmation_document_repo=confirmation_document_repo,
         confirmation_outbound_repo=confirmation_outbound_repo,
+        pause_repository=pause_repository,
         offer_repo=offer_repo,
         catalog_repo=catalog_repo,
         ui_version=ui_version,
@@ -2640,6 +2769,7 @@ def create_office_panel_server(
     payment_reminder_repo: PaymentReminderRepository | None = None,
     confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
     confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
+    pause_repository: OrderOperationalPauseRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
@@ -2665,6 +2795,7 @@ def create_office_panel_server(
         payment_reminder_repo=payment_reminder_repo,
         confirmation_document_repo=confirmation_document_repo,
         confirmation_outbound_repo=confirmation_outbound_repo,
+        pause_repository=pause_repository,
         offer_repo=offer_repo,
         catalog_repo=catalog_repo,
         ui_version=ui_version,
@@ -2802,6 +2933,9 @@ def main() -> None:
         from catering_system.repositories.sqlite_order_confirmation_outbound_repository import (
             SQLiteOrderConfirmationOutboundRepository,
         )
+        from catering_system.repositories.sqlite_order_operational_pause_repository import (
+            SQLiteOrderOperationalPauseRepository,
+        )
         from catering_system.repositories.sqlite_catalog_repository import (
             SQLiteCatalogRepository,
         )
@@ -2820,6 +2954,9 @@ def main() -> None:
         confirmation_outbound_repo = (
             SQLiteOrderConfirmationOutboundRepository.from_connection(connection)
         )
+        pause_repository = SQLiteOrderOperationalPauseRepository.from_connection(
+            connection
+        )
 
         server = create_office_panel_server(
             inquiry_repo,
@@ -2836,6 +2973,7 @@ def main() -> None:
             payment_reminder_repo=payment_reminder_repo,
             confirmation_document_repo=confirmation_document_repo,
             confirmation_outbound_repo=confirmation_outbound_repo,
+            pause_repository=pause_repository,
             offer_repo=offer_repo,
             catalog_repo=catalog_repo,
             ui_version=args.ui_version,

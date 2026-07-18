@@ -19,6 +19,9 @@ from catering_system.domain.wochenuebersicht import (
     WochenuebersichtEntry,
 )
 from catering_system.repositories.order_repository import OrderRepository
+from catering_system.repositories.order_operational_pause_repository import (
+    OrderOperationalPauseRepository,
+)
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
 from catering_system.ui.pickup_signal import (
     PickupSignalRefresher,
@@ -54,6 +57,7 @@ def render_wochenuebersicht_html(
         guests = (
             str(e.guest_count_estimate) if e.guest_count_estimate is not None else "–"
         )
+        status = "PAUSIERT" if e.operational_pause_active else "–"
         rows.append(
             "<tr>"
             f"<td>{weekday} {html.escape(e.event_date.isoformat())}</td>"
@@ -61,12 +65,13 @@ def render_wochenuebersicht_html(
             f"<td>{html.escape(e.location_text)}</td>"
             f"<td>{html.escape(guests)}</td>"
             f"<td>v{e.version_number}</td>"
+            f"<td>{html.escape(status)}</td>"
             "</tr>"
         )
     body = (
         "\n".join(rows)
         if rows
-        else '<tr><td colspan="5">Keine Lieferungen in dieser Woche</td></tr>'
+        else '<tr><td colspan="6">Keine Lieferungen in dieser Woche</td></tr>'
     )
     return f"""<!DOCTYPE html>
 <html lang="de">
@@ -85,7 +90,7 @@ th {{ background: #eee; }}
 <body>
 <h1>Wochenübersicht — KW {view.iso_week}/{view.iso_year}</h1>
 <table>
-<tr><th>Tag</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th><th>Version</th></tr>
+<tr><th>Tag</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th><th>Version</th><th>Status</th></tr>
 {body}
 </table>{pickup_block}
 </body>
@@ -150,8 +155,12 @@ def _requested_week(query: str) -> tuple[int, int]:
 def make_kiosk_handler(
     order_repository: OrderRepository,
     pickup_signal: PickupSignalRefresher | None = None,
+    *,
+    pause_repository: OrderOperationalPauseRepository | None = None,
 ) -> type[BaseHTTPRequestHandler]:
-    service = WochenuebersichtService(order_repository)
+    service = WochenuebersichtService(
+        order_repository, pause_repository=pause_repository
+    )
 
     class KioskHandler(BaseHTTPRequestHandler):
         server_version = "KitchenKiosk/1.0"
@@ -222,12 +231,19 @@ def create_kiosk_server(
     host: str = "0.0.0.0",
     port: int = 8080,
     pickup_signal: PickupSignalRefresher | None = None,
+    *,
+    pause_repository: OrderOperationalPauseRepository | None = None,
 ) -> HTTPServer:
     # Single-threaded on purpose: the shared sqlite3 connection must stay on the
     # thread that serves requests (bring-up bug, WORKLOG Entry 048). A read-only
     # display with one client does not need request threading. The pickup-signal
     # refresher is a separate thread but touches no SQLite.
-    return HTTPServer((host, port), make_kiosk_handler(order_repository, pickup_signal))
+    return HTTPServer(
+        (host, port),
+        make_kiosk_handler(
+            order_repository, pickup_signal, pause_repository=pause_repository
+        ),
+    )
 
 
 def main() -> None:
@@ -258,12 +274,21 @@ def main() -> None:
         PickupSignalRefresher(signal_url, signal_token) if signal_url else None
     )
 
+    from catering_system.repositories.sqlite_order_operational_pause_repository import (
+        SQLiteOrderOperationalPauseRepository,
+    )
     from catering_system.repositories.sqlite_order_repository import (
         SQLiteOrderRepository,
     )
 
+    order_repo = SQLiteOrderRepository(args.db)
+    pause_repo = SQLiteOrderOperationalPauseRepository(args.db)
     server = create_kiosk_server(
-        SQLiteOrderRepository(args.db), args.host, args.port, pickup_signal
+        order_repo,
+        args.host,
+        args.port,
+        pickup_signal,
+        pause_repository=pause_repo,
     )
     if pickup_signal is not None:
         pickup_signal.start()

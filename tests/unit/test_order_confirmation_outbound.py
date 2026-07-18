@@ -288,6 +288,31 @@ def test_ready_to_send_false_blocks_with_reason() -> None:
             )
 
 
+def test_operational_pause_blocks_fake_send_via_ready_to_send() -> None:
+    world = _world()
+    order, version, snapshot = _prepared_snapshot(world)
+    outbound_service = world[6]
+    core = world[7]
+    core.pause_order(
+        order.order_id,
+        reason_code="manual_hold",
+        note=None,
+        actor_reference="office-panel",
+        command_id="11111111-1111-4111-8111-111111111111",
+        expected_latest_pause_event_id=None,
+    )
+    with pytest.raises(
+        OrderConfirmationOutboundBlockedError, match="order_not_ready_to_send"
+    ):
+        outbound_service.send_to_fake_outbox(
+            order.order_id,
+            snapshot.document_snapshot_id,
+            version.order_version_id,
+            "office-panel",
+        )
+    assert core.evaluate_ready_to_send(order.order_id).reasons == ("operational_pause",)
+
+
 def test_storniert_order_blocks_send() -> None:
     world = _world()
     orders, _offers, _inquiries, _documents, _outbound, doc_service, outbound_service, core = (

@@ -409,8 +409,8 @@ th { background: #eee; }
 <body>
 <h1>Wochenübersicht — KW 40/2026</h1>
 <table>
-<tr><th>Tag</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th><th>Version</th></tr>
-<tr><td colspan="5">Keine Lieferungen in dieser Woche</td></tr>
+<tr><th>Tag</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th><th>Version</th><th>Status</th></tr>
+<tr><td colspan="6">Keine Lieferungen in dieser Woche</td></tr>
 </table>
 </body>
 </html>

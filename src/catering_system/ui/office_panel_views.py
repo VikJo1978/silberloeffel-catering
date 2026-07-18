@@ -69,6 +69,7 @@ READY_TO_SEND_BLOCKER_LABELS: dict[str, str] = {
     "effective_version_not_resolvable": "wirksame Version nicht auffindbar",
     "kitchen_print_not_confirmed": "Druckbestätigung fehlt",
     "pending_order_version_change": "Änderung wartet auf Küchendruck",
+    "operational_pause": "Betrieblich pausiert",
 }
 PROGRESSION_BLOCKER_LABELS: dict[str, str] = {
     "inquiry_call_verification_unsatisfied": "Rückrufprüfung noch nicht erfüllt",

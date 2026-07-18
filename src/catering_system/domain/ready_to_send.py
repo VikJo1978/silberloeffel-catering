@@ -19,6 +19,7 @@ READY_REASON_NO_EFFECTIVE_VERSION = "no_effective_version"
 READY_REASON_EFFECTIVE_VERSION_NOT_RESOLVABLE = "effective_version_not_resolvable"
 READY_REASON_KITCHEN_PRINT_NOT_CONFIRMED = "kitchen_print_not_confirmed"
 READY_REASON_PENDING_ORDER_VERSION_CHANGE = "pending_order_version_change"
+READY_REASON_OPERATIONAL_PAUSE = "operational_pause"
 
 
 @dataclass(frozen=True)

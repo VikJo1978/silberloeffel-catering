@@ -53,3 +53,16 @@ class OrderCancelled:
     """STORNO_EXECUTION_PACK_V1 §2."""
 
     order_id: str
+
+
+@dataclass(frozen=True)
+class OrderOperationalPaused:
+    order_id: str
+    pause_event_id: str
+
+
+@dataclass(frozen=True)
+class OrderOperationalResumed:
+    order_id: str
+    pause_event_id: str
+    resumed_pause_event_id: str

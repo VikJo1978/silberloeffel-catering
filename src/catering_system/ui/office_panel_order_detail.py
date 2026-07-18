@@ -62,6 +62,22 @@ _READY_BLOCKER_LABELS = {
     "pending_order_version_change": (
         "Eine Änderung wartet noch auf Küchendruck und Wirksamstellung."
     ),
+    "operational_pause": "Der Auftrag ist betrieblich pausiert.",
+}
+
+_PAUSE_REASON_LABELS = {
+    "manual_hold": "Manuelle Sperre",
+    "customer_request": "Kundenwunsch",
+    "payment_dispute": "Zahlungsstreit",
+    "operational_review": "Betriebliche Prüfung",
+    "other": "Sonstiges",
+}
+
+_RESUME_REASON_LABELS = {
+    "operator_cleared": "Sperre aufgehoben",
+    "customer_confirmed": "Kunde bestätigt",
+    "issue_resolved": "Problem gelöst",
+    "other": "Sonstiges",
 }
 
 _CHANGED_FIELD_LABELS = {
@@ -98,6 +114,8 @@ class OrderDetailFormFields:
     payment_command_fields: str
     confirmation_command_fields: str = ""
     send_command_fields: str = ""
+    pause_command_fields: str = ""
+    resume_command_fields: str = ""
     version_change_prefill: OrderVersionChangePrefill | None = None
 
 
@@ -182,11 +200,24 @@ def _state_copy(
     target: OrderVersion | None,
     next_action: Mapping[str, str] | None,
     ready: ReadyToSendEvaluation,
+    operational_pause: Mapping[str, object],
 ) -> tuple[str, str]:
     if order.cancelled_at is not None:
         return (
             "Auftrag storniert",
             "Historie und Küchenzettel bleiben zur Einsicht verfügbar.",
+        )
+    if operational_pause.get("active"):
+        reason = _e(
+            str(
+                operational_pause.get("reason_code")
+                or operational_pause.get("reason")
+                or "–"
+            )
+        )
+        return (
+            "Betrieblich pausiert",
+            f"Der Auftrag bleibt sichtbar, die Versandfreigabe ist gesperrt. Grund: {reason}.",
         )
     if next_action is not None and next_action.get("action") == "print-confirm":
         return (
@@ -610,8 +641,11 @@ def render_confirmation_outbound_card(
     confirmation: OrderConfirmationDocumentEligibility,
     outbound: OutboundSendEligibility,
     forms: OrderDetailFormFields,
+    *,
+    operational_pause: Mapping[str, object] | None = None,
 ) -> str:
     """Fake-outbox test send card — never implies real customer delivery."""
+    pause_view = operational_pause or {"active": False}
     state_label = _OUTBOUND_STATE_LABELS.get(outbound.state, outbound.state)
     facts: list[tuple[str, str]] = [("Status", state_label)]
     summary = outbound.send_summary
@@ -628,7 +662,12 @@ def render_confirmation_outbound_card(
             ]
         )
     actions: list[str] = []
-    if outbound.can_send and confirmation.snapshot is not None:
+    if pause_view.get("active"):
+        actions.append(
+            '<p class="order-context-note blocked">'
+            "Testversand blockiert: Auftrag pausiert</p>"
+        )
+    elif outbound.can_send and confirmation.snapshot is not None:
         actions.append(
             '<p class="order-context-note">Es wird keine E-Mail an den Kunden gesendet.</p>'
         )
@@ -706,9 +745,93 @@ def _version_change_form(
     )
 
 
+def _pause_reason_select(name: str = "reason_code") -> str:
+    options = "".join(
+        f'<option value="{_e(code)}">{_e(label)}</option>'
+        for code, label in _PAUSE_REASON_LABELS.items()
+    )
+    return f'<select name="{name}" required>{options}</select>'
+
+
+def _resume_reason_select(name: str = "reason_code") -> str:
+    options = "".join(
+        f'<option value="{_e(code)}">{_e(label)}</option>'
+        for code, label in _RESUME_REASON_LABELS.items()
+    )
+    return f'<select name="{name}" required>{options}</select>'
+
+
+def _pause_reason_label(code: object) -> str:
+    return _PAUSE_REASON_LABELS.get(str(code), str(code))
+
+
+def render_operational_pause_card(
+    order: Order,
+    operational_pause: Mapping[str, object],
+    forms: OrderDetailFormFields,
+) -> str:
+    """Shared pause/resume card for legacy and v2 Order Detail."""
+    if order.cancelled_at is not None:
+        return ""
+    if operational_pause.get("active"):
+        facts: list[tuple[str, str]] = [
+            ("Grund", _pause_reason_label(operational_pause.get("reason_code"))),
+        ]
+        note = operational_pause.get("note")
+        if note:
+            facts.append(("Notiz", str(note)))
+        paused_at = operational_pause.get("paused_at")
+        if paused_at:
+            facts.append(("Pausiert seit", str(paused_at).replace("T", " · ")[:16]))
+        actor = operational_pause.get("actor_reference")
+        if actor:
+            facts.append(("Bearbeiter", str(actor)))
+        return (
+            '<section class="order-card order-content-card order-pause-card">'
+            '<div class="order-paused-banner">Auftrag pausiert</div>'
+            "<h2>Operative Pause</h2>"
+            '<dl class="order-payment-facts">'
+            + "".join(
+                f"<div><dt>{_e(label)}</dt><dd>{_e(value)}</dd></div>"
+                for label, value in facts
+            )
+            + "</dl>"
+            f'<form method="post" action="/order/{_e(order.order_id)}/resume">'
+            f"{forms.csrf_input}{forms.resume_command_fields}"
+            "<p><label>Fortsetzungsgrund</label>"
+            f"{_resume_reason_select()}</p>"
+            '<p><label>Notiz</label><textarea name="note" maxlength="2000"></textarea></p>'
+            '<button type="submit">Pause aufheben</button>'
+            "</form></section>"
+        )
+    return (
+        '<section class="order-card order-content-card order-pause-card">'
+        "<h2>Operative Pause</h2>"
+        "<p>Der Auftrag bleibt sichtbar, blockiert aber die Versandfreigabe "
+        "und den Testversand.</p>"
+        f'<form method="post" action="/order/{_e(order.order_id)}/pause">'
+        f"{forms.csrf_input}{forms.pause_command_fields}"
+        "<p><label>Pausegrund</label>"
+        f"{_pause_reason_select()}</p>"
+        '<p><label>Notiz</label><textarea name="note" maxlength="2000"></textarea></p>'
+        '<button type="submit">Auftrag pausieren</button>'
+        "</form></section>"
+    )
+
+
+def _operational_pause_controls(
+    order: Order,
+    operational_pause: Mapping[str, object],
+    forms: OrderDetailFormFields,
+) -> str:
+    return render_operational_pause_card(order, operational_pause, forms)
+
+
 def _secondary_actions(
     order: Order,
     forms: OrderDetailFormFields,
+    *,
+    operational_pause: Mapping[str, object],
 ) -> str:
     inquiry_link = (
         f'<a class="order-text-link" href="/inquiry/{_e(order.source_inquiry_id)}">'
@@ -725,6 +848,7 @@ def _secondary_actions(
         "<h2>Weitere Aktionen</h2>"
         f"<p>{inquiry_link}</p>"
         + _version_change_form(order, forms)
+        + _operational_pause_controls(order, operational_pause, forms)
         + '<details class="order-danger"><summary>Auftrag stornieren</summary>'
         "<p>Dieser Schritt kann nicht rückgängig gemacht werden. Historie und "
         "Küchenzettel bleiben zur Einsicht erhalten.</p>"
@@ -743,16 +867,20 @@ def render_order_detail(
     next_action: Mapping[str, str] | None,
     confirmation: OrderConfirmationDocumentEligibility,
     outbound: OutboundSendEligibility,
-    *,
     forms: OrderDetailFormFields,
+    *,
+    operational_pause: Mapping[str, object] | None = None,
     versions_total_count: int,
     versions_truncated: bool,
 ) -> OrderDetailPage:
     """Render existing Order facts and actions without performing any reads."""
 
+    pause_view = operational_pause or {"active": False}
     target = _target_version(order, versions)
     title = f"Auftrag für den {_date_text(target)}" if target is not None else "Auftrag"
-    state_title, state_description = _state_copy(order, target, next_action, ready)
+    state_title, state_description = _state_copy(
+        order, target, next_action, ready, pause_view
+    )
     truncation_warning = (
         '<div class="order-notice blocked"><strong>Unvollständige Ansicht:</strong> '
         f"Es werden {len(versions)} von {_e(versions_total_count)} Auftragsständen "
@@ -794,9 +922,15 @@ def render_order_detail(
         if order.cancelled_at is not None
         else ""
     )
+    paused_banner = (
+        '<div class="order-paused-banner">PAUSIERT</div>'
+        if pause_view.get("active")
+        else ""
+    )
     body = (
         '<a class="order-back" href="/auftraege">← Zurück zu den Aufträgen</a>'
         + cancelled_banner
+        + paused_banner
         + truncation_warning
         + '<section class="order-hero"><div>'
         f'<div class="order-eyebrow">{_e(stand_label)}</div>'
@@ -815,9 +949,11 @@ def render_order_detail(
         '<aside class="order-detail-side">'
         + _primary_action(order, target, next_action, forms)
         + _confirmation_card(order, confirmation, forms)
-        + render_confirmation_outbound_card(order, confirmation, outbound, forms)
+        + render_confirmation_outbound_card(
+            order, confirmation, outbound, forms, operational_pause=pause_view
+        )
         + _payment_card(order, payment, forms)
-        + _secondary_actions(order, forms)
+        + _secondary_actions(order, forms, operational_pause=pause_view)
         + "</aside></div>"
     )
     return OrderDetailPage(title=title, body=body)

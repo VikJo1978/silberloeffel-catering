@@ -120,16 +120,37 @@ _ORDER_SUMMARY_KEYS = frozenset(
         "cancelled_at",
     }
 )
-_ORDER_LIST_KEYS = _ORDER_SUMMARY_KEYS | {"ready", "blocker_reason", "next_action"}
+_ORDER_LIST_KEYS = _ORDER_SUMMARY_KEYS | {
+    "ready",
+    "blocker_reason",
+    "next_action",
+    "operational_pause_active",
+}
 _ORDER_DETAIL_KEYS = _ORDER_SUMMARY_KEYS | {
     "ready_to_send",
     "version_change",
+    "operational_pause",
     "payment_reminder",
     "confirmation_document",
     "versions",
     "versions_total_count",
     "versions_truncated",
 }
+_OPERATIONAL_PAUSE_INACTIVE_KEYS = frozenset({"active", "latest_pause_event_id"})
+_OPERATIONAL_PAUSE_ACTIVE_KEYS = frozenset(
+    {
+        "active",
+        "current_pause_event_id",
+        "latest_pause_event_id",
+        "reason_code",
+        "note",
+        "paused_at",
+        "actor_reference",
+    }
+)
+_ORDER_TOP_PAUSE_KEYS = frozenset(
+    {"operational_pause_active", "operational_pause_reason_code"}
+)
 _VERSION_KEYS = frozenset(
     {
         "order_version_id",
@@ -163,6 +184,8 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
             "conversion_already_exists",
             "sent_evidence_exists",
             "acceptance_already_exists",
+            "order_already_paused",
+            "order_not_paused",
         }
     ),
     413: frozenset({"body_too_large"}),
@@ -254,6 +277,27 @@ def _inquiry_offer_projection(value: object) -> dict[str, object]:
 def _exact(data: Mapping[str, object], keys: frozenset[str] | set[str]) -> None:
     if set(data) != set(keys):
         _bad_response()
+
+
+def _operational_pause(value: object) -> dict[str, object]:
+    row = _dict(value)
+    keys = set(row)
+    if keys == _OPERATIONAL_PAUSE_INACTIVE_KEYS:
+        if _bool(row["active"]):
+            _bad_response()
+        _optional_uuid4(row["latest_pause_event_id"])
+        return row
+    if keys != _OPERATIONAL_PAUSE_ACTIVE_KEYS:
+        _bad_response()
+    if not _bool(row["active"]):
+        _bad_response()
+    _uuid4(row["current_pause_event_id"])
+    _uuid4(row["latest_pause_event_id"])
+    _str(row["reason_code"])
+    _optional_str(row["note"])
+    _datetime(row["paused_at"])
+    _str(row["actor_reference"])
+    return row
 
 
 def _list(value: object) -> list[object]:
@@ -913,8 +957,10 @@ class RemoteCoreClient:
         expect: Mapping[str, object],
         expected: set[int],
         result_keys: set[str],
+        *,
+        command_id: str | None = None,
     ) -> dict[str, object]:
-        command_id = self._id()
+        command_id = command_id or self._id()
         result = self._request(
             "POST",
             path,
@@ -1036,6 +1082,7 @@ class RemoteCoreClient:
                 "week",
                 "neue_anfragen_top",
                 "auftraege_top",
+                "pausiert_top",
             },
         )
         attention = _dict(body["attention"])
@@ -1047,6 +1094,7 @@ class RemoteCoreClient:
                 "nicht_wirksam",
                 "versand_blockiert",
                 "aenderungen_warten_auf_kuechendruck",
+                "pausiert",
                 "storniert",
             },
         )
@@ -1106,11 +1154,29 @@ class RemoteCoreClient:
             _exact(
                 row,
                 _ORDER_SUMMARY_KEYS
-                | {"blocker_reason", "next_action"},
+                | {"blocker_reason", "next_action", "operational_pause_active"},
             )
             _order({key: row[key] for key in _ORDER_SUMMARY_KEYS})
             _optional_str(row["blocker_reason"])
             _next_action(row["next_action"])
+            _bool(row["operational_pause_active"])
+        paused_rows = _list(body["pausiert_top"])
+        if len(paused_rows) > 5:
+            _bad_response()
+        for raw in paused_rows:
+            row = _dict(raw)
+            _exact(
+                row,
+                _ORDER_SUMMARY_KEYS
+                | {"blocker_reason", "next_action"}
+                | _ORDER_TOP_PAUSE_KEYS,
+            )
+            _order({key: row[key] for key in _ORDER_SUMMARY_KEYS})
+            _optional_str(row["blocker_reason"])
+            _next_action(row["next_action"])
+            if not _bool(row["operational_pause_active"]):
+                _bad_response()
+            _str(row["operational_pause_reason_code"])
         return body
 
     def work_center(self) -> dict[str, object]:
@@ -1807,6 +1873,7 @@ class RemoteCoreClient:
                 self._known_order_ids.append(order.order_id)
                 reason = data["blocker_reason"]
                 _next_action(data["next_action"])
+                _bool(data["operational_pause_active"])
                 self._evaluations[order.order_id] = ReadyToSendEvaluation(
                     order_id=order.order_id,
                     ready=_bool(data["ready"]),
@@ -1833,6 +1900,7 @@ class RemoteCoreClient:
         self._evaluations[order_id] = _ready_evaluation(
             detail["ready_to_send"], order_id
         )
+        _operational_pause(detail["operational_pause"])
         _payment_reminder(detail["payment_reminder"], order_id)
         if "confirmation_document" in detail:
             self._confirmation_eligibility[order_id] = _confirmation_document_eligibility(
@@ -2399,11 +2467,101 @@ class _RemoteOperationalCoreService:
         )
         if _uuid4(result["order_id"]) != order_id:
             _bad_response()
+        self._client._order_details.pop(order_id, None)
         return replace(
             current,
             cancelled_at=_datetime(result["cancelled_at"]),
             updated_at=_datetime(result["updated_at"]),
         )
+
+    def get_operational_pause_projection(self, order_id: str) -> dict[str, object]:
+        detail = self._client._order_detail(order_id)
+        if detail is None:
+            raise RemoteCoreError(404, "not_found")
+        return _operational_pause(detail["operational_pause"])
+
+    def get_active_operational_pause(self, order_id: str) -> dict[str, object] | None:
+        detail = self._client._order_detail(order_id)
+        if detail is None:
+            return None
+        pause = _operational_pause(detail["operational_pause"])
+        if not _bool(pause["active"]):
+            return None
+        return pause
+
+    def pause_order(
+        self,
+        order_id: str,
+        *,
+        reason_code: str,
+        note: str | None,
+        actor_reference: str,
+        command_id: str,
+        expected_latest_pause_event_id: str | None,
+    ) -> dict[str, object]:
+        detail = self._client._order_detail(order_id)
+        if detail is None:
+            raise RemoteCoreError(404, "not_found")
+        _operational_pause(detail["operational_pause"])
+        args: dict[str, object] = {"reason_code": reason_code}
+        if note is not None:
+            args["note"] = note
+        if actor_reference:
+            args["actor_reference"] = actor_reference
+        result = self._client.command(
+            f"/office/v1/orders/{quote(order_id, safe='')}/pause",
+            args,
+            {
+                "operational_pause_active": False,
+                "latest_pause_event_id": expected_latest_pause_event_id,
+            },
+            expected={200},
+            result_keys={"order_id", "pause_event_id", "operational_pause"},
+            command_id=command_id,
+        )
+        if _uuid4(result["order_id"]) != order_id:
+            _bad_response()
+        self._client._order_details.pop(order_id, None)
+        return _operational_pause(result["operational_pause"])
+
+    def resume_order(
+        self,
+        order_id: str,
+        *,
+        reason_code: str,
+        note: str | None,
+        actor_reference: str,
+        command_id: str,
+        expected_current_pause_event_id: str,
+        expected_latest_pause_event_id: str,
+    ) -> dict[str, object]:
+        detail = self._client._order_detail(order_id)
+        if detail is None:
+            raise RemoteCoreError(404, "not_found")
+        pause = _operational_pause(detail["operational_pause"])
+        if not _bool(pause["active"]):
+            raise RemoteCoreError(409, "order_not_paused")
+        args: dict[str, object] = {"reason_code": reason_code}
+        if note is not None:
+            args["note"] = note
+        if actor_reference:
+            args["actor_reference"] = actor_reference
+        result = self._client.command(
+            f"/office/v1/orders/{quote(order_id, safe='')}/resume",
+            args,
+            {
+                "operational_pause_active": True,
+                "current_pause_event_id": expected_current_pause_event_id,
+                "latest_pause_event_id": expected_latest_pause_event_id,
+            },
+            expected={200},
+            result_keys={"order_id", "pause_event_id", "operational_pause"},
+            command_id=command_id,
+        )
+        if _uuid4(result["order_id"]) != order_id:
+            _bad_response()
+        self._client._order_details.pop(order_id, None)
+        return _operational_pause(result["operational_pause"])
 
 
 _CONFIRMATION_DOCUMENT_KEYS = frozenset(

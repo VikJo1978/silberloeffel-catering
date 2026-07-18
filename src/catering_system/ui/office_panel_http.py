@@ -26,6 +26,9 @@ from catering_system.repositories.order_confirmation_document_repository import 
 from catering_system.repositories.order_confirmation_outbound_repository import (
     OrderConfirmationOutboundRepository,
 )
+from catering_system.repositories.order_operational_pause_repository import (
+    OrderOperationalPauseRepository,
+)
 from catering_system.integration.auerswald_sync import (
     fetch_missed_board,
     resolve_missed_call,
@@ -154,6 +157,7 @@ def make_office_panel_handler(
     payment_reminder_repo: PaymentReminderRepository | None = None,
     confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
     confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
+    pause_repository: OrderOperationalPauseRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
@@ -168,6 +172,7 @@ def make_office_panel_handler(
         payment_reminder_repo=payment_reminder_repo,
         confirmation_document_repo=confirmation_document_repo,
         confirmation_outbound_repo=confirmation_outbound_repo,
+        pause_repository=pause_repository,
         offer_repo=offer_repo,
         catalog_repo=catalog_repo,
         ui_version=ui_version,
@@ -629,6 +634,10 @@ def make_office_panel_handler(
                 panel.save_payment_reminder(order_id, self._form())
             elif action == "confirmation-document":
                 panel.prepare_confirmation_document(order_id, self._form())
+            elif action == "pause":
+                panel.pause_order(order_id, self._form())
+            elif action == "resume":
+                panel.resume_order(order_id, self._form())
             else:
                 self.send_error(404)
                 return
@@ -654,6 +663,7 @@ def create_office_panel_server(
     payment_reminder_repo: PaymentReminderRepository | None = None,
     confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
     confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
+    pause_repository: OrderOperationalPauseRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
@@ -675,6 +685,7 @@ def create_office_panel_server(
             payment_reminder_repo=payment_reminder_repo,
             confirmation_document_repo=confirmation_document_repo,
             confirmation_outbound_repo=confirmation_outbound_repo,
+            pause_repository=pause_repository,
             offer_repo=offer_repo,
             catalog_repo=catalog_repo,
             ui_version=ui_version,

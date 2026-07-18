@@ -14,12 +14,26 @@ from catering_system.domain.wochenuebersicht import (
     entry_from_effective,
     is_in_iso_week,
 )
+from catering_system.repositories.order_operational_pause_repository import (
+    OrderOperationalPauseRepository,
+)
 from catering_system.repositories.order_repository import OrderRepository
 
 
 class WochenuebersichtService:
-    def __init__(self, order_repository: OrderRepository) -> None:
+    def __init__(
+        self,
+        order_repository: OrderRepository,
+        *,
+        pause_repository: OrderOperationalPauseRepository | None = None,
+    ) -> None:
         self._order_repository = order_repository
+        self._pause_repository = pause_repository
+
+    def _operational_pause_active(self, order_id: str) -> bool:
+        if self._pause_repository is None:
+            return False
+        return self._pause_repository.get_active_pause(order_id) is not None
 
     def get_week_overview(self, iso_year: int, iso_week: int) -> Wochenuebersicht:
         entries: list[WochenuebersichtEntry] = []
@@ -34,7 +48,15 @@ class WochenuebersichtService:
                 continue
             if not is_in_iso_week(effective.event_date, iso_year, iso_week):
                 continue
-            entries.append(entry_from_effective(order, effective))
+            entries.append(
+                entry_from_effective(
+                    order,
+                    effective,
+                    operational_pause_active=self._operational_pause_active(
+                        order.order_id
+                    ),
+                )
+            )
         entries.sort(key=lambda e: (e.event_date, e.time_window_text, e.order_id))
         return Wochenuebersicht(
             iso_year=iso_year, iso_week=iso_week, entries=tuple(entries)

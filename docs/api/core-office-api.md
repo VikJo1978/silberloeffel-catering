@@ -26,11 +26,11 @@ explicit Phase 2 configuration/deploy step (not yet done; see below).
 
 | Route | Purpose |
 |---|---|
-| `GET /office/v1/queue` | dashboard `QueueView`: open-inquiry attention count, Berlin ISO week (≤100 entries + `total_count`/`truncated`), top-5 inquiry/order rows with next actions. The compatibility JSON keys remain `neue_anfragen` / `neue_anfragen_top`, but rejected and any already-converted Inquiry are excluded. |
+| `GET /office/v1/queue` | dashboard `QueueView`: open-inquiry attention count, Berlin ISO week (≤100 entries + `total_count`/`truncated`), top-5 inquiry/order rows with next actions, plus `pausiert` / `pausiert_top`. The compatibility JSON keys remain `neue_anfragen` / `neue_anfragen_top`, but rejected and any already-converted Inquiry are excluded. |
 | `GET /office/v1/inquiries?q=&limit=&offset=` | list rows (`intake_subject`, `linked_order_id`, `orders_total_count`); `limit` ≤100, honest `total_count` |
 | `GET /office/v1/inquiries/{id}` | full detail incl. `allows_conversion`, capped `orders` array, `offer_prefill` payload |
-| `GET /office/v1/orders?q=&limit=&offset=` | rows with `ready`, `blocker_reason`, `next_action` — no N+1 |
-| `GET /office/v1/orders/{id}` | detail with versions (≤200, flagged), `ready_to_send`, the separately derived `payment_reminder` view, and `confirmation_document` eligibility/snapshot summary |
+| `GET /office/v1/orders?q=&limit=&offset=` | rows with `ready`, `blocker_reason`, `next_action`, `operational_pause_active` — no N+1 |
+| `GET /office/v1/orders/{id}` | detail with versions (≤200, flagged), `ready_to_send`, derived `operational_pause`, the separately derived `payment_reminder` view, and `confirmation_document` eligibility/snapshot summary |
 | `GET /office/v1/orders/{id}/print-data?version=` | print-sheet data; unknown and unowned are the same `404` |
 | `GET /office/v1/orders/{id}/confirmation-document` | latest or `?document_snapshot_id=` snapshot summary (`404` when none) |
 | `GET /office/v1/orders/{id}/confirmation-document/preview?format=json\|html` | customer-facing preview; default `format=json`, `html` returns rendered document |
@@ -62,6 +62,8 @@ are minimal (IDs + timestamps, no PII); the panel re-reads details via GET.
 | `POST /office/v1/orders/{id}/print-confirm` | – (repeat = success) |
 | `POST /office/v1/orders/{id}/effective` | `current_effective_order_version_id` |
 | `POST /office/v1/orders/{id}/ready` | – (unknown order: `200`, `ready=false`) |
+| `POST /office/v1/orders/{id}/pause` | `operational_pause_active`, `latest_pause_event_id` (nullable uuid4); args `reason_code`, optional `note` / `actor_reference` |
+| `POST /office/v1/orders/{id}/resume` | `operational_pause_active`, `current_pause_event_id`, `latest_pause_event_id`; args `reason_code`, optional `note` / `actor_reference` |
 | `POST /office/v1/orders/{id}/cancel` | `updated_at` (repeat = success) |
 | `POST /office/v1/orders/{id}/payment-reminder` | reminder `updated_at` (nullable before first save); exact manual reminder facts only |
 | `POST /office/v1/orders/{id}/confirmation-document` | `current_effective_order_version_id`; `args.created_by`; freezes one Auftragsbestätigung snapshot per effective OrderVersion (`201` first create, `200` replay/idempotent per version); blocked when no effective version, pending candidate, kitchen print missing, or no accepted Offer linkage (`422 confirmation_document_blocked` / `422 pending_order_version_change`) |
@@ -101,6 +103,7 @@ Error codes (stable, never free text): `unauthorized`, `not_found`,
 `commercial_totals_invalid`, `confirmation_document_recipient_missing`,
 `confirmation_document_already_sent`, `confirmation_document_not_current`,
 `outbound_payload_invalid`, `order_not_ready_to_send`, `order_storniert`,
+`order_already_paused`, `order_not_paused`,
 `core_busy`, `internal`.
 
 The local payment-reminder extension records only the chosen method, external

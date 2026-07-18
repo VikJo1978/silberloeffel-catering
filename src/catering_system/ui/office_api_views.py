@@ -44,6 +44,10 @@ from catering_system.domain.order import (
     OrderVersion,
     is_order_version_superseded,
 )
+from catering_system.domain.order_operational_pause import (
+    OrderOperationalPauseEvent,
+    derive_operational_pause_projection,
+)
 from catering_system.domain.order_payment_reminder import PaymentReminderView
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
 from catering_system.domain.wochenuebersicht import Wochenuebersicht
@@ -332,6 +336,33 @@ def inquiry_detail(
     return detail
 
 
+def operational_pause_projection(
+    events: tuple[OrderOperationalPauseEvent, ...],
+) -> dict[str, object]:
+    return derive_operational_pause_projection(events)
+
+
+def operational_pause_projection_from_active(
+    active: OrderOperationalPauseEvent | None,
+    *,
+    latest_pause_event_id: str | None = None,
+) -> dict[str, object]:
+    """Legacy helper when only the active pause event is available."""
+    if active is None:
+        return {
+            "active": False,
+            "latest_pause_event_id": latest_pause_event_id,
+        }
+    return {
+        "active": True,
+        "current_pause_event_id": active.pause_event_id,
+        "latest_pause_event_id": latest_pause_event_id or active.pause_event_id,
+        "reason_code": active.reason_code,
+        "note": active.note,
+        "paused_at": active.occurred_at.isoformat(),
+        "actor_reference": active.actor_reference,
+    }
+
 
 def order_summary(order: Order) -> dict[str, object]:
     return {
@@ -373,11 +404,14 @@ def order_list_row(
     order: Order,
     versions: list[OrderVersion],
     evaluation: ReadyToSendEvaluation,
+    *,
+    active_pause: OrderOperationalPauseEvent | None = None,
 ) -> dict[str, object]:
     row = order_summary(order)
     row["ready"] = evaluation.ready
     row["blocker_reason"] = evaluation.reasons[0] if evaluation.reasons else None
     row["next_action"] = resolve_next_action(order, versions)
+    row["operational_pause_active"] = active_pause is not None
     return row
 
 
@@ -413,6 +447,9 @@ def order_detail(
     evaluation: ReadyToSendEvaluation,
     payment_reminder: PaymentReminderView | None = None,
     confirmation_document: OrderConfirmationDocumentEligibility | None = None,
+    *,
+    pause_projection: dict[str, object] | None = None,
+    active_pause: OrderOperationalPauseEvent | None = None,
 ) -> dict[str, object]:
     detail = order_summary(order)
     detail["ready_to_send"] = {
@@ -439,6 +476,12 @@ def order_detail(
             and candidate.order_version_id != order.effective_order_version_id
         ),
     }
+    if pause_projection is not None:
+        detail["operational_pause"] = pause_projection
+    else:
+        detail["operational_pause"] = operational_pause_projection_from_active(
+            active_pause
+        )
     ordered = sorted(versions, key=lambda v: v.version_number)
     detail["versions"] = [
         order_version_shape(
@@ -581,10 +624,15 @@ def order_top_row(
     order: Order,
     versions: list[OrderVersion],
     evaluation: ReadyToSendEvaluation,
+    *,
+    active_pause: OrderOperationalPauseEvent | None = None,
 ) -> dict[str, object]:
     row = order_summary(order)
     row["blocker_reason"] = evaluation.reasons[0] if evaluation.reasons else None
     row["next_action"] = resolve_next_action(order, versions)
+    row["operational_pause_active"] = active_pause is not None
+    if active_pause is not None:
+        row["operational_pause_reason_code"] = active_pause.reason_code
     return row
 
 

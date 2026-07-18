@@ -274,6 +274,7 @@ def test_queue_view_attention_counts_and_tops(api) -> None:
         "week",
         "neue_anfragen_top",
         "auftraege_top",
+        "pausiert_top",
     }
     # seed world: 3 open inquiries plus 1 rejected inquiry without an order;
     # 1 order without print;
@@ -284,6 +285,7 @@ def test_queue_view_attention_counts_and_tops(api) -> None:
         "nicht_wirksam": 1,
         "versand_blockiert": 1,
         "aenderungen_warten_auf_kuechendruck": 0,
+        "pausiert": 0,
         "storniert": 1,
     }
     top_actions = {
@@ -750,6 +752,7 @@ def test_order_detail_and_print_data(api) -> None:
     status, body, _h = _get(f"{base}/office/v1/orders/{ids['order_ready']}")
     assert status == 200
     assert body["ready_to_send"] == {"ready": True, "reasons": []}
+    assert body["operational_pause"] == {"active": False, "latest_pause_event_id": None}
     assert [v["version_number"] for v in body["versions"]] == [1]
     assert body["versions_truncated"] is False
 
@@ -1295,6 +1298,282 @@ def test_ready_unknown_order_is_200_with_reason(api) -> None:
     assert status == 200
     assert body["evaluation"]["ready"] is False
     assert body["evaluation"]["reasons"] == ["ready_to_send_order_not_found"]
+
+
+def test_order_operational_pause_and_resume_commands(api) -> None:
+    base, ids, _db = api
+    order_id = ids["order_ready"]
+    pause_url = f"{base}/office/v1/orders/{order_id}/pause"
+    resume_url = f"{base}/office/v1/orders/{order_id}/resume"
+
+    status, detail, _h = _get(f"{base}/office/v1/orders/{order_id}")
+    assert detail["operational_pause"] == {
+        "active": False,
+        "latest_pause_event_id": None,
+    }
+
+    pause_args = {"reason_code": "manual_hold", "note": "hold for review"}
+    pause_expect = {
+        "operational_pause_active": False,
+        "latest_pause_event_id": None,
+    }
+    command_id = str(uuid.uuid4())
+    status, body, _h = _post(
+        pause_url,
+        args=pause_args,
+        expect=pause_expect,
+        command_id=command_id,
+    )
+    assert status == 200
+    assert set(body) == {"command_id", "order_id", "pause_event_id", "operational_pause"}
+    assert body["operational_pause"]["active"] is True
+    assert body["operational_pause"]["reason_code"] == "manual_hold"
+    assert (
+        body["operational_pause"]["current_pause_event_id"]
+        == body["pause_event_id"]
+    )
+    status2, body2, _h = _post(
+        pause_url,
+        args=pause_args,
+        expect=pause_expect,
+        command_id=command_id,
+    )
+    assert status2 == 200
+    assert body2 == body
+
+    status, detail, _h = _get(f"{base}/office/v1/orders/{order_id}")
+    assert detail["operational_pause"]["active"] is True
+    assert detail["ready_to_send"] == {
+        "ready": False,
+        "reasons": ["operational_pause"],
+    }
+
+    status, queue, _h = _get(f"{base}/office/v1/queue")
+    assert queue["attention"]["pausiert"] == 1
+    assert queue["pausiert_top"][0]["order_id"] == order_id
+    assert queue["pausiert_top"][0]["operational_pause_active"] is True
+
+    status, orders_page, _h = _get(f"{base}/office/v1/orders?q={order_id}")
+    assert status == 200
+    assert orders_page["orders"][0]["order_id"] == order_id
+    assert orders_page["orders"][0]["operational_pause_active"] is True
+
+    status, body, _h = _post(
+        pause_url,
+        args={"reason_code": "manual_hold"},
+        expect={
+            "operational_pause_active": False,
+            "latest_pause_event_id": None,
+        },
+    )
+    assert (status, body["error"]) == (409, "stale_state")
+
+    status, body, _h = _post(
+        pause_url,
+        args={"reason_code": "manual_hold"},
+        expect={
+            "operational_pause_active": True,
+            "latest_pause_event_id": detail["operational_pause"]["latest_pause_event_id"],
+        },
+    )
+    assert (status, body["error"]) == (409, "order_already_paused")
+
+    active_pause = detail["operational_pause"]
+    status, body, _h = _post(
+        resume_url,
+        args={"reason_code": "operator_cleared", "note": "cleared"},
+        expect={
+            "operational_pause_active": True,
+            "current_pause_event_id": active_pause["current_pause_event_id"],
+            "latest_pause_event_id": active_pause["latest_pause_event_id"],
+        },
+    )
+    assert status == 200
+    assert body["operational_pause"]["active"] is False
+    assert body["operational_pause"]["latest_pause_event_id"] == body["pause_event_id"]
+
+    status, detail, _h = _get(f"{base}/office/v1/orders/{order_id}")
+    assert detail["operational_pause"] == {
+        "active": False,
+        "latest_pause_event_id": body["pause_event_id"],
+    }
+    assert detail["ready_to_send"] == {"ready": True, "reasons": []}
+
+    status, body, _h = _post(
+        resume_url,
+        args={"reason_code": "operator_cleared"},
+        expect={
+            "operational_pause_active": False,
+            "current_pause_event_id": active_pause["current_pause_event_id"],
+            "latest_pause_event_id": body["pause_event_id"],
+        },
+    )
+    assert (status, body["error"]) == (409, "order_not_paused")
+
+
+def test_pause_aba_stale_expect_after_resume_cycle(api) -> None:
+    base, ids, _db = api
+    order_id = ids["order_ready"]
+    pause_url = f"{base}/office/v1/orders/{order_id}/pause"
+    resume_url = f"{base}/office/v1/orders/{order_id}/resume"
+
+    status, body, _h = _post(
+        pause_url,
+        args={"reason_code": "manual_hold"},
+        expect={"operational_pause_active": False, "latest_pause_event_id": None},
+    )
+    assert status == 200
+    pause_a = body["operational_pause"]
+
+    status, body, _h = _post(
+        resume_url,
+        args={"reason_code": "operator_cleared"},
+        expect={
+            "operational_pause_active": True,
+            "current_pause_event_id": pause_a["current_pause_event_id"],
+            "latest_pause_event_id": pause_a["latest_pause_event_id"],
+        },
+    )
+    assert status == 200
+
+    status, body, _h = _post(
+        pause_url,
+        args={"reason_code": "customer_request"},
+        expect={"operational_pause_active": False, "latest_pause_event_id": None},
+    )
+    assert (status, body["error"]) == (409, "stale_state")
+
+    status, detail, _h = _get(f"{base}/office/v1/orders/{order_id}")
+    status, body, _h = _post(
+        pause_url,
+        args={"reason_code": "customer_request"},
+        expect={
+            "operational_pause_active": False,
+            "latest_pause_event_id": detail["operational_pause"]["latest_pause_event_id"],
+        },
+    )
+    assert status == 200
+    pause_b = body["operational_pause"]
+
+    status, body, _h = _post(
+        resume_url,
+        args={"reason_code": "operator_cleared"},
+        expect={
+            "operational_pause_active": True,
+            "current_pause_event_id": pause_a["current_pause_event_id"],
+            "latest_pause_event_id": pause_b["latest_pause_event_id"],
+        },
+    )
+    assert (status, body["error"]) == (409, "stale_state")
+
+
+def test_pause_without_effective_version_via_api(api) -> None:
+    base, ids, _db = api
+    order_id = ids["order_unprinted"]
+    status, body, _h = _post(
+        f"{base}/office/v1/orders/{order_id}/pause",
+        args={"reason_code": "operational_review"},
+        expect={
+            "operational_pause_active": False,
+            "latest_pause_event_id": None,
+        },
+    )
+    assert status == 200
+    assert body["operational_pause"]["active"] is True
+    status, detail, _h = _get(f"{base}/office/v1/orders/{order_id}")
+    assert detail["operational_pause"]["active"] is True
+    assert detail["effective_order_version_id"] is None
+
+
+def test_pause_command_rejects_invalid_contract_and_domain_values(api) -> None:
+    base, ids, _db = api
+    order_id = ids["order_ready"]
+    pause_url = f"{base}/office/v1/orders/{order_id}/pause"
+
+    status, body, _headers = _post(
+        pause_url,
+        args={"reason_code": "manual_hold"},
+        expect={"operational_pause_active": False},
+    )
+    assert (status, body["error"]) == (400, "invalid_request")
+
+    status, body, _headers = _post(
+        pause_url,
+        args={"reason_code": "manual_hold"},
+        expect={
+            "operational_pause_active": "false",
+            "latest_pause_event_id": None,
+        },
+    )
+    assert (status, body["error"]) == (400, "invalid_request")
+
+    status, body, _headers = _post(
+        pause_url,
+        args={"reason_code": "not-a-reason"},
+        expect={
+            "operational_pause_active": False,
+            "latest_pause_event_id": None,
+        },
+    )
+    assert (status, body["error"]) == (422, "invalid_request")
+
+    status, body, _headers = _post(
+        pause_url,
+        args={"reason_code": "manual_hold", "actor_reference": ""},
+        expect={
+            "operational_pause_active": False,
+            "latest_pause_event_id": None,
+        },
+    )
+    assert (status, body["error"]) == (422, "invalid_request")
+
+    status, body, _headers = _post(
+        f"{base}/office/v1/orders/{ids['order_cancelled']}/pause",
+        args={"reason_code": "manual_hold"},
+        expect={
+            "operational_pause_active": False,
+            "latest_pause_event_id": None,
+        },
+    )
+    assert (status, body["error"]) == (422, "order_cancelled")
+
+
+def test_resume_command_rejects_invalid_expect_and_reason(api) -> None:
+    base, ids, _db = api
+    order_id = ids["order_ready"]
+    pause_url = f"{base}/office/v1/orders/{order_id}/pause"
+    resume_url = f"{base}/office/v1/orders/{order_id}/resume"
+    status, paused, _headers = _post(
+        pause_url,
+        args={"reason_code": "manual_hold"},
+        expect={
+            "operational_pause_active": False,
+            "latest_pause_event_id": None,
+        },
+    )
+    assert status == 200
+    projection = paused["operational_pause"]
+
+    status, body, _headers = _post(
+        resume_url,
+        args={"reason_code": "operator_cleared"},
+        expect={
+            "operational_pause_active": True,
+            "latest_pause_event_id": projection["latest_pause_event_id"],
+        },
+    )
+    assert (status, body["error"]) == (400, "invalid_request")
+
+    status, body, _headers = _post(
+        resume_url,
+        args={"reason_code": "invalid"},
+        expect={
+            "operational_pause_active": True,
+            "current_pause_event_id": projection["current_pause_event_id"],
+            "latest_pause_event_id": projection["latest_pause_event_id"],
+        },
+    )
+    assert (status, body["error"]) == (422, "invalid_request")
 
 
 def test_cancel_with_expect_and_repeat(api) -> None:

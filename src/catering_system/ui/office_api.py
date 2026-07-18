@@ -71,6 +71,9 @@ from catering_system.repositories.sqlite_catalog_repository import (
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
+from catering_system.repositories.sqlite_order_operational_pause_repository import (
+    SQLiteOrderOperationalPauseRepository,
+)
 from catering_system.repositories.sqlite_payment_reminder_repository import (
     SQLitePaymentReminderRepository,
 )
@@ -289,6 +292,12 @@ def _v_uuid(value: object) -> str:
     return value
 
 
+def _v_optional_uuid4(value: object) -> str | None:
+    if value is None:
+        return None
+    return _v_uuid(value)
+
+
 def _v_catalog_uuid(value: object) -> str:
     if not isinstance(value, str):
         raise _invalid()
@@ -361,9 +370,13 @@ class OfficeApi:
         self.confirmation_outbound = (
             SQLiteOrderConfirmationOutboundRepository.from_connection(connection)
         )
+        self.operational_pauses = SQLiteOrderOperationalPauseRepository.from_connection(
+            connection
+        )
         self.ledger = OfficeCommandLedger(connection)
         self.events = DeferredEventSink()
         self.executor = CoreCommandExecutor(connection, self.events)
+        self._active_command_id: str | None = None
         self.inquiry_service = InquiryService(self.inquiries, event_sink=self.events)
         self.order_service = OrderService(self.orders, event_sink=self.events)
         self.offer_service = OfferService(
@@ -383,7 +396,11 @@ class OfficeApi:
             self.inquiries,
             self.confirmation_documents,
         )
-        self.core = OperationalCoreService(self.orders, event_sink=self.events)
+        self.core = OperationalCoreService(
+            self.orders,
+            pause_repository=self.operational_pauses,
+            event_sink=self.events,
+        )
         self.confirmation_outbound_service = OrderConfirmationOutboundService(
             self.orders,
             self.confirmation_documents,
@@ -471,6 +488,11 @@ class OfficeApi:
         blocked = [
             o for o in active if not self.core.evaluate_ready_to_send(o.order_id).ready
         ]
+        paused = [
+            o
+            for o in active
+            if self.core.get_active_operational_pause(o.order_id) is not None
+        ]
         pending_changes = [
             o
             for o in active
@@ -497,6 +519,7 @@ class OfficeApi:
                 "nicht_wirksam": len(not_effective),
                 "versand_blockiert": len(blocked),
                 "aenderungen_warten_auf_kuechendruck": len(pending_changes),
+                "pausiert": len(paused),
                 "storniert": len(cancelled),
             },
             "week": views.week_view(week),
@@ -511,6 +534,15 @@ class OfficeApi:
                     self.core.evaluate_ready_to_send(o.order_id),
                 )
                 for o in blocked[: views.TOP_ROWS_CAP]
+            ],
+            "pausiert_top": [
+                views.order_top_row(
+                    o,
+                    self.orders.list_order_versions(o.order_id),
+                    self.core.evaluate_ready_to_send(o.order_id),
+                    active_pause=self.core.get_active_operational_pause(o.order_id),
+                )
+                for o in paused[: views.TOP_ROWS_CAP]
             ],
         }
 
@@ -684,6 +716,7 @@ class OfficeApi:
                     o,
                     self.orders.list_order_versions(o.order_id),
                     self.core.evaluate_ready_to_send(o.order_id),
+                    active_pause=self.core.get_active_operational_pause(o.order_id),
                 )
                 for o in page
             ],
@@ -714,6 +747,7 @@ class OfficeApi:
             self.core.evaluate_ready_to_send(order_id),
             self.payment_reminder_service.view(order_id),
             self.confirmation_document_service.eligibility(order_id),
+            pause_projection=self.core.get_operational_pause_projection(order_id),
         )
 
     def confirmation_document(
@@ -1278,6 +1312,130 @@ class OfficeApi:
             }
         }
 
+    def _pause_actor_reference(self, args: dict[str, object]) -> str:
+        if "actor_reference" in args:
+            return _v_str(args["actor_reference"], 200)
+        return CLIENT_ID
+
+    def _validate_pause_expect(
+        self, expect: dict, projection: dict[str, object]
+    ) -> None:
+        expected_active = expect["operational_pause_active"]
+        if not isinstance(expected_active, bool):
+            raise _invalid()
+        if expected_active != projection["active"]:
+            raise ApiError(409, "stale_state")
+        if "latest_pause_event_id" not in expect:
+            raise _invalid()
+        expected_latest = _v_optional_uuid4(expect["latest_pause_event_id"])
+        actual_latest = projection.get("latest_pause_event_id")
+        if expected_latest != actual_latest:
+            raise ApiError(409, "stale_state")
+
+    def _validate_resume_expect(
+        self, expect: dict, projection: dict[str, object]
+    ) -> None:
+        expected_active = expect["operational_pause_active"]
+        if not isinstance(expected_active, bool):
+            raise _invalid()
+        if not projection["active"]:
+            raise ApiError(409, "order_not_paused")
+        if not expected_active:
+            raise ApiError(409, "stale_state")
+        for key in ("current_pause_event_id", "latest_pause_event_id"):
+            if key not in expect:
+                raise _invalid()
+        expected_current = _v_uuid(expect["current_pause_event_id"])
+        expected_latest = _v_uuid(expect["latest_pause_event_id"])
+        if expected_current != projection.get("current_pause_event_id"):
+            raise ApiError(409, "stale_state")
+        if expected_latest != projection.get("latest_pause_event_id"):
+            raise ApiError(409, "stale_state")
+
+    def _map_pause_error(self, exc: ValueError) -> ApiError:
+        message = str(exc)
+        if message.startswith("no order with id"):
+            return ApiError(404, "not_found")
+        if "is cancelled" in message:
+            return ApiError(422, "order_cancelled")
+        if "is already paused" in message:
+            return ApiError(409, "order_already_paused")
+        if "is not paused" in message:
+            return ApiError(409, "order_not_paused")
+        if message == "stale operational pause state":
+            return ApiError(409, "stale_state")
+        if "invalid pause reason_code" in message or "invalid resume reason_code" in message:
+            return ApiError(422, "invalid_request")
+        if "exceeds length limit" in message:
+            return ApiError(422, "invalid_request")
+        return ApiError(422, "invalid_request")
+
+    def cmd_pause(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        order = self._require_active_order(path_ids["id"])
+        projection = self.core.get_operational_pause_projection(order.order_id)
+        self._validate_pause_expect(expect, projection)
+        command_id = self._active_command_id
+        if command_id is None:
+            raise ApiError(500, "internal")
+        latest_raw = projection.get("latest_pause_event_id")
+        expected_latest = (
+            latest_raw if isinstance(latest_raw, str) or latest_raw is None else None
+        )
+        try:
+            event = self.core.pause_order(
+                order.order_id,
+                reason_code=_v_str(args["reason_code"], 100),
+                note=_v_optional_str(args["note"], 2000)
+                if "note" in args
+                else None,
+                actor_reference=self._pause_actor_reference(args),
+                command_id=command_id,
+                expected_latest_pause_event_id=expected_latest,
+            )
+        except ValueError as exc:
+            raise self._map_pause_error(exc) from exc
+        updated = self.core.get_operational_pause_projection(order.order_id)
+        return 200, {
+            "order_id": order.order_id,
+            "pause_event_id": event.pause_event_id,
+            "operational_pause": updated,
+        }
+
+    def cmd_resume(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        order = self._require_active_order(path_ids["id"])
+        projection = self.core.get_operational_pause_projection(order.order_id)
+        self._validate_resume_expect(expect, projection)
+        command_id = self._active_command_id
+        if command_id is None:
+            raise ApiError(500, "internal")
+        current_pause_event_id = projection.get("current_pause_event_id")
+        latest_pause_event_id = projection.get("latest_pause_event_id")
+        assert isinstance(current_pause_event_id, str)
+        assert isinstance(latest_pause_event_id, str)
+        try:
+            event = self.core.resume_order(
+                order.order_id,
+                reason_code=_v_str(args["reason_code"], 100),
+                note=_v_optional_str(args["note"], 2000)
+                if "note" in args
+                else None,
+                actor_reference=self._pause_actor_reference(args),
+                command_id=command_id,
+                expected_current_pause_event_id=current_pause_event_id,
+                expected_latest_pause_event_id=latest_pause_event_id,
+            )
+        except ValueError as exc:
+            raise self._map_pause_error(exc) from exc
+        updated = self.core.get_operational_pause_projection(order.order_id)
+        return 200, {
+            "order_id": order.order_id,
+            "pause_event_id": event.pause_event_id,
+            "operational_pause": updated,
+        }
 
     def cmd_cancel(
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict
@@ -1556,6 +1714,14 @@ _CONFIRMATION_DOCUMENT_ARGS = _ArgKeys(required=frozenset({"created_by"}))
 _CONFIRMATION_DOCUMENT_SEND_ARGS = _ArgKeys(
     required=frozenset({"document_snapshot_id", "requested_by"})
 )
+_PAUSE_ARGS = _ArgKeys(
+    required=frozenset({"reason_code"}),
+    optional=frozenset({"note", "actor_reference"}),
+)
+_RESUME_ARGS = _ArgKeys(
+    required=frozenset({"reason_code"}),
+    optional=frozenset({"note", "actor_reference"}),
+)
 _CATALOG_DISH_UPDATE_ARGS = _ArgKeys(
     required=frozenset(
         {
@@ -1602,6 +1768,20 @@ _COMMANDS: dict[str, _CommandSpec] = {
         },
     ),
     "ready": _CommandSpec("cmd_ready", _NO_ARGS, set()),
+    "pause": _CommandSpec(
+        "cmd_pause",
+        _PAUSE_ARGS,
+        {"operational_pause_active", "latest_pause_event_id"},
+    ),
+    "resume": _CommandSpec(
+        "cmd_resume",
+        _RESUME_ARGS,
+        {
+            "operational_pause_active",
+            "current_pause_event_id",
+            "latest_pause_event_id",
+        },
+    ),
     "cancel": _CommandSpec("cmd_cancel", _NO_ARGS, {"updated_at"}),
     "payment-reminder": _CommandSpec(
         "cmd_payment_reminder", _PAYMENT_REMINDER_ARGS, {"updated_at"}
@@ -1782,6 +1962,16 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/ready$"),
         "/office/v1/orders/{id}/ready",
         {"POST": "ready"},
+    ),
+    (
+        re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/pause$"),
+        "/office/v1/orders/{id}/pause",
+        {"POST": "pause"},
+    ),
+    (
+        re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/resume$"),
+        "/office/v1/orders/{id}/resume",
+        {"POST": "resume"},
     ),
     (
         re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/cancel$"),
@@ -2212,7 +2402,11 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
                     if not hmac.compare_digest(recorded.fingerprint, fingerprint):
                         raise ApiError(409, "command_id_conflict")
                     return recorded.result_status, recorded.result_body
-                status, result = handler(path_ids, args, expect)
+                api._active_command_id = command_id
+                try:
+                    status, result = handler(path_ids, args, expect)
+                finally:
+                    api._active_command_id = None
                 body = json.dumps(
                     {"command_id": command_id, **result}, ensure_ascii=False
                 )
