@@ -30,8 +30,10 @@ explicit Phase 2 configuration/deploy step (not yet done; see below).
 | `GET /office/v1/inquiries?q=&limit=&offset=` | list rows (`intake_subject`, `linked_order_id`, `orders_total_count`); `limit` ≤100, honest `total_count` |
 | `GET /office/v1/inquiries/{id}` | full detail incl. `allows_conversion`, capped `orders` array, `offer_prefill` payload |
 | `GET /office/v1/orders?q=&limit=&offset=` | rows with `ready`, `blocker_reason`, `next_action` — no N+1 |
-| `GET /office/v1/orders/{id}` | detail with versions (≤200, flagged), `ready_to_send` and the separately derived `payment_reminder` view |
+| `GET /office/v1/orders/{id}` | detail with versions (≤200, flagged), `ready_to_send`, the separately derived `payment_reminder` view, and `confirmation_document` eligibility/snapshot summary |
 | `GET /office/v1/orders/{id}/print-data?version=` | print-sheet data; unknown and unowned are the same `404` |
+| `GET /office/v1/orders/{id}/confirmation-document` | latest or `?document_snapshot_id=` snapshot summary (`404` when none) |
+| `GET /office/v1/orders/{id}/confirmation-document/preview?format=json\|html` | customer-facing preview; default `format=json`, `html` returns rendered document |
 
 Orderings are the repository orderings (inquiries by event date then id,
 orders by id, versions by number). Search: inquiries by ID, location, event
@@ -60,6 +62,7 @@ are minimal (IDs + timestamps, no PII); the panel re-reads details via GET.
 | `POST /office/v1/orders/{id}/ready` | – (unknown order: `200`, `ready=false`) |
 | `POST /office/v1/orders/{id}/cancel` | `updated_at` (repeat = success) |
 | `POST /office/v1/orders/{id}/payment-reminder` | reminder `updated_at` (nullable before first save); exact manual reminder facts only |
+| `POST /office/v1/orders/{id}/confirmation-document` | `current_effective_order_version_id`; `args.created_by`; freezes one Auftragsbestätigung snapshot per effective OrderVersion (`201` first create, `200` replay/idempotent per version); blocked when no effective version, pending candidate, kitchen print missing, or no accepted Offer linkage (`422 confirmation_document_blocked` / `422 pending_order_version_change`) |
 
 Idempotency: every command carries a client `command_id`; precondition,
 business write and the ledger record commit in **one** SQLite transaction.
@@ -91,12 +94,19 @@ Error codes (stable, never free text): `unauthorized`, `not_found`,
 `invalid_acceptance_evidence`, `conversion_already_exists`, `conversion_blocked`,
 `offer_blocks_conversion`,
 `order_cancelled`, `kitchen_print_not_confirmed`, `version_not_owned`,
-`invalid_payment_reminder`, `core_busy`, `internal`.
+`invalid_payment_reminder`, `confirmation_document_blocked`,
+`commercial_totals_invalid`, `core_busy`, `internal`.
 
 The local payment-reminder extension records only the chosen method, external
 invoice reference/dates, paid date and cash-received flag. Its command uses the
 same atomic idempotency ledger as the other Office commands. It neither reads
 nor writes operational Order progression fields.
+
+The local Auftragsbestätigung document slice (EMAIL_MVP_1 / outbound pack B1)
+adds immutable `order_confirmation_document_snapshots`, a read-only customer
+preview, and an Office Panel block. It does **not** send email, expose SMTP,
+outbox, SendAttempt, or SendEvidence, and cannot dispatch even when
+`recipient_status=missing`.
 
 ## Smoke test (status codes only — never dump bodies)
 

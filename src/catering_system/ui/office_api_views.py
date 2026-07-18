@@ -48,6 +48,14 @@ from catering_system.domain.order_payment_reminder import PaymentReminderView
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
 from catering_system.domain.wochenuebersicht import Wochenuebersicht
 from catering_system.domain.work_center import WorkCenterSnapshot
+from catering_system.services.order_confirmation_document_preview import (
+    OrderConfirmationDocumentPreview,
+    preview_to_json,
+)
+from catering_system.services.order_confirmation_document_service import (
+    OrderConfirmationDocumentEligibility,
+    OrderConfirmationDocumentSummary,
+)
 from catering_system.ui.office_panel_offer_prefill import offer_prefill_payload
 
 
@@ -404,6 +412,7 @@ def order_detail(
     versions: list[OrderVersion],
     evaluation: ReadyToSendEvaluation,
     payment_reminder: PaymentReminderView | None = None,
+    confirmation_document: OrderConfirmationDocumentEligibility | None = None,
 ) -> dict[str, object]:
     detail = order_summary(order)
     detail["ready_to_send"] = {
@@ -442,7 +451,54 @@ def order_detail(
     detail["versions_truncated"] = len(versions) > DETAIL_VERSIONS_CAP
     if payment_reminder is not None:
         detail["payment_reminder"] = payment_reminder_shape(payment_reminder)
+    if confirmation_document is not None:
+        detail["confirmation_document"] = confirmation_document_shape(
+            confirmation_document
+        )
     return detail
+
+
+def confirmation_document_shape(
+    eligibility: OrderConfirmationDocumentEligibility,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "state": eligibility.state,
+        "available": eligibility.available,
+        "can_prepare": eligibility.can_prepare,
+        "blocker_code": eligibility.blocker_code,
+        "snapshot": (
+            confirmation_document_summary_shape(eligibility.snapshot)
+            if eligibility.snapshot is not None
+            else None
+        ),
+    }
+    return payload
+
+
+def confirmation_document_summary_shape(
+    summary: OrderConfirmationDocumentSummary,
+) -> dict[str, object]:
+    return {
+        "document_snapshot_id": summary.document_snapshot_id,
+        "order_id": summary.order_id,
+        "order_version_id": summary.order_version_id,
+        "document_reference": summary.document_reference,
+        "created_at": summary.created_at.isoformat(),
+        "created_by": summary.created_by,
+        "recipient_status": summary.recipient_status,
+        "recipient_email_masked": summary.recipient_email_masked,
+        "document_hash_short": summary.document_hash_short,
+        "net_total_cents": summary.net_total_cents,
+        "vat_total_cents": summary.vat_total_cents,
+        "gross_total_cents": summary.gross_total_cents,
+        "effective_version_number": summary.effective_version_number,
+    }
+
+
+def confirmation_document_preview_shape(
+    preview: OrderConfirmationDocumentPreview,
+) -> dict[str, object]:
+    return preview_to_json(preview)
 
 
 def payment_reminder_shape(view: PaymentReminderView) -> dict[str, object]:

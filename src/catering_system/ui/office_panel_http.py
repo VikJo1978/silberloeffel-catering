@@ -20,6 +20,9 @@ from catering_system.repositories.order_repository import OrderRepository
 from catering_system.repositories.payment_reminder_repository import (
     PaymentReminderRepository,
 )
+from catering_system.repositories.order_confirmation_document_repository import (
+    OrderConfirmationDocumentRepository,
+)
 from catering_system.integration.auerswald_sync import (
     fetch_missed_board,
     resolve_missed_call,
@@ -40,6 +43,13 @@ from catering_system.ui.office_panel import (
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjectionService,
     PrintProjectionNotFoundError,
+)
+from catering_system.services.order_confirmation_document_preview import (
+    build_preview,
+    render_preview_html,
+)
+from catering_system.services.order_confirmation_document_service import (
+    OrderConfirmationDocumentNotFoundError,
 )
 from catering_system.services.buffet_cards_service import BuffetCardsService
 from catering_system.ui.remote_core_client import RemoteCoreError
@@ -139,6 +149,7 @@ def make_office_panel_handler(
     remote: "RemoteCoreClient | None" = None,
     command_executor: "CoreCommandExecutor | None" = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
+    confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
@@ -151,6 +162,7 @@ def make_office_panel_handler(
         remote=remote,
         command_executor=command_executor,
         payment_reminder_repo=payment_reminder_repo,
+        confirmation_document_repo=confirmation_document_repo,
         offer_repo=offer_repo,
         catalog_repo=catalog_repo,
         ui_version=ui_version,
@@ -370,6 +382,13 @@ def make_office_panel_handler(
                 self._print_sheet(parts[1], parsed.query)
             elif len(parts) == 3 and parts[0] == "order" and parts[2] == "buffet-cards":
                 self._buffet_cards(parts[1], parsed.query)
+            elif (
+                len(parts) == 4
+                and parts[0] == "order"
+                and parts[2] == "confirmation-document"
+                and parts[3] == "preview"
+            ):
+                self._confirmation_document_preview(parts[1])
             else:
                 self.send_error(404)
 
@@ -424,6 +443,22 @@ def make_office_panel_handler(
                     effective_version_number=view.effective_version_number,
                 )
             )
+
+        def _confirmation_document_preview(self, order_id: str) -> None:
+            try:
+                if remote is not None:
+                    html = remote.confirmation_document_service.preview_html(order_id)
+                else:
+                    snapshot = panel.confirmation_document_service.get_latest_snapshot(
+                        order_id
+                    )
+                    if snapshot is None:
+                        raise OrderConfirmationDocumentNotFoundError(order_id)
+                    html = render_preview_html(build_preview(snapshot))
+            except OrderConfirmationDocumentNotFoundError:
+                self.send_error(404)
+                return
+            self._html(html)
 
         def do_POST(self) -> None:  # noqa: N802
             if not self._authorized():
@@ -551,6 +586,8 @@ def make_office_panel_handler(
                 panel.core.cancel_order(order_id)
             elif action == "payment-reminder":
                 panel.save_payment_reminder(order_id, self._form())
+            elif action == "confirmation-document":
+                panel.prepare_confirmation_document(order_id, self._form())
             else:
                 self.send_error(404)
                 return
@@ -574,6 +611,7 @@ def create_office_panel_server(
     remote: "RemoteCoreClient | None" = None,
     command_executor: "CoreCommandExecutor | None" = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
+    confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",

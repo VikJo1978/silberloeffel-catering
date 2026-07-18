@@ -52,6 +52,12 @@ from catering_system.repositories.in_memory_catalog_repository import (
 from catering_system.repositories.in_memory_payment_reminder_repository import (
     InMemoryPaymentReminderRepository,
 )
+from catering_system.repositories.in_memory_order_confirmation_document_repository import (
+    InMemoryOrderConfirmationDocumentRepository,
+)
+from catering_system.repositories.order_confirmation_document_repository import (
+    OrderConfirmationDocumentRepository,
+)
 from catering_system.repositories.catalog_repository import CatalogRepository
 from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.repositories.offer_repository import OfferRepository
@@ -63,6 +69,9 @@ from catering_system.services.inquiry_service import InquiryService
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
 from catering_system.services.payment_reminder_service import PaymentReminderService
+from catering_system.services.order_confirmation_document_service import (
+    OrderConfirmationDocumentService,
+)
 from catering_system.services.progression_service import ProgressionService
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
 from catering_system.ui import office_api_views as api_views
@@ -246,6 +255,7 @@ class OfficePanel:
         remote: "RemoteCoreClient | None" = None,
         command_executor: "CoreCommandExecutor | None" = None,
         payment_reminder_repo: PaymentReminderRepository | None = None,
+        confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
         offer_repo: OfferRepository | None = None,
         catalog_repo: CatalogRepository | None = None,
         ui_version: str = "legacy",
@@ -279,6 +289,13 @@ class OfficePanel:
                 order_repo,
                 today=api_views.berlin_today,
             )
+            self.confirmation_document_service = OrderConfirmationDocumentService(
+                order_repo,
+                self._offers,
+                inquiry_repo,
+                confirmation_document_repo
+                or InMemoryOrderConfirmationDocumentRepository(),
+            )
         else:
             # Structurally duck-typed, not the same concrete class — the
             # remote facades implement exactly the method surface this
@@ -292,6 +309,7 @@ class OfficePanel:
             self.order_service = remote.order_service  # type: ignore[assignment]
             self.core = remote.core  # type: ignore[assignment]
             self.payment_reminder_service = remote.payment_reminder_service  # type: ignore[assignment]
+            self.confirmation_document_service = remote.confirmation_document_service  # type: ignore[assignment]
             self.catalog_dish_write_service = remote.catalog_dish_write_service  # type: ignore[assignment]
         self._remote = remote
         self._command_executor = command_executor
@@ -2018,6 +2036,7 @@ class OfficePanel:
         cancelled = order.cancelled_at is not None
         ev = self.core.evaluate_ready_to_send(order_id)
         payment = self.payment_reminder_service.view(order_id)
+        confirmation = self.confirmation_document_service.eligibility(order_id)
         if self._ui_version == "v2":
             print_confirm_fields: dict[str, str] = {}
             effective_fields: dict[str, str] = {}
@@ -2116,8 +2135,20 @@ class OfficePanel:
                         if not cancelled
                         else ""
                     ),
+                    confirmation_command_fields=(
+                        self._command_fields(
+                            {
+                                "current_effective_order_version_id": (
+                                    order.effective_order_version_id or ""
+                                ),
+                            }
+                        )
+                        if not cancelled
+                        else ""
+                    ),
                     version_change_prefill=change_prefill if not cancelled else None,
                 ),
+                confirmation=confirmation,
                 versions_total_count=versions_total_count,
                 versions_truncated=versions_truncated,
             )
@@ -2325,6 +2356,36 @@ class OfficePanel:
         else:
             work()
 
+    def prepare_confirmation_document(self, order_id: str, form: dict[str, str]) -> None:
+        order = self._orders.get_order(order_id)
+        if order is None or order.cancelled_at is not None:
+            raise ValueError(f"no active order with id {order_id!r}")
+        expected = form.get("_expect_current_effective_order_version_id")
+        if (
+            expected is not None
+            and (expected or None) != order.effective_order_version_id
+        ):
+            raise ValueError(
+                "Der Auftrag wurde zwischenzeitlich geändert. "
+                "Bitte laden Sie die Seite neu."
+            )
+        effective_version_id = order.effective_order_version_id
+        assert effective_version_id is not None
+
+        def work() -> None:
+            self.confirmation_document_service.prepare_snapshot(
+                order_id,
+                effective_version_id,
+                "office-panel",
+            )
+
+        if self._remote is not None:
+            work()
+        elif self._command_executor is not None:
+            self._command_executor.run(work)
+        else:
+            work()
+
     def create_version(self, order_id: str, form: dict[str, str]) -> None:
         order = self._orders.get_order(order_id)
         if order is None:
@@ -2402,6 +2463,7 @@ def make_office_panel_handler(
     remote: "RemoteCoreClient | None" = None,
     command_executor: "CoreCommandExecutor | None" = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
+    confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
@@ -2423,6 +2485,7 @@ def make_office_panel_handler(
         remote=remote,
         command_executor=command_executor,
         payment_reminder_repo=payment_reminder_repo,
+        confirmation_document_repo=confirmation_document_repo,
         offer_repo=offer_repo,
         catalog_repo=catalog_repo,
         ui_version=ui_version,
@@ -2444,6 +2507,7 @@ def create_office_panel_server(
     remote: "RemoteCoreClient | None" = None,
     command_executor: "CoreCommandExecutor | None" = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
+    confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
@@ -2467,6 +2531,7 @@ def create_office_panel_server(
         remote=remote,
         command_executor=command_executor,
         payment_reminder_repo=payment_reminder_repo,
+        confirmation_document_repo=confirmation_document_repo,
         offer_repo=offer_repo,
         catalog_repo=catalog_repo,
         ui_version=ui_version,
@@ -2598,6 +2663,9 @@ def main() -> None:
         from catering_system.repositories.sqlite_payment_reminder_repository import (
             SQLitePaymentReminderRepository,
         )
+        from catering_system.repositories.sqlite_order_confirmation_document_repository import (
+            SQLiteOrderConfirmationDocumentRepository,
+        )
         from catering_system.repositories.sqlite_catalog_repository import (
             SQLiteCatalogRepository,
         )
@@ -2609,6 +2677,9 @@ def main() -> None:
         catalog_repo = SQLiteCatalogRepository.from_connection(connection)
         payment_reminder_repo = SQLitePaymentReminderRepository.from_connection(
             connection
+        )
+        confirmation_document_repo = (
+            SQLiteOrderConfirmationDocumentRepository.from_connection(connection)
         )
 
         server = create_office_panel_server(
@@ -2624,6 +2695,7 @@ def main() -> None:
             args.configurator_url,
             command_executor=CoreCommandExecutor(connection),
             payment_reminder_repo=payment_reminder_repo,
+            confirmation_document_repo=confirmation_document_repo,
             offer_repo=offer_repo,
             catalog_repo=catalog_repo,
             ui_version=args.ui_version,

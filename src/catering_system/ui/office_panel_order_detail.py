@@ -18,6 +18,17 @@ from catering_system.domain.order_payment_reminder import (
     PaymentReminderView,
 )
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
+from catering_system.services.order_confirmation_document_service import (
+    OrderConfirmationDocumentEligibility,
+)
+
+_CONFIRMATION_STATE_LABELS = {
+    "nicht_verfuegbar": "Nicht verfügbar",
+    "aenderung_wartet": "Änderung wartet auf Küchendruck",
+    "empfaenger_fehlt": "Empfänger-E-Mail fehlt",
+    "bereit_zur_vorschau": "Bereit zur Vorschau",
+    "dokument_erstellt": "Dokument erstellt",
+}
 
 _PLANNING_MODE_LABELS = {
     "caterer_suggestion": "Vorschlag durch Silberlöffel",
@@ -70,6 +81,7 @@ class OrderDetailFormFields:
     cancel_command_fields: str
     version_command_fields: str
     payment_command_fields: str
+    confirmation_command_fields: str = ""
     version_change_prefill: OrderVersionChangePrefill | None = None
 
 
@@ -513,6 +525,61 @@ def _payment_card(
     )
 
 
+def _confirmation_card(
+    order: Order,
+    confirmation: OrderConfirmationDocumentEligibility,
+    forms: OrderDetailFormFields,
+) -> str:
+    state_label = _CONFIRMATION_STATE_LABELS.get(
+        confirmation.state, confirmation.state
+    )
+    facts: list[tuple[str, str]] = [("Status", state_label)]
+    snapshot = confirmation.snapshot
+    if snapshot is not None:
+        facts.extend(
+            [
+                ("Referenz", snapshot.document_reference),
+                ("Empfänger", snapshot.recipient_email_masked or "–"),
+                ("Hash", snapshot.document_hash_short),
+                (
+                    "Wirksamer Stand",
+                    f"Version {snapshot.effective_version_number}",
+                ),
+                (
+                    "Summe brutto",
+                    f"{snapshot.gross_total_cents / 100:.2f} €".replace(".", ","),
+                ),
+                ("Erstellt", snapshot.created_at.strftime("%d.%m.%Y · %H:%M")),
+            ]
+        )
+    actions: list[str] = []
+    if confirmation.can_prepare:
+        actions.append(
+            f'<form method="post" action="/order/{_e(order.order_id)}/confirmation-document">'
+            f"{forms.csrf_input}{forms.confirmation_command_fields}"
+            '<button type="submit">Vorschau erstellen</button></form>'
+        )
+    if snapshot is not None:
+        actions.append(
+            f'<p><a class="order-action-link" '
+            f'href="/order/{_e(order.order_id)}/confirmation-document/preview" '
+            f'target="_blank" rel="noopener">Vorschau öffnen</a></p>'
+        )
+    return (
+        '<section class="order-card order-content-card order-confirmation-card">'
+        '<div class="order-section-kicker">Kundendokument</div>'
+        "<h2>Auftragsbestätigung</h2>"
+        '<dl class="order-payment-facts">'
+        + "".join(
+            f"<div><dt>{_e(label)}</dt><dd>{_e(value)}</dd></div>"
+            for label, value in facts
+        )
+        + "</dl>"
+        + "".join(actions)
+        + "</section>"
+    )
+
+
 def _planning_mode_select(selected: str) -> str:
     options = []
     for value in PLANNING_MODES:
@@ -521,7 +588,7 @@ def _planning_mode_select(selected: str) -> str:
             f'<option value="{_e(value)}"{mark}>'
             f"{_e(_PLANNING_MODE_LABELS[value])}</option>"
         )
-    return f'<select name="planning_mode">{''.join(options)}</select>'
+    return f'<select name="planning_mode">{"".join(options)}</select>'
 
 
 def _version_change_form(
@@ -593,6 +660,7 @@ def render_order_detail(
     ready: ReadyToSendEvaluation,
     payment: PaymentReminderView,
     next_action: Mapping[str, str] | None,
+    confirmation: OrderConfirmationDocumentEligibility,
     *,
     forms: OrderDetailFormFields,
     versions_total_count: int,
@@ -664,6 +732,7 @@ def render_order_detail(
         + "</div>"
         '<aside class="order-detail-side">'
         + _primary_action(order, target, next_action, forms)
+        + _confirmation_card(order, confirmation, forms)
         + _payment_card(order, payment, forms)
         + _secondary_actions(order, forms)
         + "</aside></div>"

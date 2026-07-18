@@ -33,6 +33,10 @@ from catering_system.domain.order_payment_reminder import (
     validate_payment_method,
 )
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
+from catering_system.services.order_confirmation_document_service import (
+    OrderConfirmationDocumentEligibility,
+    OrderConfirmationDocumentSummary,
+)
 from catering_system.services.inquiry_service import validate_inquiry_source
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjection,
@@ -116,6 +120,7 @@ _ORDER_DETAIL_KEYS = _ORDER_SUMMARY_KEYS | {
     "ready_to_send",
     "version_change",
     "payment_reminder",
+    "confirmation_document",
     "versions",
     "versions_total_count",
     "versions_truncated",
@@ -773,9 +778,11 @@ class RemoteCoreClient:
         self._order_version_meta: dict[str, tuple[int, bool]] = {}
         self._known_order_ids: list[str] = []
         self._evaluations: dict[str, ReadyToSendEvaluation] = {}
+        self._confirmation_eligibility: dict[str, OrderConfirmationDocumentEligibility] = {}
         self.inquiry_service = _RemoteInquiryService(self)
         self.order_service = _RemoteOrderService(self)
         self.payment_reminder_service = _RemotePaymentReminderService(self)
+        self.confirmation_document_service = _RemoteConfirmationDocumentService(self)
         self.catalog_dish_write_service = _RemoteCatalogDishWriteService(self)
         self.core = _RemoteOperationalCoreService(self)
 
@@ -785,6 +792,7 @@ class RemoteCoreClient:
         self._order_version_meta.clear()
         self._known_order_ids = []
         self._evaluations.clear()
+        self._confirmation_eligibility.clear()
         self._form = dict(form or {})
         self._command_id = self._form.get("_command_id", "")
 
@@ -869,6 +877,29 @@ class RemoteCoreClient:
     ) -> dict[str, object]:
         return self._request("GET", path, query=query, expected={200})
 
+    def get_text(
+        self, path: str, query: Mapping[str, object] | None = None
+    ) -> str:
+        url = self._url(path, query)
+        request = urllib.request.Request(
+            url,
+            headers={"Authorization": f"Bearer {self._token}"},
+            method="GET",
+        )
+        try:
+            response = self._opener.open(request, timeout=_READ_TIMEOUT_SECONDS)
+        except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as exc:
+            raise RemoteCoreError(503, "unreachable", unavailable=True) from exc
+        with response:
+            if response.status != 200:
+                raise RemoteCoreError(
+                    response.status, "unexpected_status", unavailable=True
+                )
+            raw = response.read(_MAX_RESPONSE_BYTES + 1)
+        if len(raw) > _MAX_RESPONSE_BYTES:
+            _bad_response()
+        return raw.decode("utf-8")
+
     def command(
         self,
         path: str,
@@ -896,6 +927,7 @@ class RemoteCoreClient:
         self._order_version_meta.clear()
         self._known_order_ids = []
         self._evaluations.clear()
+        self._confirmation_eligibility.clear()
         return result
 
     def convert_accepted_offer(
@@ -1796,6 +1828,10 @@ class RemoteCoreClient:
             detail["ready_to_send"], order_id
         )
         _payment_reminder(detail["payment_reminder"], order_id)
+        if "confirmation_document" in detail:
+            self._confirmation_eligibility[order_id] = _confirmation_document_eligibility(
+                detail["confirmation_document"]
+            )
         versions = _list(detail["versions"])
         total = _nonnegative_int(detail["versions_total_count"])
         truncated = _bool(detail["versions_truncated"])
@@ -2361,4 +2397,120 @@ class _RemoteOperationalCoreService:
             current,
             cancelled_at=_datetime(result["cancelled_at"]),
             updated_at=_datetime(result["updated_at"]),
+        )
+
+
+_CONFIRMATION_DOCUMENT_KEYS = frozenset(
+    {
+        "state",
+        "available",
+        "can_prepare",
+        "blocker_code",
+        "snapshot",
+    }
+)
+_CONFIRMATION_SUMMARY_KEYS = frozenset(
+    {
+        "document_snapshot_id",
+        "order_id",
+        "order_version_id",
+        "document_reference",
+        "created_at",
+        "created_by",
+        "recipient_status",
+        "recipient_email_masked",
+        "document_hash_short",
+        "net_total_cents",
+        "vat_total_cents",
+        "gross_total_cents",
+        "effective_version_number",
+    }
+)
+
+
+def _confirmation_document_summary(raw: object) -> OrderConfirmationDocumentSummary:
+    data = _dict(raw)
+    _exact(data, _CONFIRMATION_SUMMARY_KEYS)
+    return OrderConfirmationDocumentSummary(
+        document_snapshot_id=_uuid4(data["document_snapshot_id"]),
+        order_id=_uuid4(data["order_id"]),
+        order_version_id=_uuid4(data["order_version_id"]),
+        document_reference=_str(data["document_reference"]),
+        created_at=_datetime(data["created_at"]),
+        created_by=_str(data["created_by"]),
+        recipient_status=(
+            "ready" if _str(data["recipient_status"]) == "ready" else "missing"
+        ),
+        recipient_email_masked=_optional_str(data["recipient_email_masked"]),
+        document_hash_short=_str(data["document_hash_short"]),
+        net_total_cents=_int(data["net_total_cents"]),
+        vat_total_cents=_int(data["vat_total_cents"]),
+        gross_total_cents=_int(data["gross_total_cents"]),
+        effective_version_number=_int(data["effective_version_number"]),
+    )
+
+
+def _confirmation_document_eligibility(
+    raw: object,
+) -> OrderConfirmationDocumentEligibility:
+    data = _dict(raw)
+    _exact(data, _CONFIRMATION_DOCUMENT_KEYS)
+    snapshot_raw = data.get("snapshot")
+    snapshot = (
+        _confirmation_document_summary(snapshot_raw)
+        if snapshot_raw is not None
+        else None
+    )
+    blocker = data.get("blocker_code")
+    return OrderConfirmationDocumentEligibility(
+        available=_bool(data["available"]),
+        state=_str(data["state"]),
+        blocker_code=_optional_str(blocker),
+        can_prepare=_bool(data["can_prepare"]),
+        snapshot=snapshot,
+    )
+
+
+class _RemoteConfirmationDocumentService:
+    def __init__(self, client: RemoteCoreClient) -> None:
+        self._client = client
+
+    def eligibility(self, order_id: str) -> OrderConfirmationDocumentEligibility:
+        if order_id in self._client._confirmation_eligibility:
+            return self._client._confirmation_eligibility[order_id]
+        detail = self._client._order_detail(order_id)
+        if detail is None:
+            raise ValueError(f"no order with id {order_id!r}")
+        return self._client._confirmation_eligibility.get(
+            order_id,
+            OrderConfirmationDocumentEligibility(
+                available=False,
+                state="nicht_verfuegbar",
+                blocker_code="nicht_verfuegbar",
+                can_prepare=False,
+            ),
+        )
+
+    def prepare_snapshot(
+        self,
+        order_id: str,
+        expected_effective_order_version_id: str,
+        created_by: str,
+    ) -> OrderConfirmationDocumentSummary:
+        result = self._client.command(
+            f"/office/v1/orders/{quote(order_id, safe='')}/confirmation-document",
+            {"created_by": created_by},
+            {"current_effective_order_version_id": expected_effective_order_version_id},
+            expected={201, 200},
+            result_keys={"order_id", "document_snapshot_id", "snapshot"},
+        )
+        if _uuid4(result["order_id"]) != order_id:
+            _bad_response()
+        summary = _confirmation_document_summary(result["snapshot"])
+        return summary
+
+    def preview_html(self, order_id: str) -> str:
+        return self._client.get_text(
+            f"/office/v1/orders/{quote(order_id, safe='')}/confirmation-document/preview",
+            {"format": "html"},
         )

@@ -2476,3 +2476,502 @@ def test_update_catalog_dish_stale_state_409(api) -> None:
         expect={"updated_at": "2020-01-01T00:00:00+00:00"},
     )
     assert (status, body["error"]) == (409, "stale_state")
+
+
+# --- confirmation document (EMAIL_MVP_1 / outbound pack B1) -------------------
+
+
+def _get_raw(
+    url: str, headers: dict | None = None
+) -> tuple[int, bytes, dict[str, str]]:
+    req = urllib.request.Request(url, headers=headers if headers is not None else _AUTH)
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return resp.status, resp.read(), dict(resp.headers)
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read(), dict(exc.headers)
+
+
+def _confirmation_document_url(base: str, order_id: str) -> str:
+    return f"{base}/office/v1/orders/{order_id}/confirmation-document"
+
+
+def _confirmation_preview_url(
+    base: str,
+    order_id: str,
+    *,
+    format: str = "json",
+    document_snapshot_id: str | None = None,
+) -> str:
+    query = f"format={format}"
+    if document_snapshot_id is not None:
+        query += f"&document_snapshot_id={document_snapshot_id}"
+    return f"{_confirmation_document_url(base, order_id)}/preview?{query}"
+
+
+def _confirmation_snapshot_count(db: Path) -> int:
+    conn = sqlite3.connect(db)
+    try:
+        return conn.execute(
+            "SELECT COUNT(*) FROM order_confirmation_document_snapshots"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+
+def _confirmation_snapshot_row(db: Path, document_snapshot_id: str) -> tuple[str, str]:
+    conn = sqlite3.connect(db)
+    try:
+        row = conn.execute(
+            "SELECT document_snapshot_id, document_hash "
+            "FROM order_confirmation_document_snapshots "
+            "WHERE document_snapshot_id = ?",
+            (document_snapshot_id,),
+        ).fetchone()
+        assert row is not None
+        return row[0], row[1]
+    finally:
+        conn.close()
+
+
+def _create_convertible_inquiry(base: str) -> str:
+    status, body, _h = _post(f"{base}/office/v1/inquiries", args=_CREATE_ARGS)
+    assert status == 201
+    return body["inquiry_id"]
+
+
+def _unique_offer_snapshot(*, inquiry_id: str) -> dict[str, object]:
+    payload = _valid_offer_snapshot(inquiry_id=inquiry_id)
+    payload["snapshot_id"] = str(uuid.uuid4())
+    variant = payload["variants"][0]  # type: ignore[index]
+    variant["variant_id"] = str(uuid.uuid4())
+    position = variant["positions"][0]  # type: ignore[index]
+    position["position_id"] = str(uuid.uuid4())
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+    return payload
+
+
+def _ensure_inquiry_recipient_email(base: str, inquiry_id: str) -> None:
+    detail = _get(f"{base}/office/v1/inquiries/{inquiry_id}")[1]
+    _post(
+        f"{base}/office/v1/inquiries/{inquiry_id}/update",
+        args={
+            "event_date": detail["event_date"],
+            "crm_stage": detail["crm_stage"],
+            "time_window_text": detail["time_window_text"],
+            "location_text": detail["location_text"],
+            "guest_count_estimate": detail["guest_count_estimate"],
+            "planning_mode": detail["planning_mode"],
+            "intake_message": (
+                "Firma: Example GmbH\n"
+                "Name: Example Contact\n"
+                "E-Mail: customer@example.invalid\n"
+            ),
+        },
+        expect={"updated_at": detail["updated_at"]},
+    )
+
+
+def _make_effective_offer_order(
+    api: tuple[str, dict[str, str], Path],
+    *,
+    inquiry_id: str | None = None,
+    snapshot: dict[str, object] | None = None,
+    ensure_recipient_email: bool = True,
+) -> tuple[str, str]:
+    base, ids, _db = api
+    resolved_inquiry = inquiry_id or ids["inquiry_cancelled_order"]
+    if ensure_recipient_email:
+        _ensure_inquiry_recipient_email(base, resolved_inquiry)
+    resolved_snapshot = snapshot or _unique_offer_snapshot(inquiry_id=resolved_inquiry)
+    variant_id = resolved_snapshot["variants"][0]["variant_id"]  # type: ignore[index]
+    prep_status, prep_body, _h = _post(
+        _prepare_offer_url(base, resolved_inquiry),
+        args={"snapshot": resolved_snapshot},
+    )
+    assert prep_status == 201
+    offer_id = prep_body["offer_id"]
+    offer_version_id = prep_body["offer_version_id"]
+
+    assert (
+        _post(
+            _mark_sent_url(base, offer_id, offer_version_id),
+            args=_MARK_SENT_ARGS,
+        )[0]
+        == 200
+    )
+    accept_status, accept_body, _h = _post(
+        _record_acceptance_url(base, offer_id, offer_version_id),
+        args={**_RECORD_ACCEPTANCE_ARGS, "accepted_variant_id": variant_id},
+    )
+    assert accept_status == 200
+
+    convert_status, convert_body, _h = _post(
+        _convert_accepted_url(base, offer_id, offer_version_id),
+        args={
+            "accepted_variant_id": accept_body["accepted_variant_id"],
+            "acceptance_id": accept_body["acceptance_id"],
+        },
+    )
+    assert convert_status in (200, 201)
+    order_id = convert_body["order_id"]
+    order_version_id = convert_body["order_version_id"]
+
+    assert (
+        _post(
+            f"{base}/office/v1/orders/{order_id}/print-confirm",
+            args={"order_version_id": order_version_id},
+        )[0]
+        == 200
+    )
+    assert (
+        _post(
+            f"{base}/office/v1/orders/{order_id}/effective",
+            args={"order_version_id": order_version_id},
+            expect={
+                "current_effective_order_version_id": None,
+                "current_candidate_order_version_id": None,
+            },
+        )[0]
+        == 200
+    )
+    return order_id, order_version_id
+
+
+def test_confirmation_document_post_create_get_and_replay(api) -> None:
+    base, _ids, db = api
+    order_id, order_version_id = _make_effective_offer_order(api)
+    command_url = _confirmation_document_url(base, order_id)
+    command_id = str(uuid.uuid4())
+    expect = {"current_effective_order_version_id": order_version_id}
+    args = {"created_by": "office-api-test"}
+
+    status, created, _h = _post(
+        command_url,
+        args=args,
+        expect=expect,
+        command_id=command_id,
+    )
+    assert status == 201
+    assert set(created) == {"command_id", "order_id", "document_snapshot_id", "snapshot"}
+    assert created["order_id"] == order_id
+    snapshot = created["snapshot"]
+    assert snapshot["order_version_id"] == order_version_id
+    assert snapshot["recipient_status"] == "ready"
+    assert snapshot["document_hash_short"].startswith("sha256:")
+
+    stored_id, stored_hash = _confirmation_snapshot_row(
+        db, created["document_snapshot_id"]
+    )
+    assert stored_id == created["document_snapshot_id"]
+    assert stored_hash.startswith("sha256:")
+    assert snapshot["document_hash_short"].endswith(stored_hash[-4:])
+
+    status, replay, _h = _post(
+        command_url,
+        args=args,
+        expect=expect,
+        command_id=command_id,
+    )
+    assert (status, replay) == (201, created)
+    assert _confirmation_snapshot_count(db) == 1
+
+    status, second, _h = _post(command_url, args=args, expect=expect)
+    assert status == 200
+    assert second["document_snapshot_id"] == created["document_snapshot_id"]
+    assert second["snapshot"] == snapshot
+    assert _confirmation_snapshot_count(db) == 1
+
+    read_status, summary, _h = _get(command_url)
+    assert read_status == 200
+    assert summary["document_snapshot_id"] == created["document_snapshot_id"]
+    assert summary["snapshot"] == snapshot
+
+
+def test_confirmation_document_get_not_found_cases(api) -> None:
+    base, _ids, db = api
+    order_id, order_version_id = _make_effective_offer_order(api)
+
+    status, body, _h = _get(_confirmation_document_url(base, order_id))
+    assert (status, body["error"]) == (404, "not_found")
+
+    _, created, _h = _post(
+        _confirmation_document_url(base, order_id),
+        args={"created_by": "office-api-test"},
+        expect={"current_effective_order_version_id": order_version_id},
+    )
+    snapshot_id = created["document_snapshot_id"]
+
+    status, body, _h = _get(
+        _confirmation_document_url(base, str(uuid.uuid4()))
+    )
+    assert (status, body["error"]) == (404, "not_found")
+
+    status, body, _h = _get(
+        f"{_confirmation_document_url(base, order_id)}"
+        f"?document_snapshot_id={uuid.uuid4()}"
+    )
+    assert (status, body["error"]) == (404, "not_found")
+
+    assert _confirmation_snapshot_count(db) == 1
+    status, body, _h = _get(
+        f"{_confirmation_document_url(base, order_id)}"
+        f"?document_snapshot_id={snapshot_id}"
+    )
+    assert status == 200
+    assert body["document_snapshot_id"] == snapshot_id
+
+
+def test_confirmation_document_preview_json_and_html(api) -> None:
+    base, _ids, _db = api
+    order_id, order_version_id = _make_effective_offer_order(api)
+    created = _post(
+        _confirmation_document_url(base, order_id),
+        args={"created_by": "office-api-test"},
+        expect={"current_effective_order_version_id": order_version_id},
+    )[1]
+    snapshot_id = created["document_snapshot_id"]
+
+    status, body, _h = _get(_confirmation_preview_url(base, order_id, format="json"))
+    assert status == 200
+    assert set(body) == {"document_snapshot_id", "preview"}
+    assert body["document_snapshot_id"] == snapshot_id
+    preview = body["preview"]
+    assert preview["title"] == "Auftragsbestätigung"
+    assert preview["positions"]
+    assert preview["vat_buckets"]
+    assert preview["net_total_eur"]
+    assert preview["vat_total_eur"]
+    assert preview["gross_total_eur"]
+    assert "canonical_snapshot_json" not in body
+    assert "unit_net_cents" not in preview["positions"][0]
+
+    status, raw, headers = _get_raw(
+        _confirmation_preview_url(base, order_id, format="html")
+    )
+    assert status == 200
+    html = raw.decode("utf-8")
+    content_type = headers.get("Content-type") or headers.get("Content-Type", "")
+    assert content_type.startswith("text/html")
+    assert "Auftragsbestätigung" in html
+    assert created["snapshot"]["document_reference"] in html
+    assert preview["gross_total_eur"] in html
+
+
+def test_confirmation_document_preview_escapes_html_but_preserves_json_text(
+    api,
+) -> None:
+    base, ids, _db = api
+    malicious = "<script>alert(1)</script>"
+    rich = "<b>Test</b>"
+    amp = "A&B"
+    inquiry_id = ids["inquiry_cancelled_order"]
+    detail = _get(f"{base}/office/v1/inquiries/{inquiry_id}")[1]
+    _post(
+        f"{base}/office/v1/inquiries/{inquiry_id}/update",
+        args={
+            "event_date": detail["event_date"],
+            "crm_stage": detail["crm_stage"],
+            "time_window_text": detail["time_window_text"],
+            "location_text": amp,
+            "guest_count_estimate": detail["guest_count_estimate"],
+            "planning_mode": detail["planning_mode"],
+            "intake_message": f"Firma: {malicious}\nName: {rich}\nE-Mail: customer@example.invalid\n",
+        },
+        expect={"updated_at": detail["updated_at"]},
+    )
+    snapshot_payload = _valid_offer_snapshot(inquiry_id=inquiry_id)
+    position = snapshot_payload["variants"][0]["positions"][0]  # type: ignore[index]
+    position["name"] = malicious
+    position["description"] = rich
+    snapshot_payload["event"]["location_text"] = amp  # type: ignore[index]
+    snapshot_payload["snapshot_hash"] = compute_snapshot_hash(snapshot_payload)
+
+    order_id, order_version_id = _make_effective_offer_order(
+        api,
+        inquiry_id=inquiry_id,
+        snapshot=snapshot_payload,
+        ensure_recipient_email=False,
+    )
+    _post(
+        _confirmation_document_url(base, order_id),
+        args={"created_by": "office-api-test"},
+        expect={"current_effective_order_version_id": order_version_id},
+    )
+
+    preview = _get(_confirmation_preview_url(base, order_id, format="json"))[1]["preview"]
+    assert preview["recipient_company"] == malicious
+    assert preview["recipient_name"] == rich
+    assert preview["location_text"] == amp
+    assert preview["positions"][0]["name"] == malicious
+
+    status, raw, _h = _get_raw(
+        _confirmation_preview_url(base, order_id, format="html")
+    )
+    html = raw.decode("utf-8")
+    assert "<script>alert(1)</script>" not in html
+    assert "<b>Test</b>" not in html
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+    assert "&lt;b&gt;Test&lt;/b&gt;" in html
+    assert "A&amp;B" in html
+
+
+def test_confirmation_document_snapshot_isolated_by_order(api) -> None:
+    base, ids, db = api
+    order_a, version_a = _make_effective_offer_order(
+        api, inquiry_id=ids["inquiry_convertible"]
+    )
+    order_b, _version_b = _make_effective_offer_order(
+        api, inquiry_id=_create_convertible_inquiry(base)
+    )
+    created_a = _post(
+        _confirmation_document_url(base, order_a),
+        args={"created_by": "office-api-test"},
+        expect={"current_effective_order_version_id": version_a},
+    )[1]
+    snapshot_id = created_a["document_snapshot_id"]
+
+    status, body, _h = _get(
+        f"{_confirmation_document_url(base, order_b)}"
+        f"?document_snapshot_id={snapshot_id}"
+    )
+    assert (status, body["error"]) == (404, "not_found")
+    assert _confirmation_snapshot_count(db) == 1
+
+
+def test_confirmation_document_stale_expect_and_blocked_states(api) -> None:
+    base, ids, _db = api
+    order_id, order_version_id = _make_effective_offer_order(api)
+
+    status, body, _h = _post(
+        _confirmation_document_url(base, order_id),
+        args={"created_by": "office-api-test"},
+        expect={"current_effective_order_version_id": str(uuid.uuid4())},
+    )
+    assert (status, body["error"]) == (409, "stale_state")
+
+    version_args = {
+        "event_date": "2026-10-03",
+        "time_window_text": "abends",
+        "location_text": "Hamburg",
+        "guest_count_estimate": 40,
+        "planning_mode": "caterer_suggestion",
+    }
+    _post(
+        f"{base}/office/v1/orders/{order_id}/versions",
+        args=version_args,
+        expect={
+            "latest_version_number": 1,
+            "current_effective_order_version_id": order_version_id,
+            "current_candidate_order_version_id": None,
+        },
+    )
+    status, body, _h = _post(
+        _confirmation_document_url(base, order_id),
+        args={"created_by": "office-api-test"},
+        expect={"current_effective_order_version_id": order_version_id},
+    )
+    assert (status, body["error"]) == (422, "pending_order_version_change")
+
+    status, body, _h = _post(
+        _confirmation_document_url(base, ids["order_ready"]),
+        args={"created_by": "office-api-test"},
+        expect={"current_effective_order_version_id": ids["version_ready"]},
+    )
+    assert (status, body["error"]) == (422, "confirmation_document_blocked")
+
+
+def test_confirmation_document_missing_recipient_is_allowed(api) -> None:
+    base, ids, db = api
+    inquiry_id = ids["inquiry_cancelled_order"]
+    detail = _get(f"{base}/office/v1/inquiries/{inquiry_id}")[1]
+    _post(
+        f"{base}/office/v1/inquiries/{inquiry_id}/update",
+        args={
+            "event_date": detail["event_date"],
+            "crm_stage": detail["crm_stage"],
+            "time_window_text": detail["time_window_text"],
+            "location_text": detail["location_text"],
+            "guest_count_estimate": detail["guest_count_estimate"],
+            "planning_mode": detail["planning_mode"],
+            "intake_message": "Firma: Ohne E-Mail GmbH\nName: Anna\n",
+        },
+        expect={"updated_at": detail["updated_at"]},
+    )
+    order_id, order_version_id = _make_effective_offer_order(
+        api, inquiry_id=inquiry_id, ensure_recipient_email=False
+    )
+    status, created, _h = _post(
+        _confirmation_document_url(base, order_id),
+        args={"created_by": "office-api-test"},
+        expect={"current_effective_order_version_id": order_version_id},
+    )
+    assert status == 201
+    assert created["snapshot"]["recipient_status"] == "missing"
+    assert created["snapshot"]["recipient_email_masked"] is None
+
+    preview = _get(_confirmation_preview_url(base, order_id, format="json"))[1]["preview"]
+    assert preview["recipient_status"] == "missing"
+    assert preview["recipient_email_masked"] is None
+    assert _confirmation_snapshot_count(db) == 1
+
+
+def test_confirmation_document_preview_rejects_unknown_format(api) -> None:
+    base, _ids, _db = api
+    order_id, order_version_id = _make_effective_offer_order(api)
+    _post(
+        _confirmation_document_url(base, order_id),
+        args={"created_by": "office-api-test"},
+        expect={"current_effective_order_version_id": order_version_id},
+    )
+    status, body, _h = _get(
+        _confirmation_preview_url(base, order_id, format="pdf")
+    )
+    assert (status, body["error"]) == (400, "invalid_request")
+
+
+def test_confirmation_document_reads_are_side_effect_free(api) -> None:
+    base, _ids, db = api
+    order_id, order_version_id = _make_effective_offer_order(api)
+    detail_before = _get(f"{base}/office/v1/orders/{order_id}")[1]
+    _post(
+        _confirmation_document_url(base, order_id),
+        args={"created_by": "office-api-test"},
+        expect={"current_effective_order_version_id": order_version_id},
+    )
+    count_after_create = _confirmation_snapshot_count(db)
+
+    for _ in range(2):
+        assert _get(_confirmation_document_url(base, order_id))[0] == 200
+        assert _get(_confirmation_preview_url(base, order_id, format="json"))[0] == 200
+        assert (
+            _get_raw(_confirmation_preview_url(base, order_id, format="html"))[0]
+            == 200
+        )
+
+    assert _confirmation_snapshot_count(db) == count_after_create
+    detail_after = _get(f"{base}/office/v1/orders/{order_id}")[1]
+    assert detail_after["effective_order_version_id"] == detail_before["effective_order_version_id"]
+    assert (
+        detail_after["candidate_order_version_id"]
+        == detail_before["candidate_order_version_id"]
+    )
+
+
+def test_confirmation_document_routes_require_bearer_auth(api) -> None:
+    base, ids, _db = api
+    order_id = ids["order_ready"]
+    no_auth: dict[str, str] = {}
+    for url in (
+        _confirmation_document_url(base, order_id),
+        _confirmation_preview_url(base, order_id, format="json"),
+    ):
+        status, body, _h = _get(url, headers=no_auth)
+        assert (status, body["error"]) == (401, "unauthorized")
+    status, body, _h = _post(
+        _confirmation_document_url(base, order_id),
+        args={"created_by": "office-api-test"},
+        expect={"current_effective_order_version_id": ids["version_ready"]},
+        headers=no_auth,
+    )
+    assert (status, body["error"]) == (401, "unauthorized")

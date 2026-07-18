@@ -74,6 +74,9 @@ from catering_system.repositories.sqlite_order_repository import (
 from catering_system.repositories.sqlite_payment_reminder_repository import (
     SQLitePaymentReminderRepository,
 )
+from catering_system.repositories.sqlite_order_confirmation_document_repository import (
+    SQLiteOrderConfirmationDocumentRepository,
+)
 from catering_system.services.inquiry_service import (
     InquiryService,
     validate_inquiry_source,
@@ -82,6 +85,16 @@ from catering_system.services.offer_service import OfferService
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
 from catering_system.services.payment_reminder_service import PaymentReminderService
+from catering_system.services.order_confirmation_document_service import (
+    OrderConfirmationDocumentBlockedError,
+    OrderConfirmationDocumentNotFoundError,
+    OrderConfirmationDocumentService,
+    OrderConfirmationDocumentStaleVersionError,
+)
+from catering_system.services.order_confirmation_document_preview import (
+    build_preview,
+    render_preview_html,
+)
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
 from catering_system.services.contact_projection_service import ContactProjectionService
 from catering_system.services.email_intake_projection_service import (
@@ -330,6 +343,9 @@ class OfficeApi:
         self.payment_reminders = SQLitePaymentReminderRepository.from_connection(
             connection
         )
+        self.confirmation_documents = (
+            SQLiteOrderConfirmationDocumentRepository.from_connection(connection)
+        )
         self.ledger = OfficeCommandLedger(connection)
         self.events = DeferredEventSink()
         self.executor = CoreCommandExecutor(connection, self.events)
@@ -345,6 +361,12 @@ class OfficeApi:
             self.payment_reminders,
             self.orders,
             today=views.berlin_today,
+        )
+        self.confirmation_document_service = OrderConfirmationDocumentService(
+            self.orders,
+            self.offers,
+            self.inquiries,
+            self.confirmation_documents,
         )
         self.core = OperationalCoreService(self.orders, event_sink=self.events)
         self.week_service = WochenuebersichtService(self.orders)
@@ -670,7 +692,60 @@ class OfficeApi:
             self.orders.list_order_versions(order_id),
             self.core.evaluate_ready_to_send(order_id),
             self.payment_reminder_service.view(order_id),
+            self.confirmation_document_service.eligibility(order_id),
         )
+
+    def confirmation_document(
+        self, order_id: str, document_snapshot_id: str | None = None
+    ) -> dict[str, object]:
+        try:
+            if document_snapshot_id is None:
+                snapshot = self.confirmation_document_service.get_latest_snapshot(
+                    order_id
+                )
+                if snapshot is None:
+                    raise ApiError(404, "not_found")
+                document_snapshot_id = snapshot.document_snapshot_id
+            snapshot = self.confirmation_document_service.get_snapshot(
+                order_id, document_snapshot_id
+            )
+        except OrderConfirmationDocumentNotFoundError:
+            raise ApiError(404, "not_found") from None
+        summary = self.confirmation_document_service.summary_for_snapshot(snapshot)
+        return {
+            "snapshot": views.confirmation_document_summary_shape(summary),
+            "document_snapshot_id": snapshot.document_snapshot_id,
+        }
+
+    def confirmation_document_preview(
+        self,
+        order_id: str,
+        document_snapshot_id: str | None = None,
+        *,
+        format: str = "json",
+    ) -> dict[str, object] | str:
+        if format not in {"json", "html"}:
+            raise _invalid()
+        try:
+            if document_snapshot_id is None:
+                snapshot = self.confirmation_document_service.get_latest_snapshot(
+                    order_id
+                )
+                if snapshot is None:
+                    raise ApiError(404, "not_found")
+            else:
+                snapshot = self.confirmation_document_service.get_snapshot(
+                    order_id, document_snapshot_id
+                )
+        except OrderConfirmationDocumentNotFoundError:
+            raise ApiError(404, "not_found") from None
+        preview = build_preview(snapshot)
+        if format == "html":
+            return render_preview_html(preview)
+        return {
+            "document_snapshot_id": snapshot.document_snapshot_id,
+            "preview": views.confirmation_document_preview_shape(preview),
+        }
 
     def print_data(
         self,
@@ -1235,6 +1310,43 @@ class OfficeApi:
             "updated_at": view.updated_at.isoformat(),
         }
 
+    def cmd_confirmation_document(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        order = self._require_active_order(path_ids["id"])
+        expected = expect["current_effective_order_version_id"]
+        if expected is not None and not isinstance(expected, str):
+            raise _invalid()
+        if expected != order.effective_order_version_id:
+            raise ApiError(409, "stale_state")
+        assert order.effective_order_version_id is not None
+        existing = self.confirmation_documents.get_by_order_version_id(
+            order.effective_order_version_id
+        )
+        replay = existing is not None
+        try:
+            snapshot = self.confirmation_document_service.prepare_snapshot(
+                order.order_id,
+                order.effective_order_version_id,
+                _v_str(args["created_by"], 200),
+            )
+        except OrderConfirmationDocumentStaleVersionError as exc:
+            raise ApiError(409, "stale_state") from exc
+        except OrderConfirmationDocumentBlockedError as exc:
+            message = str(exc)
+            if message == "aenderung_wartet":
+                raise ApiError(422, "pending_order_version_change") from exc
+            if message == "commercial_totals_invalid":
+                raise ApiError(422, "commercial_totals_invalid") from exc
+            raise ApiError(422, "confirmation_document_blocked") from exc
+        summary = self.confirmation_document_service.summary_for_snapshot(snapshot)
+        status = 200 if replay else 201
+        return status, {
+            "order_id": order.order_id,
+            "document_snapshot_id": snapshot.document_snapshot_id,
+            "snapshot": views.confirmation_document_summary_shape(summary),
+        }
+
 
 # --- command specs: exact args/expect keys per route (pack §4.4) --------------
 
@@ -1334,6 +1446,7 @@ _PAYMENT_REMINDER_ARGS = _ArgKeys(
         }
     )
 )
+_CONFIRMATION_DOCUMENT_ARGS = _ArgKeys(required=frozenset({"created_by"}))
 _CATALOG_DISH_UPDATE_ARGS = _ArgKeys(
     required=frozenset(
         {
@@ -1383,6 +1496,11 @@ _COMMANDS: dict[str, _CommandSpec] = {
     "cancel": _CommandSpec("cmd_cancel", _NO_ARGS, {"updated_at"}),
     "payment-reminder": _CommandSpec(
         "cmd_payment_reminder", _PAYMENT_REMINDER_ARGS, {"updated_at"}
+    ),
+    "confirmation-document": _CommandSpec(
+        "cmd_confirmation_document",
+        _CONFIRMATION_DOCUMENT_ARGS,
+        {"current_effective_order_version_id"},
     ),
     "update_catalog_dish": _CommandSpec(
         "cmd_update_catalog_dish", _CATALOG_DISH_UPDATE_ARGS, {"updated_at"}
@@ -1561,6 +1679,18 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         "/office/v1/orders/{id}/payment-reminder",
         {"POST": "payment-reminder"},
     ),
+    (
+        re.compile(
+            r"^/office/v1/orders/(?P<id>[^/]+)/confirmation-document/preview$"
+        ),
+        "/office/v1/orders/{id}/confirmation-document/preview",
+        {"GET": "confirmation_document_preview"},
+    ),
+    (
+        re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/confirmation-document$"),
+        "/office/v1/orders/{id}/confirmation-document",
+        {"GET": "confirmation_document", "POST": "confirmation-document"},
+    ),
 )
 
 
@@ -1612,6 +1742,24 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             self.end_headers()
             if not suppress_body:
                 self.wfile.write(payload)
+
+        def _respond_text(
+            self,
+            status: int,
+            body: str,
+            *,
+            content_type: str = "text/html; charset=utf-8",
+        ) -> None:
+            payload = body.encode("utf-8")
+            if len(payload) > _MAX_RESPONSE_BYTES:
+                raise ApiError(500, "internal")
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            self.wfile.write(payload)
 
         def _error(self, status: int, code: str, *, retry_after: bool = False) -> None:
             self._respond(status, {"error": code}, retry_after=retry_after)
@@ -1850,6 +1998,35 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
                     200,
                     api.buffet_cards_data(path_ids["id"], _v_uuid(params["version"])),
                 )
+            elif kind == "confirmation_document":
+                params = self._query({"document_snapshot_id"})
+                snapshot_id = (
+                    _v_uuid(params["document_snapshot_id"])
+                    if "document_snapshot_id" in params
+                    else None
+                )
+                self._respond(
+                    200, api.confirmation_document(path_ids["id"], snapshot_id)
+                )
+            elif kind == "confirmation_document_preview":
+                params = self._query({"document_snapshot_id", "format"})
+                snapshot_id = (
+                    _v_uuid(params["document_snapshot_id"])
+                    if "document_snapshot_id" in params
+                    else None
+                )
+                format_value = params.get("format", "json")
+                if format_value not in {"json", "html"}:
+                    raise _invalid()
+                result = api.confirmation_document_preview(
+                    path_ids["id"],
+                    snapshot_id,
+                    format=format_value,
+                )
+                if isinstance(result, str):
+                    self._respond_text(200, result)
+                else:
+                    self._respond(200, result)
 
         def _command(self, template: str, kind: str, path_ids: dict[str, str]) -> None:
             spec = _COMMANDS[kind]
