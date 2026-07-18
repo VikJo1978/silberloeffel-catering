@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from catering_system.domain.order import Order, OrderVersion
 
 
@@ -66,20 +68,23 @@ class InMemoryOrderRepository:
         self._versions = next_versions
 
     def update_order_version(self, version: OrderVersion) -> None:
-        if version.order_version_id not in self._versions:
+        existing = self._versions.get(version.order_version_id)
+        if existing is None:
             raise KeyError(version.order_version_id)
-        if version.order_id not in self._orders:
-            raise ValueError("order version owner does not exist")
-        if any(
-            row.order_version_id != version.order_version_id
-            and row.order_id == version.order_id
-            and row.version_number == version.version_number
-            for row in self._versions.values()
-        ):
-            raise ValueError(
-                f"version_number {version.version_number} already exists "
-                f"for order {version.order_id!r}"
+        if (
+            replace(
+                existing,
+                kitchen_print_confirmed_at=version.kitchen_print_confirmed_at,
             )
+            != version
+        ):
+            raise ValueError("order version snapshot is immutable")
+        if (
+            existing.kitchen_print_confirmed_at is not None
+            and version.kitchen_print_confirmed_at
+            != existing.kitchen_print_confirmed_at
+        ):
+            raise ValueError("kitchen print confirmation is immutable")
         self._versions[version.order_version_id] = version
 
     @staticmethod

@@ -68,6 +68,7 @@ READY_TO_SEND_BLOCKER_LABELS: dict[str, str] = {
     "no_effective_version": "keine wirksame Auftragsversion",
     "effective_version_not_resolvable": "wirksame Version nicht auffindbar",
     "kitchen_print_not_confirmed": "Druckbestätigung fehlt",
+    "pending_order_version_change": "Änderung wartet auf Küchendruck",
 }
 PROGRESSION_BLOCKER_LABELS: dict[str, str] = {
     "inquiry_call_verification_unsatisfied": "Rückrufprüfung noch nicht erfüllt",
@@ -266,6 +267,16 @@ def render_print_sheet(projection: OrderPrintProjection) -> str:
     watermark_html = (
         f'<p class="watermark">{_e(watermark)}</p>' if watermark is not None else ""
     )
+    change_html = ""
+    if event.change_reason is not None or event.changed_fields:
+        fields = ", ".join(event.changed_fields) or "–"
+        change_html = (
+            '<div class="change-summary">'
+            f'<p class="label">Änderungsgrund:</p><p class="value">'
+            f'{_e(event.change_reason or "–")}</p>'
+            f'<p class="label">Geänderte Felder:</p><p class="value">'
+            f"{_e(fields)}</p></div>"
+        )
     menu_html = _render_menu_section(projection)
     return f"""<!DOCTYPE html>
 <html lang="de"><head><meta charset="utf-8"><title>Küchenzettel</title>
@@ -287,6 +298,7 @@ button{{font-size:1rem;margin-top:1.5rem;padding:0.5rem 1rem}}
 </style></head><body>
 {cancelled_banner}
 {watermark_html}
+{change_html}
 <p class="brand">SILBERLÖFFEL</p>
 <hr>
 <p class="label">Datum:</p>
@@ -329,6 +341,13 @@ def _buffet_banner_html(
     effective_version_number: int | None,
 ) -> str:
     watermark = projection.flags.watermark
+    if watermark == "ÄNDERUNG – NOCH NICHT WIRKSAM":
+        return (
+            '<div class="buffet-banner">'
+            '<p class="watermark">ÄNDERUNG – NOCH NICHT WIRKSAM</p>'
+            f'<p class="stand-label">Stand Version {projection.event.version_number}</p>'
+            "</div>"
+        )
     if watermark == "ENTWURF":
         return (
             '<div class="buffet-banner">'

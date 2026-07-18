@@ -305,6 +305,23 @@ def test_update_unknown_order_version_does_not_insert(tmp_path: Path) -> None:
     assert repo.get_order_version(missing.order_version_id) is None
 
 
+def test_order_version_snapshot_fields_cannot_be_updated(tmp_path: Path) -> None:
+    repo = SQLiteOrderRepository(tmp_path / "test.db")
+    order, v1 = OrderService(repo).convert_inquiry_to_order(_sample_inquiry())
+
+    with pytest.raises(ValueError, match="snapshot is immutable"):
+        repo.update_order_version(replace(v1, location_text="Andere Adresse"))
+
+    stored = repo.get_order_version(v1.order_version_id)
+    assert stored == v1
+    confirmed = OperationalCoreService(repo).confirm_kitchen_print(
+        order.order_id, v1.order_version_id
+    )
+    assert confirmed.kitchen_print_confirmed_at is not None
+    with pytest.raises(ValueError, match="confirmation is immutable"):
+        repo.update_order_version(replace(confirmed, kitchen_print_confirmed_at=None))
+
+
 def test_order_update_missing_raises(tmp_path: Path) -> None:
     repo = SQLiteOrderRepository(tmp_path / "test.db")
     osvc = OrderService(repo)
@@ -376,6 +393,7 @@ def test_component_migrations_are_recorded_once(tmp_path: Path) -> None:
         ("orders", 4),
         ("orders", 5),
         ("orders", 6),  # PROXMOX pack §6.2: unique active source inquiry
+        ("orders", 7),  # immutable change provenance + snapshot guard
     ]
 
 
@@ -389,6 +407,9 @@ def test_sqlite_rejects_orphan_order_version(tmp_path: Path) -> None:
     with pytest.raises(sqlite3.IntegrityError, match="owner does not exist"):
         connection.execute(
             "INSERT INTO order_versions "
+            "(order_version_id, order_id, version_number, created_at, event_date, "
+            "time_window_text, location_text, guest_count_estimate, planning_mode, "
+            "kitchen_print_confirmed_at) "
             "SELECT 'orphan-version', 'missing-order', 2, created_at, event_date, "
             "time_window_text, location_text, guest_count_estimate, planning_mode, NULL "
             "FROM order_versions LIMIT 1"
@@ -435,7 +456,7 @@ def test_sqlite_rejects_moving_referenced_version(tmp_path: Path) -> None:
     repo.close()
     connection = sqlite3.connect(db)
 
-    with pytest.raises(sqlite3.IntegrityError, match="version is referenced"):
+    with pytest.raises(sqlite3.IntegrityError, match="snapshot is immutable"):
         connection.execute(
             "UPDATE order_versions SET order_id = ? WHERE order_version_id = ?",
             (other_order.order_id, version.order_version_id),

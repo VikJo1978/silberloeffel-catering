@@ -333,6 +333,7 @@ class OfficePanel:
                 upcoming_orders=cast(int, raw["upcoming_orders"]),
                 open_tasks=cast(int, raw["open_tasks"]),
                 today_calendar_entries=cast(int, raw["today_calendar_entries"]),
+                pending_order_changes=cast(int, raw["pending_order_changes"]),
             )
         return WorkCenterService(
             self._inquiries,
@@ -914,7 +915,10 @@ class OfficePanel:
             label, action = "Druck bestätigen", "print-confirm"
         elif version.order_version_id != order.effective_order_version_id:
             label, action = "Wirksam machen", "effective"
-            expect = {"effective_version_id": order.effective_order_version_id or ""}
+            expect = {
+                "effective_version_id": order.effective_order_version_id or "",
+                "candidate_version_id": order.candidate_order_version_id or "",
+            }
         else:
             return ""
         return (
@@ -1058,6 +1062,19 @@ class OfficePanel:
             for o in active_orders
         }
         blockiert = [o for o in active_orders if not evaluations[o.order_id].ready]
+        pending_changes = [
+            o
+            for o in active_orders
+            if o.candidate_order_version_id is not None
+            and o.candidate_order_version_id != o.effective_order_version_id
+            and (
+                candidate := self._orders.get_order_version(
+                    o.candidate_order_version_id
+                )
+            )
+            is not None
+            and candidate.kitchen_print_confirmed_at is None
+        ]
         storniert = [o for o in orders if o.cancelled_at is not None]
         # Reuses the same request-local count already fetched for the sidebar
         # badge — no second auerswald-sync request. None = not configured/unreachable -> card omitted, same
@@ -1081,6 +1098,7 @@ class OfficePanel:
             + f'<a href="#anfragen"><strong>{len(open_inquiries)}</strong> Offene Anfragen prüfen</a>'
             f'<a href="#auftraege"><strong>{len(ohne_druck)}</strong> Druckbestätigung fehlt</a>'
             f'<a href="#auftraege"><strong>{len(nicht_wirksam)}</strong> Aufträge noch nicht wirksam</a>'
+            f'<a href="#auftraege"><strong>{len(pending_changes)}</strong> Änderungen warten auf Küchendruck</a>'
             f'<a href="#auftraege"><strong>{len(blockiert)}</strong> Versandfreigabe blockiert</a>'
             + storniert_card
             + "</div>"
@@ -1230,6 +1248,7 @@ class OfficePanel:
             + f'<a href="#anfragen"><strong>{attention_view["neue_anfragen"]}</strong> Offene Anfragen prüfen</a>'
             f'<a href="#auftraege"><strong>{attention_view["druck_fehlt"]}</strong> Druckbestätigung fehlt</a>'
             f'<a href="#auftraege"><strong>{attention_view["nicht_wirksam"]}</strong> Aufträge noch nicht wirksam</a>'
+            f'<a href="#auftraege"><strong>{attention_view["aenderungen_warten_auf_kuechendruck"]}</strong> Änderungen warten auf Küchendruck</a>'
             f'<a href="#auftraege"><strong>{attention_view["versand_blockiert"]}</strong> Versandfreigabe blockiert</a>'
             + storniert_card
             + "</div>"
@@ -1351,7 +1370,14 @@ class OfficePanel:
                     else "Wirksam machen"
                 )
                 expect = (
-                    {"effective_version_id": order["effective_order_version_id"] or ""}
+                    {
+                        "effective_version_id": (
+                            order["effective_order_version_id"] or ""
+                        ),
+                        "candidate_version_id": (
+                            order["candidate_order_version_id"] or ""
+                        ),
+                    }
                     if action_name == "effective"
                     else None
                 )
@@ -1995,14 +2021,31 @@ class OfficePanel:
         if self._ui_version == "v2":
             print_confirm_fields: dict[str, str] = {}
             effective_fields: dict[str, str] = {}
+            target = next(
+                (
+                    version
+                    for version in versions
+                    if version.order_version_id
+                    == order.candidate_order_version_id
+                ),
+                None,
+            )
+            if target is None:
+                target = max(versions, key=lambda item: item.version_number, default=None)
             if not cancelled:
                 for version in versions:
-                    if version.kitchen_print_confirmed_at is None:
+                    if (
+                        target is not None
+                        and version.order_version_id == target.order_version_id
+                        and version.kitchen_print_confirmed_at is None
+                    ):
                         print_confirm_fields[version.order_version_id] = (
                             self._command_fields()
                         )
                     if (
-                        version.kitchen_print_confirmed_at is not None
+                        target is not None
+                        and version.order_version_id == target.order_version_id
+                        and version.kitchen_print_confirmed_at is not None
                         and version.order_version_id != order.effective_order_version_id
                     ):
                         effective_fields[version.order_version_id] = (
@@ -2010,7 +2053,10 @@ class OfficePanel:
                                 {
                                     "effective_version_id": (
                                         order.effective_order_version_id or ""
-                                    )
+                                    ),
+                                    "candidate_version_id": (
+                                        order.candidate_order_version_id or ""
+                                    ),
                                 }
                             )
                         )
@@ -2044,7 +2090,15 @@ class OfficePanel:
                     ),
                     version_command_fields=(
                         self._command_fields(
-                            {"latest_version_number": str(latest_version_number)}
+                            {
+                                "latest_version_number": str(latest_version_number),
+                                "current_effective_order_version_id": (
+                                    order.effective_order_version_id or ""
+                                ),
+                                "current_candidate_order_version_id": (
+                                    order.candidate_order_version_id or ""
+                                ),
+                            }
                         )
                         if not cancelled
                         else ""
@@ -2090,8 +2144,24 @@ class OfficePanel:
                 f'<a href="/order/{_e(order_id)}/print?version={_e(v.order_version_id)}">Küchenzettel</a>',
                 f'<a href="/order/{_e(order_id)}/buffet-cards?version={_e(v.order_version_id)}">Buffetschilder</a>',
             ]
+            action_target = next(
+                (
+                    version
+                    for version in versions
+                    if version.order_version_id == order.candidate_order_version_id
+                ),
+                None,
+            )
+            if action_target is None:
+                action_target = max(
+                    versions, key=lambda item: item.version_number, default=None
+                )
             if not cancelled:
-                if v.kitchen_print_confirmed_at is None:
+                if (
+                    v.kitchen_print_confirmed_at is None
+                    and action_target is not None
+                    and v.order_version_id == action_target.order_version_id
+                ):
                     actions.append(
                         f'<form class="inline" method="post" action="/order/{_e(order_id)}/print-confirm">'
                         f"{_csrf_input(context)}{self._command_fields()}"
@@ -2101,11 +2171,13 @@ class OfficePanel:
                 if (
                     v.kitchen_print_confirmed_at is not None
                     and v.order_version_id != order.effective_order_version_id
+                    and action_target is not None
+                    and v.order_version_id == action_target.order_version_id
                 ):
                     actions.append(
                         f'<form class="inline" method="post" action="/order/{_e(order_id)}/effective">'
                         f"{_csrf_input(context)}"
-                        f"{self._command_fields({'effective_version_id': order.effective_order_version_id or ''})}"
+                        f"{self._command_fields({'effective_version_id': order.effective_order_version_id or '', 'candidate_version_id': order.candidate_order_version_id or ''})}"
                         f'<input type="hidden" name="order_version_id" value="{_e(v.order_version_id)}">'
                         "<button>Wirksam machen</button></form>"
                     )
@@ -2195,12 +2267,14 @@ class OfficePanel:
 <form class="inline" method="post" action="/order/{_e(order_id)}/cancel">{_csrf_input(context)}{self._command_fields({"updated_at": order.updated_at.isoformat()})}<button>Auftrag stornieren</button></form>
 </p>
 <h2>Neue Version</h2>
-<form method="post" action="/order/{_e(order_id)}/version">{_csrf_input(context)}{self._command_fields({"latest_version_number": str(latest_version_number)})}<input type="hidden" name="latest_version_number" value="{_e(prefill.latest_version_number)}"><fieldset>
+<form method="post" action="/order/{_e(order_id)}/version">{_csrf_input(context)}{self._command_fields({"latest_version_number": str(latest_version_number), "current_effective_order_version_id": order.effective_order_version_id or "", "current_candidate_order_version_id": order.candidate_order_version_id or ""})}<input type="hidden" name="latest_version_number" value="{_e(prefill.latest_version_number)}"><fieldset>
 <p><label>Datum*</label><input type="date" name="event_date" required value="{_e(prefill.event_date)}"></p>
 <p><label>Zeitfenster</label><input name="time_window_text" value="{_e(prefill.time_window_text)}"></p>
 <p><label>Ort</label><input name="location_text" value="{_e(prefill.location_text)}"></p>
 <p><label>Gäste (ca.)</label><input name="guest_count_estimate" inputmode="numeric" value="{_e(prefill.guest_count_estimate)}"></p>
 <p><label>Planungsmodus</label>{_planning_mode_select(prefill.planning_mode)}</p>
+<p>Die Änderung wird erst nach Küchendruck und Bestätigung wirksam.</p>
+<p><label>Änderungsgrund*</label><textarea name="change_reason" maxlength="1000" required></textarea></p>
 <p><button type="submit">Version anlegen</button></p>
 </fieldset></form>"""
         truncation_warning = (
@@ -2267,20 +2341,38 @@ class OfficePanel:
                     "Der Auftrag wurde zwischenzeitlich geändert. "
                     "Bitte laden Sie die Seite neu."
                 )
+            expected_effective = form.get(
+                "_expect_current_effective_order_version_id"
+            )
+            expected_candidate = form.get(
+                "_expect_current_candidate_order_version_id"
+            )
+            if (
+                expected_effective is not None
+                and (expected_effective or None)
+                != order.effective_order_version_id
+            ) or (
+                expected_candidate is not None
+                and (expected_candidate or None)
+                != order.candidate_order_version_id
+            ):
+                raise ValueError(
+                    "Der Auftrag wurde zwischenzeitlich geändert. "
+                    "Bitte laden Sie die Seite neu."
+                )
 
         def work() -> None:
-            version = self.order_service.create_relevant_order_change_version(
-                order,
+            self.order_service.propose_order_version_change(
+                order_id,
                 event_date=date.fromisoformat(form["event_date"]),
                 time_window_text=form.get("time_window_text", ""),
                 location_text=form.get("location_text", ""),
                 guest_count_estimate=_opt_int(form.get("guest_count_estimate", "")),
                 planning_mode=form.get("planning_mode", PLANNING_MODES[0]),
+                actor_reference="office-panel",
+                change_reason=form.get("change_reason", "").strip()
+                or "Operational order change",
             )
-            if self._remote is None:
-                self.order_service.set_candidate_order_version(
-                    order_id, version.order_version_id
-                )
 
         if self._remote is not None:
             work()

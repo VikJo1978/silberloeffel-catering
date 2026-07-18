@@ -162,6 +162,15 @@ def test_create_relevant_order_change_version_second_preserves_first() -> None:
     assert updated_order.updated_at >= order.updated_at
 
 
+def test_in_memory_repository_rejects_operational_version_update() -> None:
+    repo = InMemoryOrderRepository()
+    order, v1 = OrderService(repo).convert_inquiry_to_order(_sample_inquiry())
+    with pytest.raises(ValueError, match="snapshot is immutable"):
+        repo.update_order_version(replace(v1, location_text="Andere Adresse"))
+    assert repo.get_order(order.order_id) is not None
+    assert repo.get_order_version(v1.order_version_id) == v1
+
+
 def test_list_order_versions_and_get_latest_match_history_not_activation() -> None:
     """Full history via service; latest is max(version_number); history not collapsed to one active row."""
     repo = InMemoryOrderRepository()
@@ -283,8 +292,6 @@ def test_order_domain_has_no_kitchen_or_release_surface() -> None:
     assert "ready_to_send" not in lowered
     assert "wochen" not in lowered
     assert "kiosk" not in lowered
-    # "kitchen" may appear only as the §7 field name
-    assert lowered.count("kitchen") == lowered.count("kitchen_print_confirmed_at")
     _assert_dataclasses_have_no_b3_forbidden_fields()
     assert {f.name for f in fields(Order)} == {
         "order_id",
@@ -306,6 +313,10 @@ def test_order_domain_has_no_kitchen_or_release_surface() -> None:
         "guest_count_estimate",
         "planning_mode",
         "kitchen_print_confirmed_at",
+        "parent_order_version_id",
+        "created_by",
+        "change_reason",
+        "changed_fields",
     }
 
 

@@ -6,8 +6,10 @@ the frozen Order/OrderVersion field set (incl. the two OPERATIONAL_CORE §7 fiel
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from contextlib import nullcontext
+from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 
@@ -38,7 +40,11 @@ CREATE TABLE IF NOT EXISTS order_versions (
     location_text TEXT NOT NULL,
     guest_count_estimate INTEGER,
     planning_mode TEXT NOT NULL,
-    kitchen_print_confirmed_at TEXT
+    kitchen_print_confirmed_at TEXT,
+    parent_order_version_id TEXT,
+    created_by TEXT,
+    change_reason TEXT,
+    changed_fields_json TEXT NOT NULL DEFAULT '[]'
 )
 """
 
@@ -192,6 +198,59 @@ def _migration_6_unique_active_source_inquiry(
     )
 
 
+def _migration_7_immutable_version_change_metadata(
+    connection: sqlite3.Connection,
+) -> None:
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(order_versions)")
+    }
+    additions = (
+        ("parent_order_version_id", "TEXT"),
+        ("created_by", "TEXT"),
+        ("change_reason", "TEXT"),
+        ("changed_fields_json", "TEXT NOT NULL DEFAULT '[]'"),
+    )
+    for name, declaration in additions:
+        if name not in columns:
+            connection.execute(
+                f"ALTER TABLE order_versions ADD COLUMN {name} {declaration}"
+            )
+    connection.execute(
+        """CREATE TRIGGER IF NOT EXISTS trg_order_version_parent_insert
+        BEFORE INSERT ON order_versions
+        WHEN NEW.parent_order_version_id IS NOT NULL AND NOT EXISTS (
+            SELECT 1 FROM order_versions parent
+            WHERE parent.order_version_id = NEW.parent_order_version_id
+              AND parent.order_id = NEW.order_id)
+        BEGIN SELECT RAISE(ABORT, 'order version parent is not owned'); END"""
+    )
+    connection.execute(
+        """CREATE TRIGGER IF NOT EXISTS trg_order_version_immutable_update
+        BEFORE UPDATE ON order_versions
+        WHEN NEW.order_version_id IS NOT OLD.order_version_id
+          OR NEW.order_id IS NOT OLD.order_id
+          OR NEW.version_number IS NOT OLD.version_number
+          OR NEW.created_at IS NOT OLD.created_at
+          OR NEW.event_date IS NOT OLD.event_date
+          OR NEW.time_window_text IS NOT OLD.time_window_text
+          OR NEW.location_text IS NOT OLD.location_text
+          OR NEW.guest_count_estimate IS NOT OLD.guest_count_estimate
+          OR NEW.planning_mode IS NOT OLD.planning_mode
+          OR NEW.parent_order_version_id IS NOT OLD.parent_order_version_id
+          OR NEW.created_by IS NOT OLD.created_by
+          OR NEW.change_reason IS NOT OLD.change_reason
+          OR NEW.changed_fields_json IS NOT OLD.changed_fields_json
+          OR (OLD.kitchen_print_confirmed_at IS NOT NULL
+              AND NEW.kitchen_print_confirmed_at IS NOT OLD.kitchen_print_confirmed_at)
+        BEGIN SELECT RAISE(ABORT, 'order version snapshot is immutable'); END"""
+    )
+    connection.execute(
+        """CREATE TRIGGER IF NOT EXISTS trg_order_version_history_no_delete
+        BEFORE DELETE ON order_versions
+        BEGIN SELECT RAISE(ABORT, 'order version history is append-only'); END"""
+    )
+
+
 _MIGRATIONS = (
     (1, "create_order_tables", _migration_1_create_tables),
     (2, "add_cancelled_at", _migration_2_add_cancelled_at),
@@ -199,6 +258,11 @@ _MIGRATIONS = (
     (4, "order_invariant_triggers", _migration_4_order_invariants),
     (5, "protect_invariant_mutations", _migration_5_protect_invariant_mutations),
     (6, "unique_active_source_inquiry", _migration_6_unique_active_source_inquiry),
+    (
+        7,
+        "immutable_version_change_metadata",
+        _migration_7_immutable_version_change_metadata,
+    ),
 )
 
 
@@ -248,7 +312,8 @@ class SQLiteOrderRepository:
                 self._order_values(order),
             )
             self._conn.execute(
-                "INSERT INTO order_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO order_versions VALUES "
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 self._version_values(version),
             )
 
@@ -294,26 +359,43 @@ class SQLiteOrderRepository:
         if version.order_id != order.order_id or version.version_number < 1:
             raise ValueError("version must belong to the supplied order")
         with self._write_scope():
+            self._conn.execute(
+                "INSERT INTO order_versions VALUES "
+                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                self._version_values(version),
+            )
             updated = self._update_order_row(order)
             if updated != 1:
                 raise KeyError(order.order_id)
-            self._conn.execute(
-                "INSERT INTO order_versions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                self._version_values(version),
-            )
 
     def update_order_version(self, version: OrderVersion) -> None:
+        existing = self.get_order_version(version.order_version_id)
+        if existing is None:
+            raise KeyError(version.order_version_id)
+        if (
+            replace(
+                existing,
+                kitchen_print_confirmed_at=version.kitchen_print_confirmed_at,
+            )
+            != version
+        ):
+            raise ValueError("order version snapshot is immutable")
+        if (
+            existing.kitchen_print_confirmed_at is not None
+            and version.kitchen_print_confirmed_at
+            != existing.kitchen_print_confirmed_at
+        ):
+            raise ValueError("kitchen print confirmation is immutable")
         with self._write_scope():
             updated = self._conn.execute(
-                """
-                UPDATE order_versions SET
-                    order_id = ?, version_number = ?, created_at = ?,
-                    event_date = ?, time_window_text = ?, location_text = ?,
-                    guest_count_estimate = ?, planning_mode = ?,
-                    kitchen_print_confirmed_at = ?
-                WHERE order_version_id = ?
-                """,
-                self._version_values(version)[1:] + (version.order_version_id,),
+                "UPDATE order_versions SET kitchen_print_confirmed_at = ? "
+                "WHERE order_version_id = ?",
+                (
+                    version.kitchen_print_confirmed_at.isoformat()
+                    if version.kitchen_print_confirmed_at is not None
+                    else None,
+                    version.order_version_id,
+                ),
             ).rowcount
             if updated != 1:
                 raise KeyError(version.order_version_id)
@@ -357,6 +439,10 @@ class SQLiteOrderRepository:
             version.kitchen_print_confirmed_at.isoformat()
             if version.kitchen_print_confirmed_at is not None
             else None,
+            version.parent_order_version_id,
+            version.created_by,
+            version.change_reason,
+            json.dumps(version.changed_fields, separators=(",", ":")),
         )
 
     def get_order_version(self, order_version_id: str) -> OrderVersion | None:
@@ -388,4 +474,8 @@ class SQLiteOrderRepository:
             guest_count_estimate=row[7],
             planning_mode=validate_planning_mode(row[8]),
             kitchen_print_confirmed_at=_dt(row[9]) if row[9] is not None else None,
+            parent_order_version_id=row[10],
+            created_by=row[11],
+            change_reason=row[12],
+            changed_fields=tuple(json.loads(row[13])),
         )

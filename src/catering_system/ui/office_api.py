@@ -334,7 +334,7 @@ class OfficeApi:
         self.events = DeferredEventSink()
         self.executor = CoreCommandExecutor(connection, self.events)
         self.inquiry_service = InquiryService(self.inquiries, event_sink=self.events)
-        self.order_service = OrderService(self.orders)
+        self.order_service = OrderService(self.orders, event_sink=self.events)
         self.offer_service = OfferService(
             self.offers,
             self.inquiries,
@@ -428,6 +428,19 @@ class OfficeApi:
         blocked = [
             o for o in active if not self.core.evaluate_ready_to_send(o.order_id).ready
         ]
+        pending_changes = [
+            o
+            for o in active
+            if o.candidate_order_version_id is not None
+            and o.candidate_order_version_id != o.effective_order_version_id
+            and (
+                candidate := self.orders.get_order_version(
+                    o.candidate_order_version_id
+                )
+            )
+            is not None
+            and candidate.kitchen_print_confirmed_at is None
+        ]
         cancelled = [o for o in orders if o.cancelled_at is not None]
 
         iso = views.berlin_today().isocalendar()
@@ -440,6 +453,7 @@ class OfficeApi:
                 "druck_fehlt": len(without_print),
                 "nicht_wirksam": len(not_effective),
                 "versand_blockiert": len(blocked),
+                "aenderungen_warten_auf_kuechendruck": len(pending_changes),
                 "storniert": len(cancelled),
             },
             "week": views.week_view(week),
@@ -1063,25 +1077,41 @@ class OfficeApi:
         order = self._require_active_order(path_ids["id"])
         versions = self.orders.list_order_versions(order.order_id)
         latest = max((v.version_number for v in versions), default=0)
-        if _v_int(expect["latest_version_number"]) != latest:
+        if (
+            _v_int(expect["latest_version_number"]) != latest
+            or expect["current_effective_order_version_id"]
+            != order.effective_order_version_id
+            or expect["current_candidate_order_version_id"]
+            != order.candidate_order_version_id
+        ):
             raise ApiError(409, "stale_state")
         try:
-            version = self.order_service.create_relevant_order_change_version(
-                order,
+            version = self.order_service.propose_order_version_change(
+                order.order_id,
                 event_date=_v_date(args["event_date"]),
                 time_window_text=_v_str(args["time_window_text"], 500),
                 location_text=_v_str(args["location_text"], 500),
                 guest_count_estimate=_v_guest_count(args["guest_count_estimate"]),
                 planning_mode=_v_enum(args["planning_mode"], validate_planning_mode),
-            )
-            self.order_service.set_candidate_order_version(
-                order.order_id, version.order_version_id
+                actor_reference=(
+                    _v_str(args["actor_reference"], 200)
+                    if "actor_reference" in args
+                    else CLIENT_ID
+                ),
+                change_reason=(
+                    _v_str(args["change_reason"], 1000)
+                    if "change_reason" in args
+                    else "Operational order change"
+                ),
             )
         except ValueError as exc:
             raise ApiError(422, "order_cancelled") from exc
         return 201, {
             "order_version_id": version.order_version_id,
             "version_number": version.version_number,
+            "candidate_order_version_id": version.order_version_id,
+            "parent_order_version_id": version.parent_order_version_id,
+            "changed_fields": list(version.changed_fields),
         }
 
     def cmd_print_confirm(
@@ -1106,9 +1136,19 @@ class OfficeApi:
     ) -> tuple[int, dict[str, object]]:
         order = self._require_active_order(path_ids["id"])
         expected_pointer = expect["current_effective_order_version_id"]
-        if expected_pointer is not None and not isinstance(expected_pointer, str):
+        expected_candidate = expect["current_candidate_order_version_id"]
+        if (
+            expected_pointer is not None
+            and not isinstance(expected_pointer, str)
+        ) or (
+            expected_candidate is not None
+            and not isinstance(expected_candidate, str)
+        ):
             raise _invalid()
-        if expected_pointer != order.effective_order_version_id:
+        if (
+            expected_pointer != order.effective_order_version_id
+            or expected_candidate != order.candidate_order_version_id
+        ):
             raise ApiError(409, "stale_state")
         version = self._owned_version(order.order_id, _v_uuid(args["order_version_id"]))
         try:
@@ -1116,10 +1156,16 @@ class OfficeApi:
                 order.order_id, version.order_version_id
             )
         except ValueError as exc:
-            raise ApiError(422, "kitchen_print_not_confirmed") from exc
+            code = (
+                "order_version_not_current_candidate"
+                if "not current candidate" in str(exc)
+                else "kitchen_print_not_confirmed"
+            )
+            raise ApiError(422, code) from exc
         return 200, {
             "order_id": updated.order_id,
             "effective_order_version_id": updated.effective_order_version_id,
+            "candidate_order_version_id": updated.candidate_order_version_id,
             "updated_at": updated.updated_at.isoformat(),
         }
 
@@ -1135,6 +1181,7 @@ class OfficeApi:
                 "reasons": list(evaluation.reasons),
             }
         }
+
 
     def cmd_cancel(
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict
@@ -1244,7 +1291,8 @@ _VERSION_ARGS = _ArgKeys(
             "guest_count_estimate",
             "planning_mode",
         }
-    )
+    ),
+    optional=frozenset({"actor_reference", "change_reason"}),
 )
 _NO_ARGS = _ArgKeys(required=frozenset())
 _SNAPSHOT_ARGS = _ArgKeys(required=frozenset({"snapshot"}))
@@ -1314,11 +1362,22 @@ _COMMANDS: dict[str, _CommandSpec] = {
         "cmd_convert_accepted", _CONVERT_ACCEPTED_ARGS, set()
     ),
     "versions": _CommandSpec(
-        "cmd_create_version", _VERSION_ARGS, {"latest_version_number"}
+        "cmd_create_version",
+        _VERSION_ARGS,
+        {
+            "latest_version_number",
+            "current_effective_order_version_id",
+            "current_candidate_order_version_id",
+        },
     ),
     "print-confirm": _CommandSpec("cmd_print_confirm", _VERSION_ID_ARGS, set()),
     "effective": _CommandSpec(
-        "cmd_effective", _VERSION_ID_ARGS, {"current_effective_order_version_id"}
+        "cmd_effective",
+        _VERSION_ID_ARGS,
+        {
+            "current_effective_order_version_id",
+            "current_candidate_order_version_id",
+        },
     ),
     "ready": _CommandSpec("cmd_ready", _NO_ARGS, set()),
     "cancel": _CommandSpec("cmd_cancel", _NO_ARGS, {"updated_at"}),

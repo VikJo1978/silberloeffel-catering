@@ -12,8 +12,8 @@ from catering_system.domain.order import Order, OrderVersion
 from catering_system.repositories.offer_repository import OfferRepository
 from catering_system.repositories.order_repository import OrderRepository
 
-PrintIntent = Literal["preview", "final"]
-PrintWatermark = Literal["ENTWURF", "VERALTET"]
+PrintIntent = Literal["preview", "change_preview", "final"]
+PrintWatermark = Literal["ENTWURF", "VERALTET", "ÄNDERUNG – NOCH NICHT WIRKSAM"]
 
 
 class PrintProjectionNotFoundError(LookupError):
@@ -38,6 +38,8 @@ class PrintEventBlock:
     order_cancelled_at: datetime | None
     is_candidate: bool
     is_effective: bool
+    change_reason: str | None = None
+    changed_fields: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -182,9 +184,14 @@ class OrderPrintProjectionService:
                 watermark=None,
             )
 
+        is_candidate_change = (
+            version.order_version_id == order.candidate_order_version_id
+            and version.parent_order_version_id is not None
+            and not is_effective
+        )
         watermark = self._preview_watermark(order, version, is_effective=is_effective)
         return PrintFlagsBlock(
-            intent=intent,
+            intent="change_preview" if is_candidate_change else intent,
             is_preview=not is_effective,
             is_final_allowed=is_effective and order.cancelled_at is None,
             is_stale=watermark == "VERALTET",
@@ -200,6 +207,11 @@ class OrderPrintProjectionService:
     ) -> PrintWatermark | None:
         if is_effective:
             return None
+        if (
+            version.order_version_id == order.candidate_order_version_id
+            and version.parent_order_version_id is not None
+        ):
+            return "ÄNDERUNG – NOCH NICHT WIRKSAM"
         effective_id = order.effective_order_version_id
         if effective_id is None:
             return "ENTWURF"
@@ -227,6 +239,8 @@ def _event_block(order: Order, version: OrderVersion) -> PrintEventBlock:
         order_cancelled_at=order.cancelled_at,
         is_candidate=version.order_version_id == order.candidate_order_version_id,
         is_effective=version.order_version_id == order.effective_order_version_id,
+        change_reason=version.change_reason,
+        changed_fields=version.changed_fields,
     )
 
 

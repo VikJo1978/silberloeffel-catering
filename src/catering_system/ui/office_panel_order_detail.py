@@ -7,7 +7,11 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 from catering_system.domain.inquiry import PLANNING_MODES
-from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.order import (
+    Order,
+    OrderVersion,
+    is_order_version_superseded,
+)
 from catering_system.domain.order_payment_reminder import (
     PAYMENT_METHOD_LABELS,
     PAYMENT_METHODS,
@@ -29,6 +33,17 @@ _READY_BLOCKER_LABELS = {
     "kitchen_print_not_confirmed": (
         "Für den aktuellen Küchenstand fehlt die Druckbestätigung."
     ),
+    "pending_order_version_change": (
+        "Eine Änderung wartet noch auf Küchendruck und Wirksamstellung."
+    ),
+}
+
+_CHANGED_FIELD_LABELS = {
+    "event_date": "Datum",
+    "time_window_text": "Zeitfenster",
+    "location_text": "Ort",
+    "guest_count_estimate": "Gästezahl",
+    "planning_mode": "Planungsmodus",
 }
 
 
@@ -368,6 +383,8 @@ def _version_history(
             statuses.append("Aktueller Küchenstand")
         if version.order_version_id == order.candidate_order_version_id:
             statuses.append("Nächster Stand")
+        if is_order_version_superseded(order, version, list(versions)):
+            statuses.append("Durch neuere Änderung ersetzt")
         statuses.append(
             "Druck bestätigt"
             if version.kitchen_print_confirmed_at is not None
@@ -394,7 +411,22 @@ def _version_history(
             f"<div><dt>Ort</dt><dd>{_e(version.location_text or 'Noch offen')}</dd></div>"
             f"<div><dt>Gäste</dt><dd>{_e(guests)}</dd></div>"
             "</dl>"
-            f"{_version_actions(order, version, forms)}</article>"
+            + (
+                '<div class="order-version-change">'
+                f"<strong>Änderungsgrund:</strong> {_e(version.change_reason)}<br>"
+                "<strong>Geändert:</strong> "
+                + _e(
+                    ", ".join(
+                        _CHANGED_FIELD_LABELS.get(field, field)
+                        for field in version.changed_fields
+                    )
+                    or "–"
+                )
+                + "</div>"
+                if version.change_reason is not None
+                else ""
+            )
+            + f"{_version_actions(order, version, forms)}</article>"
         )
     return (
         '<details class="order-history">'
@@ -503,6 +535,8 @@ def _version_change_form(
         '<details class="order-version-edit"><summary>Neuen Stand anlegen</summary>'
         "<p>Die Felder übernehmen den aktuellen Bearbeitungsstand. "
         "Speichern legt einen neuen unveränderlichen Stand an.</p>"
+        '<p class="order-context-note">Die Änderung wird erst nach '
+        "Küchendruck und Bestätigung wirksam.</p>"
         f'<form method="post" action="/order/{_e(order.order_id)}/version">'
         f"{forms.csrf_input}{forms.version_command_fields}"
         f'<input type="hidden" name="latest_version_number" '
@@ -517,6 +551,8 @@ def _version_change_form(
         f'inputmode="numeric" value="{_e(prefill.guest_count_estimate)}"></p>'
         f"<p><label>Planung</label>"
         f"{_planning_mode_select(prefill.planning_mode)}</p>"
+        '<p><label>Änderungsgrund*</label><textarea name="change_reason" '
+        'maxlength="1000" required></textarea></p>'
         '<p><button type="submit">Stand anlegen</button></p>'
         "</fieldset></form></details>"
     )

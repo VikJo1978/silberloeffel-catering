@@ -18,6 +18,7 @@ READY_REASON_ORDER_CANCELLED = "order_cancelled"
 READY_REASON_NO_EFFECTIVE_VERSION = "no_effective_version"
 READY_REASON_EFFECTIVE_VERSION_NOT_RESOLVABLE = "effective_version_not_resolvable"
 READY_REASON_KITCHEN_PRINT_NOT_CONFIRMED = "kitchen_print_not_confirmed"
+READY_REASON_PENDING_ORDER_VERSION_CHANGE = "pending_order_version_change"
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,12 @@ def evaluate_ready_to_send_from_facts(
             order_id=order.order_id,
             ready=False,
             reasons=(READY_REASON_ORDER_CANCELLED,),
+        )
+    if order.candidate_order_version_id is not None:
+        return ReadyToSendEvaluation(
+            order_id=order.order_id,
+            ready=False,
+            reasons=(READY_REASON_PENDING_ORDER_VERSION_CHANGE,),
         )
     if order.effective_order_version_id is None:
         return ReadyToSendEvaluation(

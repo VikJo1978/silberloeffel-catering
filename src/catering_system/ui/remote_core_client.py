@@ -114,6 +114,7 @@ _ORDER_SUMMARY_KEYS = frozenset(
 _ORDER_LIST_KEYS = _ORDER_SUMMARY_KEYS | {"ready", "blocker_reason", "next_action"}
 _ORDER_DETAIL_KEYS = _ORDER_SUMMARY_KEYS | {
     "ready_to_send",
+    "version_change",
     "payment_reminder",
     "versions",
     "versions_total_count",
@@ -131,6 +132,11 @@ _VERSION_KEYS = frozenset(
         "guest_count_estimate",
         "planning_mode",
         "kitchen_print_confirmed_at",
+        "parent_order_version_id",
+        "created_by",
+        "change_reason",
+        "changed_fields",
+        "superseded",
     }
 )
 _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
@@ -167,6 +173,7 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
             "acceptance_blocked",
             "invalid_variant",
             "invalid_acceptance_evidence",
+            "order_version_not_current_candidate",
         }
     ),
     500: frozenset({"internal"}),
@@ -415,6 +422,7 @@ def _version(data: Mapping[str, object]) -> OrderVersion:
         planning_mode = validate_planning_mode(_str(data["planning_mode"]))
     except (KeyError, ValueError):
         _bad_response()
+    _bool(data.get("superseded"))
     return OrderVersion(
         order_version_id=_uuid4(data.get("order_version_id")),
         order_id=_uuid4(data.get("order_id")),
@@ -427,6 +435,14 @@ def _version(data: Mapping[str, object]) -> OrderVersion:
         planning_mode=planning_mode,
         kitchen_print_confirmed_at=_optional_datetime(
             data.get("kitchen_print_confirmed_at")
+        ),
+        parent_order_version_id=_optional_uuid4(
+            data.get("parent_order_version_id")
+        ),
+        created_by=_optional_str(data.get("created_by")),
+        change_reason=_optional_str(data.get("change_reason")),
+        changed_fields=tuple(
+            _str(value) for value in _list(data.get("changed_fields"))
         ),
     )
 
@@ -457,6 +473,8 @@ _PRINT_EVENT_KEYS = frozenset(
         "order_cancelled_at",
         "is_candidate",
         "is_effective",
+        "change_reason",
+        "changed_fields",
     }
 )
 _PRINT_COMMERCIAL_KEYS = frozenset(
@@ -507,10 +525,14 @@ def _print_projection(data: Mapping[str, object]) -> OrderPrintProjection:
     if source not in {"offer_conversion", "none"}:
         _bad_response()
     intent = _str(flags_data["intent"])
-    if intent not in {"preview", "final"}:
+    if intent not in {"preview", "change_preview", "final"}:
         _bad_response()
     watermark = flags_data.get("watermark")
-    if watermark is not None and watermark not in {"ENTWURF", "VERALTET"}:
+    if watermark is not None and watermark not in {
+        "ENTWURF",
+        "VERALTET",
+        "ÄNDERUNG – NOCH NICHT WIRKSAM",
+    }:
         _bad_response()
     try:
         planning_mode = validate_planning_mode(_str(event_data["planning_mode"]))
@@ -532,6 +554,10 @@ def _print_projection(data: Mapping[str, object]) -> OrderPrintProjection:
             order_cancelled_at=_optional_datetime(event_data.get("order_cancelled_at")),
             is_candidate=_bool(event_data["is_candidate"]),
             is_effective=_bool(event_data["is_effective"]),
+            change_reason=_optional_str(event_data.get("change_reason")),
+            changed_fields=tuple(
+                _str(value) for value in _list(event_data.get("changed_fields"))
+            ),
         ),
         commercial=PrintCommercialBlock(
             source=source,  # type: ignore[arg-type]
@@ -965,7 +991,15 @@ class RemoteCoreClient:
 
     def queue_view(self) -> dict[str, object]:
         body = self.get("/office/v1/queue")
-        _exact(body, {"attention", "week", "neue_anfragen_top", "auftraege_top"})
+        _exact(
+            body,
+            {
+                "attention",
+                "week",
+                "neue_anfragen_top",
+                "auftraege_top",
+            },
+        )
         attention = _dict(body["attention"])
         _exact(
             attention,
@@ -974,6 +1008,7 @@ class RemoteCoreClient:
                 "druck_fehlt",
                 "nicht_wirksam",
                 "versand_blockiert",
+                "aenderungen_warten_auf_kuechendruck",
                 "storniert",
             },
         )
@@ -1030,7 +1065,11 @@ class RemoteCoreClient:
             _bad_response()
         for raw in order_rows:
             row = _dict(raw)
-            _exact(row, _ORDER_SUMMARY_KEYS | {"blocker_reason", "next_action"})
+            _exact(
+                row,
+                _ORDER_SUMMARY_KEYS
+                | {"blocker_reason", "next_action"},
+            )
             _order({key: row[key] for key in _ORDER_SUMMARY_KEYS})
             _optional_str(row["blocker_reason"])
             _next_action(row["next_action"])
@@ -1048,6 +1087,7 @@ class RemoteCoreClient:
                 "upcoming_orders",
                 "open_tasks",
                 "today_calendar_entries",
+                "pending_order_changes",
             },
         )
         for value in body.values():
@@ -2077,6 +2117,12 @@ class _RemoteOrderService:
             (version.version_number for version in versions), default=0
         )
         expected_latest = self._client.form_value("_expect_latest_version_number")
+        expected_effective = self._client.form_value(
+            "_expect_current_effective_order_version_id"
+        )
+        expected_candidate = self._client.form_value(
+            "_expect_current_candidate_order_version_id"
+        )
         result = self._client.command(
             f"/office/v1/orders/{quote(order.order_id, safe='')}/versions",
             {
@@ -2085,14 +2131,33 @@ class _RemoteOrderService:
                 "location_text": values["location_text"],
                 "guest_count_estimate": values["guest_count_estimate"],
                 "planning_mode": values["planning_mode"],
+                "actor_reference": "office-panel",
+                "change_reason": values.get("change_reason")
+                or "Operational order change",
             },
             {
                 "latest_version_number": (
                     int(expected_latest) if expected_latest is not None else latest
-                )
+                ),
+                "current_effective_order_version_id": (
+                    order.effective_order_version_id
+                    if expected_effective is None
+                    else (expected_effective or None)
+                ),
+                "current_candidate_order_version_id": (
+                    order.candidate_order_version_id
+                    if expected_candidate is None
+                    else (expected_candidate or None)
+                ),
             },
             expected={201},
-            result_keys={"order_version_id", "version_number"},
+            result_keys={
+                "order_version_id",
+                "version_number",
+                "candidate_order_version_id",
+                "parent_order_version_id",
+                "changed_fields",
+            },
         )
         return OrderVersion(
             order_version_id=_uuid4(result["order_version_id"]),
@@ -2104,7 +2169,25 @@ class _RemoteOrderService:
             location_text=values["location_text"],
             guest_count_estimate=values["guest_count_estimate"],
             planning_mode=validate_planning_mode(values["planning_mode"]),
+            parent_order_version_id=_optional_uuid4(
+                result["parent_order_version_id"]
+            ),
+            created_by="office-panel",
+            change_reason=str(
+                values.get("change_reason") or "Operational order change"
+            ),
+            changed_fields=tuple(
+                _str(value) for value in _list(result["changed_fields"])
+            ),
         )
+
+    def propose_order_version_change(
+        self, order_id: str, **values: Any
+    ) -> OrderVersion:
+        order = self._client.get_order(order_id)
+        if order is None:
+            raise RemoteCoreError(404, "not_found")
+        return self.create_relevant_order_change_version(order, **values)
 
 
 class _RemoteCatalogDishWriteService:
@@ -2223,6 +2306,7 @@ class _RemoteOperationalCoreService:
         if current is None:
             raise RemoteCoreError(404, "not_found")
         expected_effective = self._client.form_value("_expect_effective_version_id")
+        expected_candidate = self._client.form_value("_expect_candidate_version_id")
         expect_value = (
             current.effective_order_version_id
             if expected_effective is None
@@ -2231,9 +2315,21 @@ class _RemoteOperationalCoreService:
         result = self._client.command(
             f"/office/v1/orders/{quote(order_id, safe='')}/effective",
             {"order_version_id": order_version_id},
-            {"current_effective_order_version_id": expect_value},
+            {
+                "current_effective_order_version_id": expect_value,
+                "current_candidate_order_version_id": (
+                    current.candidate_order_version_id
+                    if expected_candidate is None
+                    else (expected_candidate or None)
+                ),
+            },
             expected={200},
-            result_keys={"order_id", "effective_order_version_id", "updated_at"},
+            result_keys={
+                "order_id",
+                "effective_order_version_id",
+                "candidate_order_version_id",
+                "updated_at",
+            },
         )
         if (
             _uuid4(result["order_id"]) != order_id
@@ -2243,6 +2339,7 @@ class _RemoteOperationalCoreService:
         return replace(
             current,
             effective_order_version_id=order_version_id,
+            candidate_order_version_id=None,
             updated_at=_datetime(result["updated_at"]),
         )
 

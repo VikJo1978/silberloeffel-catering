@@ -982,10 +982,7 @@ def test_v2_order_detail_prefers_new_candidate_over_ready_old_stand(
     assert "Hamburg-Altona" in body
     assert "Auswahl durch den Kunden" in body
     assert "Nächster Stand" in body
-    assert (
-        "Die Versandfreigabe gilt für den bisherigen Küchenstand. "
-        "Der neue Stand ist noch nicht übernommen."
-    ) in body
+    assert "Eine Änderung wartet noch auf Küchendruck" in body
     assert "Aktueller Küchenstand" in body
     assert "Aktueller Bearbeitungsstand" in body
 

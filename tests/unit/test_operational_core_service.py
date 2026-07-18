@@ -123,27 +123,30 @@ def test_make_effective_succeeds_after_confirmation() -> None:
     )
 
 
-def test_make_effective_does_not_touch_candidate() -> None:
+def test_make_effective_clears_current_candidate() -> None:
     repo, osvc, core, _events = _setup()
     order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
-    osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
-    v2 = osvc.create_relevant_order_change_version(
-        order,
+    core.confirm_kitchen_print(order.order_id, v1.order_version_id)
+    core.make_order_version_effective(order.order_id, v1.order_version_id)
+    v2 = osvc.propose_order_version_change(
+        order.order_id,
         event_date=date(2026, 10, 2),
         time_window_text="abends",
         location_text="Hamburg",
         guest_count_estimate=30,
         planning_mode=PLANNING_MODES[0],
+        actor_reference="office-panel",
+        change_reason="Neue Gästezahl",
     )
     core.confirm_kitchen_print(order.order_id, v2.order_version_id)
     core.make_order_version_effective(order.order_id, v2.order_version_id)
     stored = repo.get_order(order.order_id)
     assert stored is not None
-    assert stored.candidate_order_version_id == v1.order_version_id  # unchanged
+    assert stored.candidate_order_version_id is None
     assert stored.effective_order_version_id == v2.order_version_id
 
 
-def test_make_effective_may_target_non_candidate_version() -> None:
+def test_make_effective_rejects_non_candidate_version() -> None:
     _repo, osvc, core, _events = _setup()
     order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
     v2 = osvc.create_relevant_order_change_version(
@@ -156,8 +159,8 @@ def test_make_effective_may_target_non_candidate_version() -> None:
     )
     osvc.set_candidate_order_version(order.order_id, v2.order_version_id)
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
-    updated = core.make_order_version_effective(order.order_id, v1.order_version_id)
-    assert updated.effective_order_version_id == v1.order_version_id
+    with pytest.raises(ValueError, match="not current candidate"):
+        core.make_order_version_effective(order.order_id, v1.order_version_id)
 
 
 def test_history_immutable_after_switch() -> None:

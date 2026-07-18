@@ -91,7 +91,9 @@ def test_cancel_preserves_history_candidate_effective() -> None:
     core.cancel_order(order.order_id)
     stored = repo.get_order(order.order_id)
     assert stored is not None
-    assert stored.candidate_order_version_id == v1.order_version_id
+    # The effective switch consumes the candidate under the change gate;
+    # cancellation preserves that post-switch state rather than recreating it.
+    assert stored.candidate_order_version_id is None
     assert stored.effective_order_version_id == v1.order_version_id
     assert [v.version_number for v in repo.list_order_versions(order.order_id)] == [1]
 

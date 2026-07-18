@@ -119,6 +119,39 @@ def test_overview_shows_effective_not_latest_version() -> None:
     assert e.location_text == "Hamburg"
 
 
+def test_candidate_change_reaches_week_and_day_only_after_effective_switch() -> None:
+    _repo, osvc, core, week = _setup()
+    order, v1 = osvc.convert_inquiry_to_order(_inquiry(date(2026, 10, 1)))
+    core.confirm_kitchen_print(order.order_id, v1.order_version_id)
+    core.make_order_version_effective(order.order_id, v1.order_version_id)
+    v2 = osvc.propose_order_version_change(
+        order.order_id,
+        event_date=date(2026, 10, 8),  # W41
+        time_window_text="abends",
+        location_text="Kiel",
+        guest_count_estimate=40,
+        planning_mode=PLANNING_MODES[0],
+        actor_reference="office-panel",
+        change_reason="Termin verschoben",
+    )
+
+    assert [
+        entry.effective_order_version_id
+        for entry in week.get_day_overview(v1.event_date)
+    ] == [v1.order_version_id]
+    assert week.get_day_overview(v2.event_date) == ()
+    assert len(week.get_week_overview(2026, 40).entries) == 1
+    assert week.get_week_overview(2026, 41).entries == ()
+
+    core.confirm_kitchen_print(order.order_id, v2.order_version_id)
+    core.make_order_version_effective(order.order_id, v2.order_version_id)
+    assert week.get_day_overview(v1.event_date) == ()
+    assert [
+        entry.effective_order_version_id
+        for entry in week.get_day_overview(v2.event_date)
+    ] == [v2.order_version_id]
+
+
 def test_ordering_is_deterministic_by_date_window_then_id() -> None:
     _repo, osvc, core, week = _setup()
     _make_effective_order(osvc, core, date(2026, 10, 2))

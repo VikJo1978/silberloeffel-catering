@@ -16,3 +16,4 @@ class WorkCenterSnapshot:
     upcoming_orders: int
     open_tasks: int
     today_calendar_entries: int
+    pending_order_changes: int = 0

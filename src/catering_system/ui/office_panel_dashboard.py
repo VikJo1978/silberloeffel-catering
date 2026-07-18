@@ -71,7 +71,7 @@ def _angebote_card(snapshot: WorkCenterSnapshot) -> str:
     )
 
 
-def _auftraege_card(ui: WorkCenterDashboardUi) -> str:
+def _auftraege_card(snapshot: WorkCenterSnapshot, ui: WorkCenterDashboardUi) -> str:
     count = ui.week_order_count
     label = (
         f"{count} diese Woche"
@@ -84,6 +84,7 @@ def _auftraege_card(ui: WorkCenterDashboardUi) -> str:
         "🍽</span><h2 id=\"wc-auftraege\">Aufträge</h2></div>"
         '<hr class="wc-card-rule">'
         f"<p class=\"wc-card-summary\">{_e(label)}</p>"
+        f"<p>{snapshot.pending_order_changes} Änderungen warten auf Küchendruck</p>"
         + _card_action("/auftraege", "Aufträge öffnen")
         + "</section>"
     )
@@ -144,7 +145,7 @@ def render_work_center_arbeitszentrale(
         '<div class="wc-cards">'
         + _rueckrufe_card(snapshot)
         + _angebote_card(snapshot)
-        + _auftraege_card(ui)
+        + _auftraege_card(snapshot, ui)
         + _aufgaben_card(snapshot)
         + _kalender_card(snapshot)
         + "</div></div>"

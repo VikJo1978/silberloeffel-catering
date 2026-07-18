@@ -39,7 +39,11 @@ from catering_system.services.catalog_dish_service import (
     CatalogDishListResult,
 )
 from catering_system.domain.catalog import CatalogDish, CatalogPriceHistoryEntry
-from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.order import (
+    Order,
+    OrderVersion,
+    is_order_version_superseded,
+)
 from catering_system.domain.order_payment_reminder import PaymentReminderView
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
 from catering_system.domain.wochenuebersicht import Wochenuebersicht
@@ -320,6 +324,7 @@ def inquiry_detail(
     return detail
 
 
+
 def order_summary(order: Order) -> dict[str, object]:
     return {
         "order_id": order.order_id,
@@ -368,7 +373,9 @@ def order_list_row(
     return row
 
 
-def order_version_shape(version: OrderVersion) -> dict[str, object]:
+def order_version_shape(
+    version: OrderVersion, *, superseded: bool = False
+) -> dict[str, object]:
     return {
         "order_version_id": version.order_version_id,
         "order_id": version.order_id,
@@ -384,6 +391,11 @@ def order_version_shape(version: OrderVersion) -> dict[str, object]:
             if version.kitchen_print_confirmed_at is not None
             else None
         ),
+        "parent_order_version_id": version.parent_order_version_id,
+        "created_by": version.created_by,
+        "change_reason": version.change_reason,
+        "changed_fields": list(version.changed_fields),
+        "superseded": superseded,
     }
 
 
@@ -398,8 +410,34 @@ def order_detail(
         "ready": evaluation.ready,
         "reasons": list(evaluation.reasons),
     }
+    candidate = next(
+        (
+            version
+            for version in versions
+            if version.order_version_id == order.candidate_order_version_id
+        ),
+        None,
+    )
+    detail["version_change"] = {
+        "pending": candidate is not None,
+        "reason": candidate.change_reason if candidate is not None else None,
+        "changed_fields": (
+            list(candidate.changed_fields) if candidate is not None else []
+        ),
+        "kitchen_reprint_required": (
+            candidate is not None
+            and candidate.kitchen_print_confirmed_at is None
+            and candidate.order_version_id != order.effective_order_version_id
+        ),
+    }
     ordered = sorted(versions, key=lambda v: v.version_number)
-    detail["versions"] = [order_version_shape(v) for v in ordered[:DETAIL_VERSIONS_CAP]]
+    detail["versions"] = [
+        order_version_shape(
+            version,
+            superseded=is_order_version_superseded(order, version, versions),
+        )
+        for version in ordered[:DETAIL_VERSIONS_CAP]
+    ]
     detail["versions_total_count"] = len(versions)
     detail["versions_truncated"] = len(versions) > DETAIL_VERSIONS_CAP
     if payment_reminder is not None:
@@ -503,6 +541,7 @@ def work_center_snapshot(snapshot: WorkCenterSnapshot) -> dict[str, object]:
         "upcoming_orders": snapshot.upcoming_orders,
         "open_tasks": snapshot.open_tasks,
         "today_calendar_entries": snapshot.today_calendar_entries,
+        "pending_order_changes": snapshot.pending_order_changes,
     }
 
 
@@ -694,6 +733,8 @@ def order_print_projection_shape(projection: OrderPrintProjection) -> dict[str, 
             ),
             "is_candidate": event.is_candidate,
             "is_effective": event.is_effective,
+            "change_reason": event.change_reason,
+            "changed_fields": list(event.changed_fields),
         },
         "commercial": {
             "source": commercial.source,

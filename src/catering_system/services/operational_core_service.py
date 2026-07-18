@@ -11,7 +11,6 @@ import logging
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import datetime, timezone
-
 from catering_system.domain.operational_core_events import (
     KitchenPrintConfirmed,
     OrderCancelled,
@@ -89,21 +88,37 @@ class OperationalCoreService:
     def make_order_version_effective(
         self, order_id: str, order_version_id: str
     ) -> Order:
-        """MakeOrderVersionEffective (pack §9): gated on confirmed kitchen print.
-
-        May target any owned version that satisfies the gate, not only the candidate.
-        Never implicitly changes candidate_order_version_id; history stays immutable.
-        """
+        """Select the initial stand or the exact confirmed current candidate."""
         ver = self._owned_version(order_id, order_version_id)
+        current = self._order_repository.get_order(order_id)
+        assert current is not None  # _owned_version already checked existence
+        if (
+            current.effective_order_version_id == order_version_id
+            and current.candidate_order_version_id is None
+        ):
+            return current
+        is_initial_selection = (
+            current.effective_order_version_id is None
+            and current.candidate_order_version_id is None
+        )
+        if (
+            not is_initial_selection
+            and current.candidate_order_version_id != order_version_id
+        ):
+            raise ValueError(
+                "effective switch blocked: version is not current candidate "
+                f"(order_id={order_id!r}, order_version_id={order_version_id!r})"
+            )
         if ver.kitchen_print_confirmed_at is None:
             raise ValueError(
                 "effective switch blocked: kitchen print not confirmed "
                 f"(order_id={order_id!r}, order_version_id={order_version_id!r})"
             )
-        current = self._order_repository.get_order(order_id)
-        assert current is not None  # _owned_version already checked existence
         updated = replace(
-            current, effective_order_version_id=order_version_id, updated_at=_utc_now()
+            current,
+            effective_order_version_id=order_version_id,
+            candidate_order_version_id=None,
+            updated_at=_utc_now(),
         )
         self._order_repository.update_order(updated)
         _log.info(

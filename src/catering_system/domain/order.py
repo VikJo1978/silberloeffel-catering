@@ -4,9 +4,9 @@ B3 adds no activation or selection fields; B6 adds optional candidate_order_vers
 only (office-side progression hint, not effective truth).
 OPERATIONAL_CORE_EXECUTION_PACK_V1 (§7) adds kitchen_print_confirmed_at on
 OrderVersion and effective_order_version_id on Order; STORNO_EXECUTION_PACK_V1
-adds cancelled_at on Order. These three are the only operational fields.
-Do not add any further status/selection field (is_active, is_effective,
-selected_version_id, release_ready flags, ...) outside an accepted execution pack.
+adds cancelled_at on Order. EFFECTIVE_ORDER_VERSION_CHANGE_GATE_V1 adds only
+immutable change provenance to OrderVersion. No stored status/selection field
+(is_active, is_effective, release_ready, superseded, ...) belongs here.
 """
 
 from __future__ import annotations
@@ -32,7 +32,7 @@ class Order:
 
 @dataclass(frozen=True)
 class OrderVersion:
-    """Immutable version snapshot under Core (B1: initial v1; B2: further versions, no activation)."""
+    """Immutable operational snapshot plus one additive kitchen-confirmation fact."""
 
     order_version_id: str
     order_id: str
@@ -44,3 +44,27 @@ class OrderVersion:
     guest_count_estimate: int | None
     planning_mode: PlanningMode
     kitchen_print_confirmed_at: datetime | None = None
+    parent_order_version_id: str | None = None
+    created_by: str | None = None
+    change_reason: str | None = None
+    changed_fields: tuple[str, ...] = ()
+
+
+def is_order_version_superseded(
+    order: Order,
+    version: OrderVersion,
+    versions: list[OrderVersion],
+) -> bool:
+    """Derive supersession without mutating an earlier candidate snapshot."""
+    if version.parent_order_version_id is None:
+        return False
+    if version.order_version_id in {
+        order.candidate_order_version_id,
+        order.effective_order_version_id,
+    }:
+        return False
+    return any(
+        later.parent_order_version_id == version.parent_order_version_id
+        and later.version_number > version.version_number
+        for later in versions
+    )

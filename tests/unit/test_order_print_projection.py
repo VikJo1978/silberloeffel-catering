@@ -21,9 +21,7 @@ from tests.unit.test_offer_service import (
 )
 
 
-def _projection_service(
-    offers, orders
-) -> OrderPrintProjectionService:
+def _projection_service(offers, orders) -> OrderPrintProjectionService:
     return OrderPrintProjectionService(orders, offers)
 
 
@@ -77,9 +75,16 @@ def test_order_without_offer_has_empty_menu() -> None:
 
 
 def test_new_order_version_uses_version_facts_and_accepted_offer_menu() -> None:
-    offer, version_id, variant_id, acceptance_id, offers, orders, _inq, offer_service = (
-        _accepted_offer_state()
-    )
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        _inq,
+        offer_service,
+    ) = _accepted_offer_state()
     _converted, order, v1 = offer_service.convert_accepted_offer(
         offer.offer_id,
         version_id,
@@ -114,9 +119,16 @@ def test_new_order_version_uses_version_facts_and_accepted_offer_menu() -> None:
 
 
 def test_preview_watermark_candidate_entwurf_effective_clear() -> None:
-    offer, version_id, variant_id, acceptance_id, offers, orders, _inq, offer_service = (
-        _accepted_offer_state()
-    )
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        _inq,
+        offer_service,
+    ) = _accepted_offer_state()
     _converted, order, order_version = offer_service.convert_accepted_offer(
         offer.offer_id,
         version_id,
@@ -161,10 +173,62 @@ def test_preview_watermark_candidate_entwurf_effective_clear() -> None:
     assert final_projection.flags.is_final_allowed is True
 
 
-def test_stale_stand_shows_veraltet_watermark() -> None:
-    offer, version_id, variant_id, acceptance_id, offers, orders, _inq, offer_service = (
-        _accepted_offer_state()
+def test_candidate_change_preview_contains_reason_diff_and_frozen_offer_menu() -> None:
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        _inq,
+        offer_service,
+    ) = _accepted_offer_state()
+    _converted, order, v1 = offer_service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
     )
+    core = OperationalCoreService(orders)
+    core.confirm_kitchen_print(order.order_id, v1.order_version_id)
+    core.make_order_version_effective(order.order_id, v1.order_version_id)
+    v2 = OrderService(orders).propose_order_version_change(
+        order.order_id,
+        event_date=v1.event_date,
+        time_window_text="18:00",
+        location_text=v1.location_text,
+        guest_count_estimate=v1.guest_count_estimate,
+        planning_mode=v1.planning_mode,
+        actor_reference="office-panel",
+        change_reason="Beginn verschoben",
+    )
+    service = _projection_service(offers, orders)
+    effective = service.resolve(order.order_id, v1.order_version_id)
+    candidate = service.resolve(order.order_id, v2.order_version_id)
+
+    assert candidate.flags.intent == "change_preview"
+    assert candidate.flags.watermark == "ÄNDERUNG – NOCH NICHT WIRKSAM"
+    assert candidate.event.change_reason == "Beginn verschoben"
+    assert candidate.event.changed_fields == ("time_window_text",)
+    assert candidate.commercial.positions == effective.commercial.positions
+    sheet = render_print_sheet(candidate)
+    assert "ÄNDERUNG – NOCH NICHT WIRKSAM" in sheet
+    assert "Beginn verschoben" in sheet
+    assert "time_window_text" in sheet
+
+
+def test_stale_stand_shows_veraltet_watermark() -> None:
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        _inq,
+        offer_service,
+    ) = _accepted_offer_state()
     _converted, order, v1 = offer_service.convert_accepted_offer(
         offer.offer_id,
         version_id,
@@ -194,9 +258,16 @@ def test_stale_stand_shows_veraltet_watermark() -> None:
 
 
 def test_final_intent_requires_effective_version() -> None:
-    offer, version_id, variant_id, acceptance_id, offers, orders, _inq, offer_service = (
-        _accepted_offer_state()
-    )
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        _inq,
+        offer_service,
+    ) = _accepted_offer_state()
     _converted, order, order_version = offer_service.convert_accepted_offer(
         offer.offer_id,
         version_id,
@@ -213,9 +284,16 @@ def test_final_intent_requires_effective_version() -> None:
 
 
 def test_cancelled_order_shows_storniert_banner_but_remains_readable() -> None:
-    offer, version_id, variant_id, acceptance_id, offers, orders, _inq, offer_service = (
-        _accepted_offer_state()
-    )
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        _inq,
+        offer_service,
+    ) = _accepted_offer_state()
     _converted, order, order_version = offer_service.convert_accepted_offer(
         offer.offer_id,
         version_id,

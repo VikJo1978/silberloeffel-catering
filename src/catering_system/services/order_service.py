@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import date, datetime, timezone
 
@@ -19,6 +20,10 @@ from catering_system.domain.inquiry import (
     validate_planning_mode,
 )
 from catering_system.domain.offer import OfferVersion as CommercialOfferVersion
+from catering_system.domain.operational_core_events import (
+    OrderVersionCandidateSuperseded,
+    OrderVersionChangeProposed,
+)
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.repositories.order_repository import OrderRepository
 
@@ -32,8 +37,18 @@ def _utc_now() -> datetime:
 class OrderService:
     """Core-owned Order lifecycle: conversion (B1/B5), versions (B2), history reads (B3), candidate (B6)."""
 
-    def __init__(self, order_repository: OrderRepository) -> None:
+    def __init__(
+        self,
+        order_repository: OrderRepository,
+        *,
+        event_sink: Callable[[object], None] | None = None,
+    ) -> None:
         self._order_repository = order_repository
+        self._event_sink = event_sink
+
+    def _emit(self, event: object) -> None:
+        if self._event_sink is not None:
+            self._event_sink(event)
 
     def convert_inquiry_to_order(self, inquiry: Inquiry) -> tuple[Order, OrderVersion]:
         """Create Order + v1 after the Core inquiry conversion gate passes.
@@ -150,6 +165,109 @@ class OrderService:
             "create_relevant_order_change_version order_id=%s version=%s",
             order.order_id,
             version.version_number,
+        )
+        return version
+
+    def propose_order_version_change(
+        self,
+        order_id: str,
+        *,
+        event_date: date,
+        time_window_text: str,
+        location_text: str,
+        guest_count_estimate: int | None,
+        planning_mode: str,
+        actor_reference: str,
+        change_reason: str,
+    ) -> OrderVersion:
+        """Append an immutable snapshot and atomically make it current candidate.
+
+        The parent is the effective snapshot. For an existing order that has
+        never had an effective pointer, the latest stored version is used as a
+        compatibility source for the initial handoff workflow.
+        """
+        current = self._order_repository.get_order(order_id)
+        if current is None:
+            raise ValueError(f"no order with id {order_id!r}")
+        if current.cancelled_at is not None:
+            raise ValueError(
+                f"order {order_id!r} is cancelled (Storno); no further versions"
+            )
+        versions = self._order_repository.list_order_versions(order_id)
+        if not versions:
+            raise ValueError(f"order {order_id!r} has no source version")
+        source = None
+        if current.effective_order_version_id is not None:
+            source = self._order_repository.get_order_version(
+                current.effective_order_version_id
+            )
+            if source is None or source.order_id != order_id:
+                raise ValueError("effective order version is not resolvable")
+        if source is None:
+            source = max(versions, key=lambda item: item.version_number)
+
+        now = _utc_now()
+        validated_planning_mode = validate_planning_mode(planning_mode)
+        values: dict[str, object] = {
+            "event_date": event_date,
+            "time_window_text": time_window_text,
+            "location_text": location_text,
+            "guest_count_estimate": guest_count_estimate,
+            "planning_mode": validated_planning_mode,
+        }
+        changed_fields = tuple(
+            name for name, value in values.items() if getattr(source, name) != value
+        )
+        version = OrderVersion(
+            order_version_id=str(uuid.uuid4()),
+            order_id=order_id,
+            version_number=max(item.version_number for item in versions) + 1,
+            created_at=now,
+            event_date=event_date,
+            time_window_text=time_window_text,
+            location_text=location_text,
+            guest_count_estimate=guest_count_estimate,
+            planning_mode=validated_planning_mode,
+            parent_order_version_id=source.order_version_id,
+            created_by=actor_reference,
+            change_reason=change_reason,
+            changed_fields=changed_fields,
+        )
+        previous_candidate_id = current.candidate_order_version_id
+        updated = replace(
+            current,
+            candidate_order_version_id=version.order_version_id,
+            updated_at=now,
+        )
+        self._order_repository.append_order_version(updated, version)
+        if (
+            previous_candidate_id is not None
+            and previous_candidate_id != current.effective_order_version_id
+        ):
+            self._emit(
+                OrderVersionCandidateSuperseded(
+                    order_id=order_id,
+                    superseded_order_version_id=previous_candidate_id,
+                    new_candidate_order_version_id=version.order_version_id,
+                    occurred_at=now,
+                )
+            )
+        self._emit(
+            OrderVersionChangeProposed(
+                order_id=order_id,
+                old_effective_order_version_id=current.effective_order_version_id,
+                new_candidate_order_version_id=version.order_version_id,
+                actor_reference=actor_reference,
+                change_reason=change_reason,
+                changed_fields=changed_fields,
+                occurred_at=now,
+            )
+        )
+        _log.info(
+            "propose_order_version_change order_id=%s version=%s candidate=%s",
+            order_id,
+            version.version_number,
+            version.order_version_id,
         )
         return version
 

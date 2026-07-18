@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 
 @dataclass(frozen=True)
@@ -15,6 +16,25 @@ class KitchenPrintConfirmed:
 class OrderVersionMadeEffective:
     order_id: str
     order_version_id: str
+
+
+@dataclass(frozen=True)
+class OrderVersionChangeProposed:
+    order_id: str
+    old_effective_order_version_id: str | None
+    new_candidate_order_version_id: str
+    actor_reference: str
+    change_reason: str
+    changed_fields: tuple[str, ...]
+    occurred_at: datetime
+
+
+@dataclass(frozen=True)
+class OrderVersionCandidateSuperseded:
+    order_id: str
+    superseded_order_version_id: str
+    new_candidate_order_version_id: str
+    occurred_at: datetime
 
 
 @dataclass(frozen=True)

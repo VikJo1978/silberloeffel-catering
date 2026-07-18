@@ -72,9 +72,22 @@ class WorkCenterService:
                     offers_accepted += 1
 
         upcoming_orders = 0
+        pending_order_changes = 0
         for order in orders:
             if order.cancelled_at is not None:
                 continue
+            if (
+                order.candidate_order_version_id is not None
+                and order.candidate_order_version_id != order.effective_order_version_id
+                and (
+                    candidate := self._orders.get_order_version(
+                        order.candidate_order_version_id
+                    )
+                )
+                is not None
+                and candidate.kitchen_print_confirmed_at is None
+            ):
+                pending_order_changes += 1
             effective_id = order.effective_order_version_id
             if effective_id is None:
                 continue
@@ -99,4 +112,5 @@ class WorkCenterService:
             upcoming_orders=upcoming_orders,
             open_tasks=open_tasks,
             today_calendar_entries=today_calendar_entries,
+            pending_order_changes=pending_order_changes,
         )

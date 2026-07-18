@@ -269,7 +269,12 @@ def test_queue_view_attention_counts_and_tops(api) -> None:
     base, ids, _db = api
     status, body, _h = _get(f"{base}/office/v1/queue")
     assert status == 200
-    assert set(body) == {"attention", "week", "neue_anfragen_top", "auftraege_top"}
+    assert set(body) == {
+        "attention",
+        "week",
+        "neue_anfragen_top",
+        "auftraege_top",
+    }
     # seed world: 3 open inquiries plus 1 rejected inquiry without an order;
     # 1 order without print;
     # 2 not effective (unprinted + none), 2 blocked, 1 cancelled
@@ -278,6 +283,7 @@ def test_queue_view_attention_counts_and_tops(api) -> None:
         "druck_fehlt": 1,
         "nicht_wirksam": 1,
         "versand_blockiert": 1,
+        "aenderungen_warten_auf_kuechendruck": 0,
         "storniert": 1,
     }
     top_actions = {
@@ -311,6 +317,7 @@ _WORK_CENTER_KEYS = {
     "upcoming_orders",
     "open_tasks",
     "today_calendar_entries",
+    "pending_order_changes",
 }
 
 
@@ -329,6 +336,7 @@ def test_work_center_schema_and_seed_counts(api) -> None:
         "upcoming_orders": 1,
         "open_tasks": len(tasks_body["tasks"]),
         "today_calendar_entries": 0,
+        "pending_order_changes": 0,
     }
     assert body["open_tasks"] >= 1
 
@@ -1144,19 +1152,78 @@ def test_versions_expect_and_cancelled_gate(api) -> None:
         "planning_mode": "caterer_suggestion",
     }
     url = f"{base}/office/v1/orders/{ids['order_ready']}/versions"
-    status, body, _h = _post(url, args=args, expect={"latest_version_number": 7})
+    version_expect = {
+        "latest_version_number": 7,
+        "current_effective_order_version_id": ids["version_ready"],
+        "current_candidate_order_version_id": None,
+    }
+    status, body, _h = _post(url, args=args, expect=version_expect)
     assert (status, body["error"]) == (409, "stale_state")
-    status, body, _h = _post(url, args=args, expect={"latest_version_number": 1})
+    version_expect["latest_version_number"] = 1
+    command_id = str(uuid.uuid4())
+    status, body, _h = _post(
+        url, args=args, expect=version_expect, command_id=command_id
+    )
     assert status == 201
-    assert set(body) == {"command_id", "order_version_id", "version_number"}
+    assert set(body) == {
+        "command_id",
+        "order_version_id",
+        "version_number",
+        "candidate_order_version_id",
+        "parent_order_version_id",
+        "changed_fields",
+    }
     assert body["version_number"] == 2
+    created = body
+    replay_status, replay, _h = _post(
+        url, args=args, expect=version_expect, command_id=command_id
+    )
+    assert replay_status == 201
+    assert replay == created
     status, detail, _h = _get(f"{base}/office/v1/orders/{ids['order_ready']}")
     assert detail["candidate_order_version_id"] == body["order_version_id"]
+    assert detail["effective_order_version_id"] == ids["version_ready"]
+    assert detail["ready_to_send"] == {
+        "ready": False,
+        "reasons": ["pending_order_version_change"],
+    }
+    assert detail["version_change"]["pending"] is True
+    assert detail["version_change"]["kitchen_reprint_required"] is True
+    assert len(detail["versions"]) == 2
+
+    effective_url = f"{base}/office/v1/orders/{ids['order_ready']}/effective"
+    effective_expect = {
+        "current_effective_order_version_id": ids["version_ready"],
+        "current_candidate_order_version_id": body["order_version_id"],
+    }
+    status, rejected, _h = _post(
+        effective_url,
+        args={"order_version_id": body["order_version_id"]},
+        expect=effective_expect,
+    )
+    assert (status, rejected["error"]) == (422, "kitchen_print_not_confirmed")
+    status, _confirmed, _h = _post(
+        f"{base}/office/v1/orders/{ids['order_ready']}/print-confirm",
+        args={"order_version_id": body["order_version_id"]},
+    )
+    assert status == 200
+    status, switched, _h = _post(
+        effective_url,
+        args={"order_version_id": body["order_version_id"]},
+        expect=effective_expect,
+    )
+    assert status == 200
+    assert switched["effective_order_version_id"] == body["order_version_id"]
+    assert switched["candidate_order_version_id"] is None
 
     status, body, _h = _post(
         f"{base}/office/v1/orders/{ids['order_cancelled']}/versions",
         args=args,
-        expect={"latest_version_number": 1},
+        expect={
+            "latest_version_number": 1,
+            "current_effective_order_version_id": None,
+            "current_candidate_order_version_id": None,
+        },
     )
     assert (status, body["error"]) == (422, "order_cancelled")
 
@@ -1169,7 +1236,10 @@ def test_print_confirm_effective_and_gates(api) -> None:
     status, body, _h = _post(
         f"{base}/office/v1/orders/{order_id}/effective",
         args={"order_version_id": version_id},
-        expect={"current_effective_order_version_id": None},
+        expect={
+            "current_effective_order_version_id": None,
+            "current_candidate_order_version_id": None,
+        },
     )
     assert (status, body["error"]) == (422, "kitchen_print_not_confirmed")
     # foreign version
@@ -1195,13 +1265,19 @@ def test_print_confirm_effective_and_gates(api) -> None:
     status, body, _h = _post(
         f"{base}/office/v1/orders/{order_id}/effective",
         args={"order_version_id": version_id},
-        expect={"current_effective_order_version_id": version_id},
+        expect={
+            "current_effective_order_version_id": version_id,
+            "current_candidate_order_version_id": None,
+        },
     )
     assert (status, body["error"]) == (409, "stale_state")
     status, body, _h = _post(
         f"{base}/office/v1/orders/{order_id}/effective",
         args={"order_version_id": version_id},
-        expect={"current_effective_order_version_id": None},
+        expect={
+            "current_effective_order_version_id": None,
+            "current_candidate_order_version_id": None,
+        },
     )
     assert status == 200
     assert body["effective_order_version_id"] == version_id
