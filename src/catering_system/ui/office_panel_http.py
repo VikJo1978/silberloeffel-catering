@@ -23,6 +23,9 @@ from catering_system.repositories.payment_reminder_repository import (
 from catering_system.repositories.order_confirmation_document_repository import (
     OrderConfirmationDocumentRepository,
 )
+from catering_system.repositories.order_confirmation_outbound_repository import (
+    OrderConfirmationOutboundRepository,
+)
 from catering_system.integration.auerswald_sync import (
     fetch_missed_board,
     resolve_missed_call,
@@ -150,6 +153,7 @@ def make_office_panel_handler(
     command_executor: "CoreCommandExecutor | None" = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
     confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
+    confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
@@ -163,6 +167,7 @@ def make_office_panel_handler(
         command_executor=command_executor,
         payment_reminder_repo=payment_reminder_repo,
         confirmation_document_repo=confirmation_document_repo,
+        confirmation_outbound_repo=confirmation_outbound_repo,
         offer_repo=offer_repo,
         catalog_repo=catalog_repo,
         ui_version=ui_version,
@@ -389,6 +394,13 @@ def make_office_panel_handler(
                 and parts[3] == "preview"
             ):
                 self._confirmation_document_preview(parts[1])
+            elif (
+                len(parts) == 4
+                and parts[0] == "order"
+                and parts[2] == "confirmation-document"
+                and parts[3] == "fake-outbox"
+            ):
+                self._confirmation_fake_outbox(parts[1])
             else:
                 self.send_error(404)
 
@@ -460,6 +472,27 @@ def make_office_panel_handler(
                 return
             self._html(html)
 
+        def _confirmation_fake_outbox(self, order_id: str) -> None:
+            try:
+                message = panel.confirmation_outbound_service.fake_outbox_message(
+                    order_id
+                )
+            except Exception:
+                self.send_error(404)
+                return
+            body = (
+                "<!doctype html><html><head><meta charset='utf-8'>"
+                "<title>Testnachricht Fake Outbox</title></head><body>"
+                "<p><strong>Testtransport — keine echte Zustellung.</strong></p>"
+                f"<p>Betreff: {_e(message.subject)}</p>"
+                "<h2>Text</h2>"
+                f"<pre>{_e(message.text_body)}</pre>"
+                "<h2>HTML</h2>"
+                f"{message.html_body}"
+                "</body></html>"
+            )
+            self._html(body)
+
         def do_POST(self) -> None:  # noqa: N802
             if not self._authorized():
                 self._deny()
@@ -497,6 +530,14 @@ def make_office_panel_handler(
                 self._offer_action(parts[1], parts[2])
             elif len(parts) == 3 and parts[0] == "order":
                 self._order_action(parts[1], parts[2])
+            elif (
+                len(parts) == 4
+                and parts[0] == "order"
+                and parts[2] == "confirmation-document"
+                and parts[3] == "send"
+            ):
+                panel.send_confirmation_test(parts[1], self._form())
+                self._redirect(f"/order/{parts[1]}")
             elif parts == ["proposal-preview"]:
                 payload = parse_proposal_payload(self._form().get("payload_json", ""))
                 self._html(
@@ -612,6 +653,7 @@ def create_office_panel_server(
     command_executor: "CoreCommandExecutor | None" = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
     confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
+    confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
@@ -632,6 +674,7 @@ def create_office_panel_server(
             command_executor=command_executor,
             payment_reminder_repo=payment_reminder_repo,
             confirmation_document_repo=confirmation_document_repo,
+            confirmation_outbound_repo=confirmation_outbound_repo,
             offer_repo=offer_repo,
             catalog_repo=catalog_repo,
             ui_version=ui_version,

@@ -46,6 +46,9 @@ from catering_system.ui.office_panel_order_detail import (
     OrderDetailFormFields,
     render_order_detail,
 )
+from catering_system.services.order_confirmation_outbound_service import (
+    OutboundSendEligibility,
+)
 from tests.unit.test_offer_service import (
     _INQUIRY_ID,
     _POSITION_ID,
@@ -521,6 +524,7 @@ def test_office_panel_confirmation_block_renders() -> None:
     service = services[4]
     eligibility = service.eligibility(order.order_id)
     assert eligibility.state in {"bereit_zur_vorschau", "empfaenger_fehlt"}
+    outbound = OutboundSendEligibility(state="dokument_fehlt", can_send=False)
     page = render_order_detail(
         order,
         services[0].list_order_versions(order.order_id),
@@ -542,6 +546,7 @@ def test_office_panel_confirmation_block_renders() -> None:
         ),
         None,
         eligibility,
+        outbound,
         forms=OrderDetailFormFields(
             csrf_input="",
             print_confirm_command_fields={},
@@ -551,6 +556,7 @@ def test_office_panel_confirmation_block_renders() -> None:
             version_command_fields="",
             payment_command_fields="",
             confirmation_command_fields="",
+            send_command_fields="",
         ),
         versions_total_count=1,
         versions_truncated=False,
@@ -563,6 +569,10 @@ def test_office_panel_confirmation_block_renders() -> None:
         "office-panel",
     )
     created = service.eligibility(order.order_id)
+    outbound_created = OutboundSendEligibility(
+        state="testversand_bereit",
+        can_send=True,
+    )
     page_created = render_order_detail(
         order,
         services[0].list_order_versions(order.order_id),
@@ -584,6 +594,7 @@ def test_office_panel_confirmation_block_renders() -> None:
         ),
         None,
         created,
+        outbound_created,
         forms=OrderDetailFormFields(
             csrf_input="",
             print_confirm_command_fields={},
@@ -593,10 +604,12 @@ def test_office_panel_confirmation_block_renders() -> None:
             version_command_fields="",
             payment_command_fields="",
             confirmation_command_fields="",
+            send_command_fields="",
         ),
         versions_total_count=1,
         versions_truncated=False,
     )
     assert snapshot.document_reference in page_created.body
     assert "Vorschau öffnen" in page_created.body
+    assert "Testversand erzeugen" in page_created.body
     assert views.confirmation_document_shape(created)["state"] == "dokument_erstellt"

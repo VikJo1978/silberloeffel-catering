@@ -21,6 +21,9 @@ from catering_system.domain.ready_to_send import ReadyToSendEvaluation
 from catering_system.services.order_confirmation_document_service import (
     OrderConfirmationDocumentEligibility,
 )
+from catering_system.services.order_confirmation_outbound_service import (
+    OutboundSendEligibility,
+)
 
 _CONFIRMATION_STATE_LABELS = {
     "nicht_verfuegbar": "Nicht verfügbar",
@@ -28,6 +31,18 @@ _CONFIRMATION_STATE_LABELS = {
     "empfaenger_fehlt": "Empfänger-E-Mail fehlt",
     "bereit_zur_vorschau": "Bereit zur Vorschau",
     "dokument_erstellt": "Dokument erstellt",
+}
+
+_OUTBOUND_STATE_LABELS = {
+    "dokument_fehlt": "Dokument fehlt",
+    "testversand_bereit": "Testversand möglich",
+    "testversand_protokolliert": "Testversand protokolliert",
+    "empfaenger_fehlt": "Empfänger-E-Mail fehlt",
+    "pending_order_version_change": "Änderung wartet auf Küchendruck",
+    "kitchen_print_not_confirmed": "Küchendruck fehlt",
+    "order_not_ready_to_send": "Versandfreigabe blockiert",
+    "order_storniert": "Auftrag storniert",
+    "confirmation_document_not_current": "Dokument nicht aktuell",
 }
 
 _PLANNING_MODE_LABELS = {
@@ -82,6 +97,7 @@ class OrderDetailFormFields:
     version_command_fields: str
     payment_command_fields: str
     confirmation_command_fields: str = ""
+    send_command_fields: str = ""
     version_change_prefill: OrderVersionChangePrefill | None = None
 
 
@@ -589,6 +605,62 @@ def render_confirmation_card(
     return _confirmation_card(order, confirmation, forms)
 
 
+def render_confirmation_outbound_card(
+    order: Order,
+    confirmation: OrderConfirmationDocumentEligibility,
+    outbound: OutboundSendEligibility,
+    forms: OrderDetailFormFields,
+) -> str:
+    """Fake-outbox test send card — never implies real customer delivery."""
+    state_label = _OUTBOUND_STATE_LABELS.get(outbound.state, outbound.state)
+    facts: list[tuple[str, str]] = [("Status", state_label)]
+    summary = outbound.send_summary
+    if summary is not None:
+        facts.extend(
+            [
+                ("Empfänger", summary.recipient_email_masked),
+                ("Transport", "Fake Outbox"),
+                ("Payload-Hash", summary.payload_hash_short),
+                (
+                    "Protokolliert",
+                    summary.accepted_at.replace("T", " · ")[:16],
+                ),
+            ]
+        )
+    actions: list[str] = []
+    if outbound.can_send and confirmation.snapshot is not None:
+        actions.append(
+            '<p class="order-context-note">Es wird keine E-Mail an den Kunden gesendet.</p>'
+        )
+        actions.append(
+            f'<form method="post" action="/order/{_e(order.order_id)}/confirmation-document/send">'
+            f"{forms.csrf_input}{forms.send_command_fields}"
+            f'<input type="hidden" name="document_snapshot_id" '
+            f'value="{_e(confirmation.snapshot.document_snapshot_id)}">'
+            '<button type="submit">Testversand erzeugen</button></form>'
+        )
+    if summary is not None:
+        actions.append('<p class="order-context-note">Keine echte Zustellung.</p>')
+        actions.append(
+            f'<p><a class="order-action-link" '
+            f'href="/order/{_e(order.order_id)}/confirmation-document/fake-outbox" '
+            f'target="_blank" rel="noopener">Testnachricht ansehen</a></p>'
+        )
+    return (
+        '<section class="order-card order-content-card order-confirmation-outbound-card">'
+        '<div class="order-section-kicker">Testversand</div>'
+        "<h2>Fake Outbox</h2>"
+        '<dl class="order-payment-facts">'
+        + "".join(
+            f"<div><dt>{_e(label)}</dt><dd>{_e(value)}</dd></div>"
+            for label, value in facts
+        )
+        + "</dl>"
+        + "".join(actions)
+        + "</section>"
+    )
+
+
 def _planning_mode_select(selected: str) -> str:
     options = []
     for value in PLANNING_MODES:
@@ -670,6 +742,7 @@ def render_order_detail(
     payment: PaymentReminderView,
     next_action: Mapping[str, str] | None,
     confirmation: OrderConfirmationDocumentEligibility,
+    outbound: OutboundSendEligibility,
     *,
     forms: OrderDetailFormFields,
     versions_total_count: int,
@@ -742,6 +815,7 @@ def render_order_detail(
         '<aside class="order-detail-side">'
         + _primary_action(order, target, next_action, forms)
         + _confirmation_card(order, confirmation, forms)
+        + render_confirmation_outbound_card(order, confirmation, outbound, forms)
         + _payment_card(order, payment, forms)
         + _secondary_actions(order, forms)
         + "</aside></div>"

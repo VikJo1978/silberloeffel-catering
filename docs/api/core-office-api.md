@@ -34,6 +34,8 @@ explicit Phase 2 configuration/deploy step (not yet done; see below).
 | `GET /office/v1/orders/{id}/print-data?version=` | print-sheet data; unknown and unowned are the same `404` |
 | `GET /office/v1/orders/{id}/confirmation-document` | latest or `?document_snapshot_id=` snapshot summary (`404` when none) |
 | `GET /office/v1/orders/{id}/confirmation-document/preview?format=json\|html` | customer-facing preview; default `format=json`, `html` returns rendered document |
+| `GET /office/v1/orders/{id}/confirmation-document/send-status` | fake-outbox send state (`not_sent` or evidence summary); always `real_delivery=false`; no full message bodies |
+| `GET /office/v1/orders/{id}/confirmation-document/fake-outbox` | Office inspection of the frozen fake-outbox payload (`test_transport=true`, `real_delivery=false`) |
 
 Orderings are the repository orderings (inquiries by event date then id,
 orders by id, versions by number). Search: inquiries by ID, location, event
@@ -63,6 +65,7 @@ are minimal (IDs + timestamps, no PII); the panel re-reads details via GET.
 | `POST /office/v1/orders/{id}/cancel` | `updated_at` (repeat = success) |
 | `POST /office/v1/orders/{id}/payment-reminder` | reminder `updated_at` (nullable before first save); exact manual reminder facts only |
 | `POST /office/v1/orders/{id}/confirmation-document` | `current_effective_order_version_id`; `args.created_by`; freezes one Auftragsbestätigung snapshot per effective OrderVersion (`201` first create, `200` replay/idempotent per version); blocked when no effective version, pending candidate, kitchen print missing, or no accepted Offer linkage (`422 confirmation_document_blocked` / `422 pending_order_version_change`) |
+| `POST /office/v1/orders/{id}/confirmation-document/send` | `current_effective_order_version_id`; `args.document_snapshot_id`, `args.requested_by`; synchronous fake-outbox test send (`201` first success, ledger replay `200`/`201`); `real_delivery=false`; duplicate snapshot with new `command_id` → `409 confirmation_document_already_sent`; eligibility failures → controlled `404`/`409`/`422` (no SMTP/network) |
 
 Idempotency: every command carries a client `command_id`; precondition,
 business write and the ledger record commit in **one** SQLite transaction.
@@ -95,7 +98,10 @@ Error codes (stable, never free text): `unauthorized`, `not_found`,
 `offer_blocks_conversion`,
 `order_cancelled`, `kitchen_print_not_confirmed`, `version_not_owned`,
 `invalid_payment_reminder`, `confirmation_document_blocked`,
-`commercial_totals_invalid`, `core_busy`, `internal`.
+`commercial_totals_invalid`, `confirmation_document_recipient_missing`,
+`confirmation_document_already_sent`, `confirmation_document_not_current`,
+`outbound_payload_invalid`, `order_not_ready_to_send`, `order_storniert`,
+`core_busy`, `internal`.
 
 The local payment-reminder extension records only the chosen method, external
 invoice reference/dates, paid date and cash-received flag. Its command uses the
@@ -104,9 +110,16 @@ nor writes operational Order progression fields.
 
 The local Auftragsbestätigung document slice (EMAIL_MVP_1 / outbound pack B1)
 adds immutable `order_confirmation_document_snapshots`, a read-only customer
-preview, and an Office Panel block. It does **not** send email, expose SMTP,
-outbox, SendAttempt, or SendEvidence, and cannot dispatch even when
-`recipient_status=missing`.
+preview, and an Office Panel block. It does **not** send email.
+
+The local fake-outbox slice (EMAIL_MVP_2 / outbound pack B2) adds immutable
+`order_confirmation_send_attempts`, `order_confirmation_fake_outbox_messages`,
+and `order_confirmation_send_evidence`, plus synchronous test dispatch into a
+local inspection sink. Responses always carry `real_delivery=false`.
+`SendEvidence` means only “accepted by fake outbox”, not delivered to the
+customer. **No SMTP credentials, external mail HTTP, retries, resend, or
+background dispatcher.** Before any real SMTP transport, PAUSE/Attention
+enforcement and a separate security review are mandatory.
 
 ## Smoke test (status codes only — never dump bodies)
 

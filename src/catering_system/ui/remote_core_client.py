@@ -37,6 +37,11 @@ from catering_system.services.order_confirmation_document_service import (
     OrderConfirmationDocumentEligibility,
     OrderConfirmationDocumentSummary,
 )
+from catering_system.services.order_confirmation_outbound_service import (
+    OutboundSendEligibility,
+    OutboundSendSummary,
+)
+from catering_system.domain.order_confirmation_outbound import FakeOutboxMessage
 from catering_system.services.inquiry_service import validate_inquiry_source
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjection,
@@ -783,6 +788,7 @@ class RemoteCoreClient:
         self.order_service = _RemoteOrderService(self)
         self.payment_reminder_service = _RemotePaymentReminderService(self)
         self.confirmation_document_service = _RemoteConfirmationDocumentService(self)
+        self.confirmation_outbound_service = _RemoteConfirmationOutboundService(self)
         self.catalog_dish_write_service = _RemoteCatalogDishWriteService(self)
         self.core = _RemoteOperationalCoreService(self)
 
@@ -2513,4 +2519,128 @@ class _RemoteConfirmationDocumentService:
         return self._client.get_text(
             f"/office/v1/orders/{quote(order_id, safe='')}/confirmation-document/preview",
             {"format": "html"},
+        )
+
+
+class _RemoteConfirmationOutboundService:
+    def __init__(self, client: RemoteCoreClient) -> None:
+        self._client = client
+
+    def send_eligibility(
+        self,
+        order_id: str,
+        *,
+        document_snapshot_id: str | None = None,
+    ) -> OutboundSendEligibility:
+        confirmation = self._client.confirmation_document_service.eligibility(order_id)
+        snapshot = confirmation.snapshot
+        if document_snapshot_id is not None and snapshot is not None:
+            if snapshot.document_snapshot_id != document_snapshot_id:
+                snapshot = None
+        if snapshot is None:
+            return OutboundSendEligibility(
+                state="dokument_fehlt",
+                can_send=False,
+                blocker_code="dokument_fehlt",
+            )
+        status = self._client.get(
+            f"/office/v1/orders/{quote(order_id, safe='')}/confirmation-document/send-status"
+        )
+        if status.get("state") == "sent":
+            summary = OutboundSendSummary(
+                send_attempt_id=_str(status["send_attempt_id"]),
+                send_evidence_id=_str(status["send_evidence_id"]),
+                fake_outbox_message_id=_str(status["fake_outbox_message_id"]),
+                document_snapshot_id=_str(status["document_snapshot_id"]),
+                document_hash=_str(status["document_hash"]),
+                document_hash_short=_str(status["document_hash_short"]),
+                payload_hash=_str(status["payload_hash"]),
+                payload_hash_short=_str(status["payload_hash_short"]),
+                recipient_email_masked=_str(status["recipient_email_masked"]),
+                transport_kind=_str(status["transport_kind"]),
+                outcome=_str(status["outcome"]),
+                accepted_at=_str(status["accepted_at"]),
+                real_delivery=False,
+            )
+            return OutboundSendEligibility(
+                state="testversand_protokolliert",
+                can_send=False,
+                send_summary=summary,
+            )
+        blocker_map = {
+            "empfaenger_fehlt": "empfaenger_fehlt",
+            "aenderung_wartet": "pending_order_version_change",
+        }
+        if confirmation.blocker_code in blocker_map:
+            state = blocker_map[confirmation.blocker_code]
+            return OutboundSendEligibility(
+                state=state,
+                can_send=False,
+                blocker_code=state,
+            )
+        if confirmation.state != "dokument_erstellt":
+            return OutboundSendEligibility(
+                state="dokument_fehlt",
+                can_send=False,
+                blocker_code="dokument_fehlt",
+            )
+        return OutboundSendEligibility(
+            state="testversand_bereit",
+            can_send=True,
+        )
+
+    def send_to_fake_outbox(
+        self,
+        order_id: str,
+        document_snapshot_id: str,
+        expected_effective_order_version_id: str,
+        requested_by: str,
+    ) -> None:
+        self._client.command(
+            f"/office/v1/orders/{quote(order_id, safe='')}/confirmation-document/send",
+            {
+                "document_snapshot_id": document_snapshot_id,
+                "requested_by": requested_by,
+            },
+            {"current_effective_order_version_id": expected_effective_order_version_id},
+            expected={201, 200, 409},
+            result_keys={
+                "order_id",
+                "send_attempt_id",
+                "send_evidence_id",
+                "fake_outbox_message_id",
+                "document_snapshot_id",
+                "document_hash",
+                "payload_hash",
+                "recipient_email_masked",
+                "transport_kind",
+                "outcome",
+                "accepted_at",
+                "real_delivery",
+            },
+        )
+
+    def fake_outbox_message(
+        self, order_id: str, *, document_snapshot_id: str | None = None
+    ) -> FakeOutboxMessage:
+        query: dict[str, object] = {}
+        if document_snapshot_id is not None:
+            query["document_snapshot_id"] = document_snapshot_id
+        raw = self._client.get(
+            f"/office/v1/orders/{quote(order_id, safe='')}/confirmation-document/fake-outbox",
+            query or None,
+        )
+        from datetime import UTC, datetime
+
+        return FakeOutboxMessage(
+            fake_outbox_message_id=_str(raw["fake_outbox_message_id"]),
+            send_attempt_id=_str(raw["send_attempt_id"]),
+            order_id=order_id,
+            document_snapshot_id=_str(raw["document_snapshot_id"]),
+            recipient_email=_str(raw["recipient_email"]),
+            subject=_str(raw["subject"]),
+            text_body=_str(raw["text_body"]),
+            html_body=_str(raw["html_body"]),
+            payload_hash=_str(raw["payload_hash"]),
+            created_at=datetime.now(UTC),
         )

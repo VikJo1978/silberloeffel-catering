@@ -55,8 +55,14 @@ from catering_system.repositories.in_memory_payment_reminder_repository import (
 from catering_system.repositories.in_memory_order_confirmation_document_repository import (
     InMemoryOrderConfirmationDocumentRepository,
 )
+from catering_system.repositories.in_memory_order_confirmation_outbound_repository import (
+    InMemoryOrderConfirmationOutboundRepository,
+)
 from catering_system.repositories.order_confirmation_document_repository import (
     OrderConfirmationDocumentRepository,
+)
+from catering_system.repositories.order_confirmation_outbound_repository import (
+    OrderConfirmationOutboundRepository,
 )
 from catering_system.repositories.catalog_repository import CatalogRepository
 from catering_system.repositories.inquiry_repository import InquiryRepository
@@ -71,6 +77,10 @@ from catering_system.services.order_service import OrderService
 from catering_system.services.payment_reminder_service import PaymentReminderService
 from catering_system.services.order_confirmation_document_service import (
     OrderConfirmationDocumentService,
+)
+from catering_system.services.order_confirmation_outbound_service import (
+    OrderConfirmationOutboundAlreadySentError,
+    OrderConfirmationOutboundService,
 )
 from catering_system.services.progression_service import ProgressionService
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
@@ -117,6 +127,7 @@ from catering_system.ui.office_panel_inquiry_detail import (
 from catering_system.ui.office_panel_order_detail import (
     OrderDetailFormFields,
     render_confirmation_card,
+    render_confirmation_outbound_card,
     render_order_detail,
     version_change_prefill,
 )
@@ -257,6 +268,7 @@ class OfficePanel:
         command_executor: "CoreCommandExecutor | None" = None,
         payment_reminder_repo: PaymentReminderRepository | None = None,
         confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
+        confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
         offer_repo: OfferRepository | None = None,
         catalog_repo: CatalogRepository | None = None,
         ui_version: str = "legacy",
@@ -290,12 +302,25 @@ class OfficePanel:
                 order_repo,
                 today=api_views.berlin_today,
             )
+            document_repo = (
+                confirmation_document_repo
+                or InMemoryOrderConfirmationDocumentRepository()
+            )
+            outbound_repo = (
+                confirmation_outbound_repo
+                or InMemoryOrderConfirmationOutboundRepository()
+            )
             self.confirmation_document_service = OrderConfirmationDocumentService(
                 order_repo,
                 self._offers,
                 inquiry_repo,
-                confirmation_document_repo
-                or InMemoryOrderConfirmationDocumentRepository(),
+                document_repo,
+            )
+            self.confirmation_outbound_service = OrderConfirmationOutboundService(
+                order_repo,
+                document_repo,
+                outbound_repo,
+                self.core,
             )
         else:
             # Structurally duck-typed, not the same concrete class — the
@@ -311,6 +336,7 @@ class OfficePanel:
             self.core = remote.core  # type: ignore[assignment]
             self.payment_reminder_service = remote.payment_reminder_service  # type: ignore[assignment]
             self.confirmation_document_service = remote.confirmation_document_service  # type: ignore[assignment]
+            self.confirmation_outbound_service = remote.confirmation_outbound_service  # type: ignore[assignment]
             self.catalog_dish_write_service = remote.catalog_dish_write_service  # type: ignore[assignment]
         self._remote = remote
         self._command_executor = command_executor
@@ -2038,6 +2064,15 @@ class OfficePanel:
         ev = self.core.evaluate_ready_to_send(order_id)
         payment = self.payment_reminder_service.view(order_id)
         confirmation = self.confirmation_document_service.eligibility(order_id)
+        snapshot_id = (
+            confirmation.snapshot.document_snapshot_id
+            if confirmation.snapshot is not None
+            else None
+        )
+        outbound = self.confirmation_outbound_service.send_eligibility(
+            order_id,
+            document_snapshot_id=snapshot_id,
+        )
         if self._ui_version == "v2":
             print_confirm_fields: dict[str, str] = {}
             effective_fields: dict[str, str] = {}
@@ -2147,9 +2182,21 @@ class OfficePanel:
                         if not cancelled
                         else ""
                     ),
+                    send_command_fields=(
+                        self._command_fields(
+                            {
+                                "current_effective_order_version_id": (
+                                    order.effective_order_version_id or ""
+                                ),
+                            }
+                        )
+                        if not cancelled
+                        else ""
+                    ),
                     version_change_prefill=change_prefill if not cancelled else None,
                 ),
                 confirmation=confirmation,
+                outbound=outbound,
                 versions_total_count=versions_total_count,
                 versions_truncated=versions_truncated,
             )
@@ -2316,29 +2363,47 @@ class OfficePanel:
             if versions_truncated
             else ""
         )
+        detail_forms = OrderDetailFormFields(
+            csrf_input=_csrf_input(context),
+            print_confirm_command_fields={},
+            effective_command_fields={},
+            ready_command_fields="",
+            cancel_command_fields="",
+            version_command_fields="",
+            payment_command_fields="",
+            confirmation_command_fields=(
+                self._command_fields(
+                    {
+                        "current_effective_order_version_id": (
+                            order.effective_order_version_id or ""
+                        ),
+                    }
+                )
+                if not cancelled
+                else ""
+            ),
+            send_command_fields=(
+                self._command_fields(
+                    {
+                        "current_effective_order_version_id": (
+                            order.effective_order_version_id or ""
+                        ),
+                    }
+                )
+                if not cancelled
+                else ""
+            ),
+        )
         confirmation_card = render_confirmation_card(
             order,
             confirmation,
-            OrderDetailFormFields(
-                csrf_input=_csrf_input(context),
-                print_confirm_command_fields={},
-                effective_command_fields={},
-                ready_command_fields="",
-                cancel_command_fields="",
-                version_command_fields="",
-                payment_command_fields="",
-                confirmation_command_fields=(
-                    self._command_fields(
-                        {
-                            "current_effective_order_version_id": (
-                                order.effective_order_version_id or ""
-                            ),
-                        }
-                    )
-                    if not cancelled
-                    else ""
-                ),
-            ),
+            detail_forms,
+        )
+        outbound_card = render_confirmation_outbound_card(
+            order,
+            confirmation,
+            outbound,
+            detail_forms,
         )
         body = f"""{header}{truncation_warning}
 <p>Anfrage: <a href="/inquiry/{_e(order.source_inquiry_id)}">{_e(order.source_inquiry_id[:8])}</a></p>
@@ -2347,6 +2412,7 @@ class OfficePanel:
 <th>Druck bestätigt</th><th>Status</th><th>Aktionen</th></tr>{"".join(rows)}</table>
 <h2>Zahlung</h2>{"".join(payment_rows)}{payment_form}
 {confirmation_card}
+{outbound_card}
 <h2>Freigabe (READY_TO_SEND)</h2>{release}
 {actions_block}"""
         return _page(
@@ -2374,6 +2440,43 @@ class OfficePanel:
 
         def work() -> None:
             self.payment_reminder_service.save(reminder)
+
+        if self._remote is not None:
+            work()
+        elif self._command_executor is not None:
+            self._command_executor.run(work)
+        else:
+            work()
+
+    def send_confirmation_test(self, order_id: str, form: dict[str, str]) -> None:
+        order = self._orders.get_order(order_id)
+        if order is None or order.cancelled_at is not None:
+            raise ValueError(f"no active order with id {order_id!r}")
+        expected = form.get("_expect_current_effective_order_version_id")
+        if (
+            expected is not None
+            and (expected or None) != order.effective_order_version_id
+        ):
+            raise ValueError(
+                "Der Auftrag wurde zwischenzeitlich geändert. "
+                "Bitte laden Sie die Seite neu."
+            )
+        document_snapshot_id = form.get("document_snapshot_id", "").strip()
+        if not document_snapshot_id:
+            raise ValueError("document snapshot is required for test send")
+        effective_version_id = order.effective_order_version_id
+        assert effective_version_id is not None
+
+        def work() -> None:
+            try:
+                self.confirmation_outbound_service.send_to_fake_outbox(
+                    order_id,
+                    document_snapshot_id,
+                    effective_version_id,
+                    "office-panel",
+                )
+            except OrderConfirmationOutboundAlreadySentError:
+                return
 
         if self._remote is not None:
             work()
@@ -2490,6 +2593,7 @@ def make_office_panel_handler(
     command_executor: "CoreCommandExecutor | None" = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
     confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
+    confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
@@ -2512,6 +2616,7 @@ def make_office_panel_handler(
         command_executor=command_executor,
         payment_reminder_repo=payment_reminder_repo,
         confirmation_document_repo=confirmation_document_repo,
+        confirmation_outbound_repo=confirmation_outbound_repo,
         offer_repo=offer_repo,
         catalog_repo=catalog_repo,
         ui_version=ui_version,
@@ -2534,6 +2639,7 @@ def create_office_panel_server(
     command_executor: "CoreCommandExecutor | None" = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
     confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
+    confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
@@ -2558,6 +2664,7 @@ def create_office_panel_server(
         command_executor=command_executor,
         payment_reminder_repo=payment_reminder_repo,
         confirmation_document_repo=confirmation_document_repo,
+        confirmation_outbound_repo=confirmation_outbound_repo,
         offer_repo=offer_repo,
         catalog_repo=catalog_repo,
         ui_version=ui_version,
@@ -2692,6 +2799,9 @@ def main() -> None:
         from catering_system.repositories.sqlite_order_confirmation_document_repository import (
             SQLiteOrderConfirmationDocumentRepository,
         )
+        from catering_system.repositories.sqlite_order_confirmation_outbound_repository import (
+            SQLiteOrderConfirmationOutboundRepository,
+        )
         from catering_system.repositories.sqlite_catalog_repository import (
             SQLiteCatalogRepository,
         )
@@ -2706,6 +2816,9 @@ def main() -> None:
         )
         confirmation_document_repo = (
             SQLiteOrderConfirmationDocumentRepository.from_connection(connection)
+        )
+        confirmation_outbound_repo = (
+            SQLiteOrderConfirmationOutboundRepository.from_connection(connection)
         )
 
         server = create_office_panel_server(
@@ -2722,6 +2835,7 @@ def main() -> None:
             command_executor=CoreCommandExecutor(connection),
             payment_reminder_repo=payment_reminder_repo,
             confirmation_document_repo=confirmation_document_repo,
+            confirmation_outbound_repo=confirmation_outbound_repo,
             offer_repo=offer_repo,
             catalog_repo=catalog_repo,
             ui_version=args.ui_version,

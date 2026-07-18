@@ -77,6 +77,9 @@ from catering_system.repositories.sqlite_payment_reminder_repository import (
 from catering_system.repositories.sqlite_order_confirmation_document_repository import (
     SQLiteOrderConfirmationDocumentRepository,
 )
+from catering_system.repositories.sqlite_order_confirmation_outbound_repository import (
+    SQLiteOrderConfirmationOutboundRepository,
+)
 from catering_system.services.inquiry_service import (
     InquiryService,
     validate_inquiry_source,
@@ -90,6 +93,15 @@ from catering_system.services.order_confirmation_document_service import (
     OrderConfirmationDocumentNotFoundError,
     OrderConfirmationDocumentService,
     OrderConfirmationDocumentStaleVersionError,
+)
+from catering_system.services.order_confirmation_outbound_service import (
+    OrderConfirmationOutboundAlreadySentError,
+    OrderConfirmationOutboundBlockedError,
+    OrderConfirmationOutboundNotFoundError,
+    OrderConfirmationOutboundPayloadInvalidError,
+    OrderConfirmationOutboundRecipientMissingError,
+    OrderConfirmationOutboundService,
+    OrderConfirmationOutboundStaleVersionError,
 )
 from catering_system.services.order_confirmation_document_preview import (
     build_preview,
@@ -346,6 +358,9 @@ class OfficeApi:
         self.confirmation_documents = (
             SQLiteOrderConfirmationDocumentRepository.from_connection(connection)
         )
+        self.confirmation_outbound = (
+            SQLiteOrderConfirmationOutboundRepository.from_connection(connection)
+        )
         self.ledger = OfficeCommandLedger(connection)
         self.events = DeferredEventSink()
         self.executor = CoreCommandExecutor(connection, self.events)
@@ -369,6 +384,12 @@ class OfficeApi:
             self.confirmation_documents,
         )
         self.core = OperationalCoreService(self.orders, event_sink=self.events)
+        self.confirmation_outbound_service = OrderConfirmationOutboundService(
+            self.orders,
+            self.confirmation_documents,
+            self.confirmation_outbound,
+            self.core,
+        )
         self.week_service = WochenuebersichtService(self.orders)
         self.contact_projection_service = ContactProjectionService(
             self.inquiries,
@@ -1347,6 +1368,91 @@ class OfficeApi:
             "snapshot": views.confirmation_document_summary_shape(summary),
         }
 
+    def confirmation_document_send_status(self, order_id: str) -> dict[str, object]:
+        try:
+            return self.confirmation_outbound_service.send_status(order_id)
+        except OrderConfirmationOutboundNotFoundError as exc:
+            raise ApiError(404, "not_found") from exc
+
+    def confirmation_document_fake_outbox(
+        self, order_id: str, *, document_snapshot_id: str | None = None
+    ) -> dict[str, object]:
+        try:
+            message = self.confirmation_outbound_service.fake_outbox_message(
+                order_id, document_snapshot_id=document_snapshot_id
+            )
+        except OrderConfirmationOutboundNotFoundError as exc:
+            raise ApiError(404, "not_found") from exc
+        return {
+            "test_transport": True,
+            "real_delivery": False,
+            "fake_outbox_message_id": message.fake_outbox_message_id,
+            "send_attempt_id": message.send_attempt_id,
+            "document_snapshot_id": message.document_snapshot_id,
+            "recipient_email": message.recipient_email,
+            "subject": message.subject,
+            "text_body": message.text_body,
+            "html_body": message.html_body,
+            "payload_hash": message.payload_hash,
+        }
+
+    def cmd_confirmation_document_send(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        order = self._require_active_order(path_ids["id"])
+        expected = expect["current_effective_order_version_id"]
+        if expected is not None and not isinstance(expected, str):
+            raise _invalid()
+        if expected != order.effective_order_version_id:
+            raise ApiError(409, "stale_state")
+        document_snapshot_id = _v_uuid(args["document_snapshot_id"])
+        try:
+            result = self.confirmation_outbound_service.send_to_fake_outbox(
+                order.order_id,
+                document_snapshot_id,
+                order.effective_order_version_id or "",
+                _v_str(args["requested_by"], 200),
+            )
+        except OrderConfirmationOutboundStaleVersionError as exc:
+            raise ApiError(409, "stale_state") from exc
+        except OrderConfirmationOutboundNotFoundError as exc:
+            raise ApiError(404, "not_found") from exc
+        except OrderConfirmationOutboundRecipientMissingError as exc:
+            raise ApiError(422, "confirmation_document_recipient_missing") from exc
+        except OrderConfirmationOutboundAlreadySentError as exc:
+            raise ApiError(409, "confirmation_document_already_sent") from exc
+        except OrderConfirmationOutboundPayloadInvalidError as exc:
+            raise ApiError(422, "outbound_payload_invalid") from exc
+        except OrderConfirmationOutboundBlockedError as exc:
+            message = str(exc)
+            if message == "pending_order_version_change":
+                raise ApiError(422, "pending_order_version_change") from exc
+            if message == "kitchen_print_not_confirmed":
+                raise ApiError(422, "kitchen_print_not_confirmed") from exc
+            if message == "order_storniert":
+                raise ApiError(422, "order_storniert") from exc
+            if message.startswith("order_not_ready_to_send:"):
+                raise ApiError(422, "order_not_ready_to_send") from exc
+            if message == "confirmation_document_not_current":
+                raise ApiError(409, "confirmation_document_not_current") from exc
+            raise ApiError(422, "confirmation_document_blocked") from exc
+        summary = result.summary
+        body = {
+            "order_id": order.order_id,
+            "send_attempt_id": summary.send_attempt_id,
+            "send_evidence_id": summary.send_evidence_id,
+            "fake_outbox_message_id": summary.fake_outbox_message_id,
+            "document_snapshot_id": summary.document_snapshot_id,
+            "document_hash": summary.document_hash,
+            "payload_hash": summary.payload_hash,
+            "recipient_email_masked": summary.recipient_email_masked,
+            "transport_kind": summary.transport_kind,
+            "outcome": summary.outcome,
+            "accepted_at": summary.accepted_at,
+            "real_delivery": False,
+        }
+        return 201, body
+
 
 # --- command specs: exact args/expect keys per route (pack §4.4) --------------
 
@@ -1447,6 +1553,9 @@ _PAYMENT_REMINDER_ARGS = _ArgKeys(
     )
 )
 _CONFIRMATION_DOCUMENT_ARGS = _ArgKeys(required=frozenset({"created_by"}))
+_CONFIRMATION_DOCUMENT_SEND_ARGS = _ArgKeys(
+    required=frozenset({"document_snapshot_id", "requested_by"})
+)
 _CATALOG_DISH_UPDATE_ARGS = _ArgKeys(
     required=frozenset(
         {
@@ -1500,6 +1609,11 @@ _COMMANDS: dict[str, _CommandSpec] = {
     "confirmation-document": _CommandSpec(
         "cmd_confirmation_document",
         _CONFIRMATION_DOCUMENT_ARGS,
+        {"current_effective_order_version_id"},
+    ),
+    "confirmation-document-send": _CommandSpec(
+        "cmd_confirmation_document_send",
+        _CONFIRMATION_DOCUMENT_SEND_ARGS,
         {"current_effective_order_version_id"},
     ),
     "update_catalog_dish": _CommandSpec(
@@ -1678,6 +1792,27 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/payment-reminder$"),
         "/office/v1/orders/{id}/payment-reminder",
         {"POST": "payment-reminder"},
+    ),
+    (
+        re.compile(
+            r"^/office/v1/orders/(?P<id>[^/]+)/confirmation-document/fake-outbox$"
+        ),
+        "/office/v1/orders/{id}/confirmation-document/fake-outbox",
+        {"GET": "confirmation_document_fake_outbox"},
+    ),
+    (
+        re.compile(
+            r"^/office/v1/orders/(?P<id>[^/]+)/confirmation-document/send-status$"
+        ),
+        "/office/v1/orders/{id}/confirmation-document/send-status",
+        {"GET": "confirmation_document_send_status"},
+    ),
+    (
+        re.compile(
+            r"^/office/v1/orders/(?P<id>[^/]+)/confirmation-document/send$"
+        ),
+        "/office/v1/orders/{id}/confirmation-document/send",
+        {"POST": "confirmation-document-send"},
     ),
     (
         re.compile(
@@ -2027,6 +2162,21 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
                     self._respond_text(200, result)
                 else:
                     self._respond(200, result)
+            elif kind == "confirmation_document_send_status":
+                self._respond(200, api.confirmation_document_send_status(path_ids["id"]))
+            elif kind == "confirmation_document_fake_outbox":
+                params = self._query({"document_snapshot_id"})
+                snapshot_id = (
+                    _v_uuid(params["document_snapshot_id"])
+                    if "document_snapshot_id" in params
+                    else None
+                )
+                self._respond(
+                    200,
+                    api.confirmation_document_fake_outbox(
+                        path_ids["id"], document_snapshot_id=snapshot_id
+                    ),
+                )
 
         def _command(self, template: str, kind: str, path_ids: dict[str, str]) -> None:
             spec = _COMMANDS[kind]

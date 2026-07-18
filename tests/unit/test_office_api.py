@@ -2975,3 +2975,146 @@ def test_confirmation_document_routes_require_bearer_auth(api) -> None:
         headers=no_auth,
     )
     assert (status, body["error"]) == (401, "unauthorized")
+
+
+# --- confirmation outbound fake outbox (EMAIL_MVP_2 / outbound pack B2) ------
+
+
+def _confirmation_send_url(base: str, order_id: str) -> str:
+    return f"{base}/office/v1/orders/{order_id}/confirmation-document/send"
+
+
+def _confirmation_send_status_url(base: str, order_id: str) -> str:
+    return f"{base}/office/v1/orders/{order_id}/confirmation-document/send-status"
+
+
+def _confirmation_fake_outbox_url(base: str, order_id: str) -> str:
+    return f"{base}/office/v1/orders/{order_id}/confirmation-document/fake-outbox"
+
+
+def _prepare_confirmation_snapshot(
+    api: tuple[str, dict[str, str], Path],
+) -> tuple[str, str, str]:
+    base, _ids, _db = api
+    order_id, order_version_id = _make_effective_offer_order(api)
+    status, body, _h = _post(
+        _confirmation_document_url(base, order_id),
+        args={"created_by": "office-api-test"},
+        expect={"current_effective_order_version_id": order_version_id},
+    )
+    assert status == 201
+    return order_id, order_version_id, body["document_snapshot_id"]
+
+
+def test_confirmation_outbound_send_status_and_payload(api) -> None:
+    base, _ids, db = api
+    order_id, order_version_id, snapshot_id = _prepare_confirmation_snapshot(api)
+    status_before, before, _h = _get(_confirmation_send_status_url(base, order_id))
+    assert status_before == 200
+    assert before["state"] == "not_sent"
+    assert before["real_delivery"] is False
+
+    command_id = str(uuid.uuid4())
+    status, sent, _h = _post(
+        _confirmation_send_url(base, order_id),
+        args={
+            "document_snapshot_id": snapshot_id,
+            "requested_by": "office-api-test",
+        },
+        expect={"current_effective_order_version_id": order_version_id},
+        command_id=command_id,
+    )
+    assert status == 201
+    assert sent["real_delivery"] is False
+    assert sent["transport_kind"] == "fake_outbox"
+    assert sent["outcome"] == "accepted_by_fake_outbox"
+
+    replay_status, replay_body, _h = _post(
+        _confirmation_send_url(base, order_id),
+        args={
+            "document_snapshot_id": snapshot_id,
+            "requested_by": "office-api-test",
+        },
+        expect={"current_effective_order_version_id": order_version_id},
+        command_id=command_id,
+    )
+    assert replay_status in (200, 201)
+    assert replay_body["send_attempt_id"] == sent["send_attempt_id"]
+
+    dup_status, dup_body, _h = _post(
+        _confirmation_send_url(base, order_id),
+        args={
+            "document_snapshot_id": snapshot_id,
+            "requested_by": "office-api-test",
+        },
+        expect={"current_effective_order_version_id": order_version_id},
+        command_id=str(uuid.uuid4()),
+    )
+    assert (dup_status, dup_body["error"]) == (409, "confirmation_document_already_sent")
+
+    status_after, after, _h = _get(_confirmation_send_status_url(base, order_id))
+    assert status_after == 200
+    assert after["state"] == "sent"
+    assert after["real_delivery"] is False
+    assert "html_body" not in after
+
+    inspect_status, inspect_body, _h = _get(
+        _confirmation_fake_outbox_url(base, order_id)
+    )
+    assert inspect_status == 200
+    assert inspect_body["test_transport"] is True
+    assert inspect_body["real_delivery"] is False
+    assert inspect_body["subject"].startswith("Auftragsbestätigung")
+    assert "<" in inspect_body["html_body"]
+
+    conn = sqlite3.connect(db)
+    try:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM order_confirmation_send_attempts"
+        ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM order_confirmation_fake_outbox_messages"
+        ).fetchone()[0] == 1
+        assert conn.execute(
+            "SELECT COUNT(*) FROM order_confirmation_send_evidence"
+        ).fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_confirmation_outbound_missing_recipient_returns_422(api) -> None:
+    base, _ids, _db = api
+    order_id, order_version_id = _make_effective_offer_order(
+        api, ensure_recipient_email=False
+    )
+    status, body, _h = _post(
+        _confirmation_document_url(base, order_id),
+        args={"created_by": "office-api-test"},
+        expect={"current_effective_order_version_id": order_version_id},
+    )
+    assert status == 201
+    snapshot_id = body["document_snapshot_id"]
+    send_status, send_body, _h = _post(
+        _confirmation_send_url(base, order_id),
+        args={
+            "document_snapshot_id": snapshot_id,
+            "requested_by": "office-api-test",
+        },
+        expect={"current_effective_order_version_id": order_version_id},
+    )
+    assert (send_status, send_body["error"]) == (
+        422,
+        "confirmation_document_recipient_missing",
+    )
+
+
+def test_confirmation_outbound_routes_require_bearer_auth(api) -> None:
+    base, ids, _db = api
+    order_id = ids["order_ready"]
+    no_auth: dict[str, str] = {}
+    for url in (
+        _confirmation_send_status_url(base, order_id),
+        _confirmation_fake_outbox_url(base, order_id),
+    ):
+        status, body, _h = _get(url, headers=no_auth)
+        assert (status, body["error"]) == (401, "unauthorized")

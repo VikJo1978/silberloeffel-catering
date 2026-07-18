@@ -140,14 +140,21 @@ Offer workflow development:
   Order-detail command/block in direct and remote mode. Reminder facts neither
   block nor advance any OrderVersion, kitchen-print, effective-version,
   `READY_TO_SEND` or kiosk state. The slice is not deployed.
-- **EMAIL_MVP_1 / outbound pack Slice B1** (`OrderConfirmationDocumentSnapshot`)
-  is implemented **locally only** (not committed/deployed on top of production
-  HEAD `2c1e61d`). It freezes a customer-facing Auftragsbestätigung preview
-  from effective OrderVersion facts plus accepted OfferVersion commercial data,
-  persists one immutable snapshot per effective OrderVersion, exposes Core
-  Office API read/preview routes and an Office Panel block (`Vorschau
-  erstellen` / `Vorschau öffnen`). **No email transport, outbox, or send
-  evidence exists; real customer send remains impossible.**
+- **EMAIL_MVP_1 / outbound pack Slice B1** is **deployed** on production HEAD
+  `bb5d4ae` (Panel integration hotfix included). It freezes a customer-facing
+  Auftragsbestätigung preview from effective OrderVersion facts plus accepted
+  OfferVersion commercial data, persists one immutable snapshot per effective
+  OrderVersion, exposes Core Office API read/preview routes and an Office Panel
+  block (`Vorschau erstellen` / `Vorschau öffnen`). **No real email transport
+  exists in B1.**
+- **EMAIL_MVP_2 / outbound pack Slice B2** (`fake_outbox` test send) is
+  implemented **locally only** (not committed/deployed). It adds immutable
+  `SendAttempt`, `FakeOutboxMessage`, and `SendEvidence`, a synchronous local
+  fake-outbox transport (`real_delivery=false`), duplicate-send protection, Core
+  Office API send/status/inspection routes, and an Office Panel block
+  (`Testversand erzeugen` / `Testversand protokolliert`). **No SMTP, external
+  HTTP mail provider, retries, resend, or background worker.** Real SMTP
+  requires PAUSE/Attention enforcement and a separate security review first.
 - The Offer layer docs, domain skeleton, and SQLite persistence are on
   `origin/main` through `64d4f06`. No Offer commands, API routes, Office UI,
   configurator import, or Order conversion exist yet.

@@ -1,6 +1,6 @@
 # Order Outbound Send Boundary — design pack V1
 
-Status: **design proposal — product decisions APPROVED FOR V1; Slice B1 implemented locally (EMAIL_MVP_1), not deployed; other slices not authorized except Slice A1 after review**
+Status: **B1 deployed (`bb5d4ae`); B2 fake outbox implemented locally (EMAIL_MVP_2), not committed/deployed; real SMTP forbidden until PAUSE/Attention enforcement**
 Evidence baseline: repository audit after Gate **6D-4 PASS** / Gate **6D-5 FAIL**, 2026-07-18, Europe/Berlin
 Prerequisite audits: Gate 6D-4 operational smoke, Gate 6D-5 send-boundary audit
 Scope owner: **Core operational outbound send** — Order axis only
