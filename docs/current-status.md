@@ -1,215 +1,180 @@
 # Current status
 
-Live deployment last verified: **2026-07-13, Europe/Berlin**.
+Operational truth last verified: **2026-07-19T22:58:14Z** (read-only audit on
+Lenovo `debiancatering`, Tailscale `100.109.6.74`).
 
-Local undeployed development last verified: **2026-07-15, Europe/Berlin**.
-The committed local baseline matches `origin/main` at **`64d4f06`**. The working
-tree is clean. None of these changes alter the live/deployed baseline below.
+This document separates **repository truth** from **production runtime truth**.
+A commit on `origin/main` is not deployed until the relevant services have
+restarted while that commit (or a descendant loaded at restart) is on disk,
+and post-deploy checks are recorded. See
+`docs/runbooks/deployment-truth-checklist.md`.
 
-## Live/deployed baseline
+## Repository truth
 
-| Environment | Component | Address/binding | State |
-|---|---|---|---|
-| Lenovo `debiancatering` | Office panel | LAN/Tailscale, port `8081` | active |
-| Lenovo `debiancatering` | Kitchen kiosk | LAN/Tailscale, port `8082` | active |
-| Lenovo `debiancatering` | Courier app (test) | LAN/Tailscale, port `8090` | active |
-| Lenovo `debiancatering` | Website intake | `127.0.0.1:8083` | active |
-| VPS `185.16.60.69` | Form and intake staging | public HTTP, port `8080` | active, Core bridge enabled for fake data |
+At audit time (**2026-07-19T22:58:14Z**), `git rev-parse origin/main` reported
+`cf2edb568d2577f3d0cc06c534a295b861138e76`. **Do not treat a SHA printed here
+as permanent:** after this document is committed and pushed, repository HEAD
+advances — query Git for the current value.
 
-Production facts:
+| Item | Value (at audit) |
+|---|---|
+| Last verified **application-code** commit on `main` | `cf2edb568d2577f3d0cc06c534a295b861138e76` (`cf2edb5`) |
+| Preceding application commit on same line | `5000d6f` (calendar-week runtime fix) |
+| GitHub Actions `quality` on `cf2edb5` | **success** — run [29706686826](https://github.com/VikJo1978/silberloeffel-catering/actions/runs/29706686826) |
+| Canonical checkout (`/home/viktor/projects/silberloeffel-catering`) | `924f1c0ddba34fa7cbe93920ee81e0fc45184646` (behind last verified application commit; not yet fast-forwarded) |
+| Release discipline (proven) | deployment user can direct-push to `main`; prior pushes were not blocked by required green `quality`; branch protection may be absent or the user may have bypass — exact settings require authenticated owner/admin verification (see `docs/runbooks/release-discipline.md`) |
 
-- Tailscale address: `100.109.6.74`
-- SSH user: `viktor`
-- repository: `/home/viktor/projects/silberloeffel-catering`
-- database: `/home/viktor/catering-runtime/core.db`
-- daily backups: `/home/viktor/catering-runtime/backups`
-- production checkout: clean fast-forward of `origin/main`, last verified on
-  2026-07-13; use `git log -1 --oneline` for the current hash
-- kitchen kiosk restarted successfully after the order-feed deployment;
-  office panel and website intake were not restarted
-- kiosk order feed: read-only `GET /api/order-feed?date=YYYY-MM-DD`, private
-  LAN/Tailscale only; deployment smoke checks returned `200`/`400` as expected
-- kiosk pickup signal: **active** since 2026-07-13. The kiosk reads the courier
-  app over loopback, the authenticated refresher logged its first success, and
-  the live process has the expected main thread plus refresher thread
-- kiosk signal configuration: `/etc/catering/kiosk.env`, owner `root:root`,
-  mode `600`; the bearer is absent from the kiosk process arguments
-- courier app test deployment: `/home/viktor/projects/courier-app` at local
-  commit `18b3633`, own database `/home/viktor/courier-runtime/courier.db`,
-  user unit `catering-courier-app.service`, enabled with `Linger=yes`; the
-  checkout and database were clean/healthy and the service had zero restarts
-- courier app source: private `VikJo1978/courier-app`, branch `main`; the full
-  history, Lenovo unit template, runbook notes, and CI workflow are published.
-  Lenovo's dedicated read-only deploy key is registered and a clean fetch of
-  `origin/main` was verified
-- live integration smoke: kiosk HTML `200`, valid/invalid order feed
-  `200`/`400`, unauthenticated/authenticated pickup signal `401`/`200`, and
-  exactly one initial `pickup signal refresh succeeded` transition
-- `PRAGMA quick_check`: `ok` for both Core and courier databases
-- staging-to-Core bridge: **active** since 2026-07-13 for invented test data.
-  The VPS backend reaches the loopback-only website-intake receiver through a
-  restricted reverse-SSH tunnel; the browser receives neither endpoint nor
-  bearer
-- bridge E2E proof: two public submissions with the same namespaced retry key
-  both returned `202` with `forwarded_to_core: true`, while Core and the VPS
-  staging database each contained exactly one row; both databases returned
-  `PRAGMA quick_check: ok`
-- bridge exposure and secret checks: receiver `127.0.0.1:8083`, VPS tunnel
-  `127.0.0.1:18083`, no wildcard tunnel listener, both environment files
-  `root:root` mode `600`, handoff consumed, and no bearer in process arguments
-- office workflow proof: the live panel is active, requires authentication,
-  and reads `/home/viktor/catering-runtime/core.db`; the bridge E2E row appears
-  as a new `website_form` Inquiry with required verification still `pending`
-  and no linked Order. On a SQLite backup copy, the same row rendered in the
-  office queue, remained blocked before verification, then completed the
-  `pending → verified → OrderVersion 1` workflow. Production stayed at zero
-  linked Orders for the test Inquiry
-- daily backup cron: 03:15, 14-day retention, `umask 077`
-- manual cron-equivalent backup verified on 2026-07-12: `ok`, mode `600`
-- encrypted off-host upload cron: 03:25 to VPS, 30-day retention
-- off-host restore drill verified on 2026-07-12: `ok`, row counts `3/1/1`
+**Docs-only commits** (including this operational-truth update) change repository
+HEAD but are **not** application deployments. Production runtime truth below
+remains authoritative until services restart.
 
-Form staging facts:
+## Production runtime truth
 
-- service user: `catering-staging`
-- application: `/opt/catering-staging-site`
-- database: `/var/lib/catering-staging/staging.db`
-- public preview: [http://185.16.60.69:8080/](http://185.16.60.69:8080/)
-- immediate purpose: exercise the already-verified staging-to-Core-to-office
-  Inquiry workflow; replacement website work is currently deferred by the owner
-- 10-user smoke load: 40/40 requests returned `200`; slowest response was
-  approximately `0.153 s`
-- staging inquiry viewer: read-only `/admin`, loopback/SSH-tunnel only
-- Core forwarding health: `core_forwarding: true`; receiver, reverse tunnel,
-  and staging services were all active after the E2E proof
-- no domain and no TLS; fake data only
-- form UX hardening is live: contact-pair precheck, 12-second timeout, stable
-  German errors, and retry-safe preservation of entered values are deployed
+Services load Python from `PYTHONPATH=.../src` at **process start**. Disk
+HEAD and in-memory runtime code diverge until each service restarts.
 
-Offer workflow development:
+| Service | Unit | Runtime commit | Last restart (CEST) | MainPID | Drift vs last verified app code (`cf2edb5`) |
+|---|---|---|---|---|---|
+| Office API | `catering-office-api.service` | `924f1c0ddba34fa7cbe93920ee81e0fc45184646` | 2026-07-20 00:24:32 | 305792 | **2 commits behind** (`5000d6f`, `cf2edb5`) |
+| Office Panel | `catering-office-panel.service` | `924f1c0ddba34fa7cbe93920ee81e0fc45184646` | 2026-07-20 00:24:49 | 305803 | **2 commits behind** |
+| Kitchen kiosk | `catering-kiosk.service` | `02b105246f4801e5732c7d13cfc07ac36a7976b6` | 2026-07-19 06:29:42 | 147681 | **many commits behind** |
+| Website intake | `catering-website-intake.service` | `68a1cb0d79b538f10326aef17653a3590f4e2c04` | 2026-07-13 16:51:09 | 75898 | **many commits behind** |
 
-- the accepted `Inquiry → Angebot` direction is a read-only prefill into the
-  separate configurator; no prices, offer drafts, or automatic customer sends
-  become Core truth
-- the handoff remains dormant until the configurator is deployed and
-  `CONFIGURATOR_URL` is set on the office panel
-- **ADR-013** and **`offer_contract_v1.md`** define the commercial Offer layer
-  between Inquiry and Order (`c2d4b13`)
-- **Offer domain skeleton** is committed: immutable facts, derived lifecycle,
-  eligibility helpers; no stored status, no Order/UI/API coupling (`2431dcf`)
-- **Offer persistence** is committed: SQLite + in-memory repositories,
-  immutability triggers, roundtrip tests; no derived state stored (`64d4f06`)
-- runtime Offer **commands are not implemented yet**; the next slice is
-  `PrepareOfferVersion`, then `RecordSentEvidence`, then `RecordAcceptance`.
-  `ConvertAcceptedOffer` remains a separate boundary with Order
-- ADR-012 fixes the future commercial/payment boundary: `Zahlungsart` is agreed
-  in the Angebot (`Vorkasse`, `Rechnung`, or `Bar vor Ort`), transferred only
-  after Angebot acceptance and Order confirmation, and then drives an Office
-  reminder workflow. A minimal local reminder slice supplies the truthful
-  fallback for legacy/manual Orders without an accepted-offer handoff. The
-  Office Panel remains reminder-only; no invoice document, accounting,
-  banking or automatic matching implementation exists.
+All four units were **active** at verification. Shared DB:
+`/home/viktor/catering-runtime/core.db`.
 
-## Local undeployed development baseline
+### Undeployed application code (on `main` at audit, not in API/Panel runtime)
 
-- Phase 2 (`RemoteCoreClient` and Office Panel direct/remote dual mode) is
-  complete on `origin/main` but has not been deployed. The live Lenovo Office
-  Panel continues to use its existing direct `core.db` mode; no Proxmox cutover
-  has occurred.
-- Phase 3 design is complete locally in
-  `PHASE_3_PRINT_ACK_ATTENTION_PACK_V1.md` (`ce499a2`).
-- Phase 3 Slice 3A is complete on `origin/main` at `707eb5d`: Core kitchen print
-  jobs are an append-only attempt history with additive immutable facts, with
-  persisted deadlines, tracked reprints, pure state derivation and atomic ACK
-  with the existing OrderVersion confirmation fact.
-- Slice 3A adds no Office UI, HTTP API, dashboard integration, kitchen agent,
-  printer integration, heartbeat or external Lenovo monitoring. None of these
-  Phase 3 capabilities is live on Lenovo or Proxmox.
-- The `Truthful open-inquiry queue and conversion gate` slice is on
-  `origin/main` at `67e2990`.
-- Two follow-up Office workflow P0 fixes are on `origin/main` at `20566dd`.
-- The Office Panel UI v2 implementation pack, UI2A foundation, UI2B
-  Arbeitszentrale, UI3 Anfrage detail, and UI4 Auftrag detail presentation
-  slices are on `origin/main` through `fdc0f5b`. They add repo-owned premium
-  presentation behind `OFFICE_UI_VERSION=v2`; `legacy` remains the default.
-  Core routes, commands and workflow gates are unchanged.
-- UI2A–UI4 have not been deployed. The Lenovo Office Panel remains on its
-  existing deployed UI and direct-`core.db` mode.
-- The minimal payment-reminder slice is on `origin/main` at `d210ea8`. It adds
-  one separate `order_payment_reminders` table, one pure derivation and one
-  Order-detail command/block in direct and remote mode. Reminder facts neither
-  block nor advance any OrderVersion, kitchen-print, effective-version,
-  `READY_TO_SEND` or kiosk state. The slice is not deployed.
-- **EMAIL_MVP_1 / outbound pack Slice B1** is **deployed** on production HEAD
-  `bb5d4ae` (Panel integration hotfix included). It freezes a customer-facing
-  Auftragsbestätigung preview from effective OrderVersion facts plus accepted
-  OfferVersion commercial data, persists one immutable snapshot per effective
-  OrderVersion, exposes Core Office API read/preview routes and an Office Panel
-  block (`Vorschau erstellen` / `Vorschau öffnen`). **No real email transport
-  exists in B1.**
-- **EMAIL_MVP_2 / outbound pack Slice B2** (`fake_outbox` test send) is
-  implemented **locally only** (not committed/deployed). It adds immutable
-  `SendAttempt`, `FakeOutboxMessage`, and `SendEvidence`, a synchronous local
-  fake-outbox transport (`real_delivery=false`), duplicate-send protection, Core
-  Office API send/status/inspection routes, and an Office Panel block
-  (`Testversand erzeugen` / `Testversand protokolliert`). **No SMTP, external
-  HTTP mail provider, retries, resend, or background worker.** Real SMTP
-  requires PAUSE/Attention enforcement and a separate security review first.
-- The Offer layer docs, domain skeleton, and SQLite persistence are on
-  `origin/main` through `64d4f06`. No Offer commands, API routes, Office UI,
-  configurator import, or Order conversion exist yet.
+Calendar-week **application** fix is **not deployed**. Office API/Panel runtime
+remains on `924f1c0`.
 
-## Local undeployed quality baseline
+| Commit | Subject | Notes |
+|---|---|---|
+| `5000d6f` | Make dashboard calendar-week parity deterministic | **not deployed** — no restart after push |
+| `cf2edb5` | Align diese-woche panel test with Berlin operating date | **not deployed** — test alignment only; same runtime drift |
 
-- Python tests: **702 passed**
-- coverage gate: **90% minimum**
-- last full-project coverage: **90.5%**
-- website intake receiver coverage: **99.2%**
-- Ruff: clean; format check reported **110 files already formatted**
-- Mypy: clean for **77 source files**
-- Office Panel UI2A browser smoke: 1280/820/620/320 px, no body overflow,
-  no-JS mobile navigation and table-local scrolling verified
-- Office Panel UI2B browser smoke: empty and populated queues, available and
-  unavailable Rückruf service, and direct/remote mode at 1280/820/320 px; no
-  body overflow, and mobile navigation remains locally scrollable
-- staging-form browser tests and Cloudflare Worker sanitizer tests: clean
-- CI: GitHub Actions on every push and pull request
+### Deployed and closed
+
+**CORE_CUSTOMER_IDENTITY_FOUNDATION_V1 — CLOSED**
+
+- Office API and Office Panel restarted on `924f1c0` (2026-07-20 ~00:24 CEST).
+- Production DB has additive schema: `customer_identities`, `phone_contact_points`.
+- Migration markers present (one per component); tables **empty** (0/0).
+- Inquiry/Order row counts unchanged from pre-migration baseline (33/24/33).
+- Rollback backup:
+  `/home/viktor/catering-runtime/backups/core.db.before-customer-identity-20260719T221452Z`
+  (mode 600, integrity ok).
+
+**AUERSWALD_SELF_FAX_CALLBACK_EXCLUSION_V1 — CLOSED**
+
+- Container `auerswald-sync-auerswald-sync-1` running; active `main.py` SHA-256
+  `f6ded6233cd815760a8b417699e868baf3097ea4ee7557d2bad2f30b1835d3b6`.
+- Self-fax excluded from callback board (deployed 2026-07-19).
+
+**Auerswald missed-board compatibility — CLOSED** (runtime stable; Office
+Rückruf pull path operational).
+
+## Production database (aggregate)
+
+| Item | Value |
+|---|---|
+| Path | `/home/viktor/catering-runtime/core.db` |
+| File mode | **644** (open risk — target 600) |
+| Integrity | ok |
+| `customer_identities` | 0 rows |
+| `phone_contact_points` | 0 rows |
+| inquiries / orders / order_versions | **33 / 24 / 33** |
+| `schema_migrations` | **24** (+2 CustomerIdentity markers vs pre-foundation 22) |
+
+## Backups (Core)
+
+| Control | State |
+|---|---|
+| Daily local cron | 03:15, 14-day retention |
+| Encrypted offsite cron | 03:25 |
+| Last verified offsite log | **2026-07-19** (`core-2026-07-19.db.gpg`) |
+| Backup alerting / stale detection | **not implemented** — see `docs/proposals/BACKUP_HEALTH_AND_ALERTING_V1.md` |
+
+Manual restore drill last verified: **2026-07-12**.
+
+## Auerswald runtime
+
+| Item | Value |
+|---|---|
+| Container | `auerswald-sync-auerswald-sync-1` (python:3.12-slim), up ~4h at audit |
+| HubSpot | `HUBSPOT_ACCESS_TOKEN` **present** in container; manual HTTP endpoints in code; **no automated outbound** observed in logs |
+| Auth/direct exposure | accepted operational debt |
+
+Core HubSpot intake remains disabled.
+
+## Courier and Fingerfood
+
+| Project | Repo HEAD | Runtime |
+|---|---|---|
+| Courier (`courier-app`) | `f2c51a0` | `catering-courier-app.service` **inactive** |
+| Fingerfood (`fingerfood-app`) | `74af846` | backup artifacts **2026-07-19**; `fingerfood-backup.timer` **inactive** |
+
+## Quality baseline (repository)
+
+On `cf2edb5` locally and in GitHub Actions: **1376 passed**, coverage **≥90%**,
+Ruff and mypy clean. Documented pre-push gate in
+`docs/runbooks/release-discipline.md`.
+
+## Operational risks (open)
+
+### High — application-code / runtime drift
+
+Last verified application-code commit at audit was `cf2edb5`; Office API/Panel
+runtime is `924f1c0`. Calendar-week application fix is **not deployed**.
+Canonical checkout is also behind that application baseline. A subsequent
+docs-only commit on `main` does not close this drift.
+
+### High — release discipline not server-enforced
+
+Proven: deployment user can direct-push to `main`; prior pushes were not
+blocked by required green `quality`. Branch protection may be absent or bypass
+may apply — exact configuration requires authenticated owner/admin verification.
+Required check target: **`quality`**. Force push must be prohibited. Preferred
+flow: PR + required green `quality` (see release discipline runbook).
+
+### High — no backup health alerting
+
+Cron runs, but failure/stale backup does not notify anyone.
+
+### Accepted — HubSpot credential retained in Auerswald
+
+Token configured; automated outbound not observed. Revoke/remove is a separate slice.
+
+### Accepted — Auerswald direct/auth exposure
+
+Unchanged operational debt.
+
+### Accepted — production `core.db` mode 644
+
+Should be tightened to 600 in a separate controlled slice.
+
+### Accepted — Courier inactive / Fingerfood timer inactive
+
+Non-blocking for Core; noted for operational awareness.
+
+### Accepted — kiosk and website intake stale runtime
+
+Not restarted with recent Core changes; CustomerIdentity bootstrap not invoked there
+(kiosk has no bootstrap helper).
 
 ## Verified recovery controls
 
-Recovery-key protection verified on 2026-07-12:
+Recovery-key protection verified on **2026-07-12** (unchanged):
 
-- working private key remains on the Mac only;
-- a separately password-protected AES-256 recovery archive was created and
-  restore-tested;
-- the owner confirmed an off-device email copy;
-- the archive password is stored separately in macOS Keychain and was cleared
-  from the clipboard;
-- no private key or archive password is present in Git, Lenovo, or VPS.
-
-## Operational risks
-
-### High — the staging form has no HTTPS
-
-The VPS form has only a public IP and plaintext HTTP. Even after the narrow Core
-test bridge is enabled it must receive invented data only. Real customer data
-waits for the domain, TLS, privacy text, and the final protected public path.
-
-### Accepted for testing — no durable intake buffer yet
-
-The current bridge stores its VPS audit row only after Core accepts the
-Inquiry. If Core or the reverse tunnel is unavailable, the browser receives a
-truthful `502` and may retry with the same idempotency key, but the VPS does not
-promise later delivery. This is acceptable for invented test data only.
-
-Before real customer traffic, implement ADR-010's SQLite-backed durable inbox
-and prove outage recovery with exactly-once Core intake.
+- working private key on Mac only;
+- password-protected AES-256 recovery archive restore-tested;
+- no private key or archive password in Git, Lenovo, or VPS.
 
 ## Next milestones
 
-No website implementation is active. The owner deferred replacement-site work
-on 2026-07-13. When that work resumes:
-
-1. Build the replacement customer website on the proven intake path.
-2. Add the ADR-010 durable SQLite intake buffer.
-3. Obtain domain control, add TLS/Cloudflare, and perform the launch test.
+1. **Operational truth docs commit** — this document + runbooks (docs-only; not an application deploy).
+2. **Optional controlled deploy** — restart Office API/Panel to pick up
+   `5000d6f`/`cf2edb5` application code (calendar-week fix only; no schema change).
+3. **Branch protection verification** — owner/admin authenticated review; require green `quality`; block force push.
+4. **BACKUP_HEALTH_AND_ALERTING_V1** — failure/stale notification.
+5. **INQUIRY_CUSTOMER_REFERENCE_AND_SNAPSHOT_V1** — next Core slice after truth docs.
