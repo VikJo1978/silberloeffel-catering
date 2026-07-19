@@ -233,5 +233,81 @@ test ! -e "$dir/courier-20260103T010101Z.tar.gz.gpg" && pass "older courier gpg 
 test -e "$dir/courier-20260104T020202Z.tar.gz.gpg" && pass "newest courier gpg retained" || fail "newest courier gpg pruned"
 rm -rf "$dir"
 
+
+# 21 valid Auerswald gpg
+dir=$(fixture)
+rc=$(run_receiver "put auerswald-20260719T062608Z.tar.gz.gpg" "$dir" "$(put_payload auerswald-gpg)")
+assert_rc "valid Auerswald gpg accepted" 0 "$rc"
+test -f "$dir/auerswald-20260719T062608Z.tar.gz.gpg" && pass "Auerswald final artifact exists" || fail "Auerswald final missing"
+stat -c '%a' "$dir/auerswald-20260719T062608Z.tar.gz.gpg" | grep -qx '600' && pass "Auerswald mode 600" || fail "Auerswald mode not 600"
+rm -rf "$dir"
+
+# 22 valid Auerswald sidecar
+dir=$(fixture)
+rc=$(run_receiver "put auerswald-20260719T062608Z.tar.gz.gpg.sha256" "$dir" "$(printf 'abc123
+')")
+assert_rc "valid Auerswald sidecar accepted" 0 "$rc"
+rm -rf "$dir"
+
+# 23 malformed Auerswald timestamp
+dir=$(fixture)
+rc=$(run_receiver "put auerswald-2026071T062608Z.tar.gz.gpg" "$dir" "$(put_payload bad-ts)")
+assert_rc "malformed Auerswald timestamp rejected" 64 "$rc"
+rm -rf "$dir"
+
+# 24 Auerswald missing .gpg rejected
+dir=$(fixture)
+rc=$(run_receiver "put auerswald-20260719T062608Z.tar.gz" "$dir" "$(put_payload no-gpg)")
+assert_rc "Auerswald missing .gpg rejected" 64 "$rc"
+rm -rf "$dir"
+
+# 25 Auerswald slash rejected
+dir=$(fixture)
+rc=$(run_receiver "put auerswald-2026/evil.tar.gz.gpg" "$dir" "$(put_payload ff-slash)")
+assert_rc "Auerswald slash rejected" 64 "$rc"
+rm -rf "$dir"
+
+# 26 duplicate Auerswald artifact not overwritten
+dir=$(fixture)
+printf 'first' >"$dir/auerswald-20260719T062608Z.tar.gz.gpg"
+chmod 600 "$dir/auerswald-20260719T062608Z.tar.gz.gpg"
+rc=$(run_receiver "put auerswald-20260719T062608Z.tar.gz.gpg" "$dir" "second")
+assert_rc "duplicate Auerswald artifact rejected" 64 "$rc"
+grep -qx 'first' "$dir/auerswald-20260719T062608Z.tar.gz.gpg" && pass "existing Auerswald artifact preserved" || fail "Auerswald artifact overwritten"
+rm -rf "$dir"
+
+# 27 interrupted Auerswald put does not become final
+dir=$(fixture)
+rc=$(run_receiver "put auerswald-20260719T062609Z.tar.gz.gpg" "$dir" </dev/null)
+assert_rc "empty Auerswald upload rejected" 1 "$rc"
+test ! -e "$dir/auerswald-20260719T062609Z.tar.gz.gpg" && pass "no final after empty Auerswald upload" || fail "final appeared after empty upload"
+test -z "$(find "$dir" -maxdepth 1 -name '.auerswald-20260719T062609Z.tar.gz.gpg.*' -print)" && pass "Auerswald partial cleaned" || fail "Auerswald partial left behind"
+rm -rf "$dir"
+
+# 28 Auerswald prune removes only old Auerswald artifacts
+dir=$(fixture)
+touch -d '40 days ago' "$dir/auerswald-20260103T010101Z.tar.gz.gpg"
+touch -d '40 days ago' "$dir/auerswald-20260104T020202Z.tar.gz.gpg"
+touch -d '40 days ago' "$dir/auerswald-20260104T020202Z.tar.gz.gpg.sha256"
+CATERING_BACKUP_RECEIVE_STORAGE=$dir SSH_ORIGINAL_COMMAND=prune sh "$RECEIVER" >/dev/null
+test ! -e "$dir/auerswald-20260103T010101Z.tar.gz.gpg" && pass "older Auerswald gpg pruned" || fail "older Auerswald gpg kept"
+test -e "$dir/auerswald-20260104T020202Z.tar.gz.gpg" && pass "newest Auerswald gpg retained" || fail "newest Auerswald gpg pruned"
+rm -rf "$dir"
+
+# 29 Auerswald prune does not touch Core Courier Fingerfood
+dir=$(fixture)
+touch -d '10 days ago' "$dir/core-2026-06-01.db.gpg"
+touch -d '10 days ago' "$dir/courier-20260602T010101Z.tar.gz.gpg"
+touch -d '10 days ago' "$dir/fingerfood-20260603T010101Z.tar.gz.gpg"
+touch -d '40 days ago' "$dir/auerswald-20260103T010101Z.tar.gz.gpg"
+touch -d '40 days ago' "$dir/auerswald-20260104T020202Z.tar.gz.gpg"
+CATERING_BACKUP_RECEIVE_STORAGE=$dir SSH_ORIGINAL_COMMAND=prune sh "$RECEIVER" >/dev/null
+test -e "$dir/core-2026-06-01.db.gpg" && pass "Core artifact survives Auerswald prune pass" || fail "Core removed by Auerswald prune"
+test -e "$dir/courier-20260602T010101Z.tar.gz.gpg" && pass "Courier artifact survives Auerswald prune pass" || fail "Courier removed by Auerswald prune"
+test -e "$dir/fingerfood-20260603T010101Z.tar.gz.gpg" && pass "Fingerfood artifact survives Auerswald prune pass" || fail "Fingerfood removed by Auerswald prune"
+test -e "$dir/auerswald-20260104T020202Z.tar.gz.gpg" && pass "newest Auerswald gpg retained in mixed prune" || fail "newest Auerswald gpg pruned in mixed prune"
+test ! -e "$dir/auerswald-20260103T010101Z.tar.gz.gpg" && pass "older Auerswald gpg pruned in mixed prune" || fail "older Auerswald gpg kept in mixed prune"
+rm -rf "$dir"
+
 echo "=== summary: pass=$PASS fail=$FAIL ==="
 test "$FAIL" -eq 0

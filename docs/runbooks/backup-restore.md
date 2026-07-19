@@ -281,6 +281,8 @@ Retention is pattern-specific and family-isolated:
 | `courier-…tar.gz.gpg.sha256` | delete after 30 days except sidecar for newest gpg |
 | `fingerfood-…tar.gz.gpg` | delete after 30 days except newest matching artifact |
 | `fingerfood-…tar.gz.gpg.sha256` | delete after 30 days except sidecar for newest gpg |
+| `auerswald-…tar.gz.gpg` | delete after 30 days except newest matching artifact |
+| `auerswald-…tar.gz.gpg.sha256` | delete after 30 days except sidecar for newest gpg |
 | unknown filenames | never deleted by `prune` |
 
 Fingerfood `prune` does not delete Core or Courier artifacts. Core and Courier
@@ -288,3 +290,27 @@ prune passes do not delete Fingerfood artifacts.
 
 Fingerfood scheduling, sender, and restore drills are documented in the
 fingerfood repo runbook.
+
+### Auerswald artifacts (shared VPS receiver)
+
+The canonical receiver additionally accepts Auerswald encrypted bundle names:
+
+```text
+auerswald-YYYYMMDDTHHMMSSZ.tar.gz.gpg
+auerswald-YYYYMMDDTHHMMSSZ.tar.gz.gpg.sha256
+```
+
+Validation rules match Courier and Fingerfood: strict basename, no traversal,
+no whitespace or control characters, no overwrite of an existing final artifact,
+atomic put with 256 MiB cap, final mode `600`.
+
+| Pattern family | Retention behavior |
+|---|---|
+| `auerswald-…tar.gz.gpg` | delete after 30 days except newest matching artifact |
+| `auerswald-…tar.gz.gpg.sha256` | delete after 30 days except sidecar for newest gpg |
+
+Auerswald `prune` does not delete Core, Courier, or Fingerfood artifacts. Other
+family prune passes do not delete Auerswald artifacts.
+
+Auerswald scheduling, sender, and restore drills are documented in the Auerswald
+repo runbook.

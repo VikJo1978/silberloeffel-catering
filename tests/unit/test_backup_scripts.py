@@ -25,6 +25,8 @@ def test_receiver_uses_a_forced_command_allowlist() -> None:
     assert "fingerfood-[0-9][0-9][0-9][0-9]" in source
     assert ".gpg.sha256" in source
     assert "prune_fingerfood_family" in source
+    assert "auerswald-[0-9][0-9][0-9][0-9]" in source
+    assert "prune_auerswald_family" in source
     assert "bs=1048576 count=256" in source
 
 

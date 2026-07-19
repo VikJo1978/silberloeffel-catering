@@ -13,6 +13,8 @@ valid_name() {
         courier-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z.tar.gz.gpg.sha256) return 0 ;;
         fingerfood-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z.tar.gz.gpg) return 0 ;;
         fingerfood-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z.tar.gz.gpg.sha256) return 0 ;;
+        auerswald-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z.tar.gz.gpg) return 0 ;;
+        auerswald-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z.tar.gz.gpg.sha256) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -41,6 +43,21 @@ prune_courier_family() {
     done
 
     for path in $(find "$storage" -maxdepth 1 -type f -name "courier-????????T??????Z.tar.gz.gpg${suffix}" -mtime +30 | LC_ALL=C sort); do
+        if [ -n "$newest" ] && [ "$path" = "$newest" ]; then
+            continue
+        fi
+        rm -f "$path"
+    done
+}
+
+prune_auerswald_family() {
+    suffix=$1
+    newest=
+    for path in $(find "$storage" -maxdepth 1 -type f -name "auerswald-????????T??????Z.tar.gz.gpg${suffix}" | LC_ALL=C sort); do
+        newest=$path
+    done
+
+    for path in $(find "$storage" -maxdepth 1 -type f -name "auerswald-????????T??????Z.tar.gz.gpg${suffix}" -mtime +30 | LC_ALL=C sort); do
         if [ -n "$newest" ] && [ "$path" = "$newest" ]; then
             continue
         fi
@@ -94,6 +111,8 @@ case "$requested" in
         prune_courier_family ".sha256"
         prune_fingerfood_family ""
         prune_fingerfood_family ".sha256"
+        prune_auerswald_family ""
+        prune_auerswald_family ".sha256"
         ;;
     *)
         echo "backup command denied" >&2
