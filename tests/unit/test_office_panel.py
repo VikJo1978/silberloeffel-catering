@@ -22,6 +22,7 @@ from catering_system.repositories.in_memory_inquiry_repository import (
 from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
 )
+from catering_system.ui import office_api_views
 from catering_system.ui.office_panel import (
     OfficePageContext,
     OfficePanel,
@@ -1420,7 +1421,7 @@ def test_full_release_flow_clears_attention_counts(panel: str) -> None:
 def test_diese_woche_shows_only_effective_orders_in_current_iso_week(
     panel: str,
 ) -> None:
-    today = date.today().isoformat()
+    today = office_api_views.berlin_today().isoformat()
     iid = _create_inquiry(panel, event_date=today, location_text="Kielort")
     oid = _convert(panel, iid)
     _status, body = _get(f"{panel}/order/{oid}")
