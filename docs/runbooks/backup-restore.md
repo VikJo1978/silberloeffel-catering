@@ -258,3 +258,33 @@ owned by `catering-backup`. Retention is pattern-specific:
 | unknown filenames | never deleted by `prune` |
 
 Courier scheduling and restore drills are documented in the courier repo runbook.
+
+### Fingerfood artifacts (shared VPS receiver)
+
+The canonical receiver additionally accepts Fingerfood encrypted bundle names:
+
+```text
+fingerfood-YYYYMMDDTHHMMSSZ.tar.gz.gpg
+fingerfood-YYYYMMDDTHHMMSSZ.tar.gz.gpg.sha256
+```
+
+Validation rules match Courier: strict basename, no traversal, no whitespace or
+control characters, no overwrite of an existing final artifact, atomic put with
+256 MiB cap, final mode `600`.
+
+Retention is pattern-specific and family-isolated:
+
+| Pattern family | Retention behavior |
+|---|---|
+| `core-YYYY-MM-DD.db.gpg` | delete after 30 days |
+| `courier-…tar.gz.gpg` | delete after 30 days except newest matching artifact |
+| `courier-…tar.gz.gpg.sha256` | delete after 30 days except sidecar for newest gpg |
+| `fingerfood-…tar.gz.gpg` | delete after 30 days except newest matching artifact |
+| `fingerfood-…tar.gz.gpg.sha256` | delete after 30 days except sidecar for newest gpg |
+| unknown filenames | never deleted by `prune` |
+
+Fingerfood `prune` does not delete Core or Courier artifacts. Core and Courier
+prune passes do not delete Fingerfood artifacts.
+
+Fingerfood scheduling, sender, and restore drills are documented in the
+fingerfood repo runbook.

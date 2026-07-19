@@ -11,6 +11,8 @@ valid_name() {
         core-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].db.gpg) return 0 ;;
         courier-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z.tar.gz.gpg) return 0 ;;
         courier-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z.tar.gz.gpg.sha256) return 0 ;;
+        fingerfood-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z.tar.gz.gpg) return 0 ;;
+        fingerfood-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z.tar.gz.gpg.sha256) return 0 ;;
         *) return 1 ;;
     esac
 }
@@ -39,6 +41,21 @@ prune_courier_family() {
     done
 
     for path in $(find "$storage" -maxdepth 1 -type f -name "courier-????????T??????Z.tar.gz.gpg${suffix}" -mtime +30 | LC_ALL=C sort); do
+        if [ -n "$newest" ] && [ "$path" = "$newest" ]; then
+            continue
+        fi
+        rm -f "$path"
+    done
+}
+
+prune_fingerfood_family() {
+    suffix=$1
+    newest=
+    for path in $(find "$storage" -maxdepth 1 -type f -name "fingerfood-????????T??????Z.tar.gz.gpg${suffix}" | LC_ALL=C sort); do
+        newest=$path
+    done
+
+    for path in $(find "$storage" -maxdepth 1 -type f -name "fingerfood-????????T??????Z.tar.gz.gpg${suffix}" -mtime +30 | LC_ALL=C sort); do
         if [ -n "$newest" ] && [ "$path" = "$newest" ]; then
             continue
         fi
@@ -75,6 +92,8 @@ case "$requested" in
         find "$storage" -maxdepth 1 -type f -name 'core-????-??-??.db.gpg' -mtime +30 -delete
         prune_courier_family ""
         prune_courier_family ".sha256"
+        prune_fingerfood_family ""
+        prune_fingerfood_family ".sha256"
         ;;
     *)
         echo "backup command denied" >&2
