@@ -27,19 +27,40 @@ def fetch_missed_board(
         req.add_header("Authorization", auth)
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-        return data.get("items", []), None
+            raw_body = resp.read().decode("utf-8")
+        try:
+            data = json.loads(raw_body)
+        except json.JSONDecodeError:
+            return None, "invalid JSON in missed-board response"
+        if not isinstance(data, dict):
+            return None, "invalid missed-board response"
+        if "items" not in data:
+            return None, "invalid items in missed-board response"
+        raw_items = data["items"]
+        if raw_items is None or not isinstance(raw_items, list):
+            return None, "invalid items in missed-board response"
+        return raw_items, None
     except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
         return None, str(exc)
 
 
 def count_open_missed_calls(url: str, user: str, password: str) -> int:
-    """Return open missed-call count; 0 when unconfigured or unreachable."""
+    """Return open missed-call count; 0 when unconfigured, unreachable, or empty."""
     if not url:
         return 0
     items, error = fetch_missed_board(url, user, password)
-    if error or not items:
+    if error or items is None:
         return 0
+    return len(items)
+
+
+def fetch_rueckruf_count(url: str, user: str, password: str) -> int | None:
+    """Sidebar badge: None when unconfigured or unreachable; 0 when board is empty."""
+    if not url:
+        return None
+    items, error = fetch_missed_board(url, user, password)
+    if error or items is None:
+        return None
     return len(items)
 
 

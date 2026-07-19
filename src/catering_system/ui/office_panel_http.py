@@ -313,7 +313,7 @@ def make_office_panel_handler(
                     auerswald_url, auerswald_user, auerswald_password
                 )
                 context = OfficePageContext(
-                    rueckruf_count=len(items) if items else None,
+                    rueckruf_count=len(items) if items is not None else None,
                     csrf_token=csrf_token,
                 )
                 self._html(render_rueckruf(items, error, context=context))
@@ -323,7 +323,7 @@ def make_office_panel_handler(
                     auerswald_url, auerswald_user, auerswald_password
                 )
                 context = OfficePageContext(
-                    rueckruf_count=len(items) if items else None,
+                    rueckruf_count=len(items) if items is not None else None,
                     csrf_token=csrf_token,
                 )
                 self._html(

@@ -204,14 +204,10 @@ _OFFICE_SOURCES = ("manual", "phone_by_office", "email", "website_form", "config
 
 
 def fetch_rueckruf_count(url: str, user: str, password: str) -> int | None:
-    """Sidebar badge count. Same source/call as the Rückrufliste page itself
-    (fetch_missed_board) — not a second data source or a new business rule,
-    just its length. None means "show no badge": unconfigured, unreachable,
-    or genuinely zero open callbacks all render the same (nothing to flag)."""
-    items, error = fetch_missed_board(url, user, password)
-    if error or not items:
-        return None
-    return len(items)
+    """Sidebar badge count via integration.auerswald_sync (same missed-board source)."""
+    from catering_system.integration.auerswald_sync import fetch_rueckruf_count as _count
+
+    return _count(url, user, password)
 
 
 _RUECKRUF_SUBTITLE = (
