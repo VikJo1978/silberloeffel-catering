@@ -276,16 +276,19 @@ def test_ready_to_send_false_blocks_with_reason() -> None:
     )
     with patch.object(
         outbound_service._core, "evaluate_ready_to_send", return_value=blocked
-    ):
+    ) as evaluate:
         with pytest.raises(
             OrderConfirmationOutboundBlockedError, match="order_not_ready_to_send"
-        ):
+        ) as caught:
             outbound_service.send_to_fake_outbox(
                 order.order_id,
                 snapshot.document_snapshot_id,
                 version.order_version_id,
                 "office-panel",
             )
+    assert caught.value.blocker_code == "order_not_ready_to_send"
+    assert caught.value.reasons == ("kitchen_print_not_confirmed",)
+    evaluate.assert_called_once_with(order.order_id)
 
 
 def test_operational_pause_blocks_fake_send_via_ready_to_send() -> None:
@@ -301,16 +304,20 @@ def test_operational_pause_blocks_fake_send_via_ready_to_send() -> None:
         command_id="11111111-1111-4111-8111-111111111111",
         expected_latest_pause_event_id=None,
     )
-    with pytest.raises(
-        OrderConfirmationOutboundBlockedError, match="order_not_ready_to_send"
-    ):
-        outbound_service.send_to_fake_outbox(
-            order.order_id,
-            snapshot.document_snapshot_id,
-            version.order_version_id,
-            "office-panel",
-        )
-    assert core.evaluate_ready_to_send(order.order_id).reasons == ("operational_pause",)
+    with patch.object(
+        core, "evaluate_ready_to_send", wraps=core.evaluate_ready_to_send
+    ) as evaluate:
+        with pytest.raises(
+            OrderConfirmationOutboundBlockedError, match="order_not_ready_to_send"
+        ) as caught:
+            outbound_service.send_to_fake_outbox(
+                order.order_id,
+                snapshot.document_snapshot_id,
+                version.order_version_id,
+                "office-panel",
+            )
+    assert caught.value.reasons == ("operational_pause",)
+    evaluate.assert_called_once_with(order.order_id)
 
 
 def test_storniert_order_blocks_send() -> None:

@@ -58,6 +58,14 @@ effective version implies a confirmed kitchen print, so the feed can never
 show an order the kitchen has not released. The implementation delegates to
 the Wochenübersicht week read and filters by date — one set of gates.
 
+An operationally paused order remains in that shared read model. The weekly
+Kiosk HTML marks it as `PAUSIERT`, shows the human-readable pause reason, and
+shows a non-empty pause note as a kitchen hint. The effective OrderVersion
+continues to supply date, time, location and guest data; pause metadata neither
+changes nor replaces that operational version. After resume, the badge, reason
+and hint disappear while the order remains visible. The frozen courier JSON
+shape above is unchanged.
+
 ## Other methods and paths
 
 - `POST`/`PUT`/`DELETE`/`PATCH` → `405` (kiosk is read-only).

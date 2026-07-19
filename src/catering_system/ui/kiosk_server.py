@@ -23,6 +23,7 @@ from catering_system.repositories.order_operational_pause_repository import (
     OrderOperationalPauseRepository,
 )
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
+from catering_system.ui.operational_pause_labels import pause_reason_label
 from catering_system.ui.pickup_signal import (
     PickupSignalRefresher,
     render_pickup_signal_section,
@@ -57,7 +58,16 @@ def render_wochenuebersicht_html(
         guests = (
             str(e.guest_count_estimate) if e.guest_count_estimate is not None else "–"
         )
-        status = "PAUSIERT" if e.operational_pause_active else "–"
+        status = "–"
+        if e.operational_pause_active:
+            status_lines = ["<strong>PAUSIERT</strong>"]
+            reason_label = pause_reason_label(e.operational_pause_reason_code)
+            if reason_label:
+                status_lines.append(f"Grund: {html.escape(reason_label)}")
+            note = (e.operational_pause_note or "").strip()
+            if note:
+                status_lines.append(f"Hinweis: {html.escape(note)}")
+            status = "<br>".join(status_lines)
         rows.append(
             "<tr>"
             f"<td>{weekday} {html.escape(e.event_date.isoformat())}</td>"
@@ -65,7 +75,7 @@ def render_wochenuebersicht_html(
             f"<td>{html.escape(e.location_text)}</td>"
             f"<td>{html.escape(guests)}</td>"
             f"<td>v{e.version_number}</td>"
-            f"<td>{html.escape(status)}</td>"
+            f"<td>{status}</td>"
             "</tr>"
         )
     body = (

@@ -24,6 +24,10 @@ from catering_system.services.order_confirmation_document_service import (
 from catering_system.services.order_confirmation_outbound_service import (
     OutboundSendEligibility,
 )
+from catering_system.ui.operational_pause_labels import (
+    PAUSE_REASON_LABELS,
+    pause_reason_label,
+)
 
 _CONFIRMATION_STATE_LABELS = {
     "nicht_verfuegbar": "Nicht verfügbar",
@@ -63,14 +67,6 @@ _READY_BLOCKER_LABELS = {
         "Eine Änderung wartet noch auf Küchendruck und Wirksamstellung."
     ),
     "operational_pause": "Der Auftrag ist betrieblich pausiert.",
-}
-
-_PAUSE_REASON_LABELS = {
-    "manual_hold": "Manuelle Sperre",
-    "customer_request": "Kundenwunsch",
-    "payment_dispute": "Zahlungsstreit",
-    "operational_review": "Betriebliche Prüfung",
-    "other": "Sonstiges",
 }
 
 _RESUME_REASON_LABELS = {
@@ -748,7 +744,7 @@ def _version_change_form(
 def _pause_reason_select(name: str = "reason_code") -> str:
     options = "".join(
         f'<option value="{_e(code)}">{_e(label)}</option>'
-        for code, label in _PAUSE_REASON_LABELS.items()
+        for code, label in PAUSE_REASON_LABELS.items()
     )
     return f'<select name="{name}" required>{options}</select>'
 
@@ -762,7 +758,7 @@ def _resume_reason_select(name: str = "reason_code") -> str:
 
 
 def _pause_reason_label(code: object) -> str:
-    return _PAUSE_REASON_LABELS.get(str(code), str(code))
+    return pause_reason_label(code)
 
 
 def render_operational_pause_card(

@@ -6,6 +6,7 @@ import json
 import threading
 import urllib.error
 import urllib.request
+from dataclasses import replace
 from datetime import date, datetime, timezone
 
 import pytest
@@ -91,6 +92,60 @@ def test_render_escapes_order_text() -> None:
     page = render_wochenuebersicht_html(view)
     assert "<script>" not in page
     assert "&lt;script&gt;" in page
+
+
+def test_render_active_pause_shows_human_reason_and_note() -> None:
+    repo = _repo_with_effective_order()
+    view = WochenuebersichtService(repo).get_week_overview(_WEEK_YEAR, _WEEK)
+    paused = replace(
+        view.entries[0],
+        operational_pause_active=True,
+        operational_pause_reason_code="customer_request",
+        operational_pause_note="Gästezahl noch offen",
+    )
+    page = render_wochenuebersicht_html(replace(view, entries=(paused,)))
+    assert "PAUSIERT" in page
+    assert "Grund: Kundenwunsch" in page
+    assert "Hinweis: Gästezahl noch offen" in page
+
+
+def test_render_pause_reason_and_note_are_escaped() -> None:
+    repo = _repo_with_effective_order()
+    view = WochenuebersichtService(repo).get_week_overview(_WEEK_YEAR, _WEEK)
+    paused = replace(
+        view.entries[0],
+        operational_pause_active=True,
+        operational_pause_reason_code='<reason data-x="1">',
+        operational_pause_note="<script>alert(1)</script>",
+    )
+    page = render_wochenuebersicht_html(replace(view, entries=(paused,)))
+    assert '<reason data-x="1">' not in page
+    assert "<script>" not in page
+    assert "&lt;reason data-x=&quot;1&quot;&gt;" in page
+    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in page
+
+
+def test_render_pause_without_note_has_no_empty_hint_block() -> None:
+    repo = _repo_with_effective_order()
+    view = WochenuebersichtService(repo).get_week_overview(_WEEK_YEAR, _WEEK)
+    paused = replace(
+        view.entries[0],
+        operational_pause_active=True,
+        operational_pause_reason_code="manual_hold",
+        operational_pause_note="   ",
+    )
+    page = render_wochenuebersicht_html(replace(view, entries=(paused,)))
+    assert "Grund: Manuelle Sperre" in page
+    assert "Hinweis:" not in page
+
+
+def test_render_legacy_active_pause_without_reason_does_not_fail() -> None:
+    repo = _repo_with_effective_order()
+    view = WochenuebersichtService(repo).get_week_overview(_WEEK_YEAR, _WEEK)
+    paused = replace(view.entries[0], operational_pause_active=True)
+    page = render_wochenuebersicht_html(replace(view, entries=(paused,)))
+    assert "PAUSIERT" in page
+    assert "Grund:" not in page
 
 
 @pytest.fixture()

@@ -30,10 +30,13 @@ class WochenuebersichtService:
         self._order_repository = order_repository
         self._pause_repository = pause_repository
 
-    def _operational_pause_active(self, order_id: str) -> bool:
+    def _operational_pause(self, order_id: str) -> tuple[bool, str | None, str | None]:
         if self._pause_repository is None:
-            return False
-        return self._pause_repository.get_active_pause(order_id) is not None
+            return False, None, None
+        active = self._pause_repository.get_active_pause(order_id)
+        if active is None:
+            return False, None, None
+        return True, active.reason_code, active.note
 
     def get_week_overview(self, iso_year: int, iso_week: int) -> Wochenuebersicht:
         entries: list[WochenuebersichtEntry] = []
@@ -48,13 +51,16 @@ class WochenuebersichtService:
                 continue
             if not is_in_iso_week(effective.event_date, iso_year, iso_week):
                 continue
+            pause_active, pause_reason_code, pause_note = self._operational_pause(
+                order.order_id
+            )
             entries.append(
                 entry_from_effective(
                     order,
                     effective,
-                    operational_pause_active=self._operational_pause_active(
-                        order.order_id
-                    ),
+                    operational_pause_active=pause_active,
+                    operational_pause_reason_code=pause_reason_code,
+                    operational_pause_note=pause_note,
                 )
             )
         entries.sort(key=lambda e: (e.event_date, e.time_window_text, e.order_id))

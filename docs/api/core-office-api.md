@@ -106,6 +106,25 @@ Error codes (stable, never free text): `unauthorized`, `not_found`,
 `order_already_paused`, `order_not_paused`,
 `core_busy`, `internal`.
 
+`POST /office/v1/orders/{id}/confirmation-document/send` exposes the fresh
+`READY_TO_SEND` blockers when the send boundary returns
+`order_not_ready_to_send`:
+
+```json
+{
+  "error": "order_not_ready_to_send",
+  "reasons": [
+    "operational_pause"
+  ]
+}
+```
+
+`reasons` is a deterministic array from the same readiness evaluation that
+blocked the send. With simultaneous blockers it contains all current reasons,
+for example `operational_pause` followed by
+`pending_order_version_change`. It contains no exception text or internal
+fields.
+
 The local payment-reminder extension records only the chosen method, external
 invoice reference/dates, paid date and cash-received flag. Its command uses the
 same atomic idempotency ledger as the other Office commands. It neither reads

@@ -57,6 +57,11 @@ class OrderConfirmationOutboundRecipientMissingError(ValueError):
 class OrderConfirmationOutboundBlockedError(ValueError):
     """Send preconditions are not satisfied."""
 
+    def __init__(self, blocker_code: str, *, reasons: tuple[str, ...] = ()) -> None:
+        super().__init__(blocker_code)
+        self.blocker_code = blocker_code
+        self.reasons = reasons
+
 
 class OrderConfirmationOutboundPayloadInvalidError(ValueError):
     """Outbound payload or document hash is invalid."""
@@ -147,18 +152,18 @@ class OrderConfirmationOutboundService:
                 can_send=False,
                 send_summary=self._summary_from_bundle(snapshot, existing),
             )
-        blocker = self._send_blocker(order, snapshot)
+        blocker, evaluation = self._send_blocker(order, snapshot)
         if blocker is not None:
             return OutboundSendEligibility(
                 state=blocker,
                 can_send=False,
                 blocker_code=blocker,
-                ready_to_send=self._core.evaluate_ready_to_send(order_id),
+                ready_to_send=evaluation,
             )
         return OutboundSendEligibility(
             state="testversand_bereit",
             can_send=True,
-            ready_to_send=self._core.evaluate_ready_to_send(order_id),
+            ready_to_send=evaluation,
         )
 
     def send_status(self, order_id: str) -> dict[str, object]:
@@ -219,16 +224,16 @@ class OrderConfirmationOutboundService:
         )
         if existing is not None:
             raise OrderConfirmationOutboundAlreadySentError(document_snapshot_id)
-        blocker = self._send_blocker(order, snapshot)
+        blocker, evaluation = self._send_blocker(order, snapshot)
         if blocker is not None:
             if blocker == "empfaenger_fehlt":
                 raise OrderConfirmationOutboundRecipientMissingError(blocker)
             if blocker == "pending_order_version_change":
                 raise OrderConfirmationOutboundBlockedError(blocker)
             if blocker == "order_not_ready_to_send":
-                evaluation = self._core.evaluate_ready_to_send(order_id)
                 raise OrderConfirmationOutboundBlockedError(
-                    f"{blocker}:{','.join(evaluation.reasons)}"
+                    blocker,
+                    reasons=evaluation.reasons,
                 )
             raise OrderConfirmationOutboundBlockedError(blocker)
         if compute_document_hash(snapshot) != snapshot.document_hash:
@@ -312,26 +317,28 @@ class OrderConfirmationOutboundService:
 
     def _send_blocker(
         self, order: Order, snapshot: OrderConfirmationDocumentSnapshot
-    ) -> str | None:
+    ) -> tuple[str | None, ReadyToSendEvaluation]:
+        evaluation = self._core.evaluate_ready_to_send(order.order_id)
         if order.cancelled_at is not None:
-            return "order_storniert"
+            return "order_storniert", evaluation
         if order.effective_order_version_id is None:
-            return "confirmation_document_not_current"
+            return "confirmation_document_not_current", evaluation
         if snapshot.order_version_id != order.effective_order_version_id:
-            return "confirmation_document_not_current"
+            return "confirmation_document_not_current", evaluation
+        if snapshot.recipient_status != "ready":
+            return "empfaenger_fehlt", evaluation
+        if not _email_syntax_ok(snapshot.recipient_email):
+            return "empfaenger_fehlt", evaluation
+        if "operational_pause" in evaluation.reasons:
+            return "order_not_ready_to_send", evaluation
         if order.candidate_order_version_id is not None:
-            return "pending_order_version_change"
+            return "pending_order_version_change", evaluation
         version = self._orders.get_order_version(order.effective_order_version_id)
         if version is None or version.kitchen_print_confirmed_at is None:
-            return "kitchen_print_not_confirmed"
-        if snapshot.recipient_status != "ready":
-            return "empfaenger_fehlt"
-        if not _email_syntax_ok(snapshot.recipient_email):
-            return "empfaenger_fehlt"
-        evaluation = self._core.evaluate_ready_to_send(order.order_id)
+            return "kitchen_print_not_confirmed", evaluation
         if not evaluation.ready:
-            return "order_not_ready_to_send"
-        return None
+            return "order_not_ready_to_send", evaluation
+        return None, evaluation
 
     def _summary_from_bundle(
         self,

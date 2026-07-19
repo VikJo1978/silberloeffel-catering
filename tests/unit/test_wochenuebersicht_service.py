@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from uuid import uuid4
 
 from catering_system.domain.inquiry import (
     CALL_VERIFICATION_STATUSES,
@@ -12,6 +13,9 @@ from catering_system.domain.inquiry import (
 )
 from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
+)
+from catering_system.repositories.in_memory_order_operational_pause_repository import (
+    InMemoryOrderOperationalPauseRepository,
 )
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
@@ -48,11 +52,12 @@ def _setup() -> tuple[
     WochenuebersichtService,
 ]:
     repo = InMemoryOrderRepository()
+    pauses = InMemoryOrderOperationalPauseRepository()
     return (
         repo,
         OrderService(repo),
-        OperationalCoreService(repo),
-        WochenuebersichtService(repo),
+        OperationalCoreService(repo, pause_repository=pauses),
+        WochenuebersichtService(repo, pause_repository=pauses),
     )
 
 
@@ -170,6 +175,61 @@ def test_overview_read_is_pure() -> None:
     before = repo.get_order(oid)
     week.get_week_overview(_WEEK_YEAR, _WEEK)
     assert repo.get_order(oid) == before
+
+
+def test_pause_projection_follows_effective_v2_and_disappears_after_resume() -> None:
+    _repo, osvc, core, week = _setup()
+    order, v1 = osvc.convert_inquiry_to_order(_inquiry(date(2026, 10, 1)))
+    core.confirm_kitchen_print(order.order_id, v1.order_version_id)
+    core.make_order_version_effective(order.order_id, v1.order_version_id)
+    v2 = osvc.propose_order_version_change(
+        order.order_id,
+        event_date=date(2026, 10, 2),
+        time_window_text="abends",
+        location_text="Kiel",
+        guest_count_estimate=40,
+        planning_mode=PLANNING_MODES[0],
+        actor_reference="office-panel",
+        change_reason="Termin verschoben",
+    )
+    core.confirm_kitchen_print(order.order_id, v2.order_version_id)
+    core.make_order_version_effective(order.order_id, v2.order_version_id)
+    pause = core.pause_order(
+        order.order_id,
+        reason_code="customer_request",
+        note="Gästezahl noch offen",
+        actor_reference="office-panel",
+        command_id=str(uuid4()),
+        expected_latest_pause_event_id=None,
+    )
+
+    weekly = week.get_week_overview(_WEEK_YEAR, _WEEK)
+    daily = week.get_day_overview(v2.event_date)
+    assert len(weekly.entries) == 1
+    entry = weekly.entries[0]
+    assert daily == (entry,)
+    assert entry.effective_order_version_id == v2.order_version_id
+    assert entry.event_date == date(2026, 10, 2)
+    assert entry.location_text == "Kiel"
+    assert entry.operational_pause_active is True
+    assert entry.operational_pause_reason_code == "customer_request"
+    assert entry.operational_pause_note == "Gästezahl noch offen"
+
+    core.resume_order(
+        order.order_id,
+        reason_code="operator_cleared",
+        note=None,
+        actor_reference="office-panel",
+        command_id=str(uuid4()),
+        expected_current_pause_event_id=pause.pause_event_id,
+        expected_latest_pause_event_id=pause.pause_event_id,
+    )
+    resumed = week.get_week_overview(_WEEK_YEAR, _WEEK)
+    assert len(resumed.entries) == 1
+    assert resumed.entries[0].effective_order_version_id == v2.order_version_id
+    assert resumed.entries[0].operational_pause_active is False
+    assert resumed.entries[0].operational_pause_reason_code is None
+    assert resumed.entries[0].operational_pause_note is None
 
 
 # --- get_day_overview (KIOSK_ORDER_FEED_PACK_V1 §4) ---

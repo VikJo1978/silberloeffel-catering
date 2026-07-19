@@ -148,11 +148,19 @@ _EnumValue = TypeVar("_EnumValue", bound=str)
 
 
 class ApiError(Exception):
-    def __init__(self, status: int, code: str, retry_after: bool = False) -> None:
+    def __init__(
+        self,
+        status: int,
+        code: str,
+        retry_after: bool = False,
+        *,
+        reasons: tuple[str, ...] | None = None,
+    ) -> None:
         super().__init__(code)
         self.status = status
         self.code = code
         self.retry_after = retry_after
+        self.reasons = reasons
 
 
 def _invalid() -> ApiError:
@@ -1582,16 +1590,19 @@ class OfficeApi:
         except OrderConfirmationOutboundPayloadInvalidError as exc:
             raise ApiError(422, "outbound_payload_invalid") from exc
         except OrderConfirmationOutboundBlockedError as exc:
-            message = str(exc)
-            if message == "pending_order_version_change":
+            if exc.blocker_code == "pending_order_version_change":
                 raise ApiError(422, "pending_order_version_change") from exc
-            if message == "kitchen_print_not_confirmed":
+            if exc.blocker_code == "kitchen_print_not_confirmed":
                 raise ApiError(422, "kitchen_print_not_confirmed") from exc
-            if message == "order_storniert":
+            if exc.blocker_code == "order_storniert":
                 raise ApiError(422, "order_storniert") from exc
-            if message.startswith("order_not_ready_to_send:"):
-                raise ApiError(422, "order_not_ready_to_send") from exc
-            if message == "confirmation_document_not_current":
+            if exc.blocker_code == "order_not_ready_to_send":
+                raise ApiError(
+                    422,
+                    "order_not_ready_to_send",
+                    reasons=exc.reasons,
+                ) from exc
+            if exc.blocker_code == "confirmation_document_not_current":
                 raise ApiError(409, "confirmation_document_not_current") from exc
             raise ApiError(422, "confirmation_document_blocked") from exc
         summary = result.summary
@@ -2086,8 +2097,18 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             self.end_headers()
             self.wfile.write(payload)
 
-        def _error(self, status: int, code: str, *, retry_after: bool = False) -> None:
-            self._respond(status, {"error": code}, retry_after=retry_after)
+        def _error(
+            self,
+            status: int,
+            code: str,
+            *,
+            retry_after: bool = False,
+            reasons: tuple[str, ...] | None = None,
+        ) -> None:
+            body: dict[str, object] = {"error": code}
+            if reasons is not None:
+                body["reasons"] = list(reasons)
+            self._respond(status, body, retry_after=retry_after)
 
         def _authorized(self) -> bool:
             presented = self.headers.get("Authorization", "")
@@ -2218,7 +2239,7 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
                 _log.info("command busy route=%s", template)
                 self._error(503, "core_busy", retry_after=True)
             except ApiError as exc:
-                self._error(exc.status, exc.code)
+                self._error(exc.status, exc.code, reasons=exc.reasons)
             except Exception:
                 _log.exception("internal error route=%s", template)
                 self._error(500, "internal")

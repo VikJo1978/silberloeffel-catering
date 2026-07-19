@@ -3271,6 +3271,60 @@ def _confirmation_fake_outbox_url(base: str, order_id: str) -> str:
     return f"{base}/office/v1/orders/{order_id}/confirmation-document/fake-outbox"
 
 
+def _pause_order_via_api(base: str, order_id: str) -> dict[str, object]:
+    detail = _get(f"{base}/office/v1/orders/{order_id}")[1]
+    status, body, _headers = _post(
+        f"{base}/office/v1/orders/{order_id}/pause",
+        args={
+            "reason_code": "operational_review",
+            "note": "API acceptance test",
+            "actor_reference": "office-api-test",
+        },
+        expect={
+            "operational_pause_active": False,
+            "latest_pause_event_id": detail["operational_pause"][
+                "latest_pause_event_id"
+            ],
+        },
+    )
+    assert status == 200
+    return body["operational_pause"]
+
+
+def _resume_order_via_api(
+    base: str, order_id: str, pause: dict[str, object]
+) -> dict[str, object]:
+    status, body, _headers = _post(
+        f"{base}/office/v1/orders/{order_id}/resume",
+        args={
+            "reason_code": "operator_cleared",
+            "note": "API acceptance test complete",
+            "actor_reference": "office-api-test",
+        },
+        expect={
+            "operational_pause_active": True,
+            "current_pause_event_id": pause["current_pause_event_id"],
+            "latest_pause_event_id": pause["latest_pause_event_id"],
+        },
+    )
+    assert status == 200
+    return body["operational_pause"]
+
+
+def _outbound_counts_for_snapshot(db: Path, snapshot_id: str) -> tuple[int, int, int]:
+    with sqlite3.connect(db) as conn:
+        return conn.execute(
+            "SELECT "
+            "(SELECT COUNT(*) FROM order_confirmation_send_attempts "
+            " WHERE document_snapshot_id = ?), "
+            "(SELECT COUNT(*) FROM order_confirmation_fake_outbox_messages "
+            " WHERE document_snapshot_id = ?), "
+            "(SELECT COUNT(*) FROM order_confirmation_send_evidence "
+            " WHERE document_snapshot_id = ?)",
+            (snapshot_id, snapshot_id, snapshot_id),
+        ).fetchone()
+
+
 def _prepare_confirmation_snapshot(
     api: tuple[str, dict[str, str], Path],
 ) -> tuple[str, str, str]:
@@ -3359,6 +3413,105 @@ def test_confirmation_outbound_send_status_and_payload(api) -> None:
         ).fetchone()[0] == 1
     finally:
         conn.close()
+
+
+def test_paused_confirmation_send_returns_ready_reasons_and_writes_nothing(
+    api,
+) -> None:
+    base, _ids, db = api
+    order_id, order_version_id, snapshot_id = _prepare_confirmation_snapshot(api)
+    _pause_order_via_api(base, order_id)
+    command_id = str(uuid.uuid4())
+
+    responses = []
+    for _round in range(2):
+        status, body, _headers = _post(
+            _confirmation_send_url(base, order_id),
+            args={
+                "document_snapshot_id": snapshot_id,
+                "requested_by": "office-api-test",
+            },
+            expect={"current_effective_order_version_id": order_version_id},
+            command_id=command_id,
+        )
+        assert status == 422
+        assert body == {
+            "error": "order_not_ready_to_send",
+            "reasons": ["operational_pause"],
+        }
+        responses.append(body)
+
+    assert responses[0] == responses[1]
+    assert _outbound_counts_for_snapshot(db, snapshot_id) == (0, 0, 0)
+    with sqlite3.connect(db) as conn:
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM office_api_commands WHERE command_id = ?",
+                (command_id,),
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def test_paused_candidate_send_returns_all_ready_reasons_in_stable_order(api) -> None:
+    base, _ids, db = api
+    order_id, order_version_id, snapshot_id = _prepare_confirmation_snapshot(api)
+    _pause_order_via_api(base, order_id)
+    status, candidate, _headers = _post(
+        f"{base}/office/v1/orders/{order_id}/versions",
+        args={
+            "event_date": "2026-10-03",
+            "time_window_text": "abends",
+            "location_text": "Hamburg",
+            "guest_count_estimate": 40,
+            "planning_mode": "caterer_suggestion",
+        },
+        expect={
+            "latest_version_number": 1,
+            "current_effective_order_version_id": order_version_id,
+            "current_candidate_order_version_id": None,
+        },
+    )
+    assert status == 201
+    assert candidate["version_number"] == 2
+
+    status, body, _headers = _post(
+        _confirmation_send_url(base, order_id),
+        args={
+            "document_snapshot_id": snapshot_id,
+            "requested_by": "office-api-test",
+        },
+        expect={"current_effective_order_version_id": order_version_id},
+    )
+    assert status == 422
+    assert body == {
+        "error": "order_not_ready_to_send",
+        "reasons": ["operational_pause", "pending_order_version_change"],
+    }
+    assert _outbound_counts_for_snapshot(db, snapshot_id) == (0, 0, 0)
+
+
+def test_confirmation_send_succeeds_after_pause_is_resumed(api) -> None:
+    base, _ids, db = api
+    order_id, order_version_id, snapshot_id = _prepare_confirmation_snapshot(api)
+    pause = _pause_order_via_api(base, order_id)
+    resumed = _resume_order_via_api(base, order_id, pause)
+    assert resumed["active"] is False
+
+    status, detail, _headers = _get(f"{base}/office/v1/orders/{order_id}")
+    assert status == 200
+    assert detail["ready_to_send"] == {"ready": True, "reasons": []}
+    status, sent, _headers = _post(
+        _confirmation_send_url(base, order_id),
+        args={
+            "document_snapshot_id": snapshot_id,
+            "requested_by": "office-api-test",
+        },
+        expect={"current_effective_order_version_id": order_version_id},
+    )
+    assert status == 201
+    assert sent["real_delivery"] is False
+    assert _outbound_counts_for_snapshot(db, snapshot_id) == (1, 1, 1)
 
 
 def test_confirmation_outbound_missing_recipient_returns_422(api) -> None:
