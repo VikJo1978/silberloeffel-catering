@@ -21,6 +21,8 @@ def test_receiver_uses_a_forced_command_allowlist() -> None:
     assert "prune)" in source
     assert "backup command denied" in source
     assert "core-[0-9][0-9][0-9][0-9]-" in source
+    assert "courier-[0-9][0-9][0-9][0-9]" in source
+    assert ".gpg.sha256" in source
     assert "bs=1048576 count=256" in source
 
 

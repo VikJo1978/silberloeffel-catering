@@ -224,3 +224,37 @@ For every restore, record:
 - Git commit running after restore;
 - `quick_check` result;
 - office/kiosk smoke-test result.
+
+### Courier artifacts (shared VPS receiver)
+
+Canonical receiver source:
+
+```text
+infra/backup/catering-backup-receive.sh
+```
+
+Live VPS path:
+
+```text
+/usr/local/sbin/catering-backup-receive
+```
+
+The receiver still serves the Core contract unchanged. It additionally accepts
+Courier encrypted bundle names:
+
+```text
+courier-YYYYMMDDTHHMMSSZ.tar.gz.gpg
+courier-YYYYMMDDTHHMMSSZ.tar.gz.gpg.sha256
+```
+
+Storage boundary remains `/var/lib/catering-backup/files` with mode `600` files
+owned by `catering-backup`. Retention is pattern-specific:
+
+| Pattern family | Retention behavior |
+|---|---|
+| `core-YYYY-MM-DD.db.gpg` | delete after 30 days |
+| `courier-…tar.gz.gpg` | delete after 30 days except newest matching artifact |
+| `courier-…tar.gz.gpg.sha256` | delete after 30 days except sidecar for newest gpg |
+| unknown filenames | never deleted by `prune` |
+
+Courier scheduling and restore drills are documented in the courier repo runbook.
