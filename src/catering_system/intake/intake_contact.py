@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from catering_system.domain.inquiry import Inquiry
+from catering_system.domain.phone_normalization import normalize_phone
 
 _INTAKE_LABELS = frozenset(
     {"Firma", "Name", "Veranstaltungsart", "Telefon", "E-Mail", "Wunsch"}
@@ -31,23 +32,6 @@ def normalize_email(raw: str | None) -> str:
     if not value or "@" not in value:
         return ""
     return value.casefold()
-
-
-def normalize_phone(raw: str | None) -> str:
-    value = (raw or "").strip()
-    if not value:
-        return ""
-    plus = value.startswith("+")
-    digits = "".join(ch for ch in value if ch.isdigit())
-    if not digits:
-        return ""
-    if plus:
-        return f"+{digits}"
-    if digits.startswith("00"):
-        return f"+{digits[2:]}"
-    if digits.startswith("0"):
-        return f"+49{digits[1:]}"
-    return digits
 
 
 def parse_intake_contact(inquiry: Inquiry) -> dict[str, str | None]:

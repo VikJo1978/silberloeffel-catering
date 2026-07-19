@@ -2936,9 +2936,13 @@ def main() -> None:
         from catering_system.repositories.sqlite_catalog_repository import (
             SQLiteCatalogRepository,
         )
+        from catering_system.repositories.bootstrap_customer_identity_schema import (
+            bootstrap_customer_identity_schema,
+        )
 
         connection = open_core_connection(args.db)
         inquiry_repo = SQLiteInquiryRepository.from_connection(connection)
+        bootstrap_customer_identity_schema(connection)
         order_repo = SQLiteOrderRepository.from_connection(connection)
         offer_repo = SQLiteOfferRepository.from_connection(connection)
         catalog_repo = SQLiteCatalogRepository.from_connection(connection)

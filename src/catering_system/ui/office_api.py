@@ -68,6 +68,9 @@ from catering_system.repositories.sqlite_offer_repository import (
 from catering_system.repositories.sqlite_catalog_repository import (
     SQLiteCatalogRepository,
 )
+from catering_system.repositories.bootstrap_customer_identity_schema import (
+    bootstrap_customer_identity_schema,
+)
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
@@ -367,6 +370,7 @@ class OfficeApi:
     def __init__(self, connection: sqlite3.Connection) -> None:
         self._conn = connection
         self.inquiries = SQLiteInquiryRepository.from_connection(connection)
+        bootstrap_customer_identity_schema(connection)
         self.orders = SQLiteOrderRepository.from_connection(connection)
         self.offers = SQLiteOfferRepository.from_connection(connection)
         self.catalog = SQLiteCatalogRepository.from_connection(connection)

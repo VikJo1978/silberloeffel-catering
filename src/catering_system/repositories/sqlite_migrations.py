@@ -62,6 +62,20 @@ def apply_migrations(
             continue
         connection.execute("BEGIN IMMEDIATE")
         try:
+            existing = connection.execute(
+                "SELECT name FROM schema_migrations "
+                "WHERE component = ? AND version = ?",
+                (component, version),
+            ).fetchone()
+            if existing is not None:
+                if existing[0] != name:
+                    raise RuntimeError(
+                        f"{component} migration {version} name mismatch: "
+                        f"database={existing[0]!r}, code={name!r}"
+                    )
+                connection.rollback()
+                applied[version] = name
+                continue
             apply(connection)
             connection.execute(
                 "INSERT INTO schema_migrations "
@@ -69,8 +83,20 @@ def apply_migrations(
                 "VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
                 (component, version, name),
             )
+        except sqlite3.IntegrityError:
+            connection.rollback()
+            existing = connection.execute(
+                "SELECT name FROM schema_migrations "
+                "WHERE component = ? AND version = ?",
+                (component, version),
+            ).fetchone()
+            if existing is None or existing[0] != name:
+                raise
+            applied[version] = name
+            continue
         except Exception:
             connection.rollback()
             raise
         else:
             connection.commit()
+            applied[version] = name
