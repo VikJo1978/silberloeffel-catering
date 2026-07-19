@@ -171,7 +171,7 @@ def validate_offer_snapshot(
     if snapshot_hash != computed_hash:
         raise ValueError("snapshot_hash mismatch")
 
-    envelope = dict(
+    snapshot = OfferSnapshotV2(
         schema_version=schema_version,
         source=source,
         source_draft_id=source_draft_id,
@@ -189,8 +189,24 @@ def validate_offer_snapshot(
         variants=variants,
     )
     if v2:
-        return OfferSnapshotV2(**envelope)
-    return OfferSnapshotV1(**envelope)
+        return snapshot
+    return OfferSnapshotV1(
+        schema_version=snapshot.schema_version,
+        source=snapshot.source,
+        source_draft_id=snapshot.source_draft_id,
+        inquiry_id=snapshot.inquiry_id,
+        snapshot_id=snapshot.snapshot_id,
+        snapshot_hash=snapshot.snapshot_hash,
+        snapshot_created_at=snapshot.snapshot_created_at,
+        valid_until=snapshot.valid_until,
+        currency=snapshot.currency,
+        recipient=snapshot.recipient,
+        event=snapshot.event,
+        customer_text=snapshot.customer_text,
+        payment_terms=snapshot.payment_terms,
+        calculator=snapshot.calculator,
+        variants=snapshot.variants,
+    )
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:

@@ -428,7 +428,10 @@ def test_offer_detail_schema_prepared(api) -> None:
 def test_offer_detail_schema_sent(api) -> None:
     base, _ids, _db = api
     offer_id, version_id = _prepare_offer(api)
-    assert _post(_mark_sent_url(base, offer_id, version_id), args=_MARK_SENT_ARGS)[0] == 200
+    assert (
+        _post(_mark_sent_url(base, offer_id, version_id), args=_MARK_SENT_ARGS)[0]
+        == 200
+    )
     status, body, _h = _get(f"{base}/office/v1/offers/{offer_id}")
     assert status == 200
     assert body["commercial_state"] == "Sent"
@@ -551,16 +554,12 @@ def test_list_emails_email_source_only(api, tmp_path: Path) -> None:
     assert row["subject"] == "Sommerfest"
     assert row["preview"] == "E-Mail: mail@example.invalid"
     assert row["sender_email"] == "mail@example.invalid"
-    assert ids["inquiry_website"] not in {
-        item["inquiry_id"] for item in body["emails"]
-    }
+    assert ids["inquiry_website"] not in {item["inquiry_id"] for item in body["emails"]}
 
 
 def test_email_detail_not_found(api) -> None:
     base, ids, _db = api
-    status, body, _h = _get(
-        f"{base}/office/v1/emails/{ids['inquiry_convertible']}"
-    )
+    status, body, _h = _get(f"{base}/office/v1/emails/{ids['inquiry_convertible']}")
     assert status == 404
     assert body["error"] == "not_found"
 
@@ -574,9 +573,7 @@ def test_list_tasks_schema(api) -> None:
 
 def test_list_calendar_schema(api) -> None:
     base, ids, _db = api
-    status, body, _h = _get(
-        f"{base}/office/v1/calendar?from=2026-10-01&to=2026-10-31"
-    )
+    status, body, _h = _get(f"{base}/office/v1/calendar?from=2026-10-01&to=2026-10-31")
     assert status == 200
     assert isinstance(body["entries"], list)
     assert len(body["entries"]) == 5
@@ -1325,13 +1322,15 @@ def test_order_operational_pause_and_resume_commands(api) -> None:
         command_id=command_id,
     )
     assert status == 200
-    assert set(body) == {"command_id", "order_id", "pause_event_id", "operational_pause"}
+    assert set(body) == {
+        "command_id",
+        "order_id",
+        "pause_event_id",
+        "operational_pause",
+    }
     assert body["operational_pause"]["active"] is True
     assert body["operational_pause"]["reason_code"] == "manual_hold"
-    assert (
-        body["operational_pause"]["current_pause_event_id"]
-        == body["pause_event_id"]
-    )
+    assert body["operational_pause"]["current_pause_event_id"] == body["pause_event_id"]
     status2, body2, _h = _post(
         pause_url,
         args=pause_args,
@@ -1373,7 +1372,9 @@ def test_order_operational_pause_and_resume_commands(api) -> None:
         args={"reason_code": "manual_hold"},
         expect={
             "operational_pause_active": True,
-            "latest_pause_event_id": detail["operational_pause"]["latest_pause_event_id"],
+            "latest_pause_event_id": detail["operational_pause"][
+                "latest_pause_event_id"
+            ],
         },
     )
     assert (status, body["error"]) == (409, "order_already_paused")
@@ -1449,7 +1450,9 @@ def test_pause_aba_stale_expect_after_resume_cycle(api) -> None:
         args={"reason_code": "customer_request"},
         expect={
             "operational_pause_active": False,
-            "latest_pause_event_id": detail["operational_pause"]["latest_pause_event_id"],
+            "latest_pause_event_id": detail["operational_pause"][
+                "latest_pause_event_id"
+            ],
         },
     )
     assert status == 200
@@ -1917,7 +1920,9 @@ def _valid_offer_snapshot(*, inquiry_id: str) -> dict[str, object]:
     return payload
 
 
-def _valid_offer_snapshot_v2(*, inquiry_id: str, unit_net_cents: int = 1200) -> dict[str, object]:
+def _valid_offer_snapshot_v2(
+    *, inquiry_id: str, unit_net_cents: int = 1200
+) -> dict[str, object]:
     net = unit_net_cents * 10
     vat = (net * 7) // 100
     gross = net + vat
@@ -2041,9 +2046,7 @@ def test_prepare_offer_happy_path_and_replay(api) -> None:
     snapshot = _valid_offer_snapshot(inquiry_id=inquiry_id)
     command_id = str(uuid.uuid4())
 
-    status, body, _h = _post(
-        url, args={"snapshot": snapshot}, command_id=command_id
-    )
+    status, body, _h = _post(url, args={"snapshot": snapshot}, command_id=command_id)
     assert status == 201
     assert set(body) == {
         "command_id",
@@ -2053,9 +2056,7 @@ def test_prepare_offer_happy_path_and_replay(api) -> None:
     }
     assert body["snapshot_id"] == _SNAPSHOT_ID
 
-    status2, body2, _h = _post(
-        url, args={"snapshot": snapshot}, command_id=command_id
-    )
+    status2, body2, _h = _post(url, args={"snapshot": snapshot}, command_id=command_id)
     assert (status2, body2) == (status, body)
 
     offers = SQLiteOfferRepository(db)
@@ -2114,9 +2115,7 @@ def test_prepare_offer_same_command_id_different_snapshot_conflicts(api) -> None
     second = _valid_offer_snapshot(inquiry_id=inquiry_id)
     second["snapshot_id"] = "99999999-9999-4999-8999-999999999991"
     second["snapshot_hash"] = compute_snapshot_hash(second)
-    status, body, _h = _post(
-        url, args={"snapshot": second}, command_id=command_id
-    )
+    status, body, _h = _post(url, args={"snapshot": second}, command_id=command_id)
     assert (status, body["error"]) == (409, "command_id_conflict")
 
 
@@ -2265,15 +2264,16 @@ _RECORD_ACCEPTANCE_ARGS = {
 
 
 def _record_acceptance_url(base: str, offer_id: str, version_id: str) -> str:
-    return (
-        f"{base}/office/v1/offers/{offer_id}/versions/{version_id}/record-acceptance"
-    )
+    return f"{base}/office/v1/offers/{offer_id}/versions/{version_id}/record-acceptance"
 
 
 def _prepare_and_send(api: tuple[str, dict[str, str], Path]) -> tuple[str, str]:
     base, _ids, _db = api
     offer_id, version_id = _prepare_offer(api)
-    assert _post(_mark_sent_url(base, offer_id, version_id), args=_MARK_SENT_ARGS)[0] == 200
+    assert (
+        _post(_mark_sent_url(base, offer_id, version_id), args=_MARK_SENT_ARGS)[0]
+        == 200
+    )
     return offer_id, version_id
 
 
@@ -2397,7 +2397,9 @@ def test_record_acceptance_failure_leaves_no_acceptance_or_ledger(api) -> None:
     assert ledger_count == 0
 
 
-def _prepare_send_accept(api: tuple[str, dict[str, str], Path]) -> tuple[str, str, str, str]:
+def _prepare_send_accept(
+    api: tuple[str, dict[str, str], Path],
+) -> tuple[str, str, str, str]:
     base, _ids, _db = api
     offer_id, version_id = _prepare_and_send(api)
     status, body, _h = _post(
@@ -2409,9 +2411,7 @@ def _prepare_send_accept(api: tuple[str, dict[str, str], Path]) -> tuple[str, st
 
 
 def _convert_accepted_url(base: str, offer_id: str, version_id: str) -> str:
-    return (
-        f"{base}/office/v1/offers/{offer_id}/versions/{version_id}/convert-accepted"
-    )
+    return f"{base}/office/v1/offers/{offer_id}/versions/{version_id}/convert-accepted"
 
 
 def test_convert_accepted_happy_path_and_replay(api) -> None:
@@ -2645,9 +2645,7 @@ def test_list_catalog_dishes_parses_boolean_query(
         name="Inaktives Gericht",
         active=False,
     )
-    status, body, _h = _get(
-        f"{base}/office/v1/catalog/dishes?active_only={value}"
-    )
+    status, body, _h = _get(f"{base}/office/v1/catalog/dishes?active_only={value}")
     assert status == 200
     returned_ids = {row["dish_id"] for row in body["dishes"]}
     assert _CATALOG_DISH_ID in returned_ids
@@ -2656,18 +2654,14 @@ def test_list_catalog_dishes_parses_boolean_query(
 
 def test_list_catalog_dishes_rejects_invalid_boolean_query(api) -> None:
     base, _ids, _db = api
-    status, body, _h = _get(
-        f"{base}/office/v1/catalog/dishes?active_only=maybe"
-    )
+    status, body, _h = _get(f"{base}/office/v1/catalog/dishes?active_only=maybe")
     assert (status, body["error"]) == (400, "invalid_request")
 
 
 def test_catalog_dish_detail_schema(api) -> None:
     base, _ids, db = api
     _seed_catalog_dish(db)
-    status, body, _h = _get(
-        f"{base}/office/v1/catalog/dishes/{_CATALOG_DISH_ID}"
-    )
+    status, body, _h = _get(f"{base}/office/v1/catalog/dishes/{_CATALOG_DISH_ID}")
     assert status == 200
     assert body["name"] == "Kartoffelsalat"
     assert body["price_history"] == []
@@ -2932,7 +2926,12 @@ def test_confirmation_document_post_create_get_and_replay(api) -> None:
         command_id=command_id,
     )
     assert status == 201
-    assert set(created) == {"command_id", "order_id", "document_snapshot_id", "snapshot"}
+    assert set(created) == {
+        "command_id",
+        "order_id",
+        "document_snapshot_id",
+        "snapshot",
+    }
     assert created["order_id"] == order_id
     snapshot = created["snapshot"]
     assert snapshot["order_version_id"] == order_version_id
@@ -2981,9 +2980,7 @@ def test_confirmation_document_get_not_found_cases(api) -> None:
     )
     snapshot_id = created["document_snapshot_id"]
 
-    status, body, _h = _get(
-        _confirmation_document_url(base, str(uuid.uuid4()))
-    )
+    status, body, _h = _get(_confirmation_document_url(base, str(uuid.uuid4())))
     assert (status, body["error"]) == (404, "not_found")
 
     status, body, _h = _get(
@@ -3078,15 +3075,15 @@ def test_confirmation_document_preview_escapes_html_but_preserves_json_text(
         expect={"current_effective_order_version_id": order_version_id},
     )
 
-    preview = _get(_confirmation_preview_url(base, order_id, format="json"))[1]["preview"]
+    preview = _get(_confirmation_preview_url(base, order_id, format="json"))[1][
+        "preview"
+    ]
     assert preview["recipient_company"] == malicious
     assert preview["recipient_name"] == rich
     assert preview["location_text"] == amp
     assert preview["positions"][0]["name"] == malicious
 
-    status, raw, _h = _get_raw(
-        _confirmation_preview_url(base, order_id, format="html")
-    )
+    status, raw, _h = _get_raw(_confirmation_preview_url(base, order_id, format="html"))
     html = raw.decode("utf-8")
     assert "<script>alert(1)</script>" not in html
     assert "<b>Test</b>" not in html
@@ -3189,7 +3186,9 @@ def test_confirmation_document_missing_recipient_is_allowed(api) -> None:
     assert created["snapshot"]["recipient_status"] == "missing"
     assert created["snapshot"]["recipient_email_masked"] is None
 
-    preview = _get(_confirmation_preview_url(base, order_id, format="json"))[1]["preview"]
+    preview = _get(_confirmation_preview_url(base, order_id, format="json"))[1][
+        "preview"
+    ]
     assert preview["recipient_status"] == "missing"
     assert preview["recipient_email_masked"] is None
     assert _confirmation_snapshot_count(db) == 1
@@ -3203,9 +3202,7 @@ def test_confirmation_document_preview_rejects_unknown_format(api) -> None:
         args={"created_by": "office-api-test"},
         expect={"current_effective_order_version_id": order_version_id},
     )
-    status, body, _h = _get(
-        _confirmation_preview_url(base, order_id, format="pdf")
-    )
+    status, body, _h = _get(_confirmation_preview_url(base, order_id, format="pdf"))
     assert (status, body["error"]) == (400, "invalid_request")
 
 
@@ -3224,13 +3221,15 @@ def test_confirmation_document_reads_are_side_effect_free(api) -> None:
         assert _get(_confirmation_document_url(base, order_id))[0] == 200
         assert _get(_confirmation_preview_url(base, order_id, format="json"))[0] == 200
         assert (
-            _get_raw(_confirmation_preview_url(base, order_id, format="html"))[0]
-            == 200
+            _get_raw(_confirmation_preview_url(base, order_id, format="html"))[0] == 200
         )
 
     assert _confirmation_snapshot_count(db) == count_after_create
     detail_after = _get(f"{base}/office/v1/orders/{order_id}")[1]
-    assert detail_after["effective_order_version_id"] == detail_before["effective_order_version_id"]
+    assert (
+        detail_after["effective_order_version_id"]
+        == detail_before["effective_order_version_id"]
+    )
     assert (
         detail_after["candidate_order_version_id"]
         == detail_before["candidate_order_version_id"]
@@ -3383,7 +3382,10 @@ def test_confirmation_outbound_send_status_and_payload(api) -> None:
         expect={"current_effective_order_version_id": order_version_id},
         command_id=str(uuid.uuid4()),
     )
-    assert (dup_status, dup_body["error"]) == (409, "confirmation_document_already_sent")
+    assert (dup_status, dup_body["error"]) == (
+        409,
+        "confirmation_document_already_sent",
+    )
 
     status_after, after, _h = _get(_confirmation_send_status_url(base, order_id))
     assert status_after == 200
@@ -3402,15 +3404,24 @@ def test_confirmation_outbound_send_status_and_payload(api) -> None:
 
     conn = sqlite3.connect(db)
     try:
-        assert conn.execute(
-            "SELECT COUNT(*) FROM order_confirmation_send_attempts"
-        ).fetchone()[0] == 1
-        assert conn.execute(
-            "SELECT COUNT(*) FROM order_confirmation_fake_outbox_messages"
-        ).fetchone()[0] == 1
-        assert conn.execute(
-            "SELECT COUNT(*) FROM order_confirmation_send_evidence"
-        ).fetchone()[0] == 1
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM order_confirmation_send_attempts"
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM order_confirmation_fake_outbox_messages"
+            ).fetchone()[0]
+            == 1
+        )
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM order_confirmation_send_evidence"
+            ).fetchone()[0]
+            == 1
+        )
     finally:
         conn.close()
 

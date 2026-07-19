@@ -573,9 +573,7 @@ def _confirmation_card(
     confirmation: OrderConfirmationDocumentEligibility,
     forms: OrderDetailFormFields,
 ) -> str:
-    state_label = _CONFIRMATION_STATE_LABELS.get(
-        confirmation.state, confirmation.state
-    )
+    state_label = _CONFIRMATION_STATE_LABELS.get(confirmation.state, confirmation.state)
     facts: list[tuple[str, str]] = [("Status", state_label)]
     snapshot = confirmation.snapshot
     if snapshot is not None:

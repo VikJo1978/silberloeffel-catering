@@ -304,7 +304,9 @@ def test_append_sent_evidence_roundtrip_in_memory_and_sqlite(tmp_path: Path) -> 
         assert reloaded == updated
 
 
-def test_append_acceptance_evidence_roundtrip_in_memory_and_sqlite(tmp_path: Path) -> None:
+def test_append_acceptance_evidence_roundtrip_in_memory_and_sqlite(
+    tmp_path: Path,
+) -> None:
     evidence = _acceptance()
     sent_offer = _offer(sent=(_sent(),))
     for repo_factory in (
@@ -315,7 +317,9 @@ def test_append_acceptance_evidence_roundtrip_in_memory_and_sqlite(tmp_path: Pat
         repo.save(sent_offer)
         updated = repo.append_acceptance_evidence(evidence)
         assert updated.acceptance_evidence == evidence
-        assert derive_offer_state(updated, _V1_ID, today=date(2026, 7, 20)) == "Accepted"
+        assert (
+            derive_offer_state(updated, _V1_ID, today=date(2026, 7, 20)) == "Accepted"
+        )
         reloaded = repo.get(_OFFER_ID)
         assert reloaded == updated
 
@@ -338,7 +342,9 @@ def test_append_conversion_link_roundtrip_in_memory_and_sqlite(tmp_path: Path) -
         repo.save(accepted_offer)
         updated = repo.append_conversion_link(link)
         assert updated.conversion_link == link
-        assert derive_offer_state(updated, _V1_ID, today=date(2026, 7, 20)) == "Converted"
+        assert (
+            derive_offer_state(updated, _V1_ID, today=date(2026, 7, 20)) == "Converted"
+        )
         reloaded = repo.get(_OFFER_ID)
         assert reloaded == updated
 
@@ -350,7 +356,9 @@ def test_append_conversion_link_rejects_second_link() -> None:
         repo.append_conversion_link(_link())
 
 
-def test_sqlite_offer_roundtrip_preserves_event_and_payment_facts(tmp_path: Path) -> None:
+def test_sqlite_offer_roundtrip_preserves_event_and_payment_facts(
+    tmp_path: Path,
+) -> None:
     v1 = _version(
         1,
         snapshot_hash=_HASH_V1,

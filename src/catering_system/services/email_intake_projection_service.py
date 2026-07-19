@@ -24,10 +24,7 @@ class EmailIntakeProjectionService:
         self._orders = order_repository
 
     def list_emails(self) -> list[EmailIntakeProjection]:
-        rows = [
-            self._project(inquiry)
-            for inquiry in self._email_inquiries()
-        ]
+        rows = [self._project(inquiry) for inquiry in self._email_inquiries()]
         rows.sort(key=lambda row: row.received_at, reverse=True)
         return rows
 

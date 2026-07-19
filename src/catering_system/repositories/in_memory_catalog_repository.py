@@ -73,9 +73,7 @@ class InMemoryCatalogRepository:
     def close(self) -> None:
         return None
 
-    def _filtered(
-        self, *, active_only: bool, q: str | None
-    ) -> list[CatalogDish]:
+    def _filtered(self, *, active_only: bool, q: str | None) -> list[CatalogDish]:
         rows = list(self._dishes.values())
         if active_only:
             rows = [row for row in rows if row.active]

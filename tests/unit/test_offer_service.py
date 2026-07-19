@@ -666,7 +666,9 @@ def test_record_acceptance_evidence_sent_to_accepted() -> None:
     assert evidence.accepted_at == _ACCEPTED_AT
     assert evidence.recorded_at == _RECORDED_AT
     assert evidence.recorded_by == "office-panel"
-    assert derive_offer_state(updated, version_id, today=date(2026, 7, 15)) == "Accepted"
+    assert (
+        derive_offer_state(updated, version_id, today=date(2026, 7, 15)) == "Accepted"
+    )
 
 
 def test_record_acceptance_evidence_rejects_prepared() -> None:
@@ -938,14 +940,23 @@ def test_convert_accepted_offer_happy_path() -> None:
     assert order_version.version_number == 1
     assert order_version.location_text == "Hamburg"
     assert order_version.guest_count_estimate == 80
-    assert derive_offer_state(updated, version_id, today=date(2026, 7, 15)) == "Converted"
+    assert (
+        derive_offer_state(updated, version_id, today=date(2026, 7, 15)) == "Converted"
+    )
     assert len(orders.list_orders()) == 1
 
 
 def test_convert_accepted_offer_order_version_from_offer_not_inquiry() -> None:
-    offer, version_id, variant_id, acceptance_id, _offers, _orders, inquiries, service = (
-        _accepted_offer_state()
-    )
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        _offers,
+        _orders,
+        inquiries,
+        service,
+    ) = _accepted_offer_state()
     inquiry = inquiries.get_by_id(_INQUIRY_ID)
     assert inquiry is not None
     assert inquiry.location_text == "Inquiry-only Berlin"
@@ -1016,9 +1027,16 @@ def test_convert_accepted_offer_rejects_wrong_variant_or_acceptance() -> None:
 
 
 def test_convert_accepted_offer_rejects_active_order_without_link() -> None:
-    offer, version_id, variant_id, acceptance_id, _offers, orders, inquiries, service = (
-        _accepted_offer_state()
-    )
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        _offers,
+        orders,
+        inquiries,
+        service,
+    ) = _accepted_offer_state()
     inquiry = inquiries.get_by_id(_INQUIRY_ID)
     assert inquiry is not None
     OrderService(orders).convert_inquiry_to_order(inquiry)
@@ -1029,9 +1047,16 @@ def test_convert_accepted_offer_rejects_active_order_without_link() -> None:
 
 
 def test_convert_accepted_offer_append_failure_leaves_no_order_or_link() -> None:
-    offer, version_id, variant_id, acceptance_id, offers, orders, inquiries, _service = (
-        _accepted_offer_state()
-    )
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        inquiries,
+        _service,
+    ) = _accepted_offer_state()
     failing = _FailingConversionAppendRepository(RuntimeError("append failed"))
     stored = offers.get(offer.offer_id)
     assert stored is not None

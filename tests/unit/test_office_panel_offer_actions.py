@@ -131,7 +131,9 @@ def _run_server_in_thread(build_server) -> tuple[str, HTTPServer]:
     return f"http://{host}:{port}", server
 
 
-def _valid_offer_snapshot(*, inquiry_id: str, variant_label: str = "Variante A") -> dict:
+def _valid_offer_snapshot(
+    *, inquiry_id: str, variant_label: str = "Variante A"
+) -> dict:
     payload: dict[str, object] = {
         "schema_version": "offer_snapshot_v1",
         "source": "fingerfood-configurator-backend",
@@ -314,7 +316,7 @@ def _extract_hidden(html: str, name: str) -> str:
 
 def _offer_form_fields(html: str, action_suffix: str) -> dict[str, str]:
     match = re.search(
-        rf'(<form[^>]*{re.escape(action_suffix)}[^>]*>.*?</form>)',
+        rf"(<form[^>]*{re.escape(action_suffix)}[^>]*>.*?</form>)",
         html,
         re.DOTALL,
     )
@@ -370,7 +372,7 @@ def test_accepted_shows_convert_form_only(direct_world) -> None:
     _record_acceptance_api(api_url, offer_id, version_id)
     _status, html = _get(f"{panel_url}/offer/{offer_id}")
     assert "In Auftrag umwandeln" in html
-    assert '/offer/' in html and "/convert" in html
+    assert "/offer/" in html and "/convert" in html
     assert "Als gesendet markieren" not in html
     assert "Annahme erfassen" not in html
 
@@ -394,7 +396,7 @@ def test_converted_shows_order_link_without_actions(direct_world) -> None:
     assert convert_status == 201
     order_id = convert_body["order_id"]
     _status, html = _get(f"{panel_url}/offer/{offer_id}")
-    assert f'/order/{order_id}' in html
+    assert f"/order/{order_id}" in html
     assert "Auftrag öffnen" in html
     assert "Als gesendet markieren" not in html
     assert "Annahme erfassen" not in html

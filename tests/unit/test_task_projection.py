@@ -229,7 +229,9 @@ def test_print_confirm_task_emitted() -> None:
     order, version = OrderService(orders).convert_inquiry_to_order(inquiry)
     rows = _service(inquiries=inquiries, orders=orders).list_tasks()
     task_ids = {row.task_id for row in rows}
-    assert f"order:{order.order_id}:print-confirm:{version.order_version_id}" in task_ids
+    assert (
+        f"order:{order.order_id}:print-confirm:{version.order_version_id}" in task_ids
+    )
     print_row = next(row for row in rows if row.category == "order_print")
     assert print_row.title == "Druck bestätigen"
 

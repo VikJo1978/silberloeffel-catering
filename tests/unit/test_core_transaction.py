@@ -375,9 +375,7 @@ def test_prepare_offer_write_and_ledger_commit_atomically(shared) -> None:
     connection, inquiries, orders, ledger = shared
     offers = SQLiteOfferRepository.from_connection(connection)
     executor = CoreCommandExecutor(connection)
-    inquiry = replace(
-        _inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222"
-    )
+    inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
     service = OfferService(offers, inquiries, orders)
     snapshot = _valid_offer_snapshot(inquiry_id=inquiry.inquiry_id)
@@ -396,9 +394,7 @@ def test_prepare_offer_save_failure_leaves_no_ledger(shared) -> None:
     connection, inquiries, orders, ledger = shared
     offers = SQLiteOfferRepository.from_connection(connection)
     executor = CoreCommandExecutor(connection)
-    inquiry = replace(
-        _inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222"
-    )
+    inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
     service = OfferService(offers, inquiries, orders)
     snapshot = _valid_offer_snapshot(inquiry_id=inquiry.inquiry_id)
@@ -422,9 +418,7 @@ def test_prepare_offer_ledger_failure_rolls_back_offer(shared) -> None:
     connection, inquiries, orders, ledger = shared
     offers = SQLiteOfferRepository.from_connection(connection)
     executor = CoreCommandExecutor(connection)
-    inquiry = replace(
-        _inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222"
-    )
+    inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
     service = OfferService(offers, inquiries, orders)
     snapshot = _valid_offer_snapshot(inquiry_id=inquiry.inquiry_id)
@@ -443,9 +437,7 @@ def test_record_sent_evidence_and_ledger_commit_atomically(shared) -> None:
     connection, inquiries, orders, ledger = shared
     offers = SQLiteOfferRepository.from_connection(connection)
     executor = CoreCommandExecutor(connection)
-    inquiry = replace(
-        _inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222"
-    )
+    inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
     service = OfferService(offers, inquiries, orders)
     offer = executor.run(
@@ -481,9 +473,7 @@ def test_record_sent_evidence_append_failure_leaves_no_ledger(shared) -> None:
     connection, inquiries, orders, ledger = shared
     offers = SQLiteOfferRepository.from_connection(connection)
     executor = CoreCommandExecutor(connection)
-    inquiry = replace(
-        _inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222"
-    )
+    inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
     service = OfferService(offers, inquiries, orders)
     offer = executor.run(
@@ -524,9 +514,7 @@ def test_record_acceptance_evidence_and_ledger_commit_atomically(shared) -> None
     connection, inquiries, orders, ledger = shared
     offers = SQLiteOfferRepository.from_connection(connection)
     executor = CoreCommandExecutor(connection)
-    inquiry = replace(
-        _inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222"
-    )
+    inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
     service = OfferService(offers, inquiries, orders)
     offer = executor.run(
@@ -574,9 +562,7 @@ def test_record_acceptance_evidence_append_failure_leaves_no_ledger(shared) -> N
     connection, inquiries, orders, ledger = shared
     offers = SQLiteOfferRepository.from_connection(connection)
     executor = CoreCommandExecutor(connection)
-    inquiry = replace(
-        _inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222"
-    )
+    inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
     service = OfferService(offers, inquiries, orders)
     offer = executor.run(
@@ -630,9 +616,7 @@ def test_convert_accepted_offer_and_ledger_commit_atomically(shared) -> None:
     offers = SQLiteOfferRepository.from_connection(connection)
     reminders = SQLitePaymentReminderRepository.from_connection(connection)
     executor = CoreCommandExecutor(connection)
-    inquiry = replace(
-        _inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222"
-    )
+    inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
     service = OfferService(offers, inquiries, orders)
     offer = executor.run(
@@ -655,15 +639,17 @@ def test_convert_accepted_offer_and_ledger_commit_atomically(shared) -> None:
         )
     )
     acceptance_id = executor.run(
-        lambda: service.record_acceptance_evidence(
-            offer.offer_id,
-            version_id,
-            variant_id,
-            accepted_at=datetime(2026, 7, 15, 11, 0, tzinfo=timezone.utc),
-            channel="email",
-            evidence_reference="reply-1",
-            recorded_by="office-panel",
-        ).acceptance_evidence.acceptance_id  # type: ignore[union-attr]
+        lambda: (
+            service.record_acceptance_evidence(
+                offer.offer_id,
+                version_id,
+                variant_id,
+                accepted_at=datetime(2026, 7, 15, 11, 0, tzinfo=timezone.utc),
+                channel="email",
+                evidence_reference="reply-1",
+                recorded_by="office-panel",
+            ).acceptance_evidence.acceptance_id
+        )  # type: ignore[union-attr]
     )
     convert_cmd = "ffffffff-ffff-4fff-8fff-ffffffffffff"
     payment_service = PaymentReminderService(reminders, orders)
@@ -707,9 +693,7 @@ def test_convert_accepted_offer_append_failure_leaves_no_ledger(shared) -> None:
     connection, inquiries, orders, ledger = shared
     offers = SQLiteOfferRepository.from_connection(connection)
     executor = CoreCommandExecutor(connection)
-    inquiry = replace(
-        _inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222"
-    )
+    inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
     service = OfferService(offers, inquiries, orders)
     offer = executor.run(
@@ -732,15 +716,17 @@ def test_convert_accepted_offer_append_failure_leaves_no_ledger(shared) -> None:
         )
     )
     acceptance_id = executor.run(
-        lambda: service.record_acceptance_evidence(
-            offer.offer_id,
-            version_id,
-            variant_id,
-            accepted_at=datetime(2026, 7, 15, 11, 0, tzinfo=timezone.utc),
-            channel="email",
-            evidence_reference="reply-1",
-            recorded_by="office-panel",
-        ).acceptance_evidence.acceptance_id  # type: ignore[union-attr]
+        lambda: (
+            service.record_acceptance_evidence(
+                offer.offer_id,
+                version_id,
+                variant_id,
+                accepted_at=datetime(2026, 7, 15, 11, 0, tzinfo=timezone.utc),
+                channel="email",
+                evidence_reference="reply-1",
+                recorded_by="office-panel",
+            ).acceptance_evidence.acceptance_id
+        )  # type: ignore[union-attr]
     )
     convert_cmd = "10101010-1010-4101-8101-010101010101"
 
@@ -771,9 +757,7 @@ def test_convert_accepted_offer_crm_failure_rolls_back(shared) -> None:
     connection, inquiries, orders, ledger = shared
     offers = SQLiteOfferRepository.from_connection(connection)
     executor = CoreCommandExecutor(connection)
-    inquiry = replace(
-        _inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222"
-    )
+    inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
     service = OfferService(offers, inquiries, orders)
     offer = executor.run(
@@ -796,15 +780,17 @@ def test_convert_accepted_offer_crm_failure_rolls_back(shared) -> None:
         )
     )
     acceptance_id = executor.run(
-        lambda: service.record_acceptance_evidence(
-            offer.offer_id,
-            version_id,
-            variant_id,
-            accepted_at=datetime(2026, 7, 15, 11, 0, tzinfo=timezone.utc),
-            channel="email",
-            evidence_reference="reply-1",
-            recorded_by="office-panel",
-        ).acceptance_evidence.acceptance_id  # type: ignore[union-attr]
+        lambda: (
+            service.record_acceptance_evidence(
+                offer.offer_id,
+                version_id,
+                variant_id,
+                accepted_at=datetime(2026, 7, 15, 11, 0, tzinfo=timezone.utc),
+                channel="email",
+                evidence_reference="reply-1",
+                recorded_by="office-panel",
+            ).acceptance_evidence.acceptance_id
+        )  # type: ignore[union-attr]
     )
     convert_cmd = "20202020-2020-4202-8202-020202020202"
     reminders = SQLitePaymentReminderRepository.from_connection(connection)

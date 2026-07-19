@@ -99,7 +99,9 @@ class SQLiteOrderConfirmationDocumentRepository(OrderConfirmationDocumentReposit
     def close(self) -> None:
         self._conn.close()
 
-    def get_by_id(self, document_snapshot_id: str) -> OrderConfirmationDocumentSnapshot | None:
+    def get_by_id(
+        self, document_snapshot_id: str
+    ) -> OrderConfirmationDocumentSnapshot | None:
         row = self._conn.execute(
             "SELECT canonical_snapshot_json FROM order_confirmation_document_snapshots "
             "WHERE document_snapshot_id = ?",

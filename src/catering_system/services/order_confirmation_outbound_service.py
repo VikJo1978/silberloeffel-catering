@@ -354,7 +354,8 @@ class OrderConfirmationOutboundService:
             document_hash_short=short_document_hash(evidence.document_hash),
             payload_hash=evidence.payload_hash,
             payload_hash_short=short_document_hash(evidence.payload_hash),
-            recipient_email_masked=mask_recipient_email(evidence.recipient_email) or "–",
+            recipient_email_masked=mask_recipient_email(evidence.recipient_email)
+            or "–",
             transport_kind=evidence.transport_kind,
             outcome=evidence.outcome,
             accepted_at=evidence.accepted_at.isoformat(),

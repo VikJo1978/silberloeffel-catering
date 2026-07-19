@@ -54,7 +54,9 @@ def _migration_1_create_pause_events(connection: sqlite3.Connection) -> None:
         connection.execute(trigger)
 
 
-_MIGRATIONS = ((1, "create_order_operational_pause_events", _migration_1_create_pause_events),)
+_MIGRATIONS = (
+    (1, "create_order_operational_pause_events", _migration_1_create_pause_events),
+)
 
 
 def _row_to_event(row: sqlite3.Row) -> OrderOperationalPauseEvent:

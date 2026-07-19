@@ -65,9 +65,16 @@ def _services() -> tuple[
     OperationalCoreService,
     OfferService,
 ]:
-    offer, version_id, variant_id, acceptance_id, offers, orders, inquiries, offer_service = (
-        _accepted_offer_state()
-    )
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        inquiries,
+        offer_service,
+    ) = _accepted_offer_state()
     inquiry = inquiries.get_by_id(_INQUIRY_ID)
     assert inquiry is not None
     inquiries.update(
@@ -154,9 +161,16 @@ def test_pending_candidate_blocked() -> None:
 
 
 def test_kitchen_print_not_confirmed_blocked() -> None:
-    offer, version_id, variant_id, acceptance_id, offers, orders, inquiries, offer_service = (
-        _accepted_offer_state()
-    )
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        inquiries,
+        offer_service,
+    ) = _accepted_offer_state()
     _converted, order, order_version = offer_service.convert_accepted_offer(
         offer.offer_id,
         version_id,
@@ -291,7 +305,9 @@ def test_surcharge_linkage_preserved() -> None:
         gross_total_cents=214,
         related_position_id=base_id,
     )
-    positions, _buckets, totals = _commercial_positions((base, surcharge), guest_count_estimate=10)
+    positions, _buckets, totals = _commercial_positions(
+        (base, surcharge), guest_count_estimate=10
+    )
     surcharge_position = next(item for item in positions if item.kind == "surcharge")
     assert surcharge_position.related_position_id == base_id
     assert totals["gross_total_cents"] == 1284
@@ -321,15 +337,24 @@ def test_fee_position_preserved() -> None:
         quantity_mode="total",
         unit_label="Stück",
     )
-    positions, _buckets, totals = _commercial_positions((catalog, fee), guest_count_estimate=80)
+    positions, _buckets, totals = _commercial_positions(
+        (catalog, fee), guest_count_estimate=80
+    )
     assert any(position.kind == "fee" for position in positions)
     assert totals["gross_total_cents"] == 25419
 
 
 def test_recipient_snapshot_and_missing_email() -> None:
-    offer, version_id, variant_id, acceptance_id, offers, orders, inquiries, offer_service = (
-        _accepted_offer_state()
-    )
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        inquiries,
+        offer_service,
+    ) = _accepted_offer_state()
     inquiry = inquiries.get_by_id(_INQUIRY_ID)
     assert inquiry is not None
     inquiries.update(

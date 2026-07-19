@@ -117,8 +117,7 @@ def test_email_intake_context_combined() -> None:
     )
     assert q.intake_subject == "Anfrage Firmenfeier"
     assert q.intake_message == (
-        "E-Mail: office@example.invalid\n"
-        "Bitte um Rückruf wegen Menüauswahl."
+        "E-Mail: office@example.invalid\nBitte um Rückruf wegen Menüauswahl."
     )
     assert q.location_text == "Anfrage Firmenfeier"
     assert q.time_window_text == "Bitte um Rückruf wegen Menüauswahl."

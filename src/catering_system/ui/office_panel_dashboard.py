@@ -46,15 +46,13 @@ def _rueckrufe_card(snapshot: WorkCenterSnapshot) -> str:
     return (
         '<section class="wc-card" aria-labelledby="wc-rueckrufe">'
         '<div class="wc-card-head"><span class="wc-card-mark" aria-hidden="true">'
-        "🔴</span><h2 id=\"wc-rueckrufe\">Rückrufe</h2></div>"
+        '🔴</span><h2 id="wc-rueckrufe">Rückrufe</h2></div>'
         '<hr class="wc-card-rule">'
         f'<p class="wc-card-summary"><strong>{total}</strong> offen</p>'
-        "<ul class=\"wc-card-lines\">"
+        '<ul class="wc-card-lines">'
         f"<li><span>📞 Kunden-Rückrufe</span><strong>{snapshot.rueckrufe_open}</strong></li>"
         f"<li><span>☎ Verpasste Anrufe</span><strong>{snapshot.missed_calls_open}</strong></li>"
-        "</ul>"
-        + _card_action("/rueckruf", "Öffnen")
-        + "</section>"
+        "</ul>" + _card_action("/rueckruf", "Öffnen") + "</section>"
     )
 
 
@@ -62,7 +60,7 @@ def _angebote_card(snapshot: WorkCenterSnapshot) -> str:
     return (
         '<section class="wc-card" aria-labelledby="wc-angebote">'
         '<div class="wc-card-head"><span class="wc-card-mark" aria-hidden="true">'
-        "📥</span><h2 id=\"wc-angebote\">Angebote</h2></div>"
+        '📥</span><h2 id="wc-angebote">Angebote</h2></div>'
         '<hr class="wc-card-rule">'
         f"<p>{snapshot.offers_waiting} warten auf Antwort</p>"
         f"<p>{snapshot.offers_accepted} angenommen</p>"
@@ -73,17 +71,13 @@ def _angebote_card(snapshot: WorkCenterSnapshot) -> str:
 
 def _auftraege_card(snapshot: WorkCenterSnapshot, ui: WorkCenterDashboardUi) -> str:
     count = ui.week_order_count
-    label = (
-        f"{count} diese Woche"
-        if count != 1
-        else "1 diese Woche"
-    )
+    label = f"{count} diese Woche" if count != 1 else "1 diese Woche"
     return (
         '<section class="wc-card" aria-labelledby="wc-auftraege">'
         '<div class="wc-card-head"><span class="wc-card-mark" aria-hidden="true">'
-        "🍽</span><h2 id=\"wc-auftraege\">Aufträge</h2></div>"
+        '🍽</span><h2 id="wc-auftraege">Aufträge</h2></div>'
         '<hr class="wc-card-rule">'
-        f"<p class=\"wc-card-summary\">{_e(label)}</p>"
+        f'<p class="wc-card-summary">{_e(label)}</p>'
         f"<p>{snapshot.pending_order_changes} Änderungen warten auf Küchendruck</p>"
         + _card_action("/auftraege", "Aufträge öffnen")
         + "</section>"
@@ -99,7 +93,7 @@ def _aufgaben_card(snapshot: WorkCenterSnapshot) -> str:
     return (
         '<section class="wc-card" aria-labelledby="wc-aufgaben">'
         '<div class="wc-card-head"><span class="wc-card-mark" aria-hidden="true">'
-        "🟡</span><h2 id=\"wc-aufgaben\">Aufgaben</h2></div>"
+        '🟡</span><h2 id="wc-aufgaben">Aufgaben</h2></div>'
         '<hr class="wc-card-rule">'
         + body
         + _card_action("/aufgaben", "Öffnen")
@@ -116,7 +110,7 @@ def _kalender_card(snapshot: WorkCenterSnapshot) -> str:
     return (
         '<section class="wc-card" aria-labelledby="wc-kalender">'
         '<div class="wc-card-head"><span class="wc-card-mark" aria-hidden="true">'
-        "📅</span><h2 id=\"wc-kalender\">Kalender</h2></div>"
+        '📅</span><h2 id="wc-kalender">Kalender</h2></div>'
         '<hr class="wc-card-rule">'
         + body
         + _card_action("/kalender", "Öffnen")

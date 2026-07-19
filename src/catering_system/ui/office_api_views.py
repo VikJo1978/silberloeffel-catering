@@ -27,7 +27,12 @@ from catering_system.domain.calendar_entry_projection import (
     CalendarEntryProjection,
 )
 from catering_system.domain.task_projection import TaskProjection
-from catering_system.domain.offer import Offer, OfferPosition, OfferState, derive_offer_state
+from catering_system.domain.offer import (
+    Offer,
+    OfferPosition,
+    OfferState,
+    derive_offer_state,
+)
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjection,
     PrintPositionLine,
@@ -100,7 +105,9 @@ def _offer_version(offer: Offer, offer_version_id: str):
     raise ValueError(f"unknown offer_version_id={offer_version_id!r}")
 
 
-def offer_list_row(offer: Offer, inquiry: Inquiry, *, today: date | None = None) -> dict[str, object]:
+def offer_list_row(
+    offer: Offer, inquiry: Inquiry, *, today: date | None = None
+) -> dict[str, object]:
     projection = derive_inquiry_offer_projection(offer, today=today or berlin_today())
     version = _offer_version(offer, projection.offer_version_id)
     return {
@@ -159,21 +166,15 @@ def _offer_history(offer: Offer) -> list[dict[str, object]]:
     entries: list[tuple[datetime, str]] = []
     for version in sorted(offer.versions, key=lambda item: item.version_number):
         label = (
-            "Angebot erstellt"
-            if version.version_number == 1
-            else "Angebot vorbereitet"
+            "Angebot erstellt" if version.version_number == 1 else "Angebot vorbereitet"
         )
         entries.append((version.created_at, label))
     for sent in offer.sent_evidence:
         entries.append((sent.sent_at, "Angebot gesendet"))
     if offer.acceptance_evidence is not None:
-        entries.append(
-            (offer.acceptance_evidence.accepted_at, "Angebot angenommen")
-        )
+        entries.append((offer.acceptance_evidence.accepted_at, "Angebot angenommen"))
     if offer.conversion_link is not None:
-        entries.append(
-            (offer.conversion_link.created_at, "In Auftrag umgewandelt")
-        )
+        entries.append((offer.conversion_link.created_at, "In Auftrag umgewandelt"))
     entries.sort(key=lambda item: item[0])
     return [{"at": at.isoformat(), "label": label} for at, label in entries]
 
@@ -744,7 +745,9 @@ def email_list_row(projection: EmailIntakeProjection) -> dict[str, object]:
     }
 
 
-def email_list_view(projections: list[EmailIntakeProjection]) -> list[dict[str, object]]:
+def email_list_view(
+    projections: list[EmailIntakeProjection],
+) -> list[dict[str, object]]:
     return [email_list_row(projection) for projection in projections]
 
 
@@ -933,9 +936,7 @@ def _price_history_shape(entry: CatalogPriceHistoryEntry) -> dict[str, object]:
         "old_unit_net_cents": old_cents,
         "new_unit_net_cents": entry.new_unit_net_cents,
         "old_price_display": (
-            format_catalog_price_eur(old_cents)
-            if old_cents is not None
-            else None
+            format_catalog_price_eur(old_cents) if old_cents is not None else None
         ),
         "new_price_display": format_catalog_price_eur(entry.new_unit_net_cents),
         "changed_at": entry.changed_at.isoformat(),

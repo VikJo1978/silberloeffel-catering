@@ -82,7 +82,8 @@ def _validate_optional_quantity(value: Decimal | None) -> None:
         return
     if value < 0:
         raise ValueError("quantity must be non-negative")
-    if value.as_tuple().exponent < -3:
+    exponent = value.as_tuple().exponent
+    if isinstance(exponent, int) and exponent < -3:
         raise ValueError("quantity exceeds fractional precision")
 
 
@@ -129,7 +130,10 @@ class OfferPosition:
         _optional_bounded_text(self.notes, "notes", max_len=20_000)
         _optional_bounded_text(self.unit_label, "unit_label", max_len=500)
         _validate_optional_quantity(self.quantity)
-        if self.quantity_mode is not None and self.quantity_mode not in POSITION_QUANTITY_MODES:
+        if (
+            self.quantity_mode is not None
+            and self.quantity_mode not in POSITION_QUANTITY_MODES
+        ):
             raise ValueError("invalid quantity_mode")
         if self.kind == "surcharge":
             if self.related_position_id is None:

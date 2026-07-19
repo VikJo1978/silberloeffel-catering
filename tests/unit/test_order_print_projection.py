@@ -9,8 +9,15 @@ import pytest
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjectionService,
     PrintFinalRequiresEffectiveError,
+    PrintProjectionNotFoundError,
 )
 from catering_system.services.operational_core_service import OperationalCoreService
+from catering_system.repositories.in_memory_offer_repository import (
+    InMemoryOfferRepository,
+)
+from catering_system.repositories.in_memory_order_repository import (
+    InMemoryOrderRepository,
+)
 from catering_system.services.order_service import OrderService
 from catering_system.ui.office_panel_views import render_print_sheet
 from tests.unit.test_offer_service import (
@@ -314,3 +321,263 @@ def test_cancelled_order_shows_storniert_banner_but_remains_readable() -> None:
     assert "SILBERLÖFFEL" in sheet
     assert "MENÜ" in sheet
     assert "Fingerfood Paket" in sheet
+
+
+def test_format_quantity_display_per_person_without_guest_count() -> None:
+    from decimal import Decimal
+
+    from catering_system.domain.offer import OfferPosition
+    from catering_system.services.order_print_projection_service import (
+        format_quantity_display,
+    )
+
+    position = OfferPosition(
+        position_id="p1",
+        kind="catalog",
+        name="Item",
+        unit_net_cents=100,
+        net_total_cents=100,
+        vat_rate_percent=7,
+        vat_amount_cents=7,
+        gross_total_cents=107,
+        quantity=Decimal("2"),
+        quantity_mode="per_person",
+        unit_label="Portionen",
+    )
+    assert format_quantity_display(position, None) == "2 Portionen pro Gast"
+
+
+def test_format_quantity_display_per_person_with_guest_count() -> None:
+    from decimal import Decimal
+
+    from catering_system.domain.offer import OfferPosition
+    from catering_system.services.order_print_projection_service import (
+        format_quantity_display,
+    )
+
+    position = OfferPosition(
+        position_id="p1",
+        kind="catalog",
+        name="Item",
+        unit_net_cents=100,
+        net_total_cents=100,
+        vat_rate_percent=7,
+        vat_amount_cents=7,
+        gross_total_cents=107,
+        quantity=Decimal("2"),
+        quantity_mode="per_person",
+        unit_label="Portionen",
+    )
+    assert format_quantity_display(position, 40) == "80 Portionen"
+
+
+def test_resolve_unknown_order_raises_not_found() -> None:
+    offers = InMemoryOfferRepository()
+    orders = InMemoryOrderRepository()
+    service = _projection_service(offers, orders)
+    with pytest.raises(PrintProjectionNotFoundError):
+        service.resolve(
+            "00000000-0000-4000-8000-000000000000",
+            "00000000-0000-4000-8000-000000000001",
+        )
+
+
+def test_format_quantity_display_without_unit_returns_plain_quantity() -> None:
+    from decimal import Decimal
+
+    from catering_system.domain.offer import OfferPosition
+    from catering_system.services.order_print_projection_service import (
+        format_quantity_display,
+    )
+
+    position = OfferPosition(
+        position_id="p1",
+        kind="catalog",
+        name="Item",
+        unit_net_cents=100,
+        net_total_cents=100,
+        vat_rate_percent=7,
+        vat_amount_cents=7,
+        gross_total_cents=107,
+        quantity=Decimal("2.5"),
+        quantity_mode="total",
+    )
+    assert format_quantity_display(position, 40) == "2.5"
+
+
+def test_resolve_foreign_version_raises_not_found() -> None:
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        _inq,
+        offer_service,
+    ) = _accepted_offer_state()
+    _converted, order, order_version = offer_service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
+    )
+    service = _projection_service(offers, orders)
+    with pytest.raises(PrintProjectionNotFoundError):
+        service.resolve(order.order_id, "00000000-0000-4000-8000-000000000099")
+
+
+def test_commercial_block_is_none_without_conversion_link() -> None:
+    offers = InMemoryOfferRepository()
+    orders = InMemoryOrderRepository()
+    inquiry = _sample_inquiry()
+    from catering_system.repositories.in_memory_inquiry_repository import (
+        InMemoryInquiryRepository,
+    )
+
+    inquiries = InMemoryInquiryRepository()
+    inquiries.save(inquiry)
+    order, version = OrderService(orders).convert_inquiry_to_order(inquiry)
+    projection = _projection_service(offers, orders).resolve(
+        order.order_id, version.order_version_id
+    )
+    assert projection.commercial.source == "none"
+
+
+def test_commercial_none_when_conversion_link_targets_other_order() -> None:
+    from dataclasses import replace
+
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        _inq,
+        offer_service,
+    ) = _accepted_offer_state()
+    _converted, order, order_version = offer_service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
+    )
+    stored = offers.get(offer.offer_id)
+    assert stored is not None and stored.conversion_link is not None
+    bad_link = replace(
+        stored.conversion_link,
+        order_id="00000000-0000-4000-8000-000000000099",
+    )
+    offers._offers[offer.offer_id] = replace(stored, conversion_link=bad_link)
+
+    projection = _projection_service(offers, orders).resolve(
+        order.order_id,
+        order_version.order_version_id,
+    )
+    assert projection.commercial.source == "none"
+
+
+def test_commercial_none_when_accepted_variant_lookup_fails() -> None:
+    from catering_system.services.order_print_projection_service import (
+        _accepted_variant,
+    )
+
+    offer, version_id, variant_id, _acceptance_id, _offers, _orders, _inq, _service = (
+        _accepted_offer_state()
+    )
+    assert (
+        _accepted_variant(offer, "00000000-0000-4000-8000-000000000077", variant_id)
+        is None
+    )
+    assert (
+        _accepted_variant(offer, version_id, "00000000-0000-4000-8000-000000000088")
+        is None
+    )
+
+
+def test_preview_entwurf_when_effective_version_record_is_missing() -> None:
+    from dataclasses import replace
+
+    inquiries, orders, offers, _service = _world(inquiry=_sample_inquiry())
+    inquiry = inquiries.get_by_id(_INQUIRY_ID)
+    assert inquiry is not None
+    order, version = OrderService(orders).convert_inquiry_to_order(inquiry)
+    broken = replace(
+        order,
+        effective_order_version_id="00000000-0000-4000-8000-000000000077",
+        candidate_order_version_id=None,
+    )
+    orders._orders[order.order_id] = broken
+
+    projection = _projection_service(offers, orders).resolve(
+        order.order_id,
+        version.order_version_id,
+        intent="preview",
+    )
+    assert projection.flags.watermark == "ENTWURF"
+
+
+def test_preview_entwurf_for_non_effective_version_without_candidate_parent() -> None:
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        _inq,
+        offer_service,
+    ) = _accepted_offer_state()
+    _converted, order, v1 = offer_service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
+    )
+    order_service = OrderService(orders)
+    v2 = order_service.create_relevant_order_change_version(
+        order,
+        event_date=date(2026, 9, 2),
+        time_window_text="abends",
+        location_text="Kiel",
+        guest_count_estimate=30,
+        planning_mode="caterer_suggestion",
+    )
+    core = OperationalCoreService(orders)
+    core.confirm_kitchen_print(order.order_id, v1.order_version_id)
+    core.make_order_version_effective(order.order_id, v1.order_version_id)
+
+    projection = _projection_service(offers, orders).resolve(
+        order.order_id,
+        v2.order_version_id,
+        intent="preview",
+    )
+    assert projection.flags.watermark == "ENTWURF"
+
+
+def test_commercial_none_when_variant_resolution_returns_none(monkeypatch) -> None:
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        _inq,
+        offer_service,
+    ) = _accepted_offer_state()
+    _converted, order, order_version = offer_service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
+    )
+    import catering_system.services.order_print_projection_service as mod
+
+    monkeypatch.setattr(mod, "_accepted_variant", lambda *_args, **_kwargs: None)
+    projection = _projection_service(offers, orders).resolve(
+        order.order_id,
+        order_version.order_version_id,
+    )
+    assert projection.commercial.source == "none"

@@ -236,9 +236,7 @@ def _render_menu_section(projection: OrderPrintProjection) -> str:
     blocks: list[str] = []
     for line in positions:
         detail = line.description or line.composition
-        detail_html = (
-            f'<p class="menu-detail">{_e(detail)}</p>' if detail else ""
-        )
+        detail_html = f'<p class="menu-detail">{_e(detail)}</p>' if detail else ""
         quantity_html = (
             f'<p class="menu-qty">Menge: {_e(line.quantity_display)}</p>'
             if line.quantity_display
@@ -274,7 +272,7 @@ def render_print_sheet(projection: OrderPrintProjection) -> str:
         change_html = (
             '<div class="change-summary">'
             f'<p class="label">Änderungsgrund:</p><p class="value">'
-            f'{_e(event.change_reason or "–")}</p>'
+            f"{_e(event.change_reason or '–')}</p>"
             f'<p class="label">Geänderte Felder:</p><p class="value">'
             f"{_e(fields)}</p></div>"
         )
@@ -360,7 +358,7 @@ def _buffet_banner_html(
         return (
             '<div class="buffet-banner">'
             '<p class="watermark stale">VERALTET</p>'
-            "<p class=\"stand-label\">Aktueller Küchenstand:<br>"
+            '<p class="stand-label">Aktueller Küchenstand:<br>'
             f"Version {effective_version_number}</p>"
             "</div>"
         )

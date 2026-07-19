@@ -90,9 +90,7 @@ _INQUIRY_DETAIL_KEYS = _INQUIRY_LIST_KEYS | {
     "offer_prefill",
 }
 _INQUIRY_DETAIL_OPTIONAL_KEYS = frozenset({"offer"})
-_INQUIRY_OFFER_KEYS = frozenset(
-    {"offer_id", "offer_version_id", "commercial_state"}
-)
+_INQUIRY_OFFER_KEYS = frozenset({"offer_id", "offer_version_id", "commercial_state"})
 _INQUIRY_OFFER_OPTIONAL_KEYS = frozenset({"accepted_variant_id", "acceptance_id"})
 _INQUIRY_NEXT_ACTIONS = frozenset(
     {"verify", "convert", "convert-accepted", "offer-pending"}
@@ -490,9 +488,7 @@ def _version(data: Mapping[str, object]) -> OrderVersion:
         kitchen_print_confirmed_at=_optional_datetime(
             data.get("kitchen_print_confirmed_at")
         ),
-        parent_order_version_id=_optional_uuid4(
-            data.get("parent_order_version_id")
-        ),
+        parent_order_version_id=_optional_uuid4(data.get("parent_order_version_id")),
         created_by=_optional_str(data.get("created_by")),
         change_reason=_optional_str(data.get("change_reason")),
         changed_fields=tuple(
@@ -827,7 +823,9 @@ class RemoteCoreClient:
         self._order_version_meta: dict[str, tuple[int, bool]] = {}
         self._known_order_ids: list[str] = []
         self._evaluations: dict[str, ReadyToSendEvaluation] = {}
-        self._confirmation_eligibility: dict[str, OrderConfirmationDocumentEligibility] = {}
+        self._confirmation_eligibility: dict[
+            str, OrderConfirmationDocumentEligibility
+        ] = {}
         self.inquiry_service = _RemoteInquiryService(self)
         self.order_service = _RemoteOrderService(self)
         self.payment_reminder_service = _RemotePaymentReminderService(self)
@@ -927,9 +925,7 @@ class RemoteCoreClient:
     ) -> dict[str, object]:
         return self._request("GET", path, query=query, expected={200})
 
-    def get_text(
-        self, path: str, query: Mapping[str, object] | None = None
-    ) -> str:
+    def get_text(self, path: str, query: Mapping[str, object] | None = None) -> str:
         url = self._url(path, query)
         request = urllib.request.Request(
             url,
@@ -1214,7 +1210,9 @@ class RemoteCoreClient:
         }
         for raw in rows:
             row = _dict(raw)
-            _exact(row, {"offer_id", "inquiry_id", "state", "event_date", "valid_until"})
+            _exact(
+                row, {"offer_id", "inquiry_id", "state", "event_date", "valid_until"}
+            )
             _uuid4(row["offer_id"])
             _uuid4(row["inquiry_id"])
             state = _str(row["state"])
@@ -1439,9 +1437,7 @@ class RemoteCoreClient:
 
     def catalog_dish_detail(self, dish_id: str) -> dict[str, object] | None:
         try:
-            body = self.get(
-                f"/office/v1/catalog/dishes/{quote(dish_id, safe='')}"
-            )
+            body = self.get(f"/office/v1/catalog/dishes/{quote(dish_id, safe='')}")
         except RemoteCoreError as exc:
             if exc.status == 404:
                 return None
@@ -1518,9 +1514,7 @@ class RemoteCoreClient:
 
     def contact_detail(self, contact_key: str) -> dict[str, object] | None:
         try:
-            body = self.get(
-                f"/office/v1/contacts/{quote(contact_key, safe='')}"
-            )
+            body = self.get(f"/office/v1/contacts/{quote(contact_key, safe='')}")
         except RemoteCoreError as exc:
             if exc.status == 404:
                 return None
@@ -1718,9 +1712,7 @@ class RemoteCoreClient:
             _datetime(row["opened_at"])
         return body
 
-    def list_calendar(
-        self, from_date: date, to_date: date
-    ) -> dict[str, object]:
+    def list_calendar(self, from_date: date, to_date: date) -> dict[str, object]:
         params = {
             "from": from_date.isoformat(),
             "to": to_date.isoformat(),
@@ -1903,8 +1895,8 @@ class RemoteCoreClient:
         _operational_pause(detail["operational_pause"])
         _payment_reminder(detail["payment_reminder"], order_id)
         if "confirmation_document" in detail:
-            self._confirmation_eligibility[order_id] = _confirmation_document_eligibility(
-                detail["confirmation_document"]
+            self._confirmation_eligibility[order_id] = (
+                _confirmation_document_eligibility(detail["confirmation_document"])
             )
         versions = _list(detail["versions"])
         total = _nonnegative_int(detail["versions_total_count"])
@@ -1990,9 +1982,7 @@ class RemoteCoreClient:
             raise RemoteCoreError(404, "not_found")
         return _payment_reminder(detail["payment_reminder"], order_id)
 
-    def print_data(
-        self, order_id: str, version_id: str
-    ) -> OrderPrintProjection | None:
+    def print_data(self, order_id: str, version_id: str) -> OrderPrintProjection | None:
         try:
             body = self.get(
                 f"/office/v1/orders/{quote(order_id, safe='')}/print-data",
@@ -2279,9 +2269,7 @@ class _RemoteOrderService:
             location_text=values["location_text"],
             guest_count_estimate=values["guest_count_estimate"],
             planning_mode=validate_planning_mode(values["planning_mode"]),
-            parent_order_version_id=_optional_uuid4(
-                result["parent_order_version_id"]
-            ),
+            parent_order_version_id=_optional_uuid4(result["parent_order_version_id"]),
             created_by="office-panel",
             change_reason=str(
                 values.get("change_reason") or "Operational order change"

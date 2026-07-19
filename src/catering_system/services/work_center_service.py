@@ -64,7 +64,9 @@ class WorkCenterService:
             if state.next_action == "verify":
                 rueckrufe_open += 1
             if offer is not None:
-                projection = derive_inquiry_offer_projection(offer, today=operating_today)
+                projection = derive_inquiry_offer_projection(
+                    offer, today=operating_today
+                )
                 commercial = projection.commercial_state
                 if commercial in ("Prepared", "Sent"):
                     offers_waiting += 1
@@ -96,9 +98,7 @@ class WorkCenterService:
                 continue
             upcoming_orders += 1
 
-        open_tasks = (
-            len(self._tasks.list_tasks()) if self._tasks is not None else 0
-        )
+        open_tasks = len(self._tasks.list_tasks()) if self._tasks is not None else 0
         today_calendar_entries = (
             self._calendar.count_on(operating_today)
             if self._calendar is not None

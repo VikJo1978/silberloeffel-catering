@@ -10,6 +10,7 @@ from catering_system.ui.office_panel_views import (
     _page,
 )
 
+
 def _format_date(raw: object) -> str:
     if isinstance(raw, str):
         try:

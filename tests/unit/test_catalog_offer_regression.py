@@ -6,8 +6,15 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from catering_system.domain.catalog import CatalogDish, CatalogDishUpdatePayload
-from catering_system.domain.offer import Offer, OfferPosition, OfferVariant, OfferVersion
-from catering_system.repositories.sqlite_catalog_repository import SQLiteCatalogRepository
+from catering_system.domain.offer import (
+    Offer,
+    OfferPosition,
+    OfferVariant,
+    OfferVersion,
+)
+from catering_system.repositories.sqlite_catalog_repository import (
+    SQLiteCatalogRepository,
+)
 from catering_system.repositories.sqlite_offer_repository import SQLiteOfferRepository
 from catering_system.services.catalog_dish_write_service import CatalogDishWriteService
 

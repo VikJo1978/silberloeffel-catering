@@ -73,7 +73,9 @@ def _require_uuid(value: str, field: str) -> None:
     uuid.UUID(value)
 
 
-def validate_allergen_codes(codes: tuple[str, ...] | list[str]) -> tuple[AllergenCode, ...]:
+def validate_allergen_codes(
+    codes: tuple[str, ...] | list[str],
+) -> tuple[AllergenCode, ...]:
     normalized: list[AllergenCode] = []
     seen: set[str] = set()
     for raw in codes:
@@ -83,7 +85,7 @@ def validate_allergen_codes(codes: tuple[str, ...] | list[str]) -> tuple[Allerge
         if code in seen:
             continue
         seen.add(code)
-        normalized.append(code)  # type: ignore[arg-type]
+        normalized.append(code)
     return tuple(normalized)
 
 
@@ -119,9 +121,7 @@ class CatalogDish:
                 raise ValueError(f"{field_name} exceeds length limit")
         if self.current_unit_net_cents < 0:
             raise ValueError("current_unit_net_cents must be non-negative")
-        object.__setattr__(
-            self, "allergens", validate_allergen_codes(self.allergens)
-        )
+        object.__setattr__(self, "allergens", validate_allergen_codes(self.allergens))
         _require_aware(self.created_at, "created_at")
         _require_aware(self.updated_at, "updated_at")
 
@@ -186,9 +186,7 @@ class CatalogDishUpdatePayload:
                 raise ValueError(f"{field_name} exceeds length limit")
         if self.current_unit_net_cents < 0:
             raise ValueError("current_unit_net_cents must be non-negative")
-        object.__setattr__(
-            self, "allergens", validate_allergen_codes(self.allergens)
-        )
+        object.__setattr__(self, "allergens", validate_allergen_codes(self.allergens))
 
 
 @dataclass(frozen=True)

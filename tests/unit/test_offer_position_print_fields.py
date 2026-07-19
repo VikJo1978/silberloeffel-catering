@@ -13,7 +13,6 @@ from catering_system.domain.offer import (
     OfferVersion,
 )
 from catering_system.repositories.sqlite_offer_repository import SQLiteOfferRepository
-from catering_system.services.offer_service import OfferService
 from tests.unit.test_offer_service import (
     _INQUIRY_ID,
     _POSITION_ID,
@@ -34,11 +33,11 @@ def _accepted_variant(offer: Offer) -> OfferVariant:
     link = offer.conversion_link
     assert link is not None
     version = next(
-        item for item in offer.versions if item.offer_version_id == link.offer_version_id
+        item
+        for item in offer.versions
+        if item.offer_version_id == link.offer_version_id
     )
-    return next(
-        item for item in version.variants if item.variant_id == link.variant_id
-    )
+    return next(item for item in version.variants if item.variant_id == link.variant_id)
 
 
 def _legacy_position() -> OfferPosition:
@@ -156,9 +155,16 @@ def test_legacy_offer_without_print_text_fields_roundtrips(tmp_path: Path) -> No
 
 
 def test_accepted_variant_positions_are_print_projection_ready() -> None:
-    offer, _version_id, _variant_id, _acceptance_id, _offers, _orders, _inq, _service = (
-        _accepted_offer_state()
-    )
+    (
+        offer,
+        _version_id,
+        _variant_id,
+        _acceptance_id,
+        _offers,
+        _orders,
+        _inq,
+        _service,
+    ) = _accepted_offer_state()
     position = offer.versions[0].variants[0].positions[0]
     print_row = {
         "name": position.name,

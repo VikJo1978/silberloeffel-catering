@@ -77,9 +77,7 @@ class SQLiteCatalogRepository:
             raise
 
     @classmethod
-    def from_connection(
-        cls, connection: sqlite3.Connection
-    ) -> SQLiteCatalogRepository:
+    def from_connection(cls, connection: sqlite3.Connection) -> SQLiteCatalogRepository:
         repo = cls.__new__(cls)
         repo._conn = connection
         repo._manage_transactions = False
@@ -258,9 +256,7 @@ class SQLiteCatalogRepository:
                 self._conn.commit()
 
     @staticmethod
-    def _filters(
-        *, active_only: bool, q: str | None
-    ) -> tuple[str, list[object]]:
+    def _filters(*, active_only: bool, q: str | None) -> tuple[str, list[object]]:
         clauses: list[str] = []
         params: list[object] = []
         if active_only:
@@ -271,6 +267,16 @@ class SQLiteCatalogRepository:
         if not clauses:
             return "", params
         return "WHERE " + " AND ".join(clauses), params
+
+
+def _optional_sql_text(value: object) -> str | None:
+    return None if value is None else str(value)
+
+
+def _sql_int(value: object) -> int:
+    if isinstance(value, int):
+        return value
+    return int(str(value))
 
 
 def _escape_like(value: str) -> str:
@@ -284,10 +290,10 @@ def _row_to_dish(row: tuple[object, ...]) -> CatalogDish:
     return CatalogDish(
         dish_id=str(row[0]),
         name=str(row[1]),
-        description=row[2] if row[2] is not None else None,
-        composition=row[3] if row[3] is not None else None,
-        notes=row[4] if row[4] is not None else None,
-        current_unit_net_cents=int(row[5]),
+        description=_optional_sql_text(row[2]),
+        composition=_optional_sql_text(row[3]),
+        notes=_optional_sql_text(row[4]),
+        current_unit_net_cents=_sql_int(row[5]),
         allergens=validate_allergen_codes(allergens_raw),
         active=bool(row[7]),
         created_at=datetime.fromisoformat(str(row[8])),
@@ -300,8 +306,8 @@ def _row_to_history(row: tuple[object, ...]) -> CatalogPriceHistoryEntry:
     return CatalogPriceHistoryEntry(
         entry_id=str(row[0]),
         dish_id=str(row[1]),
-        old_unit_net_cents=int(row[2]) if row[2] is not None else None,
-        new_unit_net_cents=int(row[3]),
+        old_unit_net_cents=_sql_int(row[2]) if row[2] is not None else None,
+        new_unit_net_cents=_sql_int(row[3]),
         changed_at=datetime.fromisoformat(str(row[4])),
         changed_by=str(row[5]),
         effective_from=date.fromisoformat(str(effective_raw))

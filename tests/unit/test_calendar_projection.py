@@ -181,7 +181,9 @@ def _save_offer(
 def test_inquiry_only_tentative_entry() -> None:
     inquiries = InMemoryInquiryRepository()
     inquiry = _save_inquiry(inquiries, intake_subject="Sommerfest")
-    rows = _service(inquiries=inquiries).list_entries(date(2026, 8, 1), date(2026, 8, 31))
+    rows = _service(inquiries=inquiries).list_entries(
+        date(2026, 8, 1), date(2026, 8, 31)
+    )
     assert len(rows) == 1
     row = rows[0]
     assert row.entry_id == f"inquiry:{inquiry.inquiry_id}:event"

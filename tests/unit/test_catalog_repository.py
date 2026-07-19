@@ -6,7 +6,9 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from catering_system.domain.catalog import CatalogDish
-from catering_system.repositories.sqlite_catalog_repository import SQLiteCatalogRepository
+from catering_system.repositories.sqlite_catalog_repository import (
+    SQLiteCatalogRepository,
+)
 
 _NOW = datetime(2026, 7, 16, 8, 0, tzinfo=UTC)
 _DISH_ID = "11111111-1111-4111-8111-111111111111"

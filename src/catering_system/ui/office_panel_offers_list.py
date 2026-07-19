@@ -42,7 +42,9 @@ def render_angebote_list(
     body = (
         '<p class="subtitle">Übersicht aller Angebote im Vertrieb.</p>'
         "<table><tr><th>Status</th><th>Veranstaltung</th><th>Datum</th><th></th></tr>"
-        + "".join(table_rows or ['<tr><td colspan="4">Keine Angebote vorhanden.</td></tr>'])
+        + "".join(
+            table_rows or ['<tr><td colspan="4">Keine Angebote vorhanden.</td></tr>']
+        )
         + "</table>"
         + '<p><a href="/">← Zurück zur Arbeitszentrale</a></p>'
     )

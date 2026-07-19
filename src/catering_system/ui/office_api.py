@@ -129,6 +129,7 @@ from catering_system.services.buffet_cards_service import BuffetCardsService
 from catering_system.services.catalog_dish_service import CatalogDishService
 from catering_system.services.catalog_dish_write_service import CatalogDishWriteService
 from catering_system.domain.catalog import (
+    AllergenCode,
     CatalogDishNotFoundError,
     CatalogDishStaleError,
     CatalogDishUpdatePayload,
@@ -326,7 +327,7 @@ def _exact_keys(mapping: dict[str, object], keys: set[str]) -> None:
 _ABSENT = object()
 
 
-def _v_allergen_codes(value: object) -> tuple[str, ...]:
+def _v_allergen_codes(value: object) -> tuple[AllergenCode, ...]:
     if not isinstance(value, list):
         raise _invalid()
     try:
@@ -507,9 +508,7 @@ class OfficeApi:
             if o.candidate_order_version_id is not None
             and o.candidate_order_version_id != o.effective_order_version_id
             and (
-                candidate := self.orders.get_order_version(
-                    o.candidate_order_version_id
-                )
+                candidate := self.orders.get_order_version(o.candidate_order_version_id)
             )
             is not None
             and candidate.kitchen_print_confirmed_at is None
@@ -1011,9 +1010,7 @@ class OfficeApi:
         if not isinstance(snapshot, dict):
             raise _invalid()
         try:
-            offer = self.offer_service.prepare_offer_version(
-                path_ids["id"], snapshot
-            )
+            offer = self.offer_service.prepare_offer_version(path_ids["id"], snapshot)
         except KeyError as exc:
             raise ApiError(404, "not_found") from exc
         except ValueError as exc:
@@ -1182,14 +1179,15 @@ class OfficeApi:
                     replay = True
                 else:
                     raise ApiError(409, "conversion_already_exists") from None
-            elif self._active_order_for_inquiry(offer_check.source_inquiry_id) is not None:
+            elif (
+                self._active_order_for_inquiry(offer_check.source_inquiry_id)
+                is not None
+            ):
                 raise ApiError(409, "already_converted") from None
             else:
                 raise
         offer_version = next(
-            item
-            for item in offer.versions
-            if item.offer_version_id == offer_version_id
+            item for item in offer.versions if item.offer_version_id == offer_version_id
         )
         self.payment_reminder_service.seed_from_conversion(
             order.order_id,
@@ -1275,12 +1273,8 @@ class OfficeApi:
         order = self._require_active_order(path_ids["id"])
         expected_pointer = expect["current_effective_order_version_id"]
         expected_candidate = expect["current_candidate_order_version_id"]
-        if (
-            expected_pointer is not None
-            and not isinstance(expected_pointer, str)
-        ) or (
-            expected_candidate is not None
-            and not isinstance(expected_candidate, str)
+        if (expected_pointer is not None and not isinstance(expected_pointer, str)) or (
+            expected_candidate is not None and not isinstance(expected_candidate, str)
         ):
             raise _invalid()
         if (
@@ -1372,7 +1366,10 @@ class OfficeApi:
             return ApiError(409, "order_not_paused")
         if message == "stale operational pause state":
             return ApiError(409, "stale_state")
-        if "invalid pause reason_code" in message or "invalid resume reason_code" in message:
+        if (
+            "invalid pause reason_code" in message
+            or "invalid resume reason_code" in message
+        ):
             return ApiError(422, "invalid_request")
         if "exceeds length limit" in message:
             return ApiError(422, "invalid_request")
@@ -1395,9 +1392,7 @@ class OfficeApi:
             event = self.core.pause_order(
                 order.order_id,
                 reason_code=_v_str(args["reason_code"], 100),
-                note=_v_optional_str(args["note"], 2000)
-                if "note" in args
-                else None,
+                note=_v_optional_str(args["note"], 2000) if "note" in args else None,
                 actor_reference=self._pause_actor_reference(args),
                 command_id=command_id,
                 expected_latest_pause_event_id=expected_latest,
@@ -1428,9 +1423,7 @@ class OfficeApi:
             event = self.core.resume_order(
                 order.order_id,
                 reason_code=_v_str(args["reason_code"], 100),
-                note=_v_optional_str(args["note"], 2000)
-                if "note" in args
-                else None,
+                note=_v_optional_str(args["note"], 2000) if "note" in args else None,
                 actor_reference=self._pause_actor_reference(args),
                 command_id=command_id,
                 expected_current_pause_event_id=current_pause_event_id,
@@ -1742,9 +1735,7 @@ _CATALOG_DISH_UPDATE_ARGS = _ArgKeys(
             "active",
         }
     ),
-    optional=frozenset(
-        {"description", "composition", "notes", "effective_from"}
-    ),
+    optional=frozenset({"description", "composition", "notes", "effective_from"}),
 )
 
 _COMMANDS: dict[str, _CommandSpec] = {
@@ -2009,16 +2000,12 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         {"GET": "confirmation_document_send_status"},
     ),
     (
-        re.compile(
-            r"^/office/v1/orders/(?P<id>[^/]+)/confirmation-document/send$"
-        ),
+        re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/confirmation-document/send$"),
         "/office/v1/orders/{id}/confirmation-document/send",
         {"POST": "confirmation-document-send"},
     ),
     (
-        re.compile(
-            r"^/office/v1/orders/(?P<id>[^/]+)/confirmation-document/preview$"
-        ),
+        re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/confirmation-document/preview$"),
         "/office/v1/orders/{id}/confirmation-document/preview",
         {"GET": "confirmation_document_preview"},
     ),
@@ -2278,16 +2265,20 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
                     if "active_only" in params
                     else False
                 )
-                q_raw = params.get("q")
-                q = _v_str(q_raw, _MAX_Q_CHARS).strip() if q_raw is not None else None
-                if q == "":
-                    q = None
+                catalog_q_raw = params.get("q")
+                catalog_q = (
+                    _v_str(catalog_q_raw, _MAX_Q_CHARS).strip()
+                    if catalog_q_raw is not None
+                    else None
+                )
+                if catalog_q == "":
+                    catalog_q = None
                 limit, offset = self._pagination(params)
                 self._respond(
                     200,
                     api.list_catalog_dishes(
                         active_only=active_only,
-                        q=q,
+                        q=catalog_q,
                         limit=limit,
                         offset=offset,
                     ),
@@ -2374,7 +2365,9 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
                 else:
                     self._respond(200, result)
             elif kind == "confirmation_document_send_status":
-                self._respond(200, api.confirmation_document_send_status(path_ids["id"]))
+                self._respond(
+                    200, api.confirmation_document_send_status(path_ids["id"])
+                )
             elif kind == "confirmation_document_fake_outbox":
                 params = self._query({"document_snapshot_id"})
                 snapshot_id = (

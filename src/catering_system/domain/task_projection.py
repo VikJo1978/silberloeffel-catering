@@ -35,7 +35,9 @@ class TaskProjection:
     opened_at: datetime
 
 
-def inquiry_subtitle(intake_subject: str | None, location_text: str, inquiry_id: str) -> str:
+def inquiry_subtitle(
+    intake_subject: str | None, location_text: str, inquiry_id: str
+) -> str:
     subject = (intake_subject or "").strip()
     if subject:
         return subject
@@ -45,7 +47,9 @@ def inquiry_subtitle(intake_subject: str | None, location_text: str, inquiry_id:
     return inquiry_id[:8]
 
 
-def task_sort_key(task: TaskProjection, *, event_date: date) -> tuple[int, date, date, str]:
+def task_sort_key(
+    task: TaskProjection, *, event_date: date
+) -> tuple[int, date, date, str]:
     tier = _sort_tier(task)
     due = task.due_at or date.max
     return (tier, due, event_date, task.task_id)

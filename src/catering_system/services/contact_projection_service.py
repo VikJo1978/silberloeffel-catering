@@ -133,10 +133,7 @@ class ContactProjectionService:
                 if order.cancelled_at is None:
                     aggregate.active_order_ids.add(order.order_id)
             activity = inquiry.updated_at
-            if (
-                aggregate.last_activity is None
-                or activity > aggregate.last_activity
-            ):
+            if aggregate.last_activity is None or activity > aggregate.last_activity:
                 aggregate.last_activity = activity
         return aggregates
 

@@ -23,8 +23,12 @@ from catering_system.repositories.core_transaction import (
 from catering_system.repositories.in_memory_order_confirmation_document_repository import (
     InMemoryOrderConfirmationDocumentRepository,
 )
-from catering_system.repositories.sqlite_catalog_repository import SQLiteCatalogRepository
-from catering_system.repositories.sqlite_inquiry_repository import SQLiteInquiryRepository
+from catering_system.repositories.sqlite_catalog_repository import (
+    SQLiteCatalogRepository,
+)
+from catering_system.repositories.sqlite_inquiry_repository import (
+    SQLiteInquiryRepository,
+)
 from catering_system.repositories.sqlite_offer_repository import SQLiteOfferRepository
 from catering_system.repositories.sqlite_order_confirmation_document_repository import (
     SQLiteOrderConfirmationDocumentRepository,
@@ -83,7 +87,9 @@ def _post(url: str, fields: dict[str, str] | None = None) -> tuple[int, str]:
         return exc.code, exc.read().decode("utf-8")
 
 
-def _start_panel_server(db: Path, *, ui_version: str = "legacy") -> tuple[str, HTTPServer]:
+def _start_panel_server(
+    db: Path, *, ui_version: str = "legacy"
+) -> tuple[str, HTTPServer]:
     ready: queue.Queue[HTTPServer] = queue.Queue()
 
     def run() -> None:
@@ -123,9 +129,7 @@ def _start_panel_server(db: Path, *, ui_version: str = "legacy") -> tuple[str, H
 def _sqlite_world(
     tmp_path: Path,
     *,
-    intake_message: str = (
-        "Firma: Example GmbH\nE-Mail: customer@example.invalid\n"
-    ),
+    intake_message: str = ("Firma: Example GmbH\nE-Mail: customer@example.invalid\n"),
 ) -> tuple[
     Path,
     OrderConfirmationDocumentService,
@@ -146,9 +150,7 @@ def _sqlite_world(
     offer_service = OfferService(offers, inquiries, orders)
     offer = offer_service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
     version_id = offer.versions[0].offer_version_id
-    offer_service.record_sent_evidence(
-        offer.offer_id, version_id, **_record_args()
-    )
+    offer_service.record_sent_evidence(offer.offer_id, version_id, **_record_args())
     updated = offer_service.record_acceptance_evidence(
         offer.offer_id,
         version_id,
@@ -196,6 +198,7 @@ def test_create_office_panel_server_passes_confirmation_document_repository() ->
             object(),
             object(),
             _PASSWORD,
+            port=0,
             confirmation_document_repo=documents,
         )
     assert make_handler.call_args.kwargs["confirmation_document_repo"] is documents
@@ -230,9 +233,7 @@ def test_panel_handler_sees_sqlite_snapshot_created_outside_panel(
 def test_legacy_order_detail_before_snapshot_shows_prepare_action(
     tmp_path: Path,
 ) -> None:
-    db, doc_service, _core, _orders, order_id, _version_id = _sqlite_world(
-        tmp_path
-    )
+    db, doc_service, _core, _orders, order_id, _version_id = _sqlite_world(tmp_path)
     connection = open_core_connection(db)
     panel = OfficePanel(
         SQLiteInquiryRepository.from_connection(connection),
@@ -333,9 +334,7 @@ def test_legacy_panel_preview_unknown_order_returns_404(tmp_path: Path) -> None:
 
 
 def test_panel_prepare_action_persists_single_snapshot(tmp_path: Path) -> None:
-    db, _doc_service, _core, _orders, order_id, _version_id = _sqlite_world(
-        tmp_path
-    )
+    db, _doc_service, _core, _orders, order_id, _version_id = _sqlite_world(tmp_path)
     panel_url, server = _start_panel_server(db)
     try:
         status, detail, _ = _get(f"{panel_url}/order/{order_id}")
@@ -494,7 +493,16 @@ def test_panel_preview_requires_basic_auth(tmp_path: Path) -> None:
 
 def test_confirmation_card_escapes_hostile_user_data() -> None:
     services = _accepted_offer_state()
-    offer, version_id, variant_id, acceptance_id, offers, orders, inquiries, offer_service = services
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        inquiries,
+        offer_service,
+    ) = services
     inquiry = inquiries.get_by_id(_INQUIRY_ID)
     assert inquiry is not None
     inquiries.update(

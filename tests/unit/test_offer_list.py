@@ -229,7 +229,9 @@ def test_expired_offer_is_listed_but_not_counted_as_waiting() -> None:
     )
     offers = InMemoryOfferRepository()
     offers.save(_offer(inquiry.inquiry_id, sent=True, valid_until=date(2026, 7, 10)))
-    rows = offer_list_view(offers.list_all(), {inquiry.inquiry_id: inquiry}, today=_TODAY)
+    rows = offer_list_view(
+        offers.list_all(), {inquiry.inquiry_id: inquiry}, today=_TODAY
+    )
     assert rows[0]["state"] == "Expired"
     snapshot = WorkCenterService(
         inquiries,

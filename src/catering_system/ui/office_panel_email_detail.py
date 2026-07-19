@@ -68,7 +68,7 @@ def render_email_detail(
         "</section>"
         '<section class="offer-detail-section">'
         "<h2>Nachricht</h2>"
-        f"<pre class=\"email-message\">{_e(message)}</pre>"
+        f'<pre class="email-message">{_e(message)}</pre>'
         "</section>"
         '<section class="offer-detail-section">'
         "<h2>Zuordnung</h2>"

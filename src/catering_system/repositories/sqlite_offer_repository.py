@@ -14,7 +14,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from pathlib import Path
 
-from catering_system.domain.catalog import validate_allergen_codes
+from catering_system.domain.catalog import AllergenCode, validate_allergen_codes
 from catering_system.domain.inquiry import validate_planning_mode
 from catering_system.domain.offer import (
     ACCEPTANCE_CHANNELS,
@@ -259,9 +259,7 @@ def _migration_5_offer_variant_and_position_print_fields(
         "unit_label",
     ):
         if name not in position_columns:
-            connection.execute(
-                f"ALTER TABLE offer_positions ADD COLUMN {name} TEXT"
-            )
+            connection.execute(f"ALTER TABLE offer_positions ADD COLUMN {name} TEXT")
 
 
 def _migration_6_offer_position_catalog_snapshot_fields(
@@ -322,7 +320,7 @@ def _allergens_storage(value: tuple[str, ...] | None) -> str | None:
     return json.dumps(list(value), ensure_ascii=False)
 
 
-def _optional_allergens(value: str | None) -> tuple[str, ...] | None:
+def _optional_allergens(value: str | None) -> tuple[AllergenCode, ...] | None:
     if value is None:
         return None
     parsed = json.loads(value)
@@ -352,7 +350,7 @@ def _position_quantity_mode(value: str | None) -> PositionQuantityMode | None:
         return None
     if value not in POSITION_QUANTITY_MODES:
         raise ValueError("invalid stored quantity_mode")
-    return value  # type: ignore[return-value]
+    return value
 
 
 def _position_kind(value: str) -> PositionKind:

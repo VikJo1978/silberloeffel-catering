@@ -8,7 +8,9 @@ from catering_system.domain.order_confirmation_document import (
 )
 
 
-def snapshot_hash_payload(snapshot: OrderConfirmationDocumentSnapshot) -> dict[str, object]:
+def snapshot_hash_payload(
+    snapshot: OrderConfirmationDocumentSnapshot,
+) -> dict[str, object]:
     return {
         "schema_version": snapshot.schema_version,
         "order_id": snapshot.order_id,

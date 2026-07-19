@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from catering_system.domain.offer import AcceptanceEvidence, ConversionLink, Offer, SentEvidence
+from catering_system.domain.offer import (
+    AcceptanceEvidence,
+    ConversionLink,
+    Offer,
+    SentEvidence,
+)
 
 
 class InMemoryOfferRepository:
@@ -27,7 +32,9 @@ class InMemoryOfferRepository:
         return None
 
     def list_all(self) -> list[Offer]:
-        return sorted(self._offers.values(), key=lambda offer: (offer.created_at, offer.offer_id))
+        return sorted(
+            self._offers.values(), key=lambda offer: (offer.created_at, offer.offer_id)
+        )
 
     def append_sent_evidence(self, evidence: SentEvidence) -> Offer:
         offer = self.get(evidence.offer_id)

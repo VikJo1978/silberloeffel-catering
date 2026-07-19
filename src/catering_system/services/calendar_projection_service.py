@@ -73,9 +73,7 @@ class CalendarProjectionService:
         offer: Offer | None,
         today: date,
     ) -> CalendarEntryProjection | None:
-        active_orders = [
-            order for order in linked_orders if order.cancelled_at is None
-        ]
+        active_orders = [order for order in linked_orders if order.cancelled_at is None]
         if active_orders:
             order = active_orders[0]
             versions = self._orders.list_order_versions(order.order_id)

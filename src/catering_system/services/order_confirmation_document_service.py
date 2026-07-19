@@ -8,7 +8,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from catering_system.domain.inquiry import Inquiry
-from catering_system.domain.offer import Offer, OfferPosition, OfferVariant, OfferVersion
+from catering_system.domain.offer import (
+    Offer,
+    OfferPosition,
+    OfferVariant,
+    OfferVersion,
+)
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_confirmation_document import (
     OrderConfirmationDocumentPosition,
@@ -20,15 +25,22 @@ from catering_system.domain.order_payment_reminder import (
     PAYMENT_METHOD_LABELS,
     validate_payment_method,
 )
-from catering_system.intake.intake_contact import labelled_intake_context, parse_intake_contact
+from catering_system.intake.intake_contact import (
+    labelled_intake_context,
+    parse_intake_contact,
+)
 from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.repositories.offer_repository import OfferRepository
 from catering_system.repositories.order_confirmation_document_repository import (
     OrderConfirmationDocumentRepository,
 )
 from catering_system.repositories.order_repository import OrderRepository
-from catering_system.services.order_confirmation_document_hash import compute_document_hash
-from catering_system.services.order_print_projection_service import format_quantity_display
+from catering_system.services.order_confirmation_document_hash import (
+    compute_document_hash,
+)
+from catering_system.services.order_print_projection_service import (
+    format_quantity_display,
+)
 
 
 class OrderConfirmationDocumentNotFoundError(LookupError):
@@ -309,7 +321,11 @@ class OrderConfirmationDocumentService:
         if offer_version is None:
             raise OrderConfirmationDocumentBlockedError("nicht_verfuegbar")
         variant = next(
-            (item for item in offer_version.variants if item.variant_id == link.variant_id),
+            (
+                item
+                for item in offer_version.variants
+                if item.variant_id == link.variant_id
+            ),
             None,
         )
         if variant is None:
@@ -324,7 +340,9 @@ def _recipient_status_from_inquiry(inquiry: Inquiry | None) -> RecipientStatus:
     return "ready" if parsed["email"] else "missing"
 
 
-def _recipient_snapshot(inquiry: Inquiry | None) -> dict[str, RecipientStatus | str | None]:
+def _recipient_snapshot(
+    inquiry: Inquiry | None,
+) -> dict[str, RecipientStatus | str | None]:
     if inquiry is None:
         return {
             "recipient_name": None,
@@ -395,7 +413,11 @@ def _commercial_positions(
     position_net = sum(item.net_total_cents for item in mapped)
     position_vat = sum(item.vat_cents for item in mapped)
     position_gross = sum(item.gross_cents for item in mapped)
-    if (position_net, position_vat, position_gross) != (net_total, vat_total, gross_total):
+    if (position_net, position_vat, position_gross) != (
+        net_total,
+        vat_total,
+        gross_total,
+    ):
         raise OrderConfirmationDocumentBlockedError("commercial_totals_invalid")
     buckets = tuple(
         OrderConfirmationVatBucket(
@@ -405,11 +427,15 @@ def _commercial_positions(
         )
         for rate, values in sorted(bucket_totals.items())
     )
-    return tuple(mapped), buckets, {
-        "net_total_cents": net_total,
-        "vat_total_cents": vat_total,
-        "gross_total_cents": gross_total,
-    }
+    return (
+        tuple(mapped),
+        buckets,
+        {
+            "net_total_cents": net_total,
+            "vat_total_cents": vat_total,
+            "gross_total_cents": gross_total,
+        },
+    )
 
 
 def payment_method_label(method: str) -> str:

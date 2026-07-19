@@ -6,7 +6,9 @@ import importlib.util
 import json
 from pathlib import Path
 
-from catering_system.repositories.sqlite_catalog_repository import SQLiteCatalogRepository
+from catering_system.repositories.sqlite_catalog_repository import (
+    SQLiteCatalogRepository,
+)
 
 _DISH_ID = "catalog-schnitzel-1"
 

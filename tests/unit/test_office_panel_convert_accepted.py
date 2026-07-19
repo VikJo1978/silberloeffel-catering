@@ -298,7 +298,7 @@ def _extract_hidden(html: str, name: str) -> str:
 def _post_convert_accepted(panel_url: str, inquiry_id: str) -> tuple[int, str, str]:
     _status, detail = _get(f"{panel_url}/inquiry/{inquiry_id}")
     form = re.search(
-        r'(<form[^>]*convert-accepted[^>]*>.*?</form>)',
+        r"(<form[^>]*convert-accepted[^>]*>.*?</form>)",
         detail,
         re.DOTALL,
     )
@@ -348,7 +348,9 @@ def test_accepted_offer_button_creates_order_and_disappears(direct_world) -> Non
     _status, detail = _get(f"{panel_url}/inquiry/{inquiry_id}")
     assert "Angenommenes Angebot in Auftrag überführen" in detail
     assert 'action="/inquiry/' in detail and "convert-accepted" in detail
-    assert "Dieses angenommene Angebot wird jetzt in einen Auftrag umgewandelt." in detail
+    assert (
+        "Dieses angenommene Angebot wird jetzt in einen Auftrag umgewandelt." in detail
+    )
 
     status, final_url, _body = _post_convert_accepted(panel_url, inquiry_id)
     assert status == 200
@@ -359,7 +361,7 @@ def test_accepted_offer_button_creates_order_and_disappears(direct_world) -> Non
     _status, detail_after = _get(f"{panel_url}/inquiry/{inquiry_id}")
     assert "Angenommenes Angebot in Auftrag überführen" not in detail_after
     assert "Auftrag vorhanden" in detail_after
-    assert f'/order/{order_id}' in detail_after
+    assert f"/order/{order_id}" in detail_after
 
 
 def test_converted_storno_shows_open_link_not_create_button(direct_world) -> None:

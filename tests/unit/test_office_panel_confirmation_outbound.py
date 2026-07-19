@@ -17,8 +17,12 @@ from catering_system.repositories.core_transaction import (
     CoreCommandExecutor,
     open_core_connection,
 )
-from catering_system.repositories.sqlite_catalog_repository import SQLiteCatalogRepository
-from catering_system.repositories.sqlite_inquiry_repository import SQLiteInquiryRepository
+from catering_system.repositories.sqlite_catalog_repository import (
+    SQLiteCatalogRepository,
+)
+from catering_system.repositories.sqlite_inquiry_repository import (
+    SQLiteInquiryRepository,
+)
 from catering_system.repositories.sqlite_offer_repository import SQLiteOfferRepository
 from catering_system.repositories.sqlite_order_confirmation_document_repository import (
     SQLiteOrderConfirmationDocumentRepository,
@@ -68,7 +72,9 @@ def _post(url: str, fields: dict[str, str]) -> tuple[int, str]:
         return exc.code, exc.read().decode("utf-8")
 
 
-def _start_panel_server(db: Path, *, ui_version: str = "legacy") -> tuple[str, HTTPServer]:
+def _start_panel_server(
+    db: Path, *, ui_version: str = "legacy"
+) -> tuple[str, HTTPServer]:
     ready: queue.Queue[HTTPServer] = queue.Queue()
 
     def run() -> None:
@@ -131,9 +137,7 @@ def _panel_with_outbound(db: Path, *, ui_version: str = "legacy") -> OfficePanel
 
 
 def test_outbound_card_before_send_shows_testversand_warning(tmp_path: Path) -> None:
-    db, doc_service, _core, orders, order_id, order_version_id = _sqlite_world(
-        tmp_path
-    )
+    db, doc_service, _core, orders, order_id, order_version_id = _sqlite_world(tmp_path)
     snapshot = doc_service.prepare_snapshot(
         order_id,
         order_version_id,

@@ -101,18 +101,25 @@ def test_fetch_missed_board_missing_items_key_not_empty_queue() -> None:
     assert items is None
     assert error is not None
 
+
 import urllib.error
 
 
 def test_fetch_missed_board_transport_error_is_failure() -> None:
-    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("network down")):
+    with patch(
+        "urllib.request.urlopen", side_effect=urllib.error.URLError("network down")
+    ):
         items, error = auerswald_sync.fetch_missed_board("http://sync", "u", "p")
     assert items is None
     assert error is not None
 
 
 def test_fetch_missed_board_valid_non_empty_list_unchanged() -> None:
-    payload = {"items": [{"call_id": "01.01.26|10:00:00|01710000000", "reason": "Nicht angenommen"}]}
+    payload = {
+        "items": [
+            {"call_id": "01.01.26|10:00:00|01710000000", "reason": "Nicht angenommen"}
+        ]
+    }
     items, error = _fetch_with_payload(json.dumps(payload).encode())
     assert error is None
     assert items == payload["items"]

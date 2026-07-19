@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 
 from catering_system.domain.catalog import (
     CatalogDish,
@@ -49,9 +49,7 @@ class CatalogDishWriteService:
             created_at=current.created_at,
             updated_at=commit_time,
         )
-        price_changed = (
-            update.current_unit_net_cents != current.current_unit_net_cents
-        )
+        price_changed = update.current_unit_net_cents != current.current_unit_net_cents
         history_entry: CatalogPriceHistoryEntry | None = None
         if price_changed:
             history_entry = CatalogPriceHistoryEntry(

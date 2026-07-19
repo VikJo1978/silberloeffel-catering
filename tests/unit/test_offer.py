@@ -316,12 +316,8 @@ def test_offer_allows_sent_recording_only_for_prepared_versions() -> None:
     v1 = _version()
     v2 = _version(2)
     prepared_v2 = _offer(versions=(v1, v2), sent=(_sent(_V1_ID),))
-    assert offer_allows_sent_recording(
-        prepared_v2, _V2_ID, today=date(2026, 7, 20)
-    )
-    assert not offer_allows_sent_recording(
-        prepared_v2, _V1_ID, today=date(2026, 7, 20)
-    )
+    assert offer_allows_sent_recording(prepared_v2, _V2_ID, today=date(2026, 7, 20))
+    assert not offer_allows_sent_recording(prepared_v2, _V1_ID, today=date(2026, 7, 20))
 
     both_sent = _offer(
         versions=(v1, v2),

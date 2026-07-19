@@ -15,7 +15,9 @@ class InMemoryOrderConfirmationDocumentRepository(OrderConfirmationDocumentRepos
         self._by_id: dict[str, OrderConfirmationDocumentSnapshot] = {}
         self._by_version: dict[str, OrderConfirmationDocumentSnapshot] = {}
 
-    def get_by_id(self, document_snapshot_id: str) -> OrderConfirmationDocumentSnapshot | None:
+    def get_by_id(
+        self, document_snapshot_id: str
+    ) -> OrderConfirmationDocumentSnapshot | None:
         return self._by_id.get(document_snapshot_id)
 
     def get_by_order_version_id(

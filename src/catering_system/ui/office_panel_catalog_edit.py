@@ -14,7 +14,7 @@ from catering_system.ui.office_panel_views import (
 def _textarea(name: str, label: str, value: object | None) -> str:
     text = str(value) if value is not None else ""
     return (
-        f"<p><label for=\"{_e(name)}\">{_e(label)}</label><br>"
+        f'<p><label for="{_e(name)}">{_e(label)}</label><br>'
         f'<textarea id="{_e(name)}" name="{_e(name)}" rows="4" cols="60">'
         f"{_e(text)}</textarea></p>"
     )
@@ -22,7 +22,7 @@ def _textarea(name: str, label: str, value: object | None) -> str:
 
 def _text_input(name: str, label: str, value: str) -> str:
     return (
-        f"<p><label for=\"{_e(name)}\">{_e(label)}</label><br>"
+        f'<p><label for="{_e(name)}">{_e(label)}</label><br>'
         f'<input id="{_e(name)}" name="{_e(name)}" value="{_e(value)}" size="60"></p>'
     )
 
@@ -54,12 +54,10 @@ def render_gericht_edit(
 ) -> str:
     name = str(detail.get("name", "Gericht"))
     dish_id = str(detail.get("dish_id", ""))
-    cents = int(detail.get("current_unit_net_cents", 0))
+    cents = int(str(detail.get("current_unit_net_cents", 0)))
     active = bool(detail.get("active"))
     effective_default = str(detail.get("effective_from_default", ""))
-    error_html = (
-        f'<p class="error">{_e(error_message)}</p>' if error_message else ""
-    )
+    error_html = f'<p class="error">{_e(error_message)}</p>' if error_message else ""
     body = (
         error_html
         + f'<p class="subtitle"><a href="/gerichte/{_e(dish_id)}">← Zurück zum Gericht</a></p>'
@@ -77,7 +75,7 @@ def render_gericht_edit(
         + _allergen_checkboxes(detail.get("allergens"))
         + (
             f'<p><label><input type="checkbox" name="active" value="1"'
-            f'{" checked" if active else ""}> Aktiv</label></p>'
+            f"{' checked' if active else ''}> Aktiv</label></p>"
         )
         + _text_input("effective_from", "Gültig ab (Preis)", effective_default)
         + '<p><button type="submit">Speichern</button></p>'

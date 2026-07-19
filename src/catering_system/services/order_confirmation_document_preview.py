@@ -8,7 +8,9 @@ from dataclasses import dataclass
 from catering_system.domain.order_confirmation_document import (
     OrderConfirmationDocumentSnapshot,
 )
-from catering_system.services.order_confirmation_document_service import payment_method_label
+from catering_system.services.order_confirmation_document_service import (
+    payment_method_label,
+)
 
 _SENDER_NAME = "Silberlöffel Event Catering Service"
 _SENDER_LOCATION = "Hamburg"
@@ -146,9 +148,7 @@ def render_preview_html(preview: OrderConfirmationDocumentPreview) -> str:
             else ""
         )
         qty = position.get("quantity")
-        qty_html = (
-            f"<p class='qty'>Menge: {_e(qty)}</p>" if qty else ""
-        )
+        qty_html = f"<p class='qty'>Menge: {_e(qty)}</p>" if qty else ""
         position_rows.append(
             "<tr>"
             f"<td><strong>{_e(position['name'])}</strong>{detail_html}{qty_html}</td>"
@@ -188,7 +188,7 @@ footer{{margin-top:2rem;padding-top:1rem;border-top:1px solid #ddd;font-size:0.9
 <h1 class="title">{_e(preview.title)}</h1>
 <p>Referenz: {_e(preview.document_reference)} · Erstellt am {_e(preview.created_at_text)}</p>
 </header>
-<section class="section"><h2>Kunde</h2>{''.join(recipient_lines) or '<p>–</p>'}</section>
+<section class="section"><h2>Kunde</h2>{"".join(recipient_lines) or "<p>–</p>"}</section>
 <section class="section"><h2>Veranstaltung</h2>
 <p>Datum: {_e(preview.event_date_text)}</p>
 <p>Zeit: {_e(preview.time_window_text)}</p>
@@ -197,7 +197,7 @@ footer{{margin-top:2rem;padding-top:1rem;border-top:1px solid #ddd;font-size:0.9
 </section>
 <section class="section"><h2>Leistungen</h2>
 <table><thead><tr><th>Position</th><th class="money">Netto</th><th class="money">MwSt.</th><th class="money">Brutto</th></tr></thead>
-<tbody>{''.join(position_rows)}</tbody></table></section>
+<tbody>{"".join(position_rows)}</tbody></table></section>
 <section class="section"><h2>MwSt.-Übersicht</h2>
 <table><thead><tr><th>Satz</th><th class="money">Netto</th><th class="money">MwSt.</th></tr></thead>
 <tbody>{bucket_rows}</tbody></table>

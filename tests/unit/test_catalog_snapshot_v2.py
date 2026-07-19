@@ -14,13 +14,12 @@ from catering_system.domain.offer_snapshot import compute_snapshot_hash
 from catering_system.repositories.in_memory_inquiry_repository import (
     InMemoryInquiryRepository,
 )
-from catering_system.repositories.in_memory_offer_repository import (
-    InMemoryOfferRepository,
-)
 from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
 )
-from catering_system.repositories.sqlite_catalog_repository import SQLiteCatalogRepository
+from catering_system.repositories.sqlite_catalog_repository import (
+    SQLiteCatalogRepository,
+)
 from catering_system.repositories.sqlite_offer_repository import SQLiteOfferRepository
 from catering_system.services.catalog_dish_write_service import CatalogDishWriteService
 from catering_system.services.offer_service import OfferService
@@ -63,8 +62,7 @@ def _catalog_position(
         "net_total_cents": unit_net_cents * 10,
         "vat_rate_percent": 7,
         "vat_amount_cents": (unit_net_cents * 10 * 7) // 100,
-        "gross_total_cents": unit_net_cents * 10
-        + (unit_net_cents * 10 * 7) // 100,
+        "gross_total_cents": unit_net_cents * 10 + (unit_net_cents * 10 * 7) // 100,
         "notes": None,
         "related_position_id": None,
         "allergens": allergens if allergens is not None else ["A", "G"],

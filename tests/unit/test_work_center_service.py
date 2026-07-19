@@ -77,7 +77,9 @@ def _save_inquiry(repo: InMemoryInquiryRepository, **overrides: object) -> Inqui
     return service.create_inquiry(**payload)  # type: ignore[arg-type]
 
 
-def _offer_version(*, offer_id: str, version_id: str, sent: bool = False) -> OfferVersion:
+def _offer_version(
+    *, offer_id: str, version_id: str, sent: bool = False
+) -> OfferVersion:
     return OfferVersion(
         offer_version_id=version_id,
         offer_id=offer_id,

@@ -15,7 +15,6 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import quote
 
-from catering_system.integration.auerswald_sync import fetch_missed_board
 
 from catering_system.domain.inquiry import (
     ACTIVE_ORDER_CRM_STAGE,
@@ -98,6 +97,7 @@ from catering_system.services.contact_projection_service import ContactProjectio
 from catering_system.services.catalog_dish_service import CatalogDishService
 from catering_system.services.catalog_dish_write_service import CatalogDishWriteService
 from catering_system.domain.catalog import (
+    AllergenCode,
     ALLERGEN_CODES,
     CatalogDishStaleError,
     CatalogDishUpdatePayload,
@@ -205,7 +205,9 @@ _OFFICE_SOURCES = ("manual", "phone_by_office", "email", "website_form", "config
 
 def fetch_rueckruf_count(url: str, user: str, password: str) -> int | None:
     """Sidebar badge count via integration.auerswald_sync (same missed-board source)."""
-    from catering_system.integration.auerswald_sync import fetch_rueckruf_count as _count
+    from catering_system.integration.auerswald_sync import (
+        fetch_rueckruf_count as _count,
+    )
 
     return _count(url, user, password)
 
@@ -304,9 +306,7 @@ class OfficePanel:
             pause_repo = pause_repository or InMemoryOrderOperationalPauseRepository()
             self.inquiry_service = InquiryService(inquiry_repo)
             self.order_service = OrderService(order_repo)
-            self.core = OperationalCoreService(
-                order_repo, pause_repository=pause_repo
-            )
+            self.core = OperationalCoreService(order_repo, pause_repository=pause_repo)
             self._pause_repository = pause_repo
             self.payment_reminder_service = PaymentReminderService(
                 payment_reminder_repo or InMemoryPaymentReminderRepository(),
@@ -882,10 +882,12 @@ class OfficePanel:
         )
 
     @staticmethod
-    def _catalog_allergens_from_form(form: dict[str, str]) -> list[str]:
-        return [
+    def _catalog_allergens_from_form(
+        form: dict[str, str],
+    ) -> tuple[AllergenCode, ...]:
+        return tuple(
             code for code in ALLERGEN_CODES if form.get(f"allergen_{code}") == "1"
-        ]
+        )
 
     def update_catalog_dish(self, dish_id: str, form: dict[str, str]) -> None:
         expected_raw = form.get("_expect_updated_at", "").strip()
@@ -897,26 +899,33 @@ class OfficePanel:
             raise ValueError(f"no catalog dish with id {dish_id!r}")
         new_cents = api_views.parse_catalog_price_cents(form.get("price_net", ""))
         effective_raw = form.get("effective_from", "").strip()
-        effective_from = (
-            date.fromisoformat(effective_raw) if effective_raw else None
-        )
-        if new_cents != int(current["current_unit_net_cents"]) and effective_from is None:
+        effective_from = date.fromisoformat(effective_raw) if effective_raw else None
+        if (
+            new_cents != int(str(current["current_unit_net_cents"]))
+            and effective_from is None
+        ):
             effective_from = api_views.berlin_today()
-        args = {
-            "name": form.get("name", "").strip(),
-            "description": form.get("description", "").strip() or None,
-            "composition": form.get("composition", "").strip() or None,
-            "notes": form.get("notes", "").strip() or None,
+        name = form.get("name", "").strip()
+        description = form.get("description", "").strip() or None
+        composition = form.get("composition", "").strip() or None
+        notes = form.get("notes", "").strip() or None
+        allergens = self._catalog_allergens_from_form(form)
+        active = form.get("active") == "1"
+        args: dict[str, object] = {
+            "name": name,
+            "description": description,
+            "composition": composition,
+            "notes": notes,
             "current_unit_net_cents": new_cents,
-            "allergens": self._catalog_allergens_from_form(form),
-            "active": form.get("active") == "1",
+            "allergens": list(allergens),
+            "active": active,
         }
         if effective_from is not None:
             args["effective_from"] = effective_from.isoformat()
 
         def work() -> None:
             if self._remote is not None:
-                self.catalog_dish_write_service.update(
+                self._remote.catalog_dish_write_service.update(
                     dish_id,
                     args=args,
                     expected_updated_at=expected_raw,
@@ -926,13 +935,13 @@ class OfficePanel:
                 self.catalog_dish_write_service.update_dish(
                     dish_id,
                     update=CatalogDishUpdatePayload(
-                        name=str(args["name"]),
-                        description=args["description"],
-                        composition=args["composition"],
-                        notes=args["notes"],
+                        name=name,
+                        description=description,
+                        composition=composition,
+                        notes=notes,
                         current_unit_net_cents=new_cents,
-                        allergens=tuple(args["allergens"]),
-                        active=bool(args["active"]),
+                        allergens=allergens,
+                        active=active,
                         effective_from=effective_from,
                     ),
                     expected_updated_at=expected_updated_at,
@@ -961,9 +970,7 @@ class OfficePanel:
         )
         return api_views.email_list_view(service.list_emails())
 
-    def render_email(
-        self, *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
-    ) -> str:
+    def render_email(self, *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT) -> str:
         return render_email_list(self._email_list_rows(), context=context)
 
     def render_email_detail(
@@ -1842,10 +1849,7 @@ class OfficePanel:
         elif state.next_action == "offer-pending":
             convert += '<p class="muted">Angebot ausstehend</p>'
         elif state.next_action == "convert-accepted":
-            if (
-                state.offer is not None
-                and state.offer.commercial_state == "Converted"
-            ):
+            if state.offer is not None and state.offer.commercial_state == "Converted":
                 convert += (
                     '<p class="muted">Auftrag bereits erstellt — '
                     "verknüpften Auftrag unten öffnen.</p>"
@@ -2174,13 +2178,14 @@ class OfficePanel:
                 (
                     version
                     for version in versions
-                    if version.order_version_id
-                    == order.candidate_order_version_id
+                    if version.order_version_id == order.candidate_order_version_id
                 ),
                 None,
             )
             if target is None:
-                target = max(versions, key=lambda item: item.version_number, default=None)
+                target = max(
+                    versions, key=lambda item: item.version_number, default=None
+                )
             if not cancelled:
                 for version in versions:
                     if (
@@ -2608,7 +2613,9 @@ class OfficePanel:
         else:
             work()
 
-    def prepare_confirmation_document(self, order_id: str, form: dict[str, str]) -> None:
+    def prepare_confirmation_document(
+        self, order_id: str, form: dict[str, str]
+    ) -> None:
         order = self._orders.get_order(order_id)
         if order is None or order.cancelled_at is not None:
             raise ValueError(f"no active order with id {order_id!r}")
@@ -2654,20 +2661,14 @@ class OfficePanel:
                     "Der Auftrag wurde zwischenzeitlich geändert. "
                     "Bitte laden Sie die Seite neu."
                 )
-            expected_effective = form.get(
-                "_expect_current_effective_order_version_id"
-            )
-            expected_candidate = form.get(
-                "_expect_current_candidate_order_version_id"
-            )
+            expected_effective = form.get("_expect_current_effective_order_version_id")
+            expected_candidate = form.get("_expect_current_candidate_order_version_id")
             if (
                 expected_effective is not None
-                and (expected_effective or None)
-                != order.effective_order_version_id
+                and (expected_effective or None) != order.effective_order_version_id
             ) or (
                 expected_candidate is not None
-                and (expected_candidate or None)
-                != order.candidate_order_version_id
+                and (expected_candidate or None) != order.candidate_order_version_id
             ):
                 raise ValueError(
                     "Der Auftrag wurde zwischenzeitlich geändert. "

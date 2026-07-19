@@ -373,7 +373,9 @@ def _post_panel_convert(
             re.DOTALL,
         )
         if convert_form is not None:
-            fields["_command_id"] = _extract_hidden(convert_form.group(0), "_command_id")
+            fields["_command_id"] = _extract_hidden(
+                convert_form.group(0), "_command_id"
+            )
         else:
             fields["_command_id"] = str(uuid.uuid4())
     return _post_form(f"{panel_url}/inquiry/{inquiry_id}/convert", fields)
@@ -386,8 +388,7 @@ def _active_orders_for_inquiry(db: Path, inquiry_id: str) -> int:
             [
                 order
                 for order in orders.list_orders()
-                if order.source_inquiry_id == inquiry_id
-                and order.cancelled_at is None
+                if order.source_inquiry_id == inquiry_id and order.cancelled_at is None
             ]
         )
     finally:
@@ -560,7 +561,7 @@ def test_aufgaben_parity_direct_vs_remote(parity_world) -> None:
     assert d_status == r_status == 200
     _assert_same_modulo_remote_fields(d_html, r_html)
     assert "Rückrufprüfung durchführen" in d_html
-    assert f'/inquiry/{ids["inquiry_verify"]}' in d_html
+    assert f"/inquiry/{ids['inquiry_verify']}" in d_html
 
 
 def test_kalender_parity_direct_vs_remote(parity_world) -> None:
@@ -570,7 +571,7 @@ def test_kalender_parity_direct_vs_remote(parity_world) -> None:
     assert d_status == r_status == 200
     _assert_same_modulo_remote_fields(d_html, r_html)
     assert "Kalender" in d_html
-    assert f'/inquiry/{ids["inquiry_convertible"]}' in d_html
+    assert f"/inquiry/{ids['inquiry_convertible']}" in d_html
 
 
 def test_email_parity_direct_vs_remote(tmp_path: Path) -> None:
@@ -666,15 +667,18 @@ def test_offer_detail_parity_direct_vs_remote(tmp_path: Path) -> None:
         mark_url = (
             f"{api_url}/office/v1/offers/{offer_id}/versions/{version_id}/mark-sent"
         )
-        assert _api_post(
-            mark_url,
-            args={
-                "sent_at": "2026-07-15T10:00:00+00:00",
-                "channel": "email",
-                "recipient_reference": "customer@example.invalid",
-                "evidence_reference": "mail-123",
-            },
-        )[0] == 200
+        assert (
+            _api_post(
+                mark_url,
+                args={
+                    "sent_at": "2026-07-15T10:00:00+00:00",
+                    "channel": "email",
+                    "recipient_reference": "customer@example.invalid",
+                    "evidence_reference": "mail-123",
+                },
+            )[0]
+            == 200
+        )
 
         direct_url, direct_server = _start_direct_panel(db)
         remote = RemoteCoreClient(api_url, _API_TOKEN)

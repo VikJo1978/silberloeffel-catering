@@ -18,7 +18,9 @@ from catering_system.domain.order_payment_reminder import validate_payment_metho
 
 def snapshot_to_canonical_json(snapshot: OrderConfirmationDocumentSnapshot) -> str:
     payload = _snapshot_payload(snapshot)
-    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
+    return json.dumps(
+        payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    )
 
 
 def snapshot_from_canonical_json(raw: str) -> OrderConfirmationDocumentSnapshot:

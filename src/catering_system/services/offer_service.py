@@ -8,6 +8,7 @@ from collections.abc import Callable
 from datetime import UTC, date, datetime
 from decimal import Decimal
 
+from catering_system.domain.catalog import validate_allergen_codes
 from catering_system.domain.inquiry import inquiry_allows_order_conversion
 from catering_system.domain.offer import (
     AcceptanceChannel,
@@ -117,7 +118,9 @@ class OfferService:
         if offer is None:
             raise KeyError(offer_id)
 
-        if not any(version.offer_version_id == offer_version_id for version in offer.versions):
+        if not any(
+            version.offer_version_id == offer_version_id for version in offer.versions
+        ):
             raise ValueError(
                 f"offer_version_id {offer_version_id!r} is not a version of "
                 f"offer {offer_id!r}"
@@ -126,7 +129,9 @@ class OfferService:
         if offer.acceptance_evidence is not None or offer.conversion_link is not None:
             raise ValueError("acceptance blocks sent recording")
 
-        if any(item.offer_version_id == offer_version_id for item in offer.sent_evidence):
+        if any(
+            item.offer_version_id == offer_version_id for item in offer.sent_evidence
+        ):
             raise ValueError(
                 f"sent evidence already exists for offer_version_id={offer_version_id!r}"
             )
@@ -177,7 +182,9 @@ class OfferService:
         if offer is None:
             raise KeyError(offer_id)
 
-        if not any(version.offer_version_id == offer_version_id for version in offer.versions):
+        if not any(
+            version.offer_version_id == offer_version_id for version in offer.versions
+        ):
             raise ValueError(
                 f"offer_version_id {offer_version_id!r} is not a version of "
                 f"offer {offer_id!r}"
@@ -368,9 +375,7 @@ def _build_offer_from_snapshot(snapshot: OfferSnapshotV1 | OfferSnapshotV2) -> O
     )
 
 
-def _map_variant(
-    variant: OfferSnapshotVariant, offer_version_id: str
-) -> OfferVariant:
+def _map_variant(variant: OfferSnapshotVariant, offer_version_id: str) -> OfferVariant:
     return OfferVariant(
         variant_id=variant.variant_id,
         offer_version_id=offer_version_id,
@@ -398,7 +403,11 @@ def _map_position(position: OfferSnapshotPosition) -> OfferPosition:
         quantity_mode=position.quantity_mode,
         unit_label=position.unit_label,
         catalog_item_id=position.catalog_item_id,
-        allergens=position.allergens,
+        allergens=(
+            validate_allergen_codes(position.allergens)
+            if position.allergens is not None
+            else None
+        ),
         vegan=position.vegan,
         vegetarian=position.vegetarian,
     )

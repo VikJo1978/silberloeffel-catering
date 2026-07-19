@@ -96,8 +96,7 @@ def derive_active_pause(
         if event.action == "paused":
             active = event
         elif (
-            active is not None
-            and event.resumes_pause_event_id == active.pause_event_id
+            active is not None and event.resumes_pause_event_id == active.pause_event_id
         ):
             active = None
     return active

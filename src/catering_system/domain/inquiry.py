@@ -254,7 +254,9 @@ def derive_inquiry_office_state(
     if today is None:
         raise ValueError("today is required when deriving inquiry office state")
     offer_projection = (
-        derive_inquiry_offer_projection(offer, today=today) if offer is not None else None
+        derive_inquiry_offer_projection(offer, today=today)
+        if offer is not None
+        else None
     )
     if inquiry.crm_stage == "Abgelehnt / verloren" or has_active_order:
         return InquiryOfficeState(
@@ -296,6 +298,4 @@ def derive_inquiry_office_state(
         return InquiryOfficeState(
             is_open=is_open, next_action="convert", offer=offer_projection
         )
-    return InquiryOfficeState(
-        is_open=is_open, next_action=None, offer=offer_projection
-    )
+    return InquiryOfficeState(is_open=is_open, next_action=None, offer=offer_projection)

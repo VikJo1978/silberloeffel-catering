@@ -78,9 +78,7 @@ class BuffetCardsService:
         )
 
 
-def _effective_version_number(
-    orders: OrderRepository, order_id: str
-) -> int | None:
+def _effective_version_number(orders: OrderRepository, order_id: str) -> int | None:
     order = orders.get_order(order_id)
     if order is None or order.effective_order_version_id is None:
         return None

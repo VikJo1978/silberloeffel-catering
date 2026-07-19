@@ -42,6 +42,7 @@ from catering_system.services.order_confirmation_outbound_payload_hash import (
 from catering_system.services.order_confirmation_outbound_service import (
     OrderConfirmationOutboundAlreadySentError,
     OrderConfirmationOutboundBlockedError,
+    OrderConfirmationOutboundNotFoundError,
     OrderConfirmationOutboundPayloadInvalidError,
     OrderConfirmationOutboundRecipientMissingError,
     OrderConfirmationOutboundService,
@@ -63,9 +64,16 @@ def _world() -> tuple[
     OrderConfirmationOutboundService,
     OperationalCoreService,
 ]:
-    offer, version_id, variant_id, acceptance_id, offers, orders, inquiries, offer_service = (
-        _accepted_offer_state()
-    )
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        inquiries,
+        offer_service,
+    ) = _accepted_offer_state()
     inquiry = inquiries.get_by_id(_INQUIRY_ID)
     assert inquiry is not None
     inquiries.update(
@@ -114,9 +122,16 @@ def _world() -> tuple[
 def _prepared_snapshot(
     world: tuple[object, ...],
 ) -> tuple[object, object, object]:
-    orders, _offers, _inquiries, _documents, _outbound, doc_service, _outbound_service, _core = (
-        world
-    )
+    (
+        orders,
+        _offers,
+        _inquiries,
+        _documents,
+        _outbound,
+        doc_service,
+        _outbound_service,
+        _core,
+    ) = world
     order = orders.list_orders()[0]
     version = orders.get_order_version(order.effective_order_version_id)
     assert version is not None
@@ -141,7 +156,11 @@ def test_eligible_send_creates_attempt_outbox_and_evidence() -> None:
     assert result.real_delivery is False
     assert result.attempt.transport_kind == TRANSPORT_KIND
     assert result.evidence.outcome == OUTCOME_ACCEPTED
-    assert result.attempt.payload_hash == result.message.payload_hash == result.evidence.payload_hash
+    assert (
+        result.attempt.payload_hash
+        == result.message.payload_hash
+        == result.evidence.payload_hash
+    )
     assert result.message.text_body
     assert result.message.html_body
     assert snapshot.document_hash == result.evidence.document_hash
@@ -150,9 +169,16 @@ def test_eligible_send_creates_attempt_outbox_and_evidence() -> None:
 def test_send_does_not_mutate_snapshot_or_order() -> None:
     world = _world()
     order, version, snapshot = _prepared_snapshot(world)
-    orders, _offers, _inquiries, documents, _outbound, _doc_service, outbound_service, _core = (
-        world
-    )
+    (
+        orders,
+        _offers,
+        _inquiries,
+        documents,
+        _outbound,
+        _doc_service,
+        outbound_service,
+        _core,
+    ) = world
     before_order = orders.get_order(order.order_id)
     before_snapshot = documents.get_by_id(snapshot.document_snapshot_id)
     outbound_service.send_to_fake_outbox(
@@ -167,7 +193,16 @@ def test_send_does_not_mutate_snapshot_or_order() -> None:
 
 def test_missing_email_blocks_send() -> None:
     world = _world()
-    orders, offers, inquiries, documents, outbound, doc_service, outbound_service, core = world
+    (
+        orders,
+        offers,
+        inquiries,
+        documents,
+        outbound,
+        doc_service,
+        outbound_service,
+        core,
+    ) = world
     inquiry = inquiries.get_by_id(_INQUIRY_ID)
     assert inquiry is not None
     inquiries.update(replace(inquiry, intake_message="Firma: Example GmbH\n"))
@@ -194,9 +229,16 @@ def test_missing_email_blocks_send() -> None:
 
 def test_pending_candidate_blocks_send() -> None:
     world = _world()
-    orders, _offers, _inquiries, _documents, _outbound, doc_service, outbound_service, _core = (
-        world
-    )
+    (
+        orders,
+        _offers,
+        _inquiries,
+        _documents,
+        _outbound,
+        doc_service,
+        outbound_service,
+        _core,
+    ) = world
     order, version, snapshot = _prepared_snapshot(world)
     OrderService(orders).propose_order_version_change(
         order.order_id,
@@ -219,7 +261,16 @@ def test_pending_candidate_blocks_send() -> None:
 
 def test_stale_snapshot_version_blocks_send() -> None:
     world = _world()
-    orders, _offers, _inquiries, documents, _outbound, doc_service, outbound_service, core = world
+    (
+        orders,
+        _offers,
+        _inquiries,
+        documents,
+        _outbound,
+        doc_service,
+        outbound_service,
+        core,
+    ) = world
     order, version, snapshot = _prepared_snapshot(world)
     OrderService(orders).propose_order_version_change(
         order.order_id,
@@ -234,7 +285,9 @@ def test_stale_snapshot_version_blocks_send() -> None:
     candidate = orders.get_order(order.order_id)
     assert candidate is not None and candidate.candidate_order_version_id is not None
     core.confirm_kitchen_print(order.order_id, candidate.candidate_order_version_id)
-    core.make_order_version_effective(order.order_id, candidate.candidate_order_version_id)
+    core.make_order_version_effective(
+        order.order_id, candidate.candidate_order_version_id
+    )
     updated = orders.get_order(order.order_id)
     assert updated is not None
     with pytest.raises(OrderConfirmationOutboundBlockedError, match="not_current"):
@@ -322,9 +375,16 @@ def test_operational_pause_blocks_fake_send_via_ready_to_send() -> None:
 
 def test_storniert_order_blocks_send() -> None:
     world = _world()
-    orders, _offers, _inquiries, _documents, _outbound, doc_service, outbound_service, core = (
-        world
-    )
+    (
+        orders,
+        _offers,
+        _inquiries,
+        _documents,
+        _outbound,
+        doc_service,
+        outbound_service,
+        core,
+    ) = world
     order, version, snapshot = _prepared_snapshot(world)
     core.cancel_order(order.order_id)
     with pytest.raises(OrderConfirmationOutboundBlockedError, match="order_storniert"):
@@ -499,6 +559,7 @@ def test_sqlite_immutable_and_owner_triggers(tmp_path) -> None:
         )
     conn.close()
 
+
 def test_b2_service_does_not_open_network_sockets() -> None:
     world = _world()
     order, version, snapshot = _prepared_snapshot(world)
@@ -515,3 +576,34 @@ def test_b2_service_does_not_open_network_sockets() -> None:
             "office-panel",
         )
     assert result.real_delivery is False
+
+
+def test_send_eligibility_reports_missing_document() -> None:
+    world = _world()
+    order, _version, _snapshot = _prepared_snapshot(world)
+    outbound_service = OrderConfirmationOutboundService(
+        world[0], world[3], world[4], world[7]
+    )
+    eligibility = outbound_service.send_eligibility(
+        order.order_id, document_snapshot_id="00000000-0000-4000-8000-000000000099"
+    )
+    assert eligibility.state == "dokument_fehlt"
+    assert eligibility.can_send is False
+
+
+def test_send_eligibility_unknown_order_raises_not_found() -> None:
+    world = _world()
+    outbound_service = OrderConfirmationOutboundService(
+        world[0], world[3], world[4], world[7]
+    )
+    with pytest.raises(OrderConfirmationOutboundNotFoundError):
+        outbound_service.send_eligibility("00000000-0000-4000-8000-000000000000")
+
+
+def test_send_status_unknown_order_raises_not_found() -> None:
+    world = _world()
+    outbound_service = OrderConfirmationOutboundService(
+        world[0], world[3], world[4], world[7]
+    )
+    with pytest.raises(OrderConfirmationOutboundNotFoundError):
+        outbound_service.send_status("00000000-0000-4000-8000-000000000000")

@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from catering_system.domain.offer import AcceptanceEvidence, ConversionLink, Offer, SentEvidence
+from catering_system.domain.offer import (
+    AcceptanceEvidence,
+    ConversionLink,
+    Offer,
+    SentEvidence,
+)
 
 
 class OfferRepository(Protocol):

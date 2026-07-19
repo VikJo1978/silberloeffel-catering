@@ -91,9 +91,7 @@ def _position_rows(variants: list[dict[str, object]]) -> str:
             name = _e(str(position.get("name", "Position")))
             unit_cents = position.get("unit_net_cents")
             unit_text = (
-                f"{int(unit_cents) / 100:.2f} €"
-                if isinstance(unit_cents, int)
-                else "–"
+                f"{int(unit_cents) / 100:.2f} €" if isinstance(unit_cents, int) else "–"
             )
             allergen_html = _allergen_block(
                 position.get("allergen_labels"),
@@ -102,7 +100,7 @@ def _position_rows(variants: list[dict[str, object]]) -> str:
             rows.append(
                 "<li>"
                 f"<strong>{name}</strong> "
-                f"<span>({ _e(unit_text) } netto / Einheit)</span>"
+                f"<span>({_e(unit_text)} netto / Einheit)</span>"
                 f"{allergen_html}"
                 "</li>"
             )
@@ -117,7 +115,7 @@ def _select_options(
 ) -> str:
     options = []
     for value in values:
-        mark = ' selected' if value == selected else ""
+        mark = " selected" if value == selected else ""
         options.append(
             f'<option value="{_e(value)}"{mark}>{_e(labels.get(value, value))}</option>'
         )
@@ -156,7 +154,7 @@ def _record_acceptance_form(
     default_at = default_datetime_local_berlin()
     variant_options = "".join(
         f'<option value="{_e(str(variant["variant_id"]))}">'
-        f'{_e(str(variant["name"]))}</option>'
+        f"{_e(str(variant['name']))}</option>"
         for variant in variants
     )
     if not variant_options:
@@ -219,21 +217,23 @@ def render_offer_detail(
     state = str(detail["commercial_state"])
     surface = _surface_version(detail)
     guest_count = surface.get("guest_count")
-    guest_text = (
-        str(guest_count) if guest_count is not None else "noch offen"
-    )
+    guest_text = str(guest_count) if guest_count is not None else "noch offen"
     planning = _PLANNING_LABELS.get(
         str(surface.get("planning_mode", "")), str(surface.get("planning_mode", "–"))
     )
     variants = cast(list[dict[str, object]], surface["variants"])
-    variant_rows = "".join(
-        f"<li>{_e(str(variant['name']))}</li>" for variant in variants
-    ) or "<li>Keine Varianten</li>"
-    history_rows = "".join(
-        f"<li><span>{_e(_history_date(str(entry['at'])))}</span> "
-        f"{_e(str(entry['label']))}</li>"
-        for entry in cast(list[dict[str, object]], detail["history"])
-    ) or "<li>Noch keine Historie</li>"
+    variant_rows = (
+        "".join(f"<li>{_e(str(variant['name']))}</li>" for variant in variants)
+        or "<li>Keine Varianten</li>"
+    )
+    history_rows = (
+        "".join(
+            f"<li><span>{_e(_history_date(str(entry['at'])))}</span> "
+            f"{_e(str(entry['label']))}</li>"
+            for entry in cast(list[dict[str, object]], detail["history"])
+        )
+        or "<li>Noch keine Historie</li>"
+    )
     order_id = detail.get("order_id")
     order_link = (
         f'<p><a href="/order/{_e(str(order_id))}">Auftrag öffnen</a></p>'
@@ -244,9 +244,7 @@ def render_offer_detail(
     if state == "Prepared":
         action_section = _mark_sent_form(offer_id, forms=forms)
     elif state == "Sent":
-        action_section = _record_acceptance_form(
-            offer_id, variants, forms=forms
-        )
+        action_section = _record_acceptance_form(offer_id, variants, forms=forms)
     elif state == "Accepted":
         acceptance_id = detail.get("acceptance_id")
         acceptance = cast(dict[str, object] | None, detail.get("acceptance"))

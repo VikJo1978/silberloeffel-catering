@@ -24,35 +24,40 @@ def render_kontakt_detail(
     context: OfficePageContext,
 ) -> str:
     contact_key = str(detail["contact_key"])
-    inquiry_rows = "".join(
-        "<li>"
-        f'<a href="/inquiry/{_e(str(row["inquiry_id"]))}">'
-        f"{_e(str(row.get('intake_subject') or str(row['inquiry_id'])[:8]))}</a>"
-        f" · {_e(_short_date(str(row['event_date'])))}"
-        f" · {_e(str(row['crm_stage']))}"
-        "</li>"
-        for row in cast(list[dict[str, object]], detail["inquiries"])
-    ) or "<li>Keine Anfragen</li>"
-    offer_rows = "".join(
-        "<li>"
-        f'<a href="/offer/{_e(str(row["offer_id"]))}">'
-        f"{_e(offer_state_label(str(row['state'])))}</a>"  # type: ignore[arg-type]
-        f" · Anfrage {_e(str(row['inquiry_id'])[:8])}"
-        "</li>"
-        for row in cast(list[dict[str, object]], detail["offers"])
-    ) or "<li>Keine Angebote</li>"
-    order_rows = "".join(
-        "<li>"
-        f'<a href="/order/{_e(str(row["order_id"]))}">'
-        f"Auftrag {_e(str(row['order_id'])[:8])}</a>"
-        + (
-            " · Storniert"
-            if row.get("cancelled_at") is not None
-            else " · Aktiv"
+    inquiry_rows = (
+        "".join(
+            "<li>"
+            f'<a href="/inquiry/{_e(str(row["inquiry_id"]))}">'
+            f"{_e(str(row.get('intake_subject') or str(row['inquiry_id'])[:8]))}</a>"
+            f" · {_e(_short_date(str(row['event_date'])))}"
+            f" · {_e(str(row['crm_stage']))}"
+            "</li>"
+            for row in cast(list[dict[str, object]], detail["inquiries"])
         )
-        + "</li>"
-        for row in cast(list[dict[str, object]], detail["orders"])
-    ) or "<li>Keine Aufträge</li>"
+        or "<li>Keine Anfragen</li>"
+    )
+    offer_rows = (
+        "".join(
+            "<li>"
+            f'<a href="/offer/{_e(str(row["offer_id"]))}">'
+            f"{_e(offer_state_label(str(row['state'])))}</a>"  # type: ignore[arg-type]
+            f" · Anfrage {_e(str(row['inquiry_id'])[:8])}"
+            "</li>"
+            for row in cast(list[dict[str, object]], detail["offers"])
+        )
+        or "<li>Keine Angebote</li>"
+    )
+    order_rows = (
+        "".join(
+            "<li>"
+            f'<a href="/order/{_e(str(row["order_id"]))}">'
+            f"Auftrag {_e(str(row['order_id'])[:8])}</a>"
+            + (" · Storniert" if row.get("cancelled_at") is not None else " · Aktiv")
+            + "</li>"
+            for row in cast(list[dict[str, object]], detail["orders"])
+        )
+        or "<li>Keine Aufträge</li>"
+    )
     email = detail.get("email")
     phone = detail.get("phone")
     body = (
@@ -74,7 +79,6 @@ def render_kontakt_detail(
         '<section class="offer-detail-section">'
         "<h2>Aufträge</h2>"
         f'<ul class="offer-history-list">{order_rows}</ul>'
-        "</section>"
-        + '<p><a href="/kontakte">← Zurück zu Kontakten</a></p>'
+        "</section>" + '<p><a href="/kontakte">← Zurück zu Kontakten</a></p>'
     )
     return _page("Kontakt", body, active_section="contacts", context=context)
