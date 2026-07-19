@@ -1248,7 +1248,7 @@ class OfficePanel:
             + "</div>"
         )
 
-        operating_today = date.today()
+        operating_today = api_views.berlin_today()
         iso = operating_today.isocalendar()
         week = self.wochenuebersicht.get_week_overview(iso.year, iso.week)
         week_rows = [
