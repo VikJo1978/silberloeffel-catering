@@ -350,11 +350,13 @@ def make_office_panel_handler(
                     rueckruf_count=len(items) if items is not None else None,
                     csrf_token=csrf_token,
                 )
+                kalender_view = parse_qs(parsed.query).get("kalender", ["woche"])[0]
                 self._html(
                     panel.render_queue(
                         items,
                         rueckruf_error=error,
                         context=context,
+                        kalender_view=kalender_view,
                     )
                 )
                 return
@@ -377,6 +379,15 @@ def make_office_panel_handler(
             elif parts == ["auftraege"]:
                 search_query = parse_qs(parsed.query).get("q", [""])[0]
                 self._html(panel.render_auftraege(search_query, context=context))
+            elif parts == ["orders"]:
+                query = parse_qs(parsed.query)
+                self._html(
+                    panel.render_orders(
+                        query.get("q", [""])[0],
+                        query.get("zeitraum", [""])[0],
+                        context=context,
+                    )
+                )
             elif parts == ["proposal-preview"]:
                 self._html(render_proposal_preview_form(context=context))
             elif parts == ["inquiry", "new"]:

@@ -1,9 +1,17 @@
-"""Arbeitszentrale dashboard — WorkCenterSnapshot presentation only (5A-2)."""
+"""Arbeitszentrale dashboard — presentation over existing read projections.
+
+Every number and row here is derived from already-shipped, mode-parity data
+sources (WorkCenterSnapshot, task projection rows, calendar projection rows,
+Inquiry contact completeness). No new domain concepts, no writes — the same
+inputs render byte-identically in direct and remote mode.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import date
+import calendar as _calendar
+from collections import Counter
+from dataclasses import dataclass, field
+from datetime import date, timedelta
 
 from catering_system.domain.work_center import WorkCenterSnapshot
 from catering_system.ui.office_panel_views import (
@@ -29,125 +37,342 @@ _MONTHS = (
 )
 _WEEKDAYS = ("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
 
+# Task-category → monochrome sprite icon (office_panel_shell.py sprite).
+_TASK_ICONS = {
+    "verify": "phone",
+    "convert": "doc",
+    "convert_accepted": "doc",
+    "order_print": "printer",
+    "order_effective": "check",
+    "payment": "briefcase",
+}
+
+_MAX_NEXT_TASKS = 6
+_MAX_NEXT_EVENTS = 5
+
 
 @dataclass(frozen=True)
-class WorkCenterDashboardUi:
+class ArbeitszentraleData:
+    """View model for the office dashboard; plain rows, no service handles."""
+
     context: OfficePageContext
     today: date
-    week_order_count: int
+    snapshot: WorkCenterSnapshot
+    tasks: list[dict[str, object]] = field(default_factory=list)
+    calendar_entries: list[dict[str, object]] = field(default_factory=list)
+    contact_check_open: int = 0
+    kalender_view: str = "woche"
 
 
-def _card_action(href: str, label: str) -> str:
-    return f'<a class="wc-card-action" href="{_e(href)}">{_e(label)}</a>'
+def _icon(name: str) -> str:
+    return f'<svg aria-hidden="true"><use href="#office-i-{name}"></use></svg>'
 
 
-def _rueckrufe_card(snapshot: WorkCenterSnapshot) -> str:
-    total = snapshot.rueckrufe_open + snapshot.missed_calls_open
-    return (
-        '<section class="wc-card" aria-labelledby="wc-rueckrufe">'
-        '<div class="wc-card-head"><span class="wc-card-mark" aria-hidden="true">'
-        '🔴</span><h2 id="wc-rueckrufe">Rückrufe</h2></div>'
-        '<hr class="wc-card-rule">'
-        f'<p class="wc-card-summary"><strong>{total}</strong> offen</p>'
-        '<ul class="wc-card-lines">'
-        f"<li><span>📞 Kunden-Rückrufe</span><strong>{snapshot.rueckrufe_open}</strong></li>"
-        f"<li><span>☎ Verpasste Anrufe</span><strong>{snapshot.missed_calls_open}</strong></li>"
-        "</ul>" + _card_action("/rueckruf", "Öffnen") + "</section>"
-    )
+def _task_counts(tasks: list[dict[str, object]]) -> Counter[str]:
+    return Counter(str(task.get("category", "")) for task in tasks)
 
 
-def _angebote_card(snapshot: WorkCenterSnapshot) -> str:
-    return (
-        '<section class="wc-card" aria-labelledby="wc-angebote">'
-        '<div class="wc-card-head"><span class="wc-card-mark" aria-hidden="true">'
-        '📥</span><h2 id="wc-angebote">Angebote</h2></div>'
-        '<hr class="wc-card-rule">'
-        f"<p>{snapshot.offers_waiting} warten auf Antwort</p>"
-        f"<p>{snapshot.offers_accepted} angenommen</p>"
-        + _card_action("/angebote", "Angebote öffnen")
-        + "</section>"
-    )
-
-
-def _auftraege_card(snapshot: WorkCenterSnapshot, ui: WorkCenterDashboardUi) -> str:
-    count = ui.week_order_count
-    label = f"{count} diese Woche" if count != 1 else "1 diese Woche"
-    return (
-        '<section class="wc-card" aria-labelledby="wc-auftraege">'
-        '<div class="wc-card-head"><span class="wc-card-mark" aria-hidden="true">'
-        '🍽</span><h2 id="wc-auftraege">Aufträge</h2></div>'
-        '<hr class="wc-card-rule">'
-        f'<p class="wc-card-summary">{_e(label)}</p>'
-        f"<p>{snapshot.pending_order_changes} Änderungen warten auf Küchendruck</p>"
-        + _card_action("/auftraege", "Aufträge öffnen")
-        + "</section>"
-    )
-
-
-def _aufgaben_card(snapshot: WorkCenterSnapshot) -> str:
-    body = (
-        f"<p>{snapshot.open_tasks} offene Aufgaben</p>"
-        if snapshot.open_tasks
-        else "<p>Keine offenen Aufgaben</p>"
-    )
-    return (
-        '<section class="wc-card" aria-labelledby="wc-aufgaben">'
-        '<div class="wc-card-head"><span class="wc-card-mark" aria-hidden="true">'
-        '🟡</span><h2 id="wc-aufgaben">Aufgaben</h2></div>'
-        '<hr class="wc-card-rule">'
-        + body
-        + _card_action("/aufgaben", "Öffnen")
-        + "</section>"
-    )
-
-
-def _kalender_card(snapshot: WorkCenterSnapshot) -> str:
-    body = (
-        f"<p>{snapshot.today_calendar_entries} Termine heute</p>"
-        if snapshot.today_calendar_entries
-        else "<p>Keine Termine heute</p>"
-    )
-    return (
-        '<section class="wc-card" aria-labelledby="wc-kalender">'
-        '<div class="wc-card-head"><span class="wc-card-mark" aria-hidden="true">'
-        '📅</span><h2 id="wc-kalender">Kalender</h2></div>'
-        '<hr class="wc-card-rule">'
-        + body
-        + _card_action("/kalender", "Öffnen")
-        + "</section>"
-    )
-
-
-def render_work_center_arbeitszentrale(
-    snapshot: WorkCenterSnapshot,
-    *,
-    ui: WorkCenterDashboardUi,
+def _attention_card(
+    *, icon: str, name: str, count: int, label: str, href: str, action: str
 ) -> str:
-    """Render the v2 Arbeitszentrale from WorkCenterSnapshot facts only."""
+    return (
+        '<article class="dashboard-attention-card">'
+        f'<span class="dashboard-attention-icon">{_icon(icon)}</span>'
+        f'<span class="dashboard-attention-name">{_e(name)}</span>'
+        f"<strong>{count}</strong>"
+        f"<span>{_e(label)}</span>"
+        f'<a href="{_e(href)}">{_e(action)}</a>'
+        "</article>"
+    )
 
+
+def _attention_section(data: ArbeitszentraleData) -> str:
+    counts = _task_counts(data.tasks)
+    snapshot = data.snapshot
+    cards: list[str] = []
+    rueckrufe = snapshot.rueckrufe_open + snapshot.missed_calls_open
+    if rueckrufe:
+        cards.append(
+            _attention_card(
+                icon="phone",
+                name="Rückrufe",
+                count=rueckrufe,
+                label="Rückrufe erforderlich",
+                href="/rueckruf",
+                action="Öffnen",
+            )
+        )
+    neue_anfragen = counts["convert"] + counts["convert_accepted"]
+    if neue_anfragen:
+        cards.append(
+            _attention_card(
+                icon="doc",
+                name="Neue Anfragen",
+                count=neue_anfragen,
+                label="Anfragen prüfen",
+                href="/anfragen",
+                action="Öffnen",
+            )
+        )
+    auftraege = counts["order_effective"] + counts["payment"]
+    if auftraege:
+        cards.append(
+            _attention_card(
+                icon="check",
+                name="Aufträge",
+                count=auftraege,
+                label="nächster Schritt",
+                href="/auftraege",
+                action="Öffnen",
+            )
+        )
+    if counts["order_print"]:
+        cards.append(
+            _attention_card(
+                icon="printer",
+                name="Küchendruck",
+                count=counts["order_print"],
+                label="prüfen",
+                href="/aufgaben",
+                action="Öffnen",
+            )
+        )
+    if data.contact_check_open:
+        cards.append(
+            _attention_card(
+                icon="users",
+                name="Kundenprüfung",
+                count=data.contact_check_open,
+                label="offen",
+                href="/anfragen",
+                action="Öffnen",
+            )
+        )
+    if not cards:
+        body = '<p class="dashboard-empty">Aktuell braucht nichts Aufmerksamkeit.</p>'
+    else:
+        body = f'<div class="dashboard-attention">{"".join(cards)}</div>'
+    return "<h2>Was braucht Aufmerksamkeit?</h2>" + body
+
+
+def _task_rows(tasks: list[dict[str, object]]) -> str:
+    rows: list[str] = []
+    for task in tasks[:_MAX_NEXT_TASKS]:
+        icon = _TASK_ICONS.get(str(task.get("category", "")), "doc")
+        href = str(task.get("action_href", ""))
+        rows.append(
+            '<div class="dashboard-work-row">'
+            f'<span class="dashboard-work-kind">{_icon(icon)}</span>'
+            '<div class="dashboard-work-copy">'
+            f'<h3><a href="{_e(href)}">{_e(str(task.get("title", "")))}</a></h3>'
+            f"<p>{_e(str(task.get('subtitle', '')))}</p></div>"
+            f'<a class="dashboard-button secondary" href="{_e(href)}">'
+            f"{_e(str(task.get('action_label', 'Öffnen')))}</a>"
+            "</div>"
+        )
+    if not rows:
+        return '<p class="dashboard-empty">Keine offenen Schritte.</p>'
+    return "".join(rows)
+
+
+def _next_step_by_entity(
+    tasks: list[dict[str, object]],
+) -> dict[tuple[str, str], str]:
+    steps: dict[tuple[str, str], str] = {}
+    for task in tasks:
+        key = (str(task.get("entity_type", "")), str(task.get("entity_id", "")))
+        steps.setdefault(key, str(task.get("title", "")))
+    return steps
+
+
+def _event_rows(data: ArbeitszentraleData) -> str:
+    steps = _next_step_by_entity(data.tasks)
+    rows: list[str] = []
+    for entry in data.calendar_entries:
+        event_date = date.fromisoformat(str(entry["event_date"]))
+        if event_date < data.today:
+            continue
+        if len(rows) >= _MAX_NEXT_EVENTS:
+            break
+        key = (str(entry.get("entity_type", "")), str(entry.get("entity_id", "")))
+        next_step = steps.get(key) or str(entry.get("status_label", ""))
+        guest_count = entry.get("guest_count_estimate")
+        meta_parts = [
+            part
+            for part in (
+                str(entry.get("time_window_text", "")).strip(),
+                f"{guest_count} Gäste" if guest_count else "",
+                next_step,
+            )
+            if part
+        ]
+        href = str(entry.get("action_href", ""))
+        rows.append(
+            '<div class="dashboard-event-row">'
+            '<span class="dashboard-date-tile">'
+            f"<strong>{event_date.day}</strong>"
+            f"<span>{_e(_MONTHS[event_date.month][:3])}</span></span>"
+            '<div class="dashboard-event-copy">'
+            f'<h3><a href="{_e(href)}">{_e(str(entry.get("title", "")))}</a></h3>'
+            f"<p>{_e(' · '.join(meta_parts))}</p></div>"
+            f'<a class="dashboard-button secondary" href="{_e(href)}">Öffnen</a>'
+            "</div>"
+        )
+    if not rows:
+        return '<p class="dashboard-empty">Keine anstehenden Veranstaltungen.</p>'
+    return "".join(rows)
+
+
+def _entries_per_day(entries: list[dict[str, object]]) -> Counter[date]:
+    return Counter(date.fromisoformat(str(entry["event_date"])) for entry in entries)
+
+
+def _calendar_toggle(view: str) -> str:
+    woche = ' aria-current="true"' if view != "monat" else ""
+    monat = ' aria-current="true"' if view == "monat" else ""
+    return (
+        '<nav class="dashboard-calendar-toggle" aria-label="Kalenderansicht">'
+        f'<a href="/"{woche}>Diese Woche</a>'
+        f'<a href="/?kalender=monat"{monat}>Dieser Monat</a></nav>'
+    )
+
+
+def _week_strip(data: ArbeitszentraleData) -> str:
+    per_day = _entries_per_day(data.calendar_entries)
+    monday = data.today - timedelta(days=data.today.weekday())
+    cells: list[str] = []
+    for offset in range(7):
+        day = monday + timedelta(days=offset)
+        classes = (
+            "dashboard-week-day today" if day == data.today else "dashboard-week-day"
+        )
+        count = per_day.get(day, 0)
+        badge = f"<small>{count}</small>" if count else ""
+        cells.append(
+            f'<span class="{classes}">{_WEEKDAYS[offset]}'
+            f"<strong>{day.day}</strong>{badge}</span>"
+        )
+    return f'<div class="dashboard-week-days">{"".join(cells)}</div>'
+
+
+def _month_grid(data: ArbeitszentraleData) -> str:
+    per_day = _entries_per_day(data.calendar_entries)
+    year, month = data.today.year, data.today.month
+    first_weekday, day_count = _calendar.monthrange(year, month)
+    cells: list[str] = [
+        f'<span class="dashboard-month-head">{label}</span>' for label in _WEEKDAYS
+    ]
+    cells.extend(
+        '<span class="dashboard-month-day outside"></span>'
+        for _blank in range(first_weekday)
+    )
+    for day_number in range(1, day_count + 1):
+        day = date(year, month, day_number)
+        classes = (
+            "dashboard-month-day today" if day == data.today else "dashboard-month-day"
+        )
+        count = per_day.get(day, 0)
+        badge = f"<small>{count}</small>" if count else ""
+        cells.append(f'<span class="{classes}">{day_number}{badge}</span>')
+    return (
+        f'<div class="dashboard-month-days" aria-label="{_MONTHS[month]} {year}">'
+        + "".join(cells)
+        + "</div>"
+    )
+
+
+def _calendar_card(data: ArbeitszentraleData) -> str:
+    if data.kalender_view == "monat":
+        body = _month_grid(data)
+        subtitle = f"{_MONTHS[data.today.month]} {data.today.year}"
+    else:
+        body = _week_strip(data)
+        iso = data.today.isocalendar()
+        subtitle = f"KW {iso.week}"
+    return (
+        '<section class="dashboard-card" id="diese-woche">'
+        '<div class="dashboard-card-head"><div>'
+        f"<h2>Kalender</h2><p>{_e(subtitle)}</p></div>"
+        + _calendar_toggle(data.kalender_view)
+        + "</div>"
+        + body
+        + "</section>"
+    )
+
+
+def _systemstatus_card() -> str:
+    # Honest presentation only: the panel has no live probes for the other
+    # services — "Core" is truthful (this page rendered from Core data),
+    # everything else states plainly that no live check exists yet. No
+    # ok/unavailable coloring on purpose (approved design: no status colors).
+    def row(name: str, state: str) -> str:
+        return (
+            '<div class="dashboard-service-state">'
+            f"<strong>{_e(name)}</strong><span>{_e(state)}</span></div>"
+        )
+
+    return (
+        '<section class="dashboard-card">'
+        '<div class="dashboard-card-head"><div><h2>Systemstatus</h2>'
+        "<p>Betriebsdienste im Überblick.</p></div></div>"
+        + row("Core", "Verbunden — Daten geladen.")
+        + row("Website Intake", "Keine Live-Prüfung eingerichtet.")
+        + row("Kiosk", "Keine Live-Prüfung eingerichtet.")
+        + row("Drucker", "Keine Live-Prüfung eingerichtet.")
+        + "</section>"
+    )
+
+
+def render_arbeitszentrale(data: ArbeitszentraleData) -> str:
+    """Render the v2 Arbeitszentrale (Heute im Büro) from projection rows."""
+
+    today = data.today
     header_date = (
-        f"{_WEEKDAYS[ui.today.weekday()]}, {ui.today.day}. "
-        f"{_MONTHS[ui.today.month]} {ui.today.year}"
+        f"{_WEEKDAYS[today.weekday()]}, {today.day}. "
+        f"{_MONTHS[today.month]} {today.year}"
+    )
+    header = (
+        '<header class="dashboard-page-header"><div>'
+        f'<div class="dashboard-eyebrow">{_e(header_date)}</div>'
+        "<h1>Heute im Büro</h1>"
+        "<p>Anfragen, Rückrufe und operative Aufgaben im Blick.</p></div>"
+        '<div class="dashboard-header-actions">'
+        '<a class="dashboard-button secondary" href="/orders">Alle Aufträge</a>'
+        '<a class="dashboard-button" href="/inquiry/new">+ Neue Anfrage</a>'
+        "</div></header>"
+    )
+    main_column = (
+        '<div class="dashboard-main">'
+        '<section class="dashboard-card">'
+        '<div class="dashboard-card-head"><div>'
+        "<h2>Was als Nächstes ansteht</h2>"
+        "<p>Die wichtigsten offenen Schritte.</p></div>"
+        '<a class="dashboard-text-link" href="/aufgaben">Alle Aufgaben</a></div>'
+        + _task_rows(data.tasks)
+        + "</section>"
+        '<section class="dashboard-card">'
+        '<div class="dashboard-card-head"><div>'
+        "<h2>Nächste Veranstaltungen</h2>"
+        "<p>Kommende Termine mit nächstem Schritt.</p></div>"
+        '<a class="dashboard-text-link" href="/kalender">Kalender öffnen</a></div>'
+        + _event_rows(data)
+        + "</section></div>"
+    )
+    side_column = (
+        '<div class="dashboard-side">'
+        + _calendar_card(data)
+        + _systemstatus_card()
+        + "</div>"
     )
     body = (
-        '<div class="wc-page">'
-        '<header class="wc-page-header">'
-        f'<div class="wc-eyebrow">{_e(header_date)}</div>'
-        "<h1>Arbeitszentrale</h1>"
-        "<p>Überblick über Rückrufe, Angebote und Aufträge im Büro.</p>"
-        "</header>"
-        '<div class="wc-cards">'
-        + _rueckrufe_card(snapshot)
-        + _angebote_card(snapshot)
-        + _auftraege_card(snapshot, ui)
-        + _aufgaben_card(snapshot)
-        + _kalender_card(snapshot)
-        + "</div></div>"
+        header
+        + _attention_section(data)
+        + f'<div class="dashboard-layout">{main_column}{side_column}</div>'
     )
     return _page(
         "Arbeitszentrale",
         body,
         active_section="home",
-        context=ui.context,
+        context=data.context,
         show_title=False,
     )
