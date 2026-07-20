@@ -6,9 +6,18 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { sanitize } from "./worker.js";
+import { sanitize, missingContact } from "./worker.js";
 
-const BASE = { event_date: "2026-09-20", guest_count_estimate: 15 };
+// WORKER_CONTACT_REQUIREMENTS_V1: sanitize() now rejects a missing/empty
+// email or phone, so BASE carries both — every existing structural test
+// below exercises its own concern (allowlist, truncation, trimming …)
+// against an otherwise-valid, contact-complete payload.
+const BASE = {
+  event_date: "2026-09-20",
+  guest_count_estimate: 15,
+  email: "info@musterfirma.de",
+  phone: "0151 2345678",
+};
 
 test("website_form fields pass through the allowlist", () => {
   const out = sanitize({
@@ -91,10 +100,64 @@ test("invalid event_date format is still rejected", () => {
 });
 
 test("guest_count_estimate digit-string coercion still works", () => {
-  const out = sanitize({ event_date: "2026-09-20", guest_count_estimate: "15" });
+  const out = sanitize({ ...BASE, guest_count_estimate: "15" });
   assert.equal(out.guest_count_estimate, 15);
 });
 
 test("non-integer guest_count_estimate is still rejected", () => {
   assert.equal(sanitize({ event_date: "2026-09-20", guest_count_estimate: "abc" }), null);
+});
+
+// -- WORKER_CONTACT_REQUIREMENTS_V1: email/phone required -------------------
+
+test("missing email is rejected", () => {
+  const { email, ...rest } = BASE;
+  assert.equal(sanitize(rest), null);
+});
+
+test("empty email is rejected", () => {
+  assert.equal(sanitize({ ...BASE, email: "" }), null);
+});
+
+test("whitespace-only email is rejected", () => {
+  assert.equal(sanitize({ ...BASE, email: "   " }), null);
+});
+
+test("missing phone is rejected", () => {
+  const { phone, ...rest } = BASE;
+  assert.equal(sanitize(rest), null);
+});
+
+test("empty phone is rejected", () => {
+  assert.equal(sanitize({ ...BASE, phone: "" }), null);
+});
+
+test("whitespace-only phone is rejected", () => {
+  assert.equal(sanitize({ ...BASE, phone: "   " }), null);
+});
+
+test("valid request with both email and phone (trimmed) is accepted", () => {
+  const out = sanitize({ ...BASE, email: "  info@musterfirma.de  ", phone: "  0151 2345678  " });
+  assert.ok(out !== null);
+  assert.equal(out.email, "info@musterfirma.de");
+  assert.equal(out.phone, "0151 2345678");
+});
+
+test("missingContact: true when raw email is absent, empty, or whitespace-only", () => {
+  assert.equal(missingContact({ phone: "0151 2345678" }), true);
+  assert.equal(missingContact({ phone: "0151 2345678", email: "" }), true);
+  assert.equal(missingContact({ phone: "0151 2345678", email: "   " }), true);
+});
+
+test("missingContact: true when raw phone is absent, empty, or whitespace-only", () => {
+  assert.equal(missingContact({ email: "info@musterfirma.de" }), true);
+  assert.equal(missingContact({ email: "info@musterfirma.de", phone: "" }), true);
+  assert.equal(missingContact({ email: "info@musterfirma.de", phone: "   " }), true);
+});
+
+test("missingContact: false when both raw email and phone are non-empty", () => {
+  assert.equal(
+    missingContact({ email: "info@musterfirma.de", phone: "0151 2345678" }),
+    false
+  );
 });

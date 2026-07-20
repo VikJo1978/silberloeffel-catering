@@ -76,7 +76,28 @@ function sanitize(raw) {
   if (out.guest_count_estimate !== undefined && !Number.isInteger(out.guest_count_estimate)) {
     return null;
   }
+  // WORKER_CONTACT_REQUIREMENTS_V1: email and phone are required and must be
+  // non-empty after trim — the intake endpoint now rejects incomplete
+  // submissions anyway (INQUIRY_CONTACT_COMPLETENESS_V1), so failing fast
+  // here saves a round trip and lets fetch() return a specific message.
+  if (typeof out.email !== "string" || out.email === "") {
+    return null;
+  }
+  if (typeof out.phone !== "string" || out.phone === "") {
+    return null;
+  }
   return out;
+}
+
+// Re-derives, from the raw (pre-sanitize) body, whether sanitize()'s null
+// return was specifically caused by a missing/empty email or phone — so
+// fetch() can return the more specific "email and phone required" message
+// instead of the generic invalid-payload one, without sanitize() having to
+// leak its rejection reason.
+function missingContact(raw) {
+  const email = typeof raw.email === "string" ? raw.email.trim() : "";
+  const phone = typeof raw.phone === "string" ? raw.phone.trim() : "";
+  return email === "" || phone === "";
 }
 
 export default {
@@ -96,6 +117,9 @@ export default {
     }
     const clean = sanitize(raw);
     if (clean === null) {
+      if (missingContact(raw)) {
+        return new Response("email and phone required", { status: 422 });
+      }
       return new Response("invalid inquiry payload", { status: 422 });
     }
     const upstream = await fetch(env.UPSTREAM_URL, {
@@ -113,7 +137,7 @@ export default {
   },
 };
 
-// Named export purely for testability (sanitize.test.mjs) — inert to the
+// Named exports purely for testability (sanitize.test.mjs) — inert to the
 // Workers runtime, which only ever invokes the default export's fetch()
 // handler. Does not change deployed behavior.
-export { sanitize };
+export { sanitize, missingContact };
