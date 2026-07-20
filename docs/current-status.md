@@ -1,7 +1,7 @@
 # Current status
 
-Operational truth last verified: **2026-07-20T05:51:00Z** (calendar-week deploy
-acceptance on Lenovo `debiancatering`, Tailscale `100.109.6.74`).
+Operational truth last verified: **2026-07-20T06:02:00Z** (core.db permission
+hardening verification on Lenovo `debiancatering`, Tailscale `100.109.6.74`).
 
 This document separates **repository truth** from **production runtime truth**.
 A commit on `origin/main` is not deployed until the relevant services have
@@ -61,6 +61,18 @@ All four units were **active** at verification. Shared DB:
   KW matches `Europe/Berlin` operating date (verified KW **30/2026** on
   2026-07-20); direct/remote parity tests green; journal since restart clean.
 
+
+**CORE_DB_PERMISSION_FIX_V1 — CLOSED**
+
+- Applied **2026-07-20**: `chmod` on production DB only — mode **644 → 600**.
+- Owner/group unchanged: **viktor:viktor**.
+- DB SHA-256 unchanged:
+  `dc501fae0259b6a791ad6ab3ebddea8a1db81a470db934820bc71b48032a5ba0`.
+- Size unchanged (**700416**); `PRAGMA integrity_check` **ok**; no SQL writes.
+- Services **not restarted** (Office API, Office Panel, kiosk PIDs unchanged).
+- Post-change smoke: API read, dashboard `/`, `/rueckruf`, kiosk — HTTP **200**;
+  journals without new database permission errors.
+
 **CORE_CUSTOMER_IDENTITY_FOUNDATION_V1 — CLOSED**
 
 - Office API and Office Panel restarted on `924f1c0` (2026-07-20 ~00:24 CEST).
@@ -85,7 +97,9 @@ Rückruf pull path operational).
 | Item | Value |
 |---|---|
 | Path | `/home/viktor/catering-runtime/core.db` |
-| File mode | **644** (open risk — target 600) |
+| Owner / group | **viktor:viktor** |
+| File mode | **600** (hardened 2026-07-20; was 644) |
+| SHA-256 (verified unchanged) | `dc501fae0259b6a791ad6ab3ebddea8a1db81a470db934820bc71b48032a5ba0` |
 | Integrity | ok |
 | `customer_identities` | 0 rows |
 | `phone_contact_points` | 0 rows |
@@ -153,10 +167,6 @@ Token configured; automated outbound not observed. Revoke/remove is a separate s
 
 Unchanged operational debt.
 
-### Accepted — production `core.db` mode 644
-
-Should be tightened to 600 in a separate controlled slice.
-
 ### Accepted — Courier inactive / Fingerfood timer inactive
 
 Non-blocking for Core; noted for operational awareness.
@@ -176,7 +186,6 @@ Recovery-key protection verified on **2026-07-12** (unchanged):
 
 ## Next milestones
 
-1. **CORE_DB_PERMISSION_FIX_V1** — tighten production `core.db` mode 644 → 600.
-2. **INQUIRY_CUSTOMER_REFERENCE_AND_SNAPSHOT_V1** — next Core application slice.
-3. **Branch protection verification** — owner/admin authenticated review; require green `quality`; block force push.
-4. **BACKUP_HEALTH_AND_ALERTING_V1** — failure/stale notification.
+1. **INQUIRY_CUSTOMER_REFERENCE_AND_SNAPSHOT_V1** — next Core application slice.
+2. **Branch protection verification** — owner/admin authenticated review; require green `quality`; block force push.
+3. **BACKUP_HEALTH_AND_ALERTING_V1** — failure/stale notification.
