@@ -27,9 +27,13 @@ from catering_system.domain.slice_a_events import (
     InquiryCreated,
     InquiryUpdated,
 )
+from catering_system.domain.inquiry_contact_completeness import (
+    complete_inquiry_contact_information,
+    derive_contact_completeness,
+)
 from catering_system.domain.inquiry_customer_snapshot import (
     InquiryCustomerSnapshot,
-    snapshot_from_intake_message,
+    snapshot_from_structured_contact,
 )
 from catering_system.repositories.inquiry_repository import InquiryRepository
 
@@ -48,6 +52,14 @@ _ALLOWED_SOURCES: frozenset[str] = frozenset(
 )
 
 _UNSET = object()
+
+# Public customer-facing channels must arrive contact-complete
+# (INQUIRY_CONTACT_COMPLETENESS_V1 §5). Enforced here in the canonical
+# service layer so no entry point can bypass the rule with the same
+# inquiry_source.
+_CONTACT_COMPLETE_REQUIRED_SOURCES: frozenset[str] = frozenset(
+    {"website_form", "configurator"}
+)
 
 _log = logging.getLogger(__name__)
 
@@ -114,24 +126,39 @@ class InquiryService:
         intake_message: str | None = None,
         intake_summary: str | None = None,
         intake_external_ref: str | None = None,
+        contact_email: str | None = None,
+        contact_phone: str | None = None,
+        contact_name: str | None = None,
+        company_name: str | None = None,
     ) -> Inquiry:
         _log.info("create_inquiry called inquiry_source=%s", inquiry_source)
+        intake_subject_norm = _normalize_intake(intake_subject)
+        intake_message_norm = _normalize_intake(intake_message)
         try:
             src = validate_inquiry_source(inquiry_source)
             crm = validate_crm_stage(crm_stage)
             linkage = validate_customer_linkage(customer_linkage)
             pm = validate_planning_mode(planning_mode)
             cvs = validate_call_verification_status(call_verification_status)
+            customer_snapshot = snapshot_from_structured_contact(
+                contact_email=contact_email,
+                contact_phone=contact_phone,
+                contact_name=contact_name,
+                company_name=company_name,
+                intake_message=intake_message_norm,
+                intake_subject=intake_subject_norm,
+            )
+            if src in _CONTACT_COMPLETE_REQUIRED_SOURCES:
+                completeness = derive_contact_completeness(customer_snapshot)
+                if completeness != "complete":
+                    raise ValueError(
+                        f"{src} intake requires email and phone "
+                        f"(contact_completeness={completeness})"
+                    )
         except (ValueError, TypeError):
             _log.warning("create_inquiry validation failed")
             raise
         now = _utc_now()
-        intake_subject_norm = _normalize_intake(intake_subject)
-        intake_message_norm = _normalize_intake(intake_message)
-        customer_snapshot = snapshot_from_intake_message(
-            intake_message_norm,
-            intake_subject=intake_subject_norm,
-        )
         inquiry = Inquiry(
             inquiry_id=str(uuid.uuid4()),
             event_date=event_date,
@@ -264,6 +291,35 @@ class InquiryService:
             inquiry_id,
             call_verification_status="verified",
         )
+
+    def complete_inquiry_contact_information(
+        self,
+        inquiry_id: str,
+        *,
+        email: str | None = None,
+        phone: str | None = None,
+    ) -> Inquiry:
+        """Append-only contact completion (INQUIRY_CONTACT_COMPLETENESS_V1 §4).
+
+        Fills only missing snapshot email/phone; stored values never change.
+        Identical resubmission is idempotent and does not touch updated_at.
+        """
+        _log.info(
+            "complete_inquiry_contact_information called inquiry_id=%s", inquiry_id
+        )
+        current = self._repository.get_by_id(inquiry_id)
+        if current is None:
+            raise KeyError(inquiry_id)
+        updated = complete_inquiry_contact_information(
+            current, email=email, phone=phone
+        )
+        if updated.customer_snapshot == current.customer_snapshot:
+            return current
+        updated = replace(updated, updated_at=_utc_now())
+        self._repository.update(updated)
+        _log.info("inquiry contact information completed inquiry_id=%s", inquiry_id)
+        self._emit(InquiryUpdated(inquiry_id=inquiry_id))
+        return updated
 
     def assign_customer_reference(
         self, inquiry_id: str, *, customer_id: str, snapshot: InquiryCustomerSnapshot

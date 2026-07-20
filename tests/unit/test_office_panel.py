@@ -112,6 +112,8 @@ def _create_inquiry(base: str, **overrides: str) -> str:
         "location_text": "Hamburg",
         "guest_count_estimate": "25",
         "planning_mode": "caterer_suggestion",
+        "contact_email": "kunde@example.com",
+        "contact_phone": "030 1234567",
     }
     data.update(overrides)
     _status, url, _body = _post(f"{base}/inquiry/new", data)
@@ -1735,6 +1737,8 @@ def _panel_with_order():
         planning_mode="caterer_suggestion",
         call_verification_required=False,
         call_verification_status="not_required",
+        contact_email="kunde@example.com",
+        contact_phone="+49301234567",
     )
     order, v1 = panel.order_service.convert_inquiry_to_order(inquiry)
     return panel, order, v1
@@ -2271,6 +2275,8 @@ def test_prepare_then_submit_then_convert_does_not_leak_intake_into_order(
             "location_text": "",
             "guest_count_estimate": "30",
             "planning_mode": "caterer_suggestion",
+            "contact_email": "kunde@example.com",
+            "contact_phone": "030 1234567",
             "intake_subject": "Angebot Sommerfest",
             "intake_message": "Freitext aus Angebotsphase",
             "intake_summary": "Mini Wraps × 30",
@@ -2319,6 +2325,8 @@ def test_prepare_then_submit_does_not_change_wochenuebersicht() -> None:
                 "location_text": "",
                 "guest_count_estimate": "30",
                 "planning_mode": "caterer_suggestion",
+                "contact_email": "kunde@example.com",
+                "contact_phone": "030 1234567",
                 "intake_subject": "Angebot Sommerfest",
             },
         )
@@ -2346,6 +2354,7 @@ def test_website_intake_to_office_verification_and_conversion_workflow() -> None
             "guest_count_estimate": 10,
             "company": "E2E TEST — KEIN KUNDE",
             "email": "e2e@example.test",
+            "phone": "040 777 888",
             "submission_id": "office-workflow-e2e",
         },
     )

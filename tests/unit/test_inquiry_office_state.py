@@ -24,6 +24,13 @@ from catering_system.domain.offer import (
     OfferVersion,
     SentEvidence,
 )
+from catering_system.domain.inquiry_customer_snapshot import (
+    InquiryCustomerSnapshot as _CCSnapshot,
+)
+
+_CONTACT_COMPLETE_SNAPSHOT = _CCSnapshot(
+    email="kunde@example.com", phone="+49301234567"
+)
 
 _TODAY = date(2026, 7, 15)
 _OFFER_ID = "11111111-1111-1111-1111-111111111111"
@@ -54,6 +61,7 @@ def _inquiry(**overrides: object) -> Inquiry:
         "planning_mode": "caterer_suggestion",
         "call_verification_required": False,
         "call_verification_status": "not_required",
+        "customer_snapshot": _CONTACT_COMPLETE_SNAPSHOT,
     }
     values.update(overrides)
     return Inquiry(**values)  # type: ignore[arg-type]

@@ -74,6 +74,11 @@ READY_TO_SEND_BLOCKER_LABELS: dict[str, str] = {
 PROGRESSION_BLOCKER_LABELS: dict[str, str] = {
     "inquiry_call_verification_unsatisfied": "Rückrufprüfung noch nicht erfüllt",
     "inquiry_rejected": "Anfrage wurde abgelehnt",
+    "inquiry_contact_missing_email": "E-Mail-Adresse fehlt",
+    "inquiry_contact_missing_phone": "Telefonnummer fehlt",
+    "inquiry_contact_missing_email_and_phone": (
+        "E-Mail-Adresse und Telefonnummer fehlen"
+    ),
 }
 # Kanal (inquiry_source) display labels — its own vocabulary, never merged
 # with the three above (WEBSITE_FORM_INQUIRY_OFFICE_UX_PACK_V1 §4/§8).

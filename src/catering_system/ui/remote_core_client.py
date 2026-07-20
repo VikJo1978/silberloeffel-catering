@@ -27,8 +27,12 @@ from catering_system.domain.inquiry import (
     validate_planning_mode,
 )
 from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.inquiry_contact_completeness import (
+    complete_inquiry_contact_information,
+)
 from catering_system.domain.inquiry_customer_snapshot import (
     customer_snapshot_from_mapping,
+    snapshot_from_structured_contact,
 )
 from catering_system.domain.order_payment_reminder import (
     OrderPaymentReminder,
@@ -81,6 +85,9 @@ _INQUIRY_LIST_KEYS = _INQUIRY_SUMMARY_KEYS | {
     "linked_order_id",
     "orders_total_count",
 }
+# Optional typed list-row field (INQUIRY_CONTACT_COMPLETENESS_V1 §10) — the
+# pre-completeness API contract has no snapshot on list rows.
+_INQUIRY_LIST_OPTIONAL_KEYS = frozenset({"customer_snapshot"})
 _INQUIRY_DETAIL_KEYS = _INQUIRY_LIST_KEYS | {
     "customer_linkage",
     "intake_message",
@@ -92,7 +99,22 @@ _INQUIRY_DETAIL_KEYS = _INQUIRY_LIST_KEYS | {
     "orders_truncated",
     "offer_prefill",
 }
-_INQUIRY_DETAIL_OPTIONAL_KEYS = frozenset({"offer", "customer_id", "customer_snapshot"})
+_INQUIRY_DETAIL_OPTIONAL_KEYS = frozenset(
+    {
+        "offer",
+        "customer_id",
+        "customer_snapshot",
+        # INQUIRY_CONTACT_COMPLETENESS_V1 §10 — typed optional read fields so
+        # this client stays compatible with the pre-completeness API contract.
+        "contact_completeness",
+        "missing_contact_fields",
+        "contact_completion_allowed",
+    }
+)
+_CONTACT_COMPLETENESS_VALUES = frozenset(
+    {"complete", "missing_email", "missing_phone", "missing_email_and_phone"}
+)
+_CONTACT_FIELD_VALUES = frozenset({"email", "phone"})
 _INQUIRY_OFFER_KEYS = frozenset({"offer_id", "offer_version_id", "commercial_state"})
 _INQUIRY_OFFER_OPTIONAL_KEYS = frozenset({"accepted_variant_id", "acceptance_id"})
 _INQUIRY_NEXT_ACTIONS = frozenset(
@@ -410,11 +432,13 @@ def _inquiry(
         allowed = _INQUIRY_DETAIL_KEYS | _INQUIRY_DETAIL_OPTIONAL_KEYS
         if not _INQUIRY_DETAIL_KEYS <= keys <= allowed:
             _bad_response()
+    elif list_row:
+        keys = set(data)
+        allowed = _INQUIRY_LIST_KEYS | _INQUIRY_LIST_OPTIONAL_KEYS
+        if not _INQUIRY_LIST_KEYS <= keys <= allowed:
+            _bad_response()
     else:
-        _exact(
-            data,
-            _INQUIRY_LIST_KEYS if list_row else _INQUIRY_SUMMARY_KEYS,
-        )
+        _exact(data, _INQUIRY_SUMMARY_KEYS)
     linkage_raw = data.get("customer_linkage", {})
     try:
         linkage = validate_customer_linkage(_dict(linkage_raw))
@@ -1825,6 +1849,19 @@ class RemoteCoreClient:
                 _uuid4(row["order_id"])
                 _optional_datetime(row["cancelled_at"])
             _bool(detail["allows_conversion"])
+            if "contact_completeness" in detail:
+                completeness = _str(detail["contact_completeness"])
+                if completeness not in _CONTACT_COMPLETENESS_VALUES:
+                    _bad_response()
+            if "missing_contact_fields" in detail:
+                for raw_field in _list(detail["missing_contact_fields"]):
+                    if (
+                        not isinstance(raw_field, str)
+                        or raw_field not in _CONTACT_FIELD_VALUES
+                    ):
+                        _bad_response()
+            if "contact_completion_allowed" in detail:
+                _bool(detail["contact_completion_allowed"])
             next_action = _optional_inquiry_next_action(detail.get("next_action"))
             offer = (
                 _inquiry_offer_projection(detail["offer"])
@@ -2078,6 +2115,12 @@ class _RemoteInquiryService:
             "intake_message",
             "intake_summary",
             "intake_external_ref",
+            # Structured contact contract (INQUIRY_CONTACT_COMPLETENESS_V1
+            # §6): the snapshot is built Core-side from these args.
+            "contact_email",
+            "contact_phone",
+            "contact_name",
+            "company_name",
         ):
             value = values.get(key)
             if value is not None:
@@ -2114,7 +2157,16 @@ class _RemoteInquiryService:
             intake_summary=values.get("intake_summary"),
             intake_external_ref=values.get("intake_external_ref"),
             customer_id=None,
-            customer_snapshot=None,
+            # Rebuild the snapshot with the same domain rule Core applied so
+            # the redirect target renders truthfully without a post-commit GET.
+            customer_snapshot=snapshot_from_structured_contact(
+                contact_email=values.get("contact_email"),
+                contact_phone=values.get("contact_phone"),
+                contact_name=values.get("contact_name"),
+                company_name=values.get("company_name"),
+                intake_message=values.get("intake_message"),
+                intake_subject=values.get("intake_subject"),
+            ),
         )
 
     def update_inquiry(self, inquiry_id: str, **values: Any) -> Inquiry:
@@ -2165,6 +2217,44 @@ class _RemoteInquiryService:
             customer_id=current.customer_id,
             customer_snapshot=current.customer_snapshot,
         )
+
+    def complete_inquiry_contact_information(
+        self,
+        inquiry_id: str,
+        *,
+        email: str | None = None,
+        phone: str | None = None,
+    ) -> Inquiry:
+        current = self._client.get_by_id(inquiry_id)
+        if current is None:
+            raise RemoteCoreError(404, "not_found")
+        args: dict[str, object] = {}
+        if email is not None:
+            args["email"] = email
+        if phone is not None:
+            args["phone"] = phone
+        expected_at = self._client.form_value("_expect_updated_at")
+        result = self._client.command(
+            f"/office/v1/inquiries/{quote(inquiry_id, safe='')}/contact-completion",
+            args,
+            {"updated_at": expected_at or current.updated_at.isoformat()},
+            expected={200},
+            result_keys={
+                "inquiry_id",
+                "updated_at",
+                "contact_completeness",
+                "missing_contact_fields",
+            },
+        )
+        if _uuid4(result["inquiry_id"]) != inquiry_id:
+            _bad_response()
+        # Reapply the same append-only domain operation locally so the
+        # redirect target renders the completed snapshot without a
+        # post-commit GET (same convention as update_inquiry above).
+        updated = complete_inquiry_contact_information(
+            current, email=email, phone=phone
+        )
+        return replace(updated, updated_at=_datetime(result["updated_at"]))
 
     def verify_customer_by_call(self, inquiry_id: str) -> Inquiry:
         current = self._client.get_by_id(inquiry_id)

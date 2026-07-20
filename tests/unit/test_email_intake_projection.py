@@ -63,6 +63,8 @@ def _save_inquiry(repo: InMemoryInquiryRepository, **overrides: object):
         "planning_mode": "caterer_suggestion",
         "call_verification_required": True,
         "call_verification_status": "pending",
+        "contact_email": "kunde@example.com",
+        "contact_phone": "+49301234567",
     }
     payload.update(overrides)
     return service.create_inquiry(**payload)  # type: ignore[arg-type]
@@ -158,6 +160,8 @@ def test_list_emails_filters_email_source_only() -> None:
         planning_mode="caterer_suggestion",
         call_verification_required=True,
         call_verification_status="pending",
+        contact_email="kunde@example.com",
+        contact_phone="+49301234567",
     )
     rows = _service(inquiries=inquiries).list_emails()
     assert len(rows) == 1

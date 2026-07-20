@@ -275,9 +275,22 @@ def derive_inquiry_office_state(
         return InquiryOfficeState(
             is_open=is_open, next_action="verify", offer=offer_projection
         )
+    from catering_system.domain.inquiry_contact_completeness import (
+        inquiry_contact_complete,
+    )
+
+    contact_complete = inquiry_contact_complete(inquiry)
     if offer_projection is not None:
         commercial = offer_projection.commercial_state
         if commercial == "Accepted":
+            # Contact-completeness gate (INQUIRY_CONTACT_COMPLETENESS_V1 §8):
+            # an accepted offer must not be convertible while e-mail/phone are
+            # missing. Converted offers below stay untouched — an existing
+            # conversion link is never blocked retroactively.
+            if not contact_complete:
+                return InquiryOfficeState(
+                    is_open=is_open, next_action=None, offer=offer_projection
+                )
             return InquiryOfficeState(
                 is_open=is_open,
                 next_action="convert-accepted",
@@ -299,7 +312,7 @@ def derive_inquiry_office_state(
                 next_action="offer-pending",
                 offer=offer_projection,
             )
-    if inquiry_allows_order_conversion(inquiry):
+    if inquiry_allows_order_conversion(inquiry) and contact_complete:
         return InquiryOfficeState(
             is_open=is_open, next_action="convert", offer=offer_projection
         )

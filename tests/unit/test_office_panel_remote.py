@@ -90,6 +90,8 @@ def _seed(db_path: Path) -> dict[str, str]:
             planning_mode="caterer_suggestion",
             call_verification_required=False,
             call_verification_status="not_required",
+            contact_email="kunde@example.com",
+            contact_phone="+49301234567",
         )
         base.update(overrides)
         return inquiry_service.create_inquiry(**base)
@@ -813,6 +815,8 @@ def test_truncated_order_detail_warns_and_uses_true_latest_version(
         planning_mode="caterer_suggestion",
         call_verification_required=False,
         call_verification_status="not_required",
+        contact_email="kunde@example.com",
+        contact_phone="030 1234567",
     )
     service = OrderService(orders)
     order, _version = service.convert_inquiry_to_order(inquiry)
@@ -866,6 +870,8 @@ def test_v2_remote_inquiry_detail_preserves_linked_order_truncation_warning(
         planning_mode="caterer_suggestion",
         call_verification_required=False,
         call_verification_status="not_required",
+        contact_email="kunde@example.com",
+        contact_phone="030 1234567",
     )
     order_service = OrderService(orders)
     core = OperationalCoreService(orders)
@@ -984,6 +990,8 @@ def test_full_write_flow_through_remote_panel(remote_world) -> None:
             "location_text": "Rostock",
             "guest_count_estimate": "40",
             "planning_mode": "caterer_suggestion",
+            "contact_email": "kunde@example.com",
+            "contact_phone": "030 1234567",
         },
     )
     assert status == 200
@@ -1172,6 +1180,8 @@ def test_verify_flow_through_remote_panel(remote_world) -> None:
             "guest_count_estimate": "15",
             "planning_mode": "caterer_suggestion",
             "call_verification_required": "1",
+            "contact_email": "kunde@example.com",
+            "contact_phone": "030 1234567",
         },
     )
     _status, list_html = _get(f"{base}/anfragen?q=Schwerin")
@@ -1210,6 +1220,8 @@ def test_idempotent_retry_same_command_id_and_preconditions(remote_world) -> Non
         "location_text": "Idempotenz-Stadt",
         "guest_count_estimate": "10",
         "planning_mode": "caterer_suggestion",
+        "contact_email": "kunde@example.com",
+        "contact_phone": "030 1234567",
     }
     status1, _ = _post_form(f"{base}/inquiry/new", fields)
     status2, _ = _post_form(f"{base}/inquiry/new", fields)  # identical retry

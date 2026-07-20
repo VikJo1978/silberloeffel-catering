@@ -63,6 +63,57 @@ def snapshot_from_intake_message(
     return snapshot
 
 
+def snapshot_from_structured_contact(
+    *,
+    contact_email: str | None = None,
+    contact_phone: str | None = None,
+    contact_name: str | None = None,
+    company_name: str | None = None,
+    intake_message: str | None = None,
+    intake_subject: str | None = None,
+) -> InquiryCustomerSnapshot | None:
+    """Structured create/update contract (INQUIRY_CONTACT_COMPLETENESS_V1 §6).
+
+    Structured fields are operational truth; the labelled intake_message text
+    stays a compatibility fallback that only fills fields the structured
+    input did not provide. Structured email/phone are validated strictly —
+    an invalid value raises instead of being silently dropped.
+    """
+    from catering_system.domain.inquiry_contact_completeness import (
+        validate_contact_email,
+        validate_contact_phone,
+    )
+
+    fallback = snapshot_from_intake_message(
+        intake_message, intake_subject=intake_subject
+    )
+    email = (
+        validate_contact_email(contact_email)
+        if contact_email is not None and contact_email.strip()
+        else (fallback.email if fallback is not None else None)
+    )
+    phone = (
+        validate_contact_phone(contact_phone)
+        if contact_phone is not None and contact_phone.strip()
+        else (fallback.phone if fallback is not None else None)
+    )
+    name = _optional_str(contact_name) or (
+        fallback.contact_name if fallback is not None else None
+    )
+    company = _optional_str(company_name) or (
+        fallback.company_name if fallback is not None else None
+    )
+    snapshot = InquiryCustomerSnapshot(
+        company_name=company,
+        contact_name=name,
+        email=email,
+        phone=phone,
+    )
+    if snapshot.is_empty():
+        return None
+    return snapshot
+
+
 def customer_snapshot_to_mapping(
     snapshot: InquiryCustomerSnapshot | None,
 ) -> dict[str, str | None] | None:

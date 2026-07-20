@@ -14,6 +14,10 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from catering_system.domain.contact_projection import ContactProjection
+from catering_system.domain.inquiry_contact_completeness import (
+    derive_inquiry_contact_completeness,
+    missing_contact_fields,
+)
 from catering_system.domain.inquiry_customer_snapshot import (
     customer_snapshot_to_mapping,
 )
@@ -275,6 +279,9 @@ def inquiry_list_row(inquiry: Inquiry, orders: list[Order]) -> dict[str, object]
     row["intake_subject"] = inquiry.intake_subject
     row["linked_order_id"] = active[0].order_id if active else None
     row["orders_total_count"] = len(orders)
+    # INQUIRY_CONTACT_COMPLETENESS_V1 §9/§10: the remote panel's list badge
+    # must derive from the same structured snapshot as direct mode.
+    row["customer_snapshot"] = customer_snapshot_to_mapping(inquiry.customer_snapshot)
     return row
 
 
@@ -322,6 +329,10 @@ def inquiry_detail(
     detail["customer_snapshot"] = customer_snapshot_to_mapping(
         inquiry.customer_snapshot
     )
+    completeness = derive_inquiry_contact_completeness(inquiry)
+    detail["contact_completeness"] = completeness
+    detail["missing_contact_fields"] = list(missing_contact_fields(completeness))
+    detail["contact_completion_allowed"] = completeness != "complete"
     detail["intake_message"] = inquiry.intake_message
     detail["intake_summary"] = inquiry.intake_summary
     detail["intake_external_ref"] = inquiry.intake_external_ref

@@ -19,6 +19,9 @@ from catering_system.domain.inquiry import (
     inquiry_allows_order_conversion,
     validate_planning_mode,
 )
+from catering_system.domain.inquiry_contact_completeness import (
+    inquiry_contact_complete,
+)
 from catering_system.domain.offer import OfferVersion as CommercialOfferVersion
 from catering_system.domain.operational_core_events import (
     OrderVersionCandidateSuperseded,
@@ -62,6 +65,11 @@ class OrderService:
                 f"crm_stage={inquiry.crm_stage!r}, "
                 f"call_verification_required={inquiry.call_verification_required!r}, "
                 f"call_verification_status={inquiry.call_verification_status!r})"
+            )
+        if not inquiry_contact_complete(inquiry):
+            raise ValueError(
+                "inquiry contact information incomplete "
+                f"(inquiry_id={inquiry.inquiry_id!r})"
             )
         now = _utc_now()
         order_id = str(uuid.uuid4())

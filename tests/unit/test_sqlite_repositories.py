@@ -27,6 +27,14 @@ from catering_system.services.operational_core_service import OperationalCoreSer
 from catering_system.services.order_service import OrderService
 from catering_system.services.progression_service import ProgressionService
 
+from catering_system.domain.inquiry_customer_snapshot import (
+    InquiryCustomerSnapshot as _CCSnapshot,
+)
+
+_CONTACT_COMPLETE_SNAPSHOT = _CCSnapshot(
+    email="kunde@example.com", phone="+49301234567"
+)
+
 
 def _sample_inquiry() -> Inquiry:
     now = datetime.now(timezone.utc)
@@ -48,6 +56,7 @@ def _sample_inquiry() -> Inquiry:
         intake_message="Nachricht",
         intake_summary="Zusammenfassung",
         intake_external_ref="ref-1",
+        customer_snapshot=_CONTACT_COMPLETE_SNAPSHOT,
     )
 
 

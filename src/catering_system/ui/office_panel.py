@@ -27,6 +27,12 @@ from catering_system.domain.inquiry import (
     inquiry_allows_convert_accepted_command,
     validate_crm_stage,
 )
+from catering_system.domain.inquiry_contact_completeness import (
+    CONTACT_COMPLETION_NEXT_ACTION,
+    contact_completeness_blocker_text,
+    derive_inquiry_contact_completeness,
+    missing_contact_fields,
+)
 from catering_system.services.offer_service import OfferService
 from catering_system.domain.offer import (
     ACCEPTANCE_CHANNELS,
@@ -1607,6 +1613,10 @@ class OfficePanel:
                 and inq.call_verification_status != "verified"
                 else verif_text
             )
+            # Calm contact badge (INQUIRY_CONTACT_COMPLETENESS_V1 §9) — same
+            # .blocked convention as the verification marker above.
+            if derive_inquiry_contact_completeness(inq) != "complete":
+                verif_cell += ' <span class="blocked">Kontaktdaten fehlen</span>'
             rows.append(
                 f"<tr><td>{_e(inq.event_date.isoformat())}</td><td>{_e(inq.location_text)}</td>"
                 f"<td>{_e(_source_label(inq.inquiry_source))}</td><td>{_e(betreff)}</td>"
@@ -1720,6 +1730,11 @@ class OfficePanel:
 <p><label>Gäste (ca.)</label><input name="guest_count_estimate" inputmode="numeric" value="{_e(guest_count_estimate)}"></p>
 <p><label>Planungsmodus</label>{_planning_mode_select(PLANNING_MODES[0])}</p>
 <p><label>Rückruf-Verifizierung nötig</label><input type="checkbox" name="call_verification_required" value="1"></p>
+<p class="subtitle">Kontaktdaten — für Website/Konfigurator Pflicht, sonst als Blocker sichtbar.</p>
+<p><label>E-Mail</label><input type="email" name="contact_email"></p>
+<p><label>Telefon</label><input type="tel" name="contact_phone"></p>
+<p><label>Name</label><input name="contact_name"></p>
+<p><label>Firma</label><input name="company_name"></p>
 <p class="subtitle">Intake-Kontext — keine Auftrags-/Küchenfreigabe.</p>
 <p><label>Betreff</label><input name="intake_subject" value="{_e(intake_subject)}"></p>
 <p><label>Nachricht</label><textarea name="intake_message" rows="4">{_e(intake_message)}</textarea></p>
@@ -1729,6 +1744,52 @@ class OfficePanel:
 </fieldset></form>"""
         )
         return _page("Neue Anfrage", body, active_section="inquiries", context=context)
+
+    def _render_contact_section(self, inq: Inquiry, context: OfficePageContext) -> str:
+        """Legacy-UI Kontaktdaten block (INQUIRY_CONTACT_COMPLETENESS_V1 §9)."""
+        snapshot = inq.customer_snapshot
+        completeness = derive_inquiry_contact_completeness(inq)
+        missing = missing_contact_fields(completeness)
+        email = (snapshot.email if snapshot is not None else None) or ""
+        phone = (snapshot.phone if snapshot is not None else None) or ""
+        name = (snapshot.contact_name if snapshot is not None else None) or ""
+        company = (snapshot.company_name if snapshot is not None else None) or ""
+        rows = (
+            f"<tr><th>E-Mail</th><td>{_e(email) if email else '<span class=blocked>fehlt</span>'}</td></tr>"
+            f"<tr><th>Telefon</th><td>{_e(phone) if phone else '<span class=blocked>fehlt</span>'}</td></tr>"
+        )
+        if name:
+            rows += f"<tr><th>Name</th><td>{_e(name)}</td></tr>"
+        if company:
+            rows += f"<tr><th>Firma</th><td>{_e(company)}</td></tr>"
+        if completeness == "complete":
+            status = '<p class="ok">Kontaktdaten vollständig.</p>'
+            form = ""
+        else:
+            blocker = contact_completeness_blocker_text(completeness) or ""
+            status = (
+                f'<p class="blocked">{_e(blocker)} — '
+                f"{_e(CONTACT_COMPLETION_NEXT_ACTION)}. "
+                "Ohne vollständige Kontaktdaten sind Angebot und Auftrag blockiert.</p>"
+            )
+            inputs = ""
+            if "email" in missing:
+                inputs += '<p><label>E-Mail</label><input type="email" name="contact_email"></p>'
+            if "phone" in missing:
+                inputs += '<p><label>Telefon</label><input type="tel" name="contact_phone"></p>'
+            form = (
+                f'<form method="post" action="/inquiry/{_e(inq.inquiry_id)}/contact-completion" '
+                'onsubmit="return confirm('
+                "'Fehlende Kontaktdaten werden ergänzt. "
+                "Vorhandene Angaben werden nicht überschrieben.'"
+                ');">'
+                f"{_csrf_input(context)}"
+                f"{self._command_fields({'updated_at': inq.updated_at.isoformat()})}"
+                f"<fieldset>{inputs}"
+                '<p><button type="submit">Kontaktdaten ergänzen</button></p>'
+                "</fieldset></form>"
+            )
+        return f"<h2>Kontaktdaten</h2>{status}<table>{rows}</table>{form}"
 
     def create_inquiry(self, form: dict[str, str]) -> Inquiry:
         required = form.get("call_verification_required") == "1"
@@ -1747,6 +1808,22 @@ class OfficePanel:
             intake_message=form.get("intake_message", ""),
             intake_summary=form.get("intake_summary", ""),
             intake_external_ref=form.get("intake_external_ref", ""),
+            contact_email=_opt_contact(form, "contact_email"),
+            contact_phone=_opt_contact(form, "contact_phone"),
+            contact_name=_opt_contact(form, "contact_name"),
+            company_name=_opt_contact(form, "company_name"),
+        )
+
+    def complete_inquiry_contacts(
+        self, inquiry_id: str, form: dict[str, str]
+    ) -> Inquiry:
+        """Append-only contact completion — only missing fields may be filled."""
+        email = _opt_contact(form, "contact_email")
+        phone = _opt_contact(form, "contact_phone")
+        return self.inquiry_service.complete_inquiry_contact_information(
+            inquiry_id,
+            email=email,
+            phone=phone,
         )
 
     def render_inquiry(
@@ -1802,6 +1879,9 @@ class OfficePanel:
                         else ""
                     ),
                     update_command_fields=self._command_fields(
+                        {"updated_at": inq.updated_at.isoformat()}
+                    ),
+                    contact_completion_command_fields=self._command_fields(
                         {"updated_at": inq.updated_at.isoformat()}
                     ),
                 ),
@@ -1909,6 +1989,7 @@ class OfficePanel:
             if has_active_order
             else _crm_stage_select(inq.crm_stage)
         )
+        contact_section = self._render_contact_section(inq, context)
         body = (
             inquiry_truncation_warning
             + website_banner
@@ -1921,6 +2002,7 @@ class OfficePanel:
 <tr><th>CRM-Stufe</th><td>{_e(inq.crm_stage)}</td></tr>
 <tr><th>Verifizierung</th><td>{_e(_verification_label(inq.call_verification_status))}</td></tr>
 {intake_rows}</table>
+{contact_section}
 <h2>Vorgangsprüfung (Progression)</h2>{prog}
 <p>{verify_btn}{convert}</p>
 {offer_prefill}
@@ -2701,6 +2783,11 @@ def _opt_int(raw: str) -> int | None:
     if not raw:
         return None
     return int(raw)
+
+
+def _opt_contact(form: dict[str, str], key: str) -> str | None:
+    value = form.get(key, "").strip()
+    return value or None
 
 
 def make_office_panel_handler(

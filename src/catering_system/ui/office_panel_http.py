@@ -80,6 +80,18 @@ _INQUIRY_COMMAND_ERROR_LABELS: dict[str, str] = {
     "offer_blocks_conversion": (
         "Der Angebotsprozess blockiert die direkte Umwandlung in einen Auftrag."
     ),
+    "contact_information_incomplete": (
+        "Kontaktdaten unvollständig — E-Mail-Adresse und Telefonnummer "
+        "müssen vor dem nächsten Schritt vorliegen."
+    ),
+    "contact_conflict": (
+        "Vorhandene Kontaktdaten können nicht ersetzt werden — "
+        "es dürfen nur fehlende Angaben ergänzt werden."
+    ),
+    "invalid_contact_value": (
+        "Die eingegebenen Kontaktdaten sind ungültig — bitte E-Mail-Adresse "
+        "oder Telefonnummer prüfen."
+    ),
 }
 
 
@@ -122,6 +134,18 @@ def office_command_error_message(code_or_text: str) -> str:
         return _OFFER_COMMAND_ERROR_LABELS["conversion_blocked"]
     if "offer blocks conversion" in lowered:
         return _INQUIRY_COMMAND_ERROR_LABELS["offer_blocks_conversion"]
+    if "contact information incomplete" in lowered:
+        return _INQUIRY_COMMAND_ERROR_LABELS["contact_information_incomplete"]
+    if "already recorded and cannot change" in lowered:
+        return _INQUIRY_COMMAND_ERROR_LABELS["contact_conflict"]
+    if "contact email is empty or invalid" in lowered:
+        return _INQUIRY_COMMAND_ERROR_LABELS["invalid_contact_value"]
+    if "contact phone is empty or invalid" in lowered:
+        return _INQUIRY_COMMAND_ERROR_LABELS["invalid_contact_value"]
+    if "contact completion requires email or phone" in lowered:
+        return _INQUIRY_COMMAND_ERROR_LABELS["invalid_contact_value"]
+    if "intake requires email and phone" in lowered:
+        return _INQUIRY_COMMAND_ERROR_LABELS["contact_information_incomplete"]
     if "inquiry conversion gate" in lowered or "verification" in lowered:
         return _INQUIRY_COMMAND_ERROR_LABELS["verification_gate_blocked"]
     if "already converted" in lowered or "active order blocks" in lowered:
@@ -586,6 +610,9 @@ def make_office_panel_handler(
         def _inquiry_action(self, inquiry_id: str, action: str) -> None:
             if action == "update":
                 panel.update_inquiry(inquiry_id, self._form())
+                self._redirect(f"/inquiry/{inquiry_id}")
+            elif action == "contact-completion":
+                panel.complete_inquiry_contacts(inquiry_id, self._form())
                 self._redirect(f"/inquiry/{inquiry_id}")
             elif action == "verify":
                 panel.inquiry_service.verify_customer_by_call(inquiry_id)

@@ -96,6 +96,8 @@ def _seed(db_path: Path) -> dict[str, str]:
         planning_mode="caterer_suggestion",
         call_verification_required=False,
         call_verification_status="not_required",
+        contact_email="kunde@example.com",
+        contact_phone="+49301234567",
         intake_subject="Sommerfest",
     )
     rejected = inquiry_service.create_inquiry(
@@ -109,6 +111,8 @@ def _seed(db_path: Path) -> dict[str, str]:
         planning_mode="caterer_suggestion",
         call_verification_required=False,
         call_verification_status="not_required",
+        contact_email="kunde@example.com",
+        contact_phone="+49301234567",
     )
     inquiries.close()
     return {

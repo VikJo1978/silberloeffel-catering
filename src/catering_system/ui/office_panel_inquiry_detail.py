@@ -12,6 +12,12 @@ from catering_system.domain.inquiry import (
     InquiryOfficeState,
     inquiry_shows_convert_accepted_button,
 )
+from catering_system.domain.inquiry_contact_completeness import (
+    CONTACT_COMPLETION_NEXT_ACTION,
+    contact_completeness_blocker_text,
+    derive_inquiry_contact_completeness,
+    missing_contact_fields,
+)
 from catering_system.domain.order import Order
 
 _SOURCE_LABELS = {
@@ -39,6 +45,11 @@ _VERIFICATION_LABELS = {
 _BLOCKER_LABELS = {
     "inquiry_call_verification_unsatisfied": "Rückrufprüfung noch nicht erfüllt",
     "inquiry_rejected": "Anfrage wurde abgelehnt",
+    "inquiry_contact_missing_email": "E-Mail-Adresse fehlt",
+    "inquiry_contact_missing_phone": "Telefonnummer fehlt",
+    "inquiry_contact_missing_email_and_phone": (
+        "E-Mail-Adresse und Telefonnummer fehlen"
+    ),
 }
 
 
@@ -49,6 +60,7 @@ class InquiryDetailFormFields:
     csrf_input: str
     primary_command_fields: str
     update_command_fields: str
+    contact_completion_command_fields: str = ""
 
 
 @dataclass(frozen=True)
@@ -256,6 +268,83 @@ def _checks(inquiry: Inquiry, blockers: Sequence[str]) -> str:
     )
 
 
+def _contact_value(value: str | None, missing_label: str) -> str:
+    if value:
+        return f"<dd>{_e(value)}</dd>"
+    return (
+        '<dd><span class="inquiry-check-icon open" aria-hidden="true">!</span> '
+        f"<strong>{_e(missing_label)}</strong></dd>"
+    )
+
+
+def _contact_completion_form(
+    inquiry: Inquiry,
+    forms: InquiryDetailFormFields,
+    missing: tuple[str, ...],
+) -> str:
+    """Inputs only for missing fields; stored values stay read-only above."""
+    inputs = []
+    if "email" in missing:
+        inputs.append(
+            '<p><label>E-Mail</label><input type="email" name="contact_email"></p>'
+        )
+    if "phone" in missing:
+        inputs.append(
+            '<p><label>Telefon</label><input type="tel" name="contact_phone"></p>'
+        )
+    return (
+        '<details class="inquiry-edit"><summary>Kontaktdaten ergänzen</summary>'
+        '<div class="inquiry-edit-body">'
+        f'<form method="post" action="/inquiry/{_e(inquiry.inquiry_id)}/contact-completion" '
+        'onsubmit="return confirm('
+        "'Fehlende Kontaktdaten werden ergänzt. Vorhandene Angaben werden nicht überschrieben.'"
+        ');">'
+        f"{forms.csrf_input}{forms.contact_completion_command_fields}<fieldset>"
+        + "".join(inputs)
+        + '<p><button type="submit">Kontaktdaten ergänzen</button></p>'
+        "</fieldset></form></div></details>"
+    )
+
+
+def _contact_card(inquiry: Inquiry, forms: InquiryDetailFormFields) -> str:
+    snapshot = inquiry.customer_snapshot
+    completeness = derive_inquiry_contact_completeness(inquiry)
+    missing = missing_contact_fields(completeness)
+    email = snapshot.email if snapshot is not None else None
+    phone = snapshot.phone if snapshot is not None else None
+    name = snapshot.contact_name if snapshot is not None else None
+    company = snapshot.company_name if snapshot is not None else None
+    rows = (
+        f"<div><dt>E-Mail</dt>{_contact_value(email, 'E-Mail-Adresse fehlt')}</div>"
+        f"<div><dt>Telefon</dt>{_contact_value(phone, 'Telefonnummer fehlt')}</div>"
+    )
+    if name:
+        rows += f"<div><dt>Name</dt><dd>{_e(name)}</dd></div>"
+    if company:
+        rows += f"<div><dt>Firma</dt><dd>{_e(company)}</dd></div>"
+    if completeness == "complete":
+        status = '<p class="inquiry-no-checks">Kontaktdaten vollständig.</p>'
+        form = ""
+    else:
+        blocker = contact_completeness_blocker_text(completeness) or ""
+        status = (
+            '<div class="inquiry-notice blocked"><strong>'
+            f"{_e(blocker)}.</strong> "
+            f"Nächster Schritt: {_e(CONTACT_COMPLETION_NEXT_ACTION)}. "
+            "Ohne vollständige Kontaktdaten sind Angebot und Auftrag blockiert."
+            "</div>"
+        )
+        form = _contact_completion_form(inquiry, forms, missing)
+    return (
+        '<section class="inquiry-card inquiry-content-card">'
+        "<h2>Kontaktdaten</h2>"
+        + status
+        + f'<dl class="inquiry-facts-list">{rows}</dl>'
+        + form
+        + "</section>"
+    )
+
+
 def _planning_mode_select(selected: str) -> str:
     options = "".join(
         f'<option value="{_e(value)}"{" selected" if value == selected else ""}>'
@@ -410,7 +499,8 @@ def render_inquiry_detail(
         f"<strong>{_e(state_title)}</strong><p>{_e(state_description)}</p></div>"
         "</section>"
         '<div class="inquiry-detail-layout"><div class="inquiry-detail-main">'
-        '<section class="inquiry-card inquiry-content-card">'
+        + _contact_card(inquiry, forms)
+        + '<section class="inquiry-card inquiry-content-card">'
         "<h2>Nachricht des Kunden</h2>"
         f'<p class="inquiry-message">{_e(message)}</p></section>'
         '<section class="inquiry-card inquiry-content-card">'

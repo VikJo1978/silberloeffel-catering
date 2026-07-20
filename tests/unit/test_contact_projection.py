@@ -59,6 +59,8 @@ def _save_inquiry(repo: InMemoryInquiryRepository, **overrides: object):
         "planning_mode": "caterer_suggestion",
         "call_verification_required": False,
         "call_verification_status": "not_required",
+        "contact_email": "kunde@example.com",
+        "contact_phone": "+49301234567",
     }
     payload.update(overrides)
     return service.create_inquiry(**payload)  # type: ignore[arg-type]

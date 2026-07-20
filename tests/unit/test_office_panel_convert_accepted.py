@@ -84,6 +84,8 @@ def _seed(db_path: Path) -> dict[str, str]:
         planning_mode="caterer_suggestion",
         call_verification_required=False,
         call_verification_status="not_required",
+        contact_email="kunde@example.com",
+        contact_phone="+49301234567",
         intake_subject="Sommerfest",
     )
     cancelled_src = inquiry_service.create_inquiry(
@@ -97,6 +99,8 @@ def _seed(db_path: Path) -> dict[str, str]:
         planning_mode="caterer_suggestion",
         call_verification_required=False,
         call_verification_status="not_required",
+        contact_email="kunde@example.com",
+        contact_phone="+49301234567",
     )
     cancelled_order, _version = order_service.convert_inquiry_to_order(cancelled_src)
     core.cancel_order(cancelled_order.order_id)

@@ -22,6 +22,14 @@ from catering_system.repositories.in_memory_order_repository import (
 from catering_system.services.kitchen_print_service import KitchenPrintService
 from catering_system.services.order_service import OrderService
 
+from catering_system.domain.inquiry_customer_snapshot import (
+    InquiryCustomerSnapshot as _CCSnapshot,
+)
+
+_CONTACT_COMPLETE_SNAPSHOT = _CCSnapshot(
+    email="kunde@example.com", phone="+49301234567"
+)
+
 JOB_1 = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 JOB_2 = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
 _NOW = datetime(2026, 7, 14, 9, 0, tzinfo=timezone.utc)
@@ -43,6 +51,7 @@ def _inquiry() -> Inquiry:
         planning_mode=PLANNING_MODES[0],
         call_verification_required=False,
         call_verification_status=CALL_VERIFICATION_STATUSES[0],
+        customer_snapshot=_CONTACT_COMPLETE_SNAPSHOT,
     )
 
 

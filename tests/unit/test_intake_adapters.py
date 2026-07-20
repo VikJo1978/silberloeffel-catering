@@ -26,6 +26,8 @@ from catering_system.repositories.in_memory_inquiry_repository import (
 from catering_system.services.inquiry_service import InquiryService
 
 _D = date(2026, 7, 15)
+# website_form/configurator require email+phone (INQUIRY_CONTACT_COMPLETENESS_V1)
+_WF_CONTACT = {"email": "kunde@example.com", "phone": "030 123456"}
 
 
 def test_wix_form_happy_path_uses_create_inquiry_and_source() -> None:
@@ -455,21 +457,22 @@ def test_website_form_happy_path_uses_create_inquiry_and_source() -> None:
 def test_website_form_uses_name_when_company_absent() -> None:
     repo = InMemoryInquiryRepository()
     svc = InquiryService(repo)
-    q = intake_from_website_form(svc, {"event_date": _D, "name": "Frau Muster"})
+    q = intake_from_website_form(
+        svc, {**_WF_CONTACT, "event_date": _D, "name": "Frau Muster"}
+    )
     assert q.intake_subject == "Frau Muster"
-    assert q.intake_message == "Name: Frau Muster"
+    assert q.intake_message == (
+        "Name: Frau Muster\nTelefon: 030 123456\nE-Mail: kunde@example.com"
+    )
 
 
-def test_website_form_no_contact_info_still_creates_inquiry() -> None:
+def test_website_form_without_contact_info_rejected() -> None:
+    """INQUIRY_CONTACT_COMPLETENESS_V1 §5: public channel requires email+phone."""
     repo = InMemoryInquiryRepository()
     svc = InquiryService(repo)
-    q = intake_from_website_form(svc, {"event_date": _D})
-    assert q.inquiry_source == "website_form"
-    assert q.intake_subject is None
-    assert q.intake_message is None
-    assert q.intake_summary == f"Website-Anfrage — {_D.isoformat()}"
-    assert q.intake_external_ref is None
-    assert q.guest_count_estimate is None
+    with pytest.raises(ValueError, match="requires email and phone"):
+        intake_from_website_form(svc, {"event_date": _D})
+    assert repo.list_all() == []
 
 
 def test_website_form_missing_event_date_rejected() -> None:
@@ -503,9 +506,11 @@ def test_website_form_guest_count_above_maximum_rejected() -> None:
 def test_website_form_guest_count_boundaries_accepted() -> None:
     repo = InMemoryInquiryRepository()
     svc = InquiryService(repo)
-    q_min = intake_from_website_form(svc, {"event_date": _D, "guest_count_estimate": 1})
+    q_min = intake_from_website_form(
+        svc, {**_WF_CONTACT, "event_date": _D, "guest_count_estimate": 1}
+    )
     q_max = intake_from_website_form(
-        svc, {"event_date": _D, "guest_count_estimate": 2000}
+        svc, {**_WF_CONTACT, "event_date": _D, "guest_count_estimate": 2000}
     )
     assert q_min.guest_count_estimate == 1
     assert q_max.guest_count_estimate == 2000
@@ -529,7 +534,9 @@ def test_website_form_long_message_truncated_with_marker() -> None:
     repo = InMemoryInquiryRepository()
     svc = InquiryService(repo)
     long_message = "Sehr ausführlicher Wunschtext. " * 300  # well over 5000 chars
-    q = intake_from_website_form(svc, {"event_date": _D, "message": long_message})
+    q = intake_from_website_form(
+        svc, {**_WF_CONTACT, "event_date": _D, "message": long_message}
+    )
     assert q.intake_message is not None
     assert q.intake_message.endswith("… (gekürzt)")
     assert len(q.intake_message) <= 5000 + len("… (gekürzt)")
@@ -539,7 +546,8 @@ def test_website_form_long_subject_truncated_with_marker() -> None:
     repo = InMemoryInquiryRepository()
     svc = InquiryService(repo)
     q = intake_from_website_form(
-        svc, {"event_date": _D, "company": "X" * 300, "event_type": "Feier"}
+        svc,
+        {**_WF_CONTACT, "event_date": _D, "company": "X" * 300, "event_type": "Feier"},
     )
     assert q.intake_subject is not None
     assert q.intake_subject.endswith("… (gekürzt)")
@@ -551,6 +559,7 @@ def test_website_form_long_location_and_time_window_truncated() -> None:
     q = intake_from_website_form(
         svc,
         {
+            **_WF_CONTACT,
             "event_date": _D,
             "location_text": "Y" * 600,
             "time_window_text": "Z" * 600,
@@ -565,7 +574,7 @@ def test_website_form_planning_mode_stays_default_even_with_buffet_event_type() 
     repo = InMemoryInquiryRepository()
     svc = InquiryService(repo)
     q = intake_from_website_form(
-        svc, {"event_date": _D, "event_type": "Büfett Firmenfeier"}
+        svc, {**_WF_CONTACT, "event_date": _D, "event_type": "Büfett Firmenfeier"}
     )
     assert q.planning_mode == PLANNING_MODES[0]
 
@@ -586,6 +595,7 @@ def test_website_form_explicit_call_verification_overrides_default() -> None:
     q = intake_from_website_form(
         svc,
         {
+            **_WF_CONTACT,
             "event_date": _D,
             "call_verification_required": False,
             "call_verification_status": "not_required",
@@ -608,7 +618,7 @@ def test_website_form_adapter_only_calls_create_inquiry_not_update() -> None:
     repo = InMemoryInquiryRepository()
     svc = InquiryService(repo)
     with patch.object(svc, "update_inquiry") as u:
-        intake_from_website_form(svc, {"event_date": _D})
+        intake_from_website_form(svc, {**_WF_CONTACT, "event_date": _D})
         u.assert_not_called()
 
 
@@ -620,14 +630,14 @@ def test_website_form_adapter_logs_called(caplog: pytest.LogCaptureFixture) -> N
     caplog.set_level(logging.INFO)
     repo = InMemoryInquiryRepository()
     svc = InquiryService(repo)
-    intake_from_website_form(svc, {"event_date": _D})
+    intake_from_website_form(svc, {**_WF_CONTACT, "event_date": _D})
     assert "website_form adapter called" in caplog.text
 
 
 def test_website_form_stored_via_repository() -> None:
     repo = InMemoryInquiryRepository()
     svc = InquiryService(repo)
-    q = intake_from_website_form(svc, {"event_date": _D, "company": "X"})
+    q = intake_from_website_form(svc, {**_WF_CONTACT, "event_date": _D, "company": "X"})
     loaded = repo.get_by_id(q.inquiry_id)
     assert loaded is not None
     assert loaded.inquiry_source == "website_form"

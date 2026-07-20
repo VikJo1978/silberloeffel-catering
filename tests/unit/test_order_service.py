@@ -25,6 +25,14 @@ from catering_system.repositories.in_memory_order_repository import (
 )
 from catering_system.services.order_service import OrderService
 
+from catering_system.domain.inquiry_customer_snapshot import (
+    InquiryCustomerSnapshot as _CCSnapshot,
+)
+
+_CONTACT_COMPLETE_SNAPSHOT = _CCSnapshot(
+    email="kunde@example.com", phone="+49301234567"
+)
+
 _B3_FORBIDDEN_FIELD_NAMES = frozenset(
     {
         "is_active",
@@ -58,6 +66,7 @@ def _sample_inquiry() -> Inquiry:
         planning_mode=PLANNING_MODES[0],
         call_verification_required=False,
         call_verification_status=CALL_VERIFICATION_STATUSES[0],
+        customer_snapshot=_CONTACT_COMPLETE_SNAPSHOT,
     )
 
 

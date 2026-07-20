@@ -47,6 +47,14 @@ from catering_system.services.operational_core_service import OperationalCoreSer
 from catering_system.services.order_service import OrderService
 from catering_system.services.payment_reminder_service import PaymentReminderService
 
+from catering_system.domain.inquiry_customer_snapshot import (
+    InquiryCustomerSnapshot as _CCSnapshot,
+)
+
+_CONTACT_COMPLETE_SNAPSHOT = _CCSnapshot(
+    email="kunde@example.com", phone="+49301234567"
+)
+
 _PREPARE_CMD = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 _SNAPSHOT_ID = "77777777-7777-4777-8777-777777777771"
 _VARIANT_ID = "44444444-4444-4444-8444-444444444441"
@@ -69,6 +77,7 @@ def _inquiry(inquiry_id: str = "11111111-1111-1111-1111-111111111111") -> Inquir
         planning_mode=PLANNING_MODES[0],
         call_verification_required=False,
         call_verification_status=CALL_VERIFICATION_STATUSES[0],
+        customer_snapshot=_CONTACT_COMPLETE_SNAPSHOT,
     )
 
 

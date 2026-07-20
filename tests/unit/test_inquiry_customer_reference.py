@@ -316,6 +316,7 @@ def test_website_form_duplicate_does_not_change_snapshot(tmp_path: Path) -> None
         "company": "ACME",
         "name": "Alex",
         "email": "a@example.com",
+        "phone": "030 4455",
         "submission_id": "sub-1",
     }
     first = intake_from_website_form(svc, raw)
@@ -376,7 +377,7 @@ def test_inquiry_to_order_behavior_unchanged() -> None:
     kwargs["customer_linkage"] = {"placeholder": True}
     inquiry = inquiry_svc.create_inquiry(
         inquiry_source="manual",
-        intake_message="Name: Alex",
+        intake_message="Name: Alex\nE-Mail: alex@example.com\nTelefon: 030 11 22",
         **kwargs,
     )
     inquiry = inquiry_svc.assign_customer_reference(

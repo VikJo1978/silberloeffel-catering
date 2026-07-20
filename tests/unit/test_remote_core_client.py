@@ -514,6 +514,8 @@ def test_confirm_kitchen_print_returns_the_version_not_bad_response(
         planning_mode="caterer_suggestion",
         call_verification_required=False,
         call_verification_status="not_required",
+        contact_email="kunde@example.com",
+        contact_phone="+49301234567",
     )
     order, version = OrderService(orders).convert_inquiry_to_order(inquiry)
     inquiries.close()
@@ -550,6 +552,8 @@ def test_create_relevant_order_change_version_returns_the_version_not_bad_respon
         planning_mode="caterer_suggestion",
         call_verification_required=False,
         call_verification_status="not_required",
+        contact_email="kunde@example.com",
+        contact_phone="+49301234567",
     )
     order, _v1 = OrderService(orders).convert_inquiry_to_order(inquiry)
     inquiries.close()

@@ -16,6 +16,19 @@ class CommonInquiryFields(TypedDict):
     planning_mode: str
     call_verification_required: bool
     call_verification_status: str
+    contact_email: str | None
+    contact_phone: str | None
+    contact_name: str | None
+    company_name: str | None
+
+
+def _optional_contact_str(raw: Mapping[str, Any], key: str, channel: str) -> str | None:
+    value = raw.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise TypeError(f"{channel} intake: {key} must be str or absent")
+    return value
 
 
 def parse_common_inquiry_fields(
@@ -88,4 +101,11 @@ def parse_common_inquiry_fields(
         "planning_mode": planning_mode,
         "call_verification_required": required,
         "call_verification_status": status,
+        # Structured contact contract (INQUIRY_CONTACT_COMPLETENESS_V1 §6):
+        # optional on office/legacy channels — a preliminary incomplete
+        # Inquiry is allowed there and surfaces as an office blocker.
+        "contact_email": _optional_contact_str(raw, "contact_email", channel),
+        "contact_phone": _optional_contact_str(raw, "contact_phone", channel),
+        "contact_name": _optional_contact_str(raw, "contact_name", channel),
+        "company_name": _optional_contact_str(raw, "company_name", channel),
     }

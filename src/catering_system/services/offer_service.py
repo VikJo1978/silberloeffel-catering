@@ -10,6 +10,9 @@ from decimal import Decimal
 
 from catering_system.domain.catalog import validate_allergen_codes
 from catering_system.domain.inquiry import inquiry_allows_order_conversion
+from catering_system.domain.inquiry_contact_completeness import (
+    inquiry_contact_complete,
+)
 from catering_system.domain.offer import (
     AcceptanceChannel,
     AcceptanceEvidence,
@@ -81,6 +84,11 @@ class OfferService:
         if inquiry is None:
             raise KeyError(inquiry_id)
 
+        if not inquiry_contact_complete(inquiry):
+            raise ValueError(
+                f"inquiry contact information incomplete (inquiry_id={inquiry_id!r})"
+            )
+
         if self._has_active_order(inquiry_id):
             raise ValueError(
                 f"active order blocks offer preparation (inquiry_id={inquiry_id!r})"
@@ -128,6 +136,8 @@ class OfferService:
 
         if offer.acceptance_evidence is not None or offer.conversion_link is not None:
             raise ValueError("acceptance blocks sent recording")
+
+        self._require_contact_complete_inquiry(offer.source_inquiry_id)
 
         if any(
             item.offer_version_id == offer_version_id for item in offer.sent_evidence
@@ -195,6 +205,8 @@ class OfferService:
 
         if offer.conversion_link is not None:
             raise ValueError("conversion link blocks acceptance recording")
+
+        self._require_contact_complete_inquiry(offer.source_inquiry_id)
 
         version = next(
             item for item in offer.versions if item.offer_version_id == offer_version_id
@@ -316,6 +328,15 @@ class OfferService:
                 f"active order blocks conversion (inquiry_id={offer.source_inquiry_id!r})"
             )
 
+        # Contact-completeness gate for NEW conversions only — placed after the
+        # conversion-link replay return above so an existing conversion is
+        # never blocked retroactively (INQUIRY_CONTACT_COMPLETENESS_V1 §8).
+        if not inquiry_contact_complete(inquiry):
+            raise ValueError(
+                "inquiry contact information incomplete "
+                f"(inquiry_id={inquiry.inquiry_id!r})"
+            )
+
         order, order_version = self._order_service.create_order_from_offer_version(
             offer.source_inquiry_id,
             version,
@@ -336,6 +357,16 @@ class OfferService:
             order.order_id,
         )
         return updated, order, order_version
+
+    def _require_contact_complete_inquiry(self, inquiry_id: str) -> None:
+        """One canonical contact gate for commercial progression. A missing
+        inquiry row is not this gate's concern (prepare_offer_version already
+        requires it); only an existing incomplete inquiry blocks."""
+        inquiry = self._inquiry_repository.get_by_id(inquiry_id)
+        if inquiry is not None and not inquiry_contact_complete(inquiry):
+            raise ValueError(
+                f"inquiry contact information incomplete (inquiry_id={inquiry_id!r})"
+            )
 
     def _has_active_order(self, inquiry_id: str) -> bool:
         return any(

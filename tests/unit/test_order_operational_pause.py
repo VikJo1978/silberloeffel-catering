@@ -47,6 +47,15 @@ from catering_system.ui.kiosk_server import (
     render_wochenuebersicht_html,
 )
 
+from catering_system.domain.inquiry_customer_snapshot import (
+    InquiryCustomerSnapshot as _CCSnapshot,
+)
+
+_CONTACT_COMPLETE_SNAPSHOT = _CCSnapshot(
+    email="kunde@example.com", phone="+49301234567"
+)
+
+
 _WEEK_YEAR = 2026
 _WEEK = 40
 
@@ -71,6 +80,7 @@ def _sample_inquiry() -> Inquiry:
         planning_mode=PLANNING_MODES[0],
         call_verification_required=False,
         call_verification_status=CALL_VERIFICATION_STATUSES[0],
+        customer_snapshot=_CONTACT_COMPLETE_SNAPSHOT,
     )
 
 
@@ -678,6 +688,7 @@ def test_resume_on_other_order_with_foreign_pause_id_rejected() -> None:
         planning_mode=PLANNING_MODES[0],
         call_verification_required=False,
         call_verification_status=CALL_VERIFICATION_STATUSES[0],
+        customer_snapshot=_CONTACT_COMPLETE_SNAPSHOT,
     )
     order_b, _v2 = osvc.convert_inquiry_to_order(inquiry_b)
     paused = _pause(

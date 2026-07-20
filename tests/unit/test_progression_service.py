@@ -77,6 +77,14 @@ from catering_system.repositories.in_memory_order_repository import (
 from catering_system.services.order_service import OrderService
 from catering_system.services.progression_service import ProgressionService
 
+from catering_system.domain.inquiry_customer_snapshot import (
+    InquiryCustomerSnapshot as _CCSnapshot,
+)
+
+_CONTACT_COMPLETE_SNAPSHOT = _CCSnapshot(
+    email="kunde@example.com", phone="+49301234567"
+)
+
 
 def _module_source_lower(module: object) -> str:
     return Path(module.__file__).read_text(encoding="utf-8").lower()
@@ -98,6 +106,7 @@ def _sample_inquiry() -> Inquiry:
         planning_mode=PLANNING_MODES[0],
         call_verification_required=False,
         call_verification_status=CALL_VERIFICATION_STATUSES[0],
+        customer_snapshot=_CONTACT_COMPLETE_SNAPSHOT,
     )
 
 

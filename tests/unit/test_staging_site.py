@@ -46,7 +46,7 @@ _VALID = {
     "company": "Testbetrieb",
     "name": "Erika Test",
     "email": "erika@example.test",
-    "phone": "",
+    "phone": "040 555 123",
     "event_type": "Business Event",
     "message": "Nur eine Testanfrage.",
     "website": "",

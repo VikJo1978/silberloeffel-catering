@@ -62,6 +62,8 @@ def _seed(db_path: Path) -> dict[str, str]:
             planning_mode="caterer_suggestion",
             call_verification_required=False,
             call_verification_status="not_required",
+            contact_email="kunde@example.com",
+            contact_phone="+49301234567",
         )
         base.update(overrides)
         return inquiry_service.create_inquiry(**base)
@@ -182,6 +184,8 @@ _CREATE_ARGS = {
     "guest_count_estimate": 40,
     "planning_mode": "caterer_suggestion",
     "call_verification_required": False,
+    "contact_email": "kunde@example.com",
+    "contact_phone": "+49301234567",
 }
 
 
@@ -715,7 +719,15 @@ def test_inquiry_detail_shape(api) -> None:
     assert body["orders_truncated"] is False
     assert body["customer_linkage"] == {}
     assert body["customer_id"] is None
-    assert body["customer_snapshot"] is None
+    assert body["customer_snapshot"] == {
+        "company_name": None,
+        "contact_name": None,
+        "email": "kunde@example.com",
+        "phone": "+49301234567",
+    }
+    assert body["contact_completeness"] == "complete"
+    assert body["missing_contact_fields"] == []
+    assert body["contact_completion_allowed"] is False
     prefill = body["offer_prefill"]
     assert prefill["schema_version"] == "core_inquiry_offer_prefill_v1"
     assert prefill["inquiry_id"] == ids["inquiry_printed"]

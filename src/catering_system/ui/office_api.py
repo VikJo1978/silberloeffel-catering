@@ -34,6 +34,11 @@ from catering_system.domain.inquiry import (
     validate_crm_stage,
     validate_planning_mode,
 )
+from catering_system.domain.inquiry_contact_completeness import (
+    derive_inquiry_contact_completeness,
+    inquiry_contact_complete,
+    missing_contact_fields,
+)
 from catering_system.domain.offer import (
     ACCEPTANCE_CHANNELS,
     SENT_CHANNELS,
@@ -904,12 +909,54 @@ class OfficeApi:
                 intake_message=_v_intake(args, "intake_message", 5000, ""),
                 intake_summary=_v_intake(args, "intake_summary", 2000, ""),
                 intake_external_ref=_v_intake(args, "intake_external_ref", 200, ""),
+                contact_email=_v_optional_str(args.get("contact_email"), 320),
+                contact_phone=_v_optional_str(args.get("contact_phone"), 100),
+                contact_name=_v_optional_str(args.get("contact_name"), 200),
+                company_name=_v_optional_str(args.get("company_name"), 200),
             )
         except DuplicateExternalReferenceError as exc:
             raise ApiError(409, "external_ref_conflict") from exc
+        except ValueError as exc:
+            message = str(exc)
+            if "intake requires email and phone" in message:
+                raise ApiError(400, "contact_information_required") from exc
+            if "contact email is empty or invalid" in message:
+                raise ApiError(400, "invalid_contact_email") from exc
+            if "contact phone is empty or invalid" in message:
+                raise ApiError(400, "invalid_contact_phone") from exc
+            raise
         return 201, {
             "inquiry_id": inquiry.inquiry_id,
             "updated_at": inquiry.updated_at.isoformat(),
+        }
+
+    def cmd_contact_completion(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        current = self._require_inquiry(path_ids["id"])
+        if _v_datetime(expect["updated_at"]) != current.updated_at:
+            raise ApiError(409, "stale_state")
+        email = _v_optional_str(args.get("email"), 320)
+        phone = _v_optional_str(args.get("phone"), 100)
+        if email is None and phone is None:
+            raise _invalid()
+        try:
+            updated = self.inquiry_service.complete_inquiry_contact_information(
+                current.inquiry_id,
+                email=email,
+                phone=phone,
+            )
+        except ValueError as exc:
+            message = str(exc)
+            if "already recorded and cannot change" in message:
+                raise ApiError(409, "contact_conflict") from exc
+            raise ApiError(400, "invalid_contact_value") from exc
+        completeness = derive_inquiry_contact_completeness(updated)
+        return 200, {
+            "inquiry_id": updated.inquiry_id,
+            "updated_at": updated.updated_at.isoformat(),
+            "contact_completeness": completeness,
+            "missing_contact_fields": list(missing_contact_fields(completeness)),
         }
 
     def cmd_update_inquiry(
@@ -987,6 +1034,8 @@ class OfficeApi:
             offer, today=views.berlin_today()
         ):
             raise ApiError(422, "offer_blocks_conversion")
+        if not inquiry_contact_complete(inquiry):
+            raise ApiError(422, "contact_information_incomplete")
         if state.next_action != "convert":
             raise ApiError(422, "verification_gate_blocked")
         try:
@@ -1025,6 +1074,8 @@ class OfficeApi:
                 raise ApiError(409, "active_order_exists") from exc
             if "offer already exists for inquiry" in message:
                 raise ApiError(409, "offer_already_exists") from exc
+            if "contact information incomplete" in message:
+                raise ApiError(422, "contact_information_incomplete") from exc
             raise ApiError(422, "invalid_snapshot") from exc
         except sqlite3.IntegrityError:
             if self.offers.get_by_source_inquiry_id(path_ids["id"]) is not None:
@@ -1064,6 +1115,8 @@ class OfficeApi:
                 raise ApiError(422, "sent_recording_blocked") from exc
             if "sent recording blocked" in message:
                 raise ApiError(422, "sent_recording_blocked") from exc
+            if "contact information incomplete" in message:
+                raise ApiError(422, "contact_information_incomplete") from exc
             raise ApiError(422, "invalid_sent_evidence") from exc
         except sqlite3.IntegrityError:
             if self.offers.get(offer_id) is None:
@@ -1110,6 +1163,8 @@ class OfficeApi:
                 raise ApiError(422, "acceptance_blocked") from exc
             if "acceptance blocked" in message:
                 raise ApiError(422, "acceptance_blocked") from exc
+            if "contact information incomplete" in message:
+                raise ApiError(422, "contact_information_incomplete") from exc
             raise ApiError(422, "invalid_acceptance_evidence") from exc
         except sqlite3.IntegrityError:
             if self.offers.get(offer_id) is None:
@@ -1158,6 +1213,8 @@ class OfficeApi:
                 raise ApiError(422, "conversion_blocked") from exc
             if "inquiry conversion blocked" in message:
                 raise ApiError(422, "verification_gate_blocked") from exc
+            if "contact information incomplete" in message:
+                raise ApiError(422, "contact_information_incomplete") from exc
             raise ApiError(422, "conversion_blocked") from exc
         except sqlite3.IntegrityError:
             offer_check = self.offers.get(offer_id)
@@ -1639,6 +1696,9 @@ class _CommandSpec:
 _INTAKE_OPTIONAL = frozenset(
     {"intake_subject", "intake_message", "intake_summary", "intake_external_ref"}
 )
+_STRUCTURED_CONTACT_OPTIONAL = frozenset(
+    {"contact_email", "contact_phone", "contact_name", "company_name"}
+)
 _CREATE_ARGS = _ArgKeys(
     required=frozenset(
         {
@@ -1651,7 +1711,11 @@ _CREATE_ARGS = _ArgKeys(
             "call_verification_required",
         }
     ),
-    optional=_INTAKE_OPTIONAL,
+    optional=_INTAKE_OPTIONAL | _STRUCTURED_CONTACT_OPTIONAL,
+)
+_CONTACT_COMPLETION_ARGS = _ArgKeys(
+    required=frozenset(),
+    optional=frozenset({"email", "phone"}),
 )
 _UPDATE_ARGS = _ArgKeys(
     required=frozenset(
@@ -1745,6 +1809,9 @@ _CATALOG_DISH_UPDATE_ARGS = _ArgKeys(
 _COMMANDS: dict[str, _CommandSpec] = {
     "create_inquiry": _CommandSpec("cmd_create_inquiry", _CREATE_ARGS, set()),
     "update_inquiry": _CommandSpec("cmd_update_inquiry", _UPDATE_ARGS, {"updated_at"}),
+    "contact-completion": _CommandSpec(
+        "cmd_contact_completion", _CONTACT_COMPLETION_ARGS, {"updated_at"}
+    ),
     "verify": _CommandSpec("cmd_verify", _NO_ARGS, set()),
     "convert": _CommandSpec("cmd_convert", _NO_ARGS, set()),
     "prepare-offer": _CommandSpec("cmd_prepare_offer", _SNAPSHOT_ARGS, set()),
@@ -1829,6 +1896,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/inquiries/(?P<id>[^/]+)/update$"),
         "/office/v1/inquiries/{id}/update",
         {"POST": "update_inquiry"},
+    ),
+    (
+        re.compile(r"^/office/v1/inquiries/(?P<id>[^/]+)/contact-completion$"),
+        "/office/v1/inquiries/{id}/contact-completion",
+        {"POST": "contact-completion"},
     ),
     (
         re.compile(r"^/office/v1/inquiries/(?P<id>[^/]+)/verify$"),

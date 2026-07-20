@@ -54,7 +54,15 @@ def test_create_works_for_each_allowed_inquiry_source() -> None:
         "configurator",
         "email",
     ):
-        q = svc.create_inquiry(inquiry_source=src, **_base_create_kwargs())
+        extra: dict[str, str] = {}
+        if src in ("website_form", "configurator"):
+            # public channels require complete contacts
+            # (INQUIRY_CONTACT_COMPLETENESS_V1 §5)
+            extra = {
+                "contact_email": "kunde@example.com",
+                "contact_phone": "+49301234567",
+            }
+        q = svc.create_inquiry(inquiry_source=src, **extra, **_base_create_kwargs())
         assert q.inquiry_source == src
 
 

@@ -28,7 +28,7 @@ explicit Phase 2 configuration/deploy step (not yet done; see below).
 |---|---|
 | `GET /office/v1/queue` | dashboard `QueueView`: open-inquiry attention count, Berlin ISO week (≤100 entries + `total_count`/`truncated`), top-5 inquiry/order rows with next actions, plus `pausiert` / `pausiert_top`. The compatibility JSON keys remain `neue_anfragen` / `neue_anfragen_top`, but rejected and any already-converted Inquiry are excluded. |
 | `GET /office/v1/inquiries?q=&limit=&offset=` | list rows (`intake_subject`, `linked_order_id`, `orders_total_count`); `limit` ≤100, honest `total_count` |
-| `GET /office/v1/inquiries/{id}` | full detail incl. `allows_conversion`, capped `orders` array, `offer_prefill` payload |
+| `GET /office/v1/inquiries/{id}` | full detail incl. `allows_conversion`, capped `orders` array, `offer_prefill` payload, `customer_snapshot`, and contact completeness (`contact_completeness`, `missing_contact_fields`, `contact_completion_allowed`) |
 | `GET /office/v1/orders?q=&limit=&offset=` | rows with `ready`, `blocker_reason`, `next_action`, `operational_pause_active` — no N+1 |
 | `GET /office/v1/orders/{id}` | detail with versions (≤200, flagged), `ready_to_send`, derived `operational_pause`, the separately derived `payment_reminder` view, and `confirmation_document` eligibility/snapshot summary |
 | `GET /office/v1/orders/{id}/print-data?version=` | print-sheet data; unknown and unowned are the same `404` |
@@ -50,10 +50,11 @@ are minimal (IDs + timestamps, no PII); the panel re-reads details via GET.
 
 | Route | `expect` precondition |
 |---|---|
-| `POST /office/v1/inquiries` | – |
+| `POST /office/v1/inquiries` | – ; optional structured contact args `contact_email`, `contact_phone`, `contact_name`, `company_name` build the customer snapshot; `website_form`/`configurator` sources require valid email **and** phone (`400 contact_information_required`) |
 | `POST /office/v1/inquiries/{id}/update` | `updated_at`; with an active linked Order, only `Bestätigt / Auftrag` is compatible (`422 active_order_crm_stage_conflict`) |
+| `POST /office/v1/inquiries/{id}/contact-completion` | `updated_at`; args optional `email` / `phone` (at least one); append-only — fills only missing snapshot contacts, identical resubmission idempotent, replacing a stored value is `409 contact_conflict`, malformed value `400 invalid_contact_value` |
 | `POST /office/v1/inquiries/{id}/verify` | – (repeat = success) |
-| `POST /office/v1/inquiries/{id}/convert` | server-side: no active order (`409 already_converted`), not rejected (`422 inquiry_rejected`), verification satisfied, no blocking Offer (`422 offer_blocks_conversion`); success also sets `Bestätigt / Auftrag` |
+| `POST /office/v1/inquiries/{id}/convert` | server-side: no active order (`409 already_converted`), not rejected (`422 inquiry_rejected`), contacts complete (`422 contact_information_incomplete`), verification satisfied, no blocking Offer (`422 offer_blocks_conversion`); success also sets `Bestätigt / Auftrag` |
 | `POST /office/v1/inquiries/{id}/prepare-offer` | `args.snapshot` is a full `offer_snapshot_v1` envelope; no active order (`409 active_order_exists`), no existing Offer (`409 offer_already_exists`), snapshot `inquiry_id` must match the path (`422 inquiry_id_mismatch`); invalid envelope or hash (`422 invalid_snapshot`); body cap **256 KiB** (not the global 64 KiB) |
 | `POST /office/v1/offers/{offer_id}/versions/{version_id}/mark-sent` | `args.sent_at`, `channel`, `recipient_reference`, `evidence_reference`; version must be `Prepared` (`422 sent_recording_blocked`); duplicate send (`409 sent_evidence_exists`); Core mints `recorded_at` and sets `recorded_by` from the authenticated client |
 | `POST /office/v1/offers/{offer_id}/versions/{version_id}/record-acceptance` | `args.accepted_variant_id`, `accepted_at`, `channel`, `evidence_reference`, optional `note`; version must be `Sent` (`422 acceptance_blocked`); duplicate acceptance (`409 acceptance_already_exists`); wrong variant (`422 invalid_variant`); Core mints `acceptance_id`, `recorded_at`, and sets `recorded_by` from the authenticated client |
@@ -97,6 +98,9 @@ Error codes (stable, never free text): `unauthorized`, `not_found`,
 `invalid_snapshot`, `sent_evidence_exists`, `sent_recording_blocked`,
 `invalid_sent_evidence`, `acceptance_already_exists`, `acceptance_blocked`,
 `invalid_acceptance_evidence`, `conversion_already_exists`, `conversion_blocked`,
+`contact_information_required`, `contact_information_incomplete`,
+`contact_conflict`, `invalid_contact_value`, `invalid_contact_email`,
+`invalid_contact_phone`,
 `offer_blocks_conversion`,
 `order_cancelled`, `kitchen_print_not_confirmed`, `version_not_owned`,
 `invalid_payment_reminder`, `confirmation_document_blocked`,

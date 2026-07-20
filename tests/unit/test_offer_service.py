@@ -40,6 +40,14 @@ from catering_system.services.offer_service import OfferService
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
 
+from catering_system.domain.inquiry_customer_snapshot import (
+    InquiryCustomerSnapshot as _CCSnapshot,
+)
+
+_CONTACT_COMPLETE_SNAPSHOT = _CCSnapshot(
+    email="kunde@example.com", phone="+49301234567"
+)
+
 _INQUIRY_ID = "22222222-2222-4222-8222-222222222222"
 _SNAPSHOT_ID = "77777777-7777-4777-8777-777777777771"
 _VARIANT_ID = "44444444-4444-4444-8444-444444444441"
@@ -162,6 +170,7 @@ def _sample_inquiry(*, inquiry_id: str = _INQUIRY_ID) -> Inquiry:
         planning_mode=PLANNING_MODES[0],
         call_verification_required=False,
         call_verification_status=CALL_VERIFICATION_STATUSES[0],
+        customer_snapshot=_CONTACT_COMPLETE_SNAPSHOT,
     )
 
 

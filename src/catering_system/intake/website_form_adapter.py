@@ -186,6 +186,11 @@ def _intake_from_website_form_body(
             "website_form intake: call_verification_required must be bool or absent"
         )
 
+    # Structured contact contract (INQUIRY_CONTACT_COMPLETENESS_V1 §5/§6):
+    # email and phone travel as structured snapshot input, not only as
+    # labelled intake_message lines. The canonical service layer rejects a
+    # website_form submission whose contacts are missing or invalid, before
+    # anything is persisted.
     return service.create_inquiry(
         event_date=event_date,
         inquiry_source="website_form",
@@ -201,4 +206,10 @@ def _intake_from_website_form_body(
         intake_message=intake_message,
         intake_summary=intake_summary,
         intake_external_ref=intake_external_ref,
+        contact_email=raw.get("email") if isinstance(raw.get("email"), str) else None,
+        contact_phone=raw.get("phone") if isinstance(raw.get("phone"), str) else None,
+        contact_name=raw.get("name") if isinstance(raw.get("name"), str) else None,
+        company_name=(
+            raw.get("company") if isinstance(raw.get("company"), str) else None
+        ),
     )

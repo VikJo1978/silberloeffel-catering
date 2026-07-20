@@ -275,9 +275,20 @@ def test_event_date_parser_leaves_invalid_values_for_adapter_validation() -> Non
     assert website_intake_endpoint._parse_event_date(20260712) == 20260712
 
 
-def test_minimal_payload_creates_inquiry_without_optional_fields(server) -> None:
+def test_minimal_payload_requires_email_and_phone(server) -> None:
+    """INQUIRY_CONTACT_COMPLETENESS_V1 §5: without both contacts the
+    submission is rejected and nothing is stored."""
     base, inquiry_repo, order_repo = server
     status, body, _raw = _post(base, {"event_date": "2026-09-20"})
+    assert status == 400
+    assert body == {"error": "invalid website_form payload"}
+    assert inquiry_repo.list_all() == []
+    minimal = {
+        "event_date": "2026-09-20",
+        "email": "erika@example.test",
+        "phone": "040 555",
+    }
+    status, body, _raw = _post(base, minimal)
     assert status == 202
     q = inquiry_repo.get_by_id(body["inquiry_id"])
     assert q is not None
