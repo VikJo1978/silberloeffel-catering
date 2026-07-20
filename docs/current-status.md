@@ -1,7 +1,7 @@
 # Current status
 
-Operational truth last verified: **2026-07-19T22:58:14Z** (read-only audit on
-Lenovo `debiancatering`, Tailscale `100.109.6.74`).
+Operational truth last verified: **2026-07-20T05:51:00Z** (calendar-week deploy
+acceptance on Lenovo `debiancatering`, Tailscale `100.109.6.74`).
 
 This document separates **repository truth** from **production runtime truth**.
 A commit on `origin/main` is not deployed until the relevant services have
@@ -11,17 +11,17 @@ and post-deploy checks are recorded. See
 
 ## Repository truth
 
-At audit time (**2026-07-19T22:58:14Z**), `git rev-parse origin/main` reported
-`cf2edb568d2577f3d0cc06c534a295b861138e76`. **Do not treat a SHA printed here
+At deploy verification (**2026-07-20T05:51:00Z**), `git rev-parse origin/main` reported
+`5d47c8e25316eac2cb6e1d30985d95dd3a1a1687`. **Do not treat a SHA printed here
 as permanent:** after this document is committed and pushed, repository HEAD
 advances — query Git for the current value.
 
 | Item | Value (at audit) |
 |---|---|
-| Last verified **application-code** commit on `main` | `cf2edb568d2577f3d0cc06c534a295b861138e76` (`cf2edb5`) |
-| Preceding application commit on same line | `5000d6f` (calendar-week runtime fix) |
-| GitHub Actions `quality` on `cf2edb5` | **success** — run [29706686826](https://github.com/VikJo1978/silberloeffel-catering/actions/runs/29706686826) |
-| Canonical checkout (`/home/viktor/projects/silberloeffel-catering`) | `924f1c0ddba34fa7cbe93920ee81e0fc45184646` (behind last verified application commit; not yet fast-forwarded) |
+| Last verified **application-code** commit deployed (Panel) | `cf2edb568d2577f3d0cc06c534a295b861138e76` (`cf2edb5`; includes `5000d6f`) |
+| Repository HEAD at verification | `5d47c8e25316eac2cb6e1d30985d95dd3a1a1687` (docs lineage after operational-truth commit) |
+| GitHub Actions `quality` on `5d47c8e` | **success** — run [29707270827](https://github.com/VikJo1978/silberloeffel-catering/actions/runs/29707270827) |
+| Canonical checkout (`/home/viktor/projects/silberloeffel-catering`) | `5d47c8e25316eac2cb6e1d30985d95dd3a1a1687` (matches `origin/main` at verification) |
 | Release discipline (proven) | deployment user can direct-push to `main`; prior pushes were not blocked by required green `quality`; branch protection may be absent or the user may have bypass — exact settings require authenticated owner/admin verification (see `docs/runbooks/release-discipline.md`) |
 
 **Docs-only commits** (including this operational-truth update) change repository
@@ -33,27 +33,33 @@ remains authoritative until services restart.
 Services load Python from `PYTHONPATH=.../src` at **process start**. Disk
 HEAD and in-memory runtime code diverge until each service restarts.
 
-| Service | Unit | Runtime commit | Last restart (CEST) | MainPID | Drift vs last verified app code (`cf2edb5`) |
+| Service | Unit | Runtime commit | Last restart (CEST) | MainPID | Notes |
 |---|---|---|---|---|---|
-| Office API | `catering-office-api.service` | `924f1c0ddba34fa7cbe93920ee81e0fc45184646` | 2026-07-20 00:24:32 | 305792 | **2 commits behind** (`5000d6f`, `cf2edb5`) |
-| Office Panel | `catering-office-panel.service` | `924f1c0ddba34fa7cbe93920ee81e0fc45184646` | 2026-07-20 00:24:49 | 305803 | **2 commits behind** |
-| Kitchen kiosk | `catering-kiosk.service` | `02b105246f4801e5732c7d13cfc07ac36a7976b6` | 2026-07-19 06:29:42 | 147681 | **many commits behind** |
+| Office API | `catering-office-api.service` | `924f1c0ddba34fa7cbe93920ee81e0fc45184646` | 2026-07-20 00:24:32 | 305792 | **not restarted** — no changed code path for this slice |
+| Office Panel | `catering-office-panel.service` | `cf2edb568d2577f3d0cc06c534a295b861138e76` (app) / disk `5d47c8e` | 2026-07-20 07:50:43 | 315051 | calendar-week fix **deployed** |
+| Kitchen kiosk | `catering-kiosk.service` | `02b105246f4801e5732c7d13cfc07ac36a7976b6` | 2026-07-19 06:29:42 | 147681 | **unchanged** (not restarted) |
 | Website intake | `catering-website-intake.service` | `68a1cb0d79b538f10326aef17653a3590f4e2c04` | 2026-07-13 16:51:09 | 75898 | **many commits behind** |
 
 All four units were **active** at verification. Shared DB:
 `/home/viktor/catering-runtime/core.db`.
 
-### Undeployed application code (on `main` at audit, not in API/Panel runtime)
-
-Calendar-week **application** fix is **not deployed**. Office API/Panel runtime
-remains on `924f1c0`.
-
-| Commit | Subject | Notes |
-|---|---|---|
-| `5000d6f` | Make dashboard calendar-week parity deterministic | **not deployed** — no restart after push |
-| `cf2edb5` | Align diese-woche panel test with Berlin operating date | **not deployed** — test alignment only; same runtime drift |
-
 ### Deployed and closed
+
+**DASHBOARD_CALENDAR_WEEK_FIX_V1 — CLOSED**
+
+- Deployed **2026-07-20** via `catering-office-panel.service` restart only.
+- Application commits loaded: `5000d6f` (Berlin operating date in direct
+  Startseite), `cf2edb5` (test alignment; no additional runtime behavior).
+- Source disk HEAD at restart: `5d47c8e` (includes docs-only lineage; no extra
+  application behavior vs `cf2edb5`).
+- Office API **not restarted** — unchanged code path; already used
+  `office_api_views.berlin_today()`.
+- Kiosk **not restarted** (PID unchanged).
+- No DB migration; aggregate counts unchanged (33/24/33); CustomerIdentity
+  tables remain empty (0/0); `schema_migrations` **24**.
+- Production acceptance: dashboard `/` and `/rueckruf` HTTP **200**; dashboard
+  KW matches `Europe/Berlin` operating date (verified KW **30/2026** on
+  2026-07-20); direct/remote parity tests green; journal since restart clean.
 
 **CORE_CUSTOMER_IDENTITY_FOUNDATION_V1 — CLOSED**
 
@@ -122,12 +128,10 @@ Ruff and mypy clean. Documented pre-push gate in
 
 ## Operational risks (open)
 
-### High — application-code / runtime drift
+### Accepted — Office API process not restarted for calendar-week slice
 
-Last verified application-code commit at audit was `cf2edb5`; Office API/Panel
-runtime is `924f1c0`. Calendar-week application fix is **not deployed**.
-Canonical checkout is also behind that application baseline. A subsequent
-docs-only commit on `main` does not close this drift.
+Office API runtime remains `924f1c0`; functional calendar-week paths already
+used `berlin_today()`. Restart was not required for this deploy.
 
 ### High — release discipline not server-enforced
 
@@ -172,9 +176,7 @@ Recovery-key protection verified on **2026-07-12** (unchanged):
 
 ## Next milestones
 
-1. **Operational truth docs commit** — this document + runbooks (docs-only; not an application deploy).
-2. **Optional controlled deploy** — restart Office API/Panel to pick up
-   `5000d6f`/`cf2edb5` application code (calendar-week fix only; no schema change).
+1. **CORE_DB_PERMISSION_FIX_V1** — tighten production `core.db` mode 644 → 600.
+2. **INQUIRY_CUSTOMER_REFERENCE_AND_SNAPSHOT_V1** — next Core application slice.
 3. **Branch protection verification** — owner/admin authenticated review; require green `quality`; block force push.
 4. **BACKUP_HEALTH_AND_ALERTING_V1** — failure/stale notification.
-5. **INQUIRY_CUSTOMER_REFERENCE_AND_SNAPSHOT_V1** — next Core slice after truth docs.
