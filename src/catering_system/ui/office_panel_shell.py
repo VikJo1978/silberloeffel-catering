@@ -49,6 +49,14 @@ stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
 stroke-linejoin="round"><path d="M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1M12
 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm8 8v-1a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0
 7.75"/></symbol>
+<symbol id="office-i-printer" viewBox="0 0 24 24" fill="none"
+stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+stroke-linejoin="round"><path d="M7 8V3h10v5M7 17H4v-6a1 1 0 0 1 1-1h14a1 1 0
+0 1 1 1v6h-3M7 14h10v7H7z"/></symbol>
+<symbol id="office-i-check" viewBox="0 0 24 24" fill="none"
+stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+stroke-linejoin="round"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm-3.5
+-9 2.5 2.5 5-5"/></symbol>
 </svg>"""
 
 OFFICE_PANEL_STYLE = """
@@ -376,7 +384,7 @@ svg { display: block; }
 .dashboard-button.secondary:hover { background: var(--accent-soft); }
 .dashboard-attention {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
   gap: 16px;
 }
 .dashboard-attention-card {
@@ -402,6 +410,12 @@ svg { display: block; }
   background: var(--accent-soft);
 }
 .dashboard-attention-icon.warm { color: #805836; background: #f5ece4; }
+.dashboard-header-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 6px;
+}
 .dashboard-attention-icon svg,
 .dashboard-work-kind svg { width: 20px; height: 20px; }
 .dashboard-attention-card > strong {
@@ -411,6 +425,10 @@ svg { display: block; }
 .dashboard-attention-card > span:not(.dashboard-attention-icon) {
   color: var(--muted);
   font-size: 12px;
+}
+.dashboard-attention-card > span.dashboard-attention-name {
+  color: var(--ink);
+  font-weight: 750;
 }
 .dashboard-attention-card > a {
   margin-top: 9px;
@@ -518,6 +536,66 @@ svg { display: block; }
   grid-template-columns: repeat(7, minmax(0, 1fr));
   gap: 4px;
   padding: 19px;
+}
+.dashboard-calendar-toggle {
+  display: inline-flex;
+  gap: 4px;
+  margin-bottom: 12px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--canvas);
+}
+.dashboard-card-head .dashboard-calendar-toggle { margin-bottom: 0; }
+.dashboard-calendar-toggle a {
+  padding: 4px 10px;
+  border-radius: 7px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+}
+.dashboard-calendar-toggle a[aria-current="true"] {
+  color: var(--accent-deep);
+  background: var(--surface);
+}
+.dashboard-month-days {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 3px;
+  padding: 19px;
+}
+.dashboard-month-head {
+  padding: 2px 0 6px;
+  color: var(--muted);
+  text-align: center;
+  font-size: 10px;
+  font-weight: 700;
+}
+.dashboard-month-day {
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 2px;
+  min-height: 44px;
+  padding: 5px 2px;
+  border-radius: 9px;
+  color: var(--ink);
+  font-size: 12px;
+}
+.dashboard-month-day.outside { color: var(--line); }
+.dashboard-month-day.today { color: var(--accent-deep); background: var(--accent-soft); }
+.dashboard-month-day small {
+  display: grid;
+  place-items: center;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 99px;
+  color: #fff;
+  background: var(--accent);
+  font-size: 9px;
+  font-weight: 800;
 }
 .dashboard-week-day {
   position: relative;
@@ -1376,7 +1454,6 @@ svg { display: block; }
     overflow-x: auto;
     white-space: nowrap;
   }
-  .dashboard-attention { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dashboard-layout { grid-template-columns: 1fr; }
   .dashboard-side { grid-template-columns: 1fr 1fr; }
   .inquiry-hero { grid-template-columns: 1fr; }
@@ -1401,7 +1478,6 @@ svg { display: block; }
   .office-content form.inline { display: inline-block; margin: 3px 0; }
   .dashboard-page-header { display: grid; }
   .dashboard-page-header .dashboard-button { justify-self: start; }
-  .dashboard-attention,
   .dashboard-side { grid-template-columns: 1fr; }
   .dashboard-work-row { grid-template-columns: 38px minmax(0, 1fr); }
   .dashboard-work-row > form,

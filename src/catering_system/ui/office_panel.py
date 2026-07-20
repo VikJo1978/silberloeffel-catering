@@ -13,7 +13,7 @@ import os
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING, Any, cast
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 
 from catering_system.domain.inquiry import (
@@ -117,8 +117,8 @@ from catering_system.services.calendar_projection_service import (
 from catering_system.services.task_projection_service import TaskProjectionService
 from catering_system.services.work_center_service import WorkCenterService
 from catering_system.ui.office_panel_dashboard import (
-    WorkCenterDashboardUi,
-    render_work_center_arbeitszentrale,
+    ArbeitszentraleData,
+    render_arbeitszentrale,
 )
 from catering_system.ui.office_panel_contact_detail import render_kontakt_detail
 from catering_system.ui.office_panel_contacts_list import render_kontakte_list
@@ -526,23 +526,45 @@ class OfficePanel:
     ) -> str:
         return render_kalender_list(self._calendar_list_rows(), context=context)
 
+    def _contact_check_open_count(self) -> int:
+        """Open (non-rejected, unconverted) inquiries with incomplete contacts.
+
+        Presentation-side aggregation over repo-shaped reads only — works
+        identically in direct and remote mode (remote inquiry list rows carry
+        the customer snapshot since INQUIRY_CONTACT_COMPLETENESS_V1 §10).
+        """
+        converted = {
+            order.source_inquiry_id
+            for order in self._orders.list_orders()
+            if order.cancelled_at is None
+        }
+        return sum(
+            1
+            for inquiry in self._inquiries.list_all()
+            if inquiry.crm_stage != "Abgelehnt / verloren"
+            and inquiry.inquiry_id not in converted
+            and derive_inquiry_contact_completeness(inquiry) != "complete"
+        )
+
     def _render_v2_arbeitszentrale(
         self,
         *,
         missed_calls_open: int,
         context: OfficePageContext,
+        kalender_view: str = "woche",
     ) -> str:
         operating_today = api_views.berlin_today()
-        iso = operating_today.isocalendar()
-        week = self.wochenuebersicht.get_week_overview(iso.year, iso.week)
         snapshot = self.build_work_center_snapshot(missed_calls_open)
-        return render_work_center_arbeitszentrale(
-            snapshot,
-            ui=WorkCenterDashboardUi(
+        return render_arbeitszentrale(
+            ArbeitszentraleData(
                 context=context,
                 today=operating_today,
-                week_order_count=len(week.entries),
-            ),
+                snapshot=snapshot,
+                tasks=self._task_list_rows(),
+                calendar_entries=self._calendar_list_rows(),
+                contact_check_open=self._contact_check_open_count(),
+                kalender_view=kalender_view,
+            )
         )
 
     def _offer_list_rows(self) -> list[dict[str, object]]:
@@ -1159,12 +1181,14 @@ class OfficePanel:
         *,
         rueckruf_error: str | None = None,
         context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
+        kalender_view: str = "woche",
     ) -> str:
         missed_calls_open = self._missed_calls_open(rueckruf_items, rueckruf_error)
         if self._ui_version == "v2":
             return self._render_v2_arbeitszentrale(
                 missed_calls_open=missed_calls_open,
                 context=context,
+                kalender_view=kalender_view,
             )
         if self._remote is not None:
             return self._render_remote_queue(
@@ -1687,6 +1711,159 @@ class OfficePanel:
             + "</table>"
         )
         return _page("Aufträge", body, active_section="orders", context=context)
+
+    _ORDERS_ZEITRAUM_LABELS = (
+        ("heute", "Heute"),
+        ("woche", "Diese Woche"),
+        ("monat", "Dieser Monat"),
+        ("", "Alle"),
+    )
+
+    def _orders_row_data(self, order: Order) -> dict[str, object]:
+        """Operative row facts for one order — repo-shaped reads only."""
+        versions = self._orders.list_order_versions(order.order_id)
+        target = next(
+            (
+                v
+                for v in versions
+                if v.order_version_id == order.candidate_order_version_id
+            ),
+            None,
+        )
+        if target is None and versions:
+            target = max(versions, key=lambda v: v.version_number)
+        inquiry = self._inquiries.get_by_id(order.source_inquiry_id)
+        kunde = "–"
+        if inquiry is not None:
+            kunde = (
+                (inquiry.intake_subject or "").strip()
+                or inquiry.location_text.strip()
+                or order.order_id[:8]
+            )
+        if order.cancelled_at is not None:
+            schritt = "Storniert"
+        else:
+            action = api_views.resolve_next_action(order, versions)
+            if action is not None and action["action"] == "print-confirm":
+                schritt = "Küchendruck bestätigen"
+            elif action is not None and action["action"] == "effective":
+                schritt = "Version wirksam setzen"
+            else:
+                evaluation = self.core.evaluate_ready_to_send(order.order_id)
+                if evaluation.ready:
+                    schritt = "Bereit zum Versand"
+                else:
+                    schritt = (
+                        _ready_to_send_blocker_label(evaluation.reasons[0])
+                        if evaluation.reasons
+                        else "–"
+                    )
+        return {
+            "order_id": order.order_id,
+            "event_date": target.event_date if target is not None else None,
+            "uhrzeit": target.time_window_text if target is not None else "–",
+            "kunde": kunde,
+            "gaeste": target.guest_count_estimate if target is not None else None,
+            "schritt": schritt,
+        }
+
+    @staticmethod
+    def _orders_zeitraum_match(
+        event_date: date | None, zeitraum: str, today: date
+    ) -> bool:
+        if not zeitraum:
+            return True
+        if event_date is None:
+            return False
+        if zeitraum == "heute":
+            return event_date == today
+        if zeitraum == "woche":
+            return event_date.isocalendar()[:2] == today.isocalendar()[:2]
+        if zeitraum == "monat":
+            return (event_date.year, event_date.month) == (today.year, today.month)
+        return True
+
+    def render_orders(
+        self,
+        q: str = "",
+        zeitraum: str = "",
+        *,
+        context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
+    ) -> str:
+        """Alle Aufträge — operative list, deliberately not a CRM table."""
+        if zeitraum not in {"", "heute", "woche", "monat"}:
+            zeitraum = ""
+        today = api_views.berlin_today()
+        needle = q.strip().lower()
+
+        rows_data = []
+        for order in self._orders.list_orders():
+            row = self._orders_row_data(order)
+            if not self._orders_zeitraum_match(
+                cast("date | None", row["event_date"]), zeitraum, today
+            ):
+                continue
+            if needle and not any(
+                needle in str(row[key]).lower()
+                for key in ("kunde", "order_id", "uhrzeit")
+            ):
+                continue
+            rows_data.append(row)
+        rows_data.sort(
+            key=lambda row: (
+                cast("date | None", row["event_date"]) or date.max,
+                str(row["uhrzeit"]),
+                str(row["order_id"]),
+            )
+        )
+
+        filter_links = "".join(
+            f'<a href="/orders?{urlencode({"zeitraum": key, "q": q} if key else {"q": q})}"'
+            + (' aria-current="true"' if key == zeitraum else "")
+            + f">{_e(label)}</a>"
+            for key, label in self._ORDERS_ZEITRAUM_LABELS
+        )
+        search_box = (
+            '<form method="get" action="/orders" class="searchbox">'
+            + (
+                f'<input type="hidden" name="zeitraum" value="{_e(zeitraum)}">'
+                if zeitraum
+                else ""
+            )
+            + f'<input type="text" name="q" value="{_e(q)}" '
+            'placeholder="Suche: Kunde / Auftrag">'
+            '<button type="submit">Suchen</button>'
+            + (
+                f' <a href="/orders?{urlencode({"zeitraum": zeitraum})}">Zurücksetzen</a>'
+                if q
+                else ""
+            )
+            + "</form>"
+        )
+
+        table_rows = []
+        for row in rows_data:
+            event_date = cast("date | None", row["event_date"])
+            datum = event_date.strftime("%d.%m.%Y") if event_date else "–"
+            gaeste = f"{row['gaeste']} Gäste" if row["gaeste"] else "–"
+            table_rows.append(
+                f"<tr><td>{_e(datum)}</td><td>{_e(str(row['uhrzeit']))}</td>"
+                f"<td>{_e(str(row['kunde']))}</td><td>{_e(gaeste)}</td>"
+                f"<td>{_e(str(row['schritt']))}</td>"
+                f'<td><a href="/order/{_e(str(row["order_id"]))}">Öffnen</a></td></tr>'
+            )
+
+        body = (
+            '<nav class="dashboard-calendar-toggle" aria-label="Zeitraum">'
+            + filter_links
+            + "</nav>"
+            + search_box
+            + "<table><tr><th>Datum</th><th>Uhrzeit</th><th>Kunde</th>"
+            "<th>Gäste</th><th>Nächster Schritt</th><th>Aktion</th></tr>"
+            + "".join(table_rows or ['<tr><td colspan="6">keine Aufträge</td></tr>'])
+            + "</table>"
+        )
+        return _page("Alle Aufträge", body, active_section="orders", context=context)
 
     # -- inquiries -------------------------------------------------------
 

@@ -168,7 +168,22 @@ def test_v2_shell_is_local_no_js_and_has_complete_inline_icon_sprite() -> None:
 
     references = set(re.findall(r'<use href="#(office-i-[^"]+)"', body))
     symbols = set(re.findall(r'<symbol id="(office-i-[^"]+)"', body))
-    assert references == symbols
+    # The shared sprite also carries dashboard-only icons, so a bare page
+    # references a subset. The explicit inventory below still guards against
+    # dead sprite entries — extend it only together with a page that uses
+    # the new icon (see test_office_panel_dashboard.py).
+    assert references <= symbols
+    assert symbols == {
+        "office-i-grid",
+        "office-i-doc",
+        "office-i-briefcase",
+        "office-i-calendar",
+        "office-i-phone",
+        "office-i-import",
+        "office-i-users",
+        "office-i-printer",
+        "office-i-check",
+    }
     assert all(body.count(f'<symbol id="{symbol}"') == 1 for symbol in symbols)
 
 

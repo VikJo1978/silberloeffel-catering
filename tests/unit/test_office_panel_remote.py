@@ -487,7 +487,7 @@ def test_v2_dashboard_parity_direct_vs_remote(tmp_path: Path) -> None:
         r_status, r_html = _get(f"{remote_url}/")
         assert d_status == r_status == 200
         _assert_same_modulo_remote_fields(d_html, r_html)
-        assert '<div class="wc-page">' in d_html
+        assert "<h1>Heute im Büro</h1>" in d_html
         assert "_command_id" not in d_html
         assert "_command_id" not in r_html
     finally:
