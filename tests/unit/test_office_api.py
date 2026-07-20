@@ -714,6 +714,8 @@ def test_inquiry_detail_shape(api) -> None:
     assert body["orders"] == [{"order_id": ids["order_ready"], "cancelled_at": None}]
     assert body["orders_truncated"] is False
     assert body["customer_linkage"] == {}
+    assert body["customer_id"] is None
+    assert body["customer_snapshot"] is None
     prefill = body["offer_prefill"]
     assert prefill["schema_version"] == "core_inquiry_offer_prefill_v1"
     assert prefill["inquiry_id"] == ids["inquiry_printed"]

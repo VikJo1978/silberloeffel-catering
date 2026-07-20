@@ -27,6 +27,9 @@ from catering_system.domain.inquiry import (
     validate_planning_mode,
 )
 from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.inquiry_customer_snapshot import (
+    customer_snapshot_from_mapping,
+)
 from catering_system.domain.order_payment_reminder import (
     OrderPaymentReminder,
     PaymentReminderView,
@@ -89,7 +92,7 @@ _INQUIRY_DETAIL_KEYS = _INQUIRY_LIST_KEYS | {
     "orders_truncated",
     "offer_prefill",
 }
-_INQUIRY_DETAIL_OPTIONAL_KEYS = frozenset({"offer"})
+_INQUIRY_DETAIL_OPTIONAL_KEYS = frozenset({"offer", "customer_id", "customer_snapshot"})
 _INQUIRY_OFFER_KEYS = frozenset({"offer_id", "offer_version_id", "commercial_state"})
 _INQUIRY_OFFER_OPTIONAL_KEYS = frozenset({"accepted_variant_id", "acceptance_id"})
 _INQUIRY_NEXT_ACTIONS = frozenset(
@@ -441,6 +444,12 @@ def _inquiry(
         intake_message=_optional_str(data.get("intake_message")),
         intake_summary=_optional_str(data.get("intake_summary")),
         intake_external_ref=_optional_str(data.get("intake_external_ref")),
+        customer_id=_optional_str(data.get("customer_id")),
+        customer_snapshot=customer_snapshot_from_mapping(
+            _dict(data["customer_snapshot"])
+            if isinstance(data.get("customer_snapshot"), dict)
+            else None
+        ),
     )
 
 
@@ -2104,6 +2113,8 @@ class _RemoteInquiryService:
             intake_message=values.get("intake_message"),
             intake_summary=values.get("intake_summary"),
             intake_external_ref=values.get("intake_external_ref"),
+            customer_id=None,
+            customer_snapshot=None,
         )
 
     def update_inquiry(self, inquiry_id: str, **values: Any) -> Inquiry:
@@ -2151,6 +2162,8 @@ class _RemoteInquiryService:
             intake_external_ref=values.get(
                 "intake_external_ref", current.intake_external_ref
             ),
+            customer_id=current.customer_id,
+            customer_snapshot=current.customer_snapshot,
         )
 
     def verify_customer_by_call(self, inquiry_id: str) -> Inquiry:

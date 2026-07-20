@@ -10,6 +10,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from catering_system.domain.inquiry import (
+    apply_inquiry_customer_reference,
     CallVerificationStatus,
     CrmStage,
     CustomerLinkage,
@@ -25,6 +26,10 @@ from catering_system.domain.slice_a_events import (
     CustomerCallVerified,
     InquiryCreated,
     InquiryUpdated,
+)
+from catering_system.domain.inquiry_customer_snapshot import (
+    InquiryCustomerSnapshot,
+    snapshot_from_intake_message,
 )
 from catering_system.repositories.inquiry_repository import InquiryRepository
 
@@ -121,6 +126,12 @@ class InquiryService:
             _log.warning("create_inquiry validation failed")
             raise
         now = _utc_now()
+        intake_subject_norm = _normalize_intake(intake_subject)
+        intake_message_norm = _normalize_intake(intake_message)
+        customer_snapshot = snapshot_from_intake_message(
+            intake_message_norm,
+            intake_subject=intake_subject_norm,
+        )
         inquiry = Inquiry(
             inquiry_id=str(uuid.uuid4()),
             event_date=event_date,
@@ -135,10 +146,12 @@ class InquiryService:
             planning_mode=pm,
             call_verification_required=call_verification_required,
             call_verification_status=cvs,
-            intake_subject=_normalize_intake(intake_subject),
-            intake_message=_normalize_intake(intake_message),
+            intake_subject=intake_subject_norm,
+            intake_message=intake_message_norm,
             intake_summary=_normalize_intake(intake_summary),
             intake_external_ref=_normalize_intake(intake_external_ref),
+            customer_id=None,
+            customer_snapshot=customer_snapshot,
         )
         self._repository.save(inquiry)
         _log.info("inquiry created inquiry_id=%s", inquiry.inquiry_id)
@@ -231,6 +244,8 @@ class InquiryService:
             intake_external_ref=_normalize_intake_update(
                 intake_external_ref, current.intake_external_ref
             ),
+            customer_id=current.customer_id,
+            customer_snapshot=current.customer_snapshot,
         )
         self._repository.update(updated)
         _log.info("inquiry updated inquiry_id=%s", inquiry_id)
@@ -249,3 +264,23 @@ class InquiryService:
             inquiry_id,
             call_verification_status="verified",
         )
+
+    def assign_customer_reference(
+        self, inquiry_id: str, *, customer_id: str, snapshot: InquiryCustomerSnapshot
+    ) -> Inquiry:
+        _log.info("assign_customer_reference called inquiry_id=%s", inquiry_id)
+        current = self._repository.get_by_id(inquiry_id)
+        if current is None:
+            raise ValueError(f"no inquiry with id {inquiry_id!r}")
+        updated = apply_inquiry_customer_reference(
+            current, customer_id=customer_id, snapshot=snapshot
+        )
+        if (
+            updated.customer_id == current.customer_id
+            and updated.customer_snapshot == current.customer_snapshot
+        ):
+            return current
+        updated = replace(updated, updated_at=_utc_now())
+        self._repository.update(updated)
+        self._emit(InquiryUpdated(inquiry_id=inquiry_id))
+        return updated

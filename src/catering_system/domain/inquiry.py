@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
 
 if TYPE_CHECKING:
+    from catering_system.domain.inquiry_customer_snapshot import (
+        InquiryCustomerSnapshot,
+    )
     from catering_system.domain.offer import Offer, OfferState
 
 InquirySource = Literal[
@@ -168,6 +171,8 @@ class Inquiry:
     intake_message: str | None = None
     intake_summary: str | None = None
     intake_external_ref: str | None = None
+    customer_id: str | None = None
+    customer_snapshot: InquiryCustomerSnapshot | None = None
 
 
 def inquiry_shows_convert_accepted_button(state: InquiryOfficeState) -> bool:
@@ -299,3 +304,31 @@ def derive_inquiry_office_state(
             is_open=is_open, next_action="convert", offer=offer_projection
         )
     return InquiryOfficeState(is_open=is_open, next_action=None, offer=offer_projection)
+
+
+def apply_inquiry_customer_reference(
+    inquiry: Inquiry,
+    *,
+    customer_id: str,
+    snapshot: "InquiryCustomerSnapshot",
+) -> Inquiry:
+    """Explicit assignment only — never auto-match or auto-create CustomerIdentity."""
+    from catering_system.domain.inquiry_customer_snapshot import (
+        InquiryCustomerSnapshot,
+        validate_customer_id_reference,
+    )
+
+    if not isinstance(snapshot, InquiryCustomerSnapshot):
+        raise TypeError("snapshot must be InquiryCustomerSnapshot")
+    next_id = validate_customer_id_reference(customer_id)
+    if inquiry.customer_id is not None and inquiry.customer_id != next_id:
+        raise ValueError("customer_id is already assigned and cannot change")
+    if snapshot.is_empty():
+        raise ValueError("snapshot is required when assigning customer_id")
+    if inquiry.customer_snapshot is not None and inquiry.customer_snapshot != snapshot:
+        raise ValueError("customer_snapshot is immutable once stored")
+    return replace(
+        inquiry,
+        customer_id=next_id,
+        customer_snapshot=snapshot,
+    )

@@ -14,6 +14,9 @@ from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from catering_system.domain.contact_projection import ContactProjection
+from catering_system.domain.inquiry_customer_snapshot import (
+    customer_snapshot_to_mapping,
+)
 from catering_system.domain.email_intake_projection import EmailIntakeProjection
 from catering_system.domain.inquiry import (
     Inquiry,
@@ -315,6 +318,10 @@ def inquiry_detail(
 ) -> dict[str, object]:
     detail = inquiry_list_row(inquiry, orders)
     detail["customer_linkage"] = dict(inquiry.customer_linkage)
+    detail["customer_id"] = inquiry.customer_id
+    detail["customer_snapshot"] = customer_snapshot_to_mapping(
+        inquiry.customer_snapshot
+    )
     detail["intake_message"] = inquiry.intake_message
     detail["intake_summary"] = inquiry.intake_summary
     detail["intake_external_ref"] = inquiry.intake_external_ref

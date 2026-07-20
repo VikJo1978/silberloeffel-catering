@@ -24,6 +24,10 @@ from catering_system.domain.inquiry import (
 from catering_system.repositories.inquiry_repository import (
     DuplicateExternalReferenceError,
 )
+from catering_system.domain.inquiry_customer_snapshot import (
+    InquiryCustomerSnapshot,
+    customer_snapshot_from_mapping,
+)
 from catering_system.repositories.sqlite_migrations import apply_migrations
 
 _CREATE_INQUIRIES = """
@@ -47,6 +51,14 @@ CREATE TABLE IF NOT EXISTS inquiries (
     intake_external_ref TEXT
 );
 """
+
+_CUSTOMER_REFERENCE_COLUMNS = (
+    "customer_id",
+    "snapshot_company_name",
+    "snapshot_contact_name",
+    "snapshot_email",
+    "snapshot_phone",
+)
 
 _INTAKE_COLUMNS = (
     "intake_subject",
@@ -94,10 +106,20 @@ def _migration_3_unique_website_external_ref(
     connection.execute(_WEBSITE_EXTERNAL_REF_INDEX)
 
 
+def _migration_4_add_customer_reference(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(inquiries)").fetchall()
+    }
+    for column in _CUSTOMER_REFERENCE_COLUMNS:
+        if column not in columns:
+            connection.execute(f"ALTER TABLE inquiries ADD COLUMN {column} TEXT")
+
+
 _MIGRATIONS = (
     (1, "create_inquiries", _migration_1_create_table),
     (2, "add_intake_context", _migration_2_add_intake_context),
     (3, "unique_website_external_ref", _migration_3_unique_website_external_ref),
+    (4, "add_customer_reference", _migration_4_add_customer_reference),
 )
 
 
@@ -134,8 +156,8 @@ class SQLiteInquiryRepository:
         try:
             with self._write_scope():
                 self._conn.execute(
-                    "INSERT INTO inquiries VALUES "
-                    "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO inquiries (inquiry_id, event_date, created_at, updated_at, inquiry_source, crm_stage, customer_linkage, time_window_text, location_text, guest_count_estimate, planning_mode, call_verification_required, call_verification_status, intake_subject, intake_message, intake_summary, intake_external_ref, customer_id, snapshot_company_name, snapshot_contact_name, snapshot_email, snapshot_phone) VALUES "
+                    "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     self._values(inquiry),
                 )
         except sqlite3.IntegrityError as exc:
@@ -157,6 +179,7 @@ class SQLiteInquiryRepository:
         return [self._row_to_inquiry(r) for r in rows]
 
     def _row_to_inquiry(self, row: tuple) -> Inquiry:
+        snapshot = self._snapshot_from_row(row[18:22])
         return Inquiry(
             inquiry_id=row[0],
             event_date=date.fromisoformat(row[1]),
@@ -175,6 +198,21 @@ class SQLiteInquiryRepository:
             intake_message=row[14],
             intake_summary=row[15],
             intake_external_ref=row[16],
+            customer_id=row[17],
+            customer_snapshot=snapshot,
+        )
+
+    @staticmethod
+    def _snapshot_from_row(values: tuple) -> InquiryCustomerSnapshot | None:
+        if all(value is None for value in values):
+            return None
+        return customer_snapshot_from_mapping(
+            {
+                "company_name": values[0],
+                "contact_name": values[1],
+                "email": values[2],
+                "phone": values[3],
+            }
         )
 
     def update(self, inquiry: Inquiry) -> None:
@@ -189,7 +227,9 @@ class SQLiteInquiryRepository:
                         guest_count_estimate = ?, planning_mode = ?,
                         call_verification_required = ?, call_verification_status = ?,
                         intake_subject = ?, intake_message = ?, intake_summary = ?,
-                        intake_external_ref = ?
+                        intake_external_ref = ?, customer_id = ?,
+                        snapshot_company_name = ?, snapshot_contact_name = ?,
+                        snapshot_email = ?, snapshot_phone = ?
                     WHERE inquiry_id = ?
                     """,
                     self._values(inquiry)[1:] + (inquiry.inquiry_id,),
@@ -215,6 +255,7 @@ class SQLiteInquiryRepository:
 
     @staticmethod
     def _values(inquiry: Inquiry) -> tuple:
+        snapshot = inquiry.customer_snapshot
         return (
             inquiry.inquiry_id,
             inquiry.event_date.isoformat(),
@@ -233,6 +274,11 @@ class SQLiteInquiryRepository:
             inquiry.intake_message,
             inquiry.intake_summary,
             inquiry.intake_external_ref,
+            inquiry.customer_id,
+            None if snapshot is None else snapshot.company_name,
+            None if snapshot is None else snapshot.contact_name,
+            None if snapshot is None else snapshot.email,
+            None if snapshot is None else snapshot.phone,
         )
 
     def find_by_source_and_external_ref(
