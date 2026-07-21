@@ -93,6 +93,7 @@ def _data(**overrides: object) -> ArbeitszentraleData:
         "tasks": [],
         "calendar_entries": [],
         "contact_check_open": 0,
+        "open_inquiries_open": 0,
         "kalender_view": "woche",
     }
     values.update(overrides)
@@ -107,25 +108,26 @@ def test_dashboard_header_title_subtitle_and_actions() -> None:
     assert 'href="/orders">Alle Aufträge</a>' in page
     assert 'href="/inquiry/new">+ Neue Anfrage</a>' in page
     assert "<form" not in page
-    assert "<script" not in page
+    assert "setTimeout(() => window.location.reload(), 60000)" in page
 
 
 def test_attention_cards_render_only_for_positive_counts() -> None:
     page = render_arbeitszentrale(
         _data(
-            snapshot=_snapshot(rueckrufe_open=1, missed_calls_open=1),
+            snapshot=_snapshot(rueckrufe_open=99, missed_calls_open=1),
             tasks=[_task(category="order_print")],
             contact_check_open=1,
+            open_inquiries_open=1,
         )
     )
 
     assert "Was braucht Aufmerksamkeit?" in page
     assert "Rückrufe erforderlich" in page
-    assert ">2</strong>" in page  # 1 + 1 missed
+    assert ">1</strong>" in page
+    assert "Offene Anfragen" in page
     assert "Küchendruck" in page
     assert '<use href="#office-i-printer">' in page
     assert "Kundenprüfung" in page
-    # no matching tasks -> cards absent
     assert "Neue Anfragen" not in page
     assert "nächster Schritt" not in page
 
@@ -140,21 +142,57 @@ def test_attention_empty_state_without_any_counts() -> None:
 def test_attention_cards_from_task_categories() -> None:
     page = render_arbeitszentrale(
         _data(
+            open_inquiries_open=2,
             tasks=[
-                _task(category="convert", entity_type="inquiry", entity_id="i1"),
-                _task(category="convert_accepted", entity_type="offer", entity_id="o1"),
                 _task(category="order_effective", entity_id="order-2"),
                 _task(category="payment", entity_id="order-3"),
-            ]
+            ],
         )
     )
 
-    assert "Neue Anfragen" in page
+    assert "Offene Anfragen" in page
     assert "Anfragen prüfen" in page
+    assert ">2</strong>" in page
     assert "Aufträge" in page
     assert "nächster Schritt" in page
     assert '<use href="#office-i-check">' in page
     assert "Küchendruck" not in page
+
+
+def test_attention_separates_missed_calls_kundenpruefung_and_open_inquiries() -> None:
+    page = render_arbeitszentrale(
+        _data(
+            snapshot=_snapshot(rueckrufe_open=1, missed_calls_open=15),
+            contact_check_open=1,
+            open_inquiries_open=1,
+            tasks=[
+                _task(
+                    category="verify",
+                    title="Kundenprüfung durchführen",
+                    subtitle="Kontroll-Anfrage",
+                    entity_type="inquiry",
+                    entity_id="inq-1",
+                    action_label="Anfrage öffnen",
+                    action_href="/inquiry/inq-1",
+                )
+            ],
+        )
+    )
+
+    assert (
+        '<span class="dashboard-attention-name">Rückrufe</span><strong>15</strong>'
+        in page
+    )
+    assert (
+        '<span class="dashboard-attention-name">Kundenprüfung</span><strong>1</strong>'
+        in page
+    )
+    assert (
+        '<span class="dashboard-attention-name">Offene Anfragen</span><strong>1</strong>'
+        in page
+    )
+    assert "Kundenprüfung durchführen" in page
+    assert "Rückrufprüfung durchführen" not in page
 
 
 def test_next_steps_lists_tasks_with_action_links() -> None:
@@ -163,7 +201,7 @@ def test_next_steps_lists_tasks_with_action_links() -> None:
             tasks=[
                 _task(
                     category="verify",
-                    title="Rückrufprüfung durchführen",
+                    title="Kundenprüfung durchführen",
                     subtitle="Müller GmbH",
                     entity_type="inquiry",
                     entity_id="i1",
@@ -175,7 +213,7 @@ def test_next_steps_lists_tasks_with_action_links() -> None:
     )
 
     assert "Was als Nächstes ansteht" in page
-    assert "Rückrufprüfung durchführen" in page
+    assert "Kundenprüfung durchführen" in page
     assert "Müller GmbH" in page
     assert 'href="/inquiry/i1">Anfrage öffnen</a>' in page
 
@@ -271,16 +309,28 @@ def test_v2_panel_renders_new_dashboard() -> None:
         call_verification_status="pending",
     )
 
+    missed_calls = [{"call_id": f"c{i}", "phone": f"040{i}"} for i in range(15)]
     page = OfficePanel(inquiries, orders, ui_version="v2").render_queue(
-        [{"call_id": "c1", "phone": "0401"}]
+        missed_calls,
+        context=OfficePageContext(rueckruf_count=15, csrf_token="csrf"),
     )
 
     assert "<h1>Heute im Büro</h1>" in page
-    # one pending verification + one missed call -> Rückrufe card shows 2
-    assert "Rückrufe erforderlich" in page
-    assert ">2</strong>" in page
-    # verification inquiry with no contacts counts into Kundenprüfung
-    assert "Kundenprüfung" in page
+    assert (
+        '<span class="dashboard-attention-name">Rückrufe</span><strong>15</strong>'
+        in page
+    )
+    assert (
+        '<span class="dashboard-attention-name">Kundenprüfung</span><strong>1</strong>'
+        in page
+    )
+    assert (
+        '<span class="dashboard-attention-name">Offene Anfragen</span><strong>1</strong>'
+        in page
+    )
+    assert "Kundenprüfung durchführen" in page
+    assert 'class="badge">15</span>' in page
+    assert "setTimeout(() => window.location.reload(), 60000)" in page
 
 
 def test_feature_flag_keeps_legacy_default_and_changes_only_dashboard() -> None:
@@ -304,8 +354,22 @@ def test_feature_flag_keeps_legacy_default_and_changes_only_dashboard() -> None:
 
     assert "Büro-Übersicht" in legacy
     assert "Heute im Büro" not in legacy
+    assert "setTimeout(() => window.location.reload(), 60000)" not in legacy
     assert "<h1>Heute im Büro</h1>" in v2
     assert "Arbeitszentrale" in v2
+    assert "setTimeout(() => window.location.reload(), 60000)" in v2
+
+
+def test_v2_other_pages_do_not_auto_refresh() -> None:
+    panel = _panel_with_order(berlin_today())
+
+    for page in (
+        panel.render_anfragen(),
+        panel.render_auftraege(),
+        panel.render_angebote(),
+        panel.render_orders(),
+    ):
+        assert "setTimeout(() => window.location.reload(), 60000)" not in page
 
 
 # -- /orders (Alle Aufträge) -------------------------------------------------

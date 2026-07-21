@@ -66,7 +66,7 @@ class TaskProjectionService:
                             inquiry,
                             task_id=f"inquiry:{inquiry.inquiry_id}:verify",
                             category="verify",
-                            title="Rückrufprüfung durchführen",
+                            title="Kundenprüfung durchführen",
                             subtitle=subtitle,
                         ),
                         inquiry.event_date,

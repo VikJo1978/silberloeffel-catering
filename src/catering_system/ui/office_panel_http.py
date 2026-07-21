@@ -215,6 +215,7 @@ def make_office_panel_handler(
             self.send_header(
                 "Content-Security-Policy",
                 "default-src 'none'; style-src 'unsafe-inline'; img-src data:; "
+                "script-src 'unsafe-inline'; "
                 "form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
             )
             self.send_header("Referrer-Policy", "no-referrer")

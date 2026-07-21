@@ -326,7 +326,7 @@ def test_office_panel_sets_security_headers(panel: str) -> None:
         assert "fonts.googleapis.com" not in csp
         assert "fonts.gstatic.com" not in csp
         assert "font-src" not in csp
-        assert "script-src" not in csp
+        assert "script-src 'unsafe-inline'" in csp
         assert response.headers["Referrer-Policy"] == "no-referrer"
         assert response.headers["X-Content-Type-Options"] == "nosniff"
         assert response.headers["X-Frame-Options"] == "DENY"
