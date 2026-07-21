@@ -367,7 +367,6 @@ def render_arbeitszentrale(data: ArbeitszentraleData) -> str:
         header
         + _attention_section(data)
         + f'<div class="dashboard-layout">{main_column}{side_column}</div>'
-        + "<script>setTimeout(() => window.location.reload(), 60000)</script>"
     )
     return _page(
         "Arbeitszentrale",
@@ -375,4 +374,5 @@ def render_arbeitszentrale(data: ArbeitszentraleData) -> str:
         active_section="home",
         context=data.context,
         show_title=False,
+        auto_refresh_seconds=60,
     )

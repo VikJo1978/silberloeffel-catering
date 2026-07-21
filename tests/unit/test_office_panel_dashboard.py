@@ -108,7 +108,8 @@ def test_dashboard_header_title_subtitle_and_actions() -> None:
     assert 'href="/orders">Alle Aufträge</a>' in page
     assert 'href="/inquiry/new">+ Neue Anfrage</a>' in page
     assert "<form" not in page
-    assert "setTimeout(() => window.location.reload(), 60000)" in page
+    assert '<meta http-equiv="refresh" content="60">' in page
+    assert "<script" not in page
 
 
 def test_attention_cards_render_only_for_positive_counts() -> None:
@@ -330,7 +331,8 @@ def test_v2_panel_renders_new_dashboard() -> None:
     )
     assert "Kundenprüfung durchführen" in page
     assert 'class="badge">15</span>' in page
-    assert "setTimeout(() => window.location.reload(), 60000)" in page
+    assert '<meta http-equiv="refresh" content="60">' in page
+    assert "<script" not in page
 
 
 def test_feature_flag_keeps_legacy_default_and_changes_only_dashboard() -> None:
@@ -354,10 +356,10 @@ def test_feature_flag_keeps_legacy_default_and_changes_only_dashboard() -> None:
 
     assert "Büro-Übersicht" in legacy
     assert "Heute im Büro" not in legacy
-    assert "setTimeout(() => window.location.reload(), 60000)" not in legacy
+    assert '<meta http-equiv="refresh" content="60">' not in legacy
     assert "<h1>Heute im Büro</h1>" in v2
     assert "Arbeitszentrale" in v2
-    assert "setTimeout(() => window.location.reload(), 60000)" in v2
+    assert '<meta http-equiv="refresh" content="60">' in v2
 
 
 def test_v2_other_pages_do_not_auto_refresh() -> None:
@@ -369,7 +371,7 @@ def test_v2_other_pages_do_not_auto_refresh() -> None:
         panel.render_angebote(),
         panel.render_orders(),
     ):
-        assert "setTimeout(() => window.location.reload(), 60000)" not in page
+        assert '<meta http-equiv="refresh" content="60">' not in page
 
 
 # -- /orders (Alle Aufträge) -------------------------------------------------
