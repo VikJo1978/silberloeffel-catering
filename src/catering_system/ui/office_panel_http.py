@@ -23,6 +23,9 @@ from catering_system.repositories.payment_reminder_repository import (
 from catering_system.repositories.contact_internal_note_repository import (
     ContactInternalNoteRepository,
 )
+from catering_system.repositories.contact_profile_repository import (
+    ContactProfileRepository,
+)
 from catering_system.repositories.order_confirmation_document_repository import (
     OrderConfirmationDocumentRepository,
 )
@@ -186,6 +189,7 @@ def make_office_panel_handler(
     confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
     pause_repository: OrderOperationalPauseRepository | None = None,
     contact_note_repo: ContactInternalNoteRepository | None = None,
+    contact_profile_repo: ContactProfileRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
@@ -202,6 +206,7 @@ def make_office_panel_handler(
         confirmation_outbound_repo=confirmation_outbound_repo,
         pause_repository=pause_repository,
         contact_note_repo=contact_note_repo,
+        contact_profile_repo=contact_profile_repo,
         offer_repo=offer_repo,
         catalog_repo=catalog_repo,
         ui_version=ui_version,
@@ -376,7 +381,8 @@ def make_office_panel_handler(
             elif parts == ["angebote"]:
                 self._html(panel.render_angebote(context=context))
             elif parts == ["kontakte"]:
-                self._html(panel.render_kontakte(context=context))
+                search_query = parse_qs(parsed.query).get("q", [""])[0]
+                self._html(panel.render_kontakte(search_query, context=context))
             elif parts == ["gerichte"]:
                 self._html(panel.render_gerichte(context=context))
             elif parts == ["email"]:
@@ -716,6 +722,7 @@ def create_office_panel_server(
     confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
     pause_repository: OrderOperationalPauseRepository | None = None,
     contact_note_repo: ContactInternalNoteRepository | None = None,
+    contact_profile_repo: ContactProfileRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
@@ -739,6 +746,7 @@ def create_office_panel_server(
             confirmation_outbound_repo=confirmation_outbound_repo,
             pause_repository=pause_repository,
             contact_note_repo=contact_note_repo,
+            contact_profile_repo=contact_profile_repo,
             offer_repo=offer_repo,
             catalog_repo=catalog_repo,
             ui_version=ui_version,

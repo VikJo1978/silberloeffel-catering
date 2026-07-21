@@ -32,8 +32,18 @@ def _short_activity(raw: str) -> str:
 def render_kontakte_list(
     rows: list[dict[str, object]],
     *,
+    q: str = "",
     context: OfficePageContext,
 ) -> str:
+    search_box = (
+        '<form method="get" action="/kontakte" class="searchbox">'
+        '<label for="kontakte-q">Kontakte durchsuchen</label> '
+        f'<input id="kontakte-q" type="text" name="q" value="{_e(q)}" '
+        'placeholder="Name, E-Mail oder Telefon…">'
+        '<button type="submit">Suchen</button>'
+        + (' <a href="/kontakte">Zurücksetzen</a>' if q else "")
+        + "</form>"
+    )
     table_rows = []
     for row in rows:
         contact_key = str(row["contact_key"])
@@ -47,13 +57,21 @@ def render_kontakte_list(
             f'<td><a href="/kontakt/{_e(quote(contact_key, safe=""))}">Öffnen</a></td>'
             "</tr>"
         )
+    if not table_rows:
+        empty = (
+            f'<tr><td colspan="6">Keine Kontakte für „{_e(q)}“ gefunden.</td></tr>'
+            if q
+            else '<tr><td colspan="6">Keine Kontakte vorhanden.</td></tr>'
+        )
+        table_body = empty
+    else:
+        table_body = "".join(table_rows)
     body = (
         '<p class="subtitle">Übersicht aus Anfragen — keine CRM-Stammdaten.</p>'
-        "<table><tr><th>Name</th><th>Kontakt</th><th>Anfragen</th>"
+        + search_box
+        + "<table><tr><th>Name</th><th>Kontakt</th><th>Anfragen</th>"
         "<th>Aufträge</th><th>Letzte Aktivität</th><th></th></tr>"
-        + "".join(
-            table_rows or ['<tr><td colspan="6">Keine Kontakte vorhanden.</td></tr>']
-        )
+        + table_body
         + "</table>"
         + '<p><a href="/">← Zurück zur Arbeitszentrale</a></p>'
     )

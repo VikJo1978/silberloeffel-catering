@@ -31,7 +31,7 @@ MAX_CONTACT_INTERNAL_NOTE_LENGTH = 4000
 @dataclass(frozen=True)
 class ContactInternalNote:
     note_id: str
-    contact_key: str
+    contact_profile_id: str
     category: ContactInternalNoteCategory
     note_text: str
     created_at: datetime

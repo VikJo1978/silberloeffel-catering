@@ -12,7 +12,10 @@ class InMemoryContactInternalNoteRepository:
     def add(self, note: ContactInternalNote) -> None:
         self._notes.append(note)
 
-    def list_for_contact(self, contact_key: str) -> list[ContactInternalNote]:
-        rows = [note for note in self._notes if note.contact_key == contact_key]
+    def list_for_profiles(
+        self, contact_profile_ids: list[str]
+    ) -> list[ContactInternalNote]:
+        wanted = set(contact_profile_ids)
+        rows = [note for note in self._notes if note.contact_profile_id in wanted]
         rows.sort(key=lambda note: note.created_at, reverse=True)
         return rows

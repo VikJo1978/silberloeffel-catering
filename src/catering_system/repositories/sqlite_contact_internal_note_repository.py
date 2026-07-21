@@ -16,7 +16,7 @@ from catering_system.repositories.sqlite_migrations import apply_migrations
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS contact_internal_notes (
     note_id TEXT PRIMARY KEY,
-    contact_key TEXT NOT NULL,
+    contact_profile_id TEXT NOT NULL,
     category TEXT NOT NULL,
     note_text TEXT NOT NULL,
     created_at TEXT NOT NULL,
@@ -25,8 +25,8 @@ CREATE TABLE IF NOT EXISTS contact_internal_notes (
 """
 
 _CREATE_INDEX = """
-CREATE INDEX IF NOT EXISTS idx_contact_internal_notes_contact_created
-ON contact_internal_notes (contact_key, created_at DESC)
+CREATE INDEX IF NOT EXISTS idx_contact_internal_notes_profile_created
+ON contact_internal_notes (contact_profile_id, created_at DESC)
 """
 
 _APPEND_ONLY_TRIGGERS = (
@@ -46,7 +46,25 @@ def _migration_1_create_table(connection: sqlite3.Connection) -> None:
         connection.execute(trigger)
 
 
-_MIGRATIONS = ((1, "create_contact_internal_notes", _migration_1_create_table),)
+def _migration_2_from_contact_key_if_present(connection: sqlite3.Connection) -> None:
+    """Upgrade early V1 rows that still used contact_key (PR preview DBs)."""
+
+    columns = {
+        str(row[1])
+        for row in connection.execute("PRAGMA table_info(contact_internal_notes)")
+    }
+    if "contact_key" not in columns or "contact_profile_id" in columns:
+        return
+    # Recreate table with profile id; orphan preview notes are dropped because
+    # contact_profile_id cannot be inferred safely without the profile service.
+    connection.execute("DROP TABLE IF EXISTS contact_internal_notes")
+    _migration_1_create_table(connection)
+
+
+_MIGRATIONS = (
+    (1, "create_contact_internal_notes", _migration_1_create_table),
+    (2, "retarget_notes_to_contact_profile_id", _migration_2_from_contact_key_if_present),
+)
 
 
 class SQLiteContactInternalNoteRepository:
@@ -80,12 +98,13 @@ class SQLiteContactInternalNoteRepository:
             self._conn.execute(
                 """
                 INSERT INTO contact_internal_notes (
-                    note_id, contact_key, category, note_text, created_at, created_by
+                    note_id, contact_profile_id, category, note_text,
+                    created_at, created_by
                 ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
                 (
                     note.note_id,
-                    note.contact_key,
+                    note.contact_profile_id,
                     note.category,
                     note.note_text,
                     note.created_at.isoformat(),
@@ -93,15 +112,21 @@ class SQLiteContactInternalNoteRepository:
                 ),
             )
 
-    def list_for_contact(self, contact_key: str) -> list[ContactInternalNote]:
+    def list_for_profiles(
+        self, contact_profile_ids: list[str]
+    ) -> list[ContactInternalNote]:
+        if not contact_profile_ids:
+            return []
+        placeholders = ",".join("?" for _ in contact_profile_ids)
         rows = self._conn.execute(
-            """
-            SELECT note_id, contact_key, category, note_text, created_at, created_by
+            f"""
+            SELECT note_id, contact_profile_id, category, note_text,
+                   created_at, created_by
             FROM contact_internal_notes
-            WHERE contact_key = ?
+            WHERE contact_profile_id IN ({placeholders})
             ORDER BY created_at DESC
             """,
-            (contact_key,),
+            tuple(contact_profile_ids),
         ).fetchall()
         return [_row_to_note(row) for row in rows]
 
@@ -109,7 +134,7 @@ class SQLiteContactInternalNoteRepository:
 def _row_to_note(row: tuple[object, ...]) -> ContactInternalNote:
     return ContactInternalNote(
         note_id=str(row[0]),
-        contact_key=str(row[1]),
+        contact_profile_id=str(row[1]),
         category=validate_contact_internal_note_category(str(row[2])),
         note_text=str(row[3]),
         created_at=datetime.fromisoformat(str(row[4])),
