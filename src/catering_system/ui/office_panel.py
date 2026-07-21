@@ -54,8 +54,20 @@ from catering_system.repositories.in_memory_offer_repository import (
 from catering_system.repositories.in_memory_catalog_repository import (
     InMemoryCatalogRepository,
 )
+from catering_system.repositories.in_memory_contact_internal_note_repository import (
+    InMemoryContactInternalNoteRepository,
+)
+from catering_system.repositories.in_memory_contact_profile_repository import (
+    InMemoryContactProfileRepository,
+)
 from catering_system.repositories.in_memory_payment_reminder_repository import (
     InMemoryPaymentReminderRepository,
+)
+from catering_system.repositories.contact_internal_note_repository import (
+    ContactInternalNoteRepository,
+)
+from catering_system.repositories.contact_profile_repository import (
+    ContactProfileRepository,
 )
 from catering_system.repositories.in_memory_order_confirmation_document_repository import (
     InMemoryOrderConfirmationDocumentRepository,
@@ -87,6 +99,10 @@ from catering_system.repositories.payment_reminder_repository import (
 from catering_system.services.inquiry_service import InquiryService
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
+from catering_system.services.contact_internal_note_service import (
+    ContactInternalNoteService,
+)
+from catering_system.services.contact_profile_service import ContactProfileService
 from catering_system.services.payment_reminder_service import PaymentReminderService
 from catering_system.services.order_confirmation_document_service import (
     OrderConfirmationDocumentService,
@@ -300,6 +316,8 @@ class OfficePanel:
         confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
         confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
         pause_repository: OrderOperationalPauseRepository | None = None,
+        contact_note_repo: ContactInternalNoteRepository | None = None,
+        contact_profile_repo: ContactProfileRepository | None = None,
         offer_repo: OfferRepository | None = None,
         catalog_repo: CatalogRepository | None = None,
         ui_version: str = "legacy",
@@ -325,6 +343,14 @@ class OfficePanel:
         # frozen Core Office API's named commands. Direct mode (remote=None)
         # is completely unchanged — same objects, same construction, byte-
         # identical behavior.
+        self.contact_profile_service = ContactProfileService(
+            contact_profile_repo or InMemoryContactProfileRepository()
+        )
+        self.contact_note_service = ContactInternalNoteService(
+            contact_note_repo or InMemoryContactInternalNoteRepository(),
+            self.contact_profile_service,
+            created_by="office-panel",
+        )
         if remote is None:
             pause_repo = pause_repository or InMemoryOrderOperationalPauseRepository()
             self.inquiry_service = InquiryService(inquiry_repo)
@@ -841,17 +867,68 @@ class OfficePanel:
         return enrich_missed_board_with_core_contacts(items, self._contact_list_rows())
 
     def render_kontakte(
-        self, *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
+        self,
+        q: str = "",
+        *,
+        context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
     ) -> str:
-        return render_kontakte_list(self._contact_list_rows(), context=context)
+        rows = self._contact_list_rows()
+        query = q.strip()
+        # Profiles must exist (with denormalized name/email/phone) before search.
+        ensured: list[tuple[dict[str, object], str]] = [
+            (row, self._ensure_profile_for_contact_row(row)) for row in rows
+        ]
+        if query:
+            matching_ids = set(self.contact_profile_service.search_profile_ids(query))
+            rows = [row for row, profile_id in ensured if profile_id in matching_ids]
+        return render_kontakte_list(rows, q=query, context=context)
+
+    def _ensure_profile_for_contact_row(self, row: dict[str, object]) -> str:
+        from datetime import datetime
+
+        from catering_system.domain.contact_projection import ContactProjection
+
+        raw_activity = row["last_activity"]
+        if isinstance(raw_activity, datetime):
+            last_activity = raw_activity
+        else:
+            last_activity = datetime.fromisoformat(str(raw_activity))
+        projection = ContactProjection(
+            contact_key=str(row["contact_key"]),
+            identity_source=str(row["identity_source"]),  # type: ignore[arg-type]
+            display_name=str(row["display_name"]),
+            email=str(row["email"]) if row.get("email") is not None else None,
+            phone=str(row["phone"]) if row.get("phone") is not None else None,
+            inquiry_count=int(str(row["inquiry_count"])),
+            open_inquiries=int(str(row["open_inquiries"])),
+            active_orders=int(str(row["active_orders"])),
+            last_activity=last_activity,
+            inquiry_ids=tuple(),
+        )
+        return self.contact_profile_service.ensure_for_projection(projection)
 
     def render_kontakt(
         self, contact_key: str, *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
     ) -> str | None:
+        profile_id: str
         if self._remote is not None:
             detail = self._remote.contact_detail(contact_key)
             if detail is None:
                 return None
+            profile_id = self._ensure_profile_for_contact_row(
+                {
+                    "contact_key": contact_key,
+                    "identity_source": detail.get("identity_source", "inquiry"),
+                    "display_name": detail.get("display_name", "–"),
+                    "email": detail.get("email"),
+                    "phone": detail.get("phone"),
+                    "inquiry_count": 0,
+                    "open_inquiries": 0,
+                    "active_orders": 0,
+                    "last_activity": detail.get("last_activity")
+                    or api_views.berlin_today().isoformat(),
+                }
+            )
         else:
             service = ContactProjectionService(
                 self._inquiries,
@@ -861,7 +938,19 @@ class OfficePanel:
             )
             projection = service.contact_detail(contact_key)
             if projection is None:
-                return None
+                # Stale UI key after linkage upgrade: resolve via profile aliases.
+                resolved_id = self.contact_profile_service.find_by_alias(
+                    "contact_key", contact_key
+                )
+                if resolved_id is None:
+                    return None
+                current_key = self._current_contact_key_for_profile(resolved_id)
+                if current_key is None:
+                    return None
+                projection = service.contact_detail(current_key)
+                if projection is None:
+                    return None
+                contact_key = current_key
             detail = api_views.contact_detail_view(
                 projection.contact,
                 list(projection.inquiries),
@@ -869,7 +958,50 @@ class OfficePanel:
                 list(projection.orders),
                 today=api_views.berlin_today(),
             )
+            for inquiry in projection.inquiries:
+                self.contact_profile_service.ensure_for_inquiry(inquiry)
+            profile_id = self.contact_profile_service.ensure_for_projection(
+                projection.contact
+            )
+            self.contact_profile_service.bind_contact_key(contact_key, profile_id)
+        detail = dict(detail)
+        detail["internal_notes"] = self._contact_note_rows(profile_id)
         return render_kontakt_detail(detail, context=context)
+
+    def _current_contact_key_for_profile(self, profile_id: str) -> str | None:
+        root = self.contact_profile_service.resolve_root_profile_id(profile_id)
+        for row in self._contact_list_rows():
+            if self._ensure_profile_for_contact_row(row) == root:
+                return str(row["contact_key"])
+        return None
+
+    def _contact_note_rows(self, contact_profile_id: str) -> list[dict[str, object]]:
+        return [
+            {
+                "note_id": note.note_id,
+                "contact_profile_id": note.contact_profile_id,
+                "category": note.category,
+                "note_text": note.note_text,
+                "created_at": note.created_at.isoformat(),
+                "created_by": note.created_by,
+            }
+            for note in self.contact_note_service.list_for_profile(contact_profile_id)
+        ]
+
+    def add_contact_note(self, contact_key: str, form: dict[str, str]) -> None:
+        page = self.render_kontakt(contact_key)
+        if page is None:
+            raise KeyError(contact_key)
+        profile_id = self.contact_profile_service.find_by_alias(
+            "contact_key", contact_key
+        )
+        if profile_id is None:
+            raise KeyError(contact_key)
+        self.contact_note_service.add_note(
+            profile_id,
+            category=form.get("category", ""),
+            note_text=form.get("note_text", ""),
+        )
 
     def _catalog_list_payload(self) -> dict[str, object]:
         if self._remote is not None:
@@ -3007,6 +3139,8 @@ def make_office_panel_handler(
     confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
     confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
     pause_repository: OrderOperationalPauseRepository | None = None,
+    contact_note_repo: ContactInternalNoteRepository | None = None,
+    contact_profile_repo: ContactProfileRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
@@ -3031,6 +3165,8 @@ def make_office_panel_handler(
         confirmation_document_repo=confirmation_document_repo,
         confirmation_outbound_repo=confirmation_outbound_repo,
         pause_repository=pause_repository,
+        contact_note_repo=contact_note_repo,
+        contact_profile_repo=contact_profile_repo,
         offer_repo=offer_repo,
         catalog_repo=catalog_repo,
         ui_version=ui_version,
@@ -3055,6 +3191,8 @@ def create_office_panel_server(
     confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
     confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
     pause_repository: OrderOperationalPauseRepository | None = None,
+    contact_note_repo: ContactInternalNoteRepository | None = None,
+    contact_profile_repo: ContactProfileRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
@@ -3081,6 +3219,8 @@ def create_office_panel_server(
         confirmation_document_repo=confirmation_document_repo,
         confirmation_outbound_repo=confirmation_outbound_repo,
         pause_repository=pause_repository,
+        contact_note_repo=contact_note_repo,
+        contact_profile_repo=contact_profile_repo,
         offer_repo=offer_repo,
         catalog_repo=catalog_repo,
         ui_version=ui_version,
@@ -3221,6 +3361,12 @@ def main() -> None:
         from catering_system.repositories.sqlite_order_operational_pause_repository import (
             SQLiteOrderOperationalPauseRepository,
         )
+        from catering_system.repositories.sqlite_contact_internal_note_repository import (
+            SQLiteContactInternalNoteRepository,
+        )
+        from catering_system.repositories.sqlite_contact_profile_repository import (
+            SQLiteContactProfileRepository,
+        )
         from catering_system.repositories.sqlite_catalog_repository import (
             SQLiteCatalogRepository,
         )
@@ -3246,6 +3392,12 @@ def main() -> None:
         pause_repository = SQLiteOrderOperationalPauseRepository.from_connection(
             connection
         )
+        contact_profile_repo = SQLiteContactProfileRepository.from_connection(
+            connection
+        )
+        contact_note_repo = SQLiteContactInternalNoteRepository.from_connection(
+            connection
+        )
 
         server = create_office_panel_server(
             inquiry_repo,
@@ -3263,6 +3415,8 @@ def main() -> None:
             confirmation_document_repo=confirmation_document_repo,
             confirmation_outbound_repo=confirmation_outbound_repo,
             pause_repository=pause_repository,
+            contact_note_repo=contact_note_repo,
+            contact_profile_repo=contact_profile_repo,
             offer_repo=offer_repo,
             catalog_repo=catalog_repo,
             ui_version=args.ui_version,

@@ -1,12 +1,17 @@
-"""Kontakt detail presentation — read-only projection context (5C-1)."""
+"""Kontakt detail presentation — projection context plus internal notes (5C-1 / V1)."""
 
 from __future__ import annotations
 
 from typing import cast
+from urllib.parse import quote
 
+from catering_system.domain.contact_internal_note import (
+    CONTACT_INTERNAL_NOTE_CATEGORIES,
+)
 from catering_system.ui.office_api_views import offer_state_label
 from catering_system.ui.office_panel_views import (
     OfficePageContext,
+    _csrf_input,
     _e,
     _page,
 )
@@ -16,6 +21,55 @@ def _short_date(raw: str) -> str:
     if len(raw) == 10 and raw[4] == "-" and raw[7] == "-":
         return f"{raw[8:10]}.{raw[5:7]}.{raw[0:4]}"
     return raw
+
+
+def _format_note_timestamp(raw: str) -> str:
+    text = raw.strip()
+    if "T" in text:
+        date_part, time_part = text.split("T", 1)
+        clock = time_part[:5]
+        if len(date_part) == 10 and date_part[4] == "-" and date_part[7] == "-":
+            return f"{_short_date(date_part)} {clock} UTC"
+    return text
+
+
+def _nl2br_escaped(text: str) -> str:
+    return "<br>".join(_e(line) for line in text.splitlines()) or _e(text)
+
+
+def _notes_section(detail: dict[str, object], context: OfficePageContext) -> str:
+    contact_key = str(detail["contact_key"])
+    notes = cast(list[dict[str, object]], detail.get("internal_notes") or [])
+    encoded = quote(contact_key, safe="")
+    options = "".join(
+        f'<option value="{_e(category)}">{_e(category)}</option>'
+        for category in CONTACT_INTERNAL_NOTE_CATEGORIES
+    )
+    note_rows = (
+        "".join(
+            '<article class="contact-note">'
+            f"<p><strong>{_e(str(row['category']))}</strong>"
+            f" · {_e(_format_note_timestamp(str(row['created_at'])))}"
+            f" · {_e(str(row['created_by']))}</p>"
+            f"<p>{_nl2br_escaped(str(row['note_text']))}</p>"
+            "</article>"
+            for row in notes
+        )
+        or "<p>Keine internen Notizen.</p>"
+    )
+    return (
+        '<section class="offer-detail-section">'
+        "<h2>Interne Notizen</h2>"
+        f'<form method="post" action="/kontakt/{_e(encoded)}/notizen">'
+        f"{_csrf_input(context)}"
+        f'<p><label>Kategorie</label><select name="category">{options}</select></p>'
+        "<p><label>Notiz</label>"
+        '<textarea name="note_text" rows="4" maxlength="4000" required></textarea></p>'
+        '<p><button type="submit">Notiz speichern</button></p>'
+        "</form>"
+        f"{note_rows}"
+        "</section>"
+    )
 
 
 def render_kontakt_detail(
@@ -68,7 +122,8 @@ def render_kontakt_detail(
         f"<p><span>Telefon</span><strong>{_e(str(phone) if phone else '–')}</strong></p>"
         f"<p><span>E-Mail</span><strong>{_e(str(email) if email else '–')}</strong></p>"
         "</section>"
-        '<section class="offer-detail-section">'
+        + _notes_section(detail, context)
+        + '<section class="offer-detail-section">'
         "<h2>Anfragen</h2>"
         f'<ul class="offer-variant-list">{inquiry_rows}</ul>'
         "</section>"

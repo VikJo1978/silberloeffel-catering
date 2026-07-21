@@ -11,7 +11,7 @@ import hashlib
 import hmac
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.repositories.offer_repository import OfferRepository
@@ -19,6 +19,12 @@ from catering_system.repositories.catalog_repository import CatalogRepository
 from catering_system.repositories.order_repository import OrderRepository
 from catering_system.repositories.payment_reminder_repository import (
     PaymentReminderRepository,
+)
+from catering_system.repositories.contact_internal_note_repository import (
+    ContactInternalNoteRepository,
+)
+from catering_system.repositories.contact_profile_repository import (
+    ContactProfileRepository,
 )
 from catering_system.repositories.order_confirmation_document_repository import (
     OrderConfirmationDocumentRepository,
@@ -182,6 +188,8 @@ def make_office_panel_handler(
     confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
     confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
     pause_repository: OrderOperationalPauseRepository | None = None,
+    contact_note_repo: ContactInternalNoteRepository | None = None,
+    contact_profile_repo: ContactProfileRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
@@ -197,6 +205,8 @@ def make_office_panel_handler(
         confirmation_document_repo=confirmation_document_repo,
         confirmation_outbound_repo=confirmation_outbound_repo,
         pause_repository=pause_repository,
+        contact_note_repo=contact_note_repo,
+        contact_profile_repo=contact_profile_repo,
         offer_repo=offer_repo,
         catalog_repo=catalog_repo,
         ui_version=ui_version,
@@ -371,7 +381,8 @@ def make_office_panel_handler(
             elif parts == ["angebote"]:
                 self._html(panel.render_angebote(context=context))
             elif parts == ["kontakte"]:
-                self._html(panel.render_kontakte(context=context))
+                search_query = parse_qs(parsed.query).get("q", [""])[0]
+                self._html(panel.render_kontakte(search_query, context=context))
             elif parts == ["gerichte"]:
                 self._html(panel.render_gerichte(context=context))
             elif parts == ["email"]:
@@ -619,6 +630,10 @@ def make_office_panel_handler(
             elif len(parts) == 3 and parts[0] == "gerichte" and parts[2] == "update":
                 panel.update_catalog_dish(parts[1], self._form())
                 self._redirect(f"/gerichte/{parts[1]}")
+            elif len(parts) == 3 and parts[0] == "kontakt" and parts[2] == "notizen":
+                contact_key = unquote(parts[1])
+                panel.add_contact_note(contact_key, self._form())
+                self._redirect(f"/kontakt/{quote(contact_key, safe='')}")
             else:
                 self.send_error(404)
 
@@ -706,6 +721,8 @@ def create_office_panel_server(
     confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
     confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
     pause_repository: OrderOperationalPauseRepository | None = None,
+    contact_note_repo: ContactInternalNoteRepository | None = None,
+    contact_profile_repo: ContactProfileRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     ui_version: str = "legacy",
@@ -728,6 +745,8 @@ def create_office_panel_server(
             confirmation_document_repo=confirmation_document_repo,
             confirmation_outbound_repo=confirmation_outbound_repo,
             pause_repository=pause_repository,
+            contact_note_repo=contact_note_repo,
+            contact_profile_repo=contact_profile_repo,
             offer_repo=offer_repo,
             catalog_repo=catalog_repo,
             ui_version=ui_version,
