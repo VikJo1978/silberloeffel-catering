@@ -9,6 +9,9 @@ from catering_system.domain.contact_internal_note import (
     CONTACT_INTERNAL_NOTE_CATEGORIES,
 )
 from catering_system.ui.office_api_views import offer_state_label
+from catering_system.ui.office_panel_contacts_list import (
+    format_contact_status_for_display,
+)
 from catering_system.ui.office_panel_views import (
     OfficePageContext,
     _csrf_input,
@@ -114,11 +117,13 @@ def render_kontakt_detail(
     )
     email = detail.get("email")
     phone = detail.get("phone")
+    status_label = format_contact_status_for_display(detail.get("contact_status"))
     body = (
         f'<p class="subtitle">Projection {_e(contact_key)}</p>'
         '<section class="offer-detail-section">'
         "<h2>Kontakt-Profil</h2>"
         f"<p><span>Name</span><strong>{_e(str(detail['display_name']))}</strong></p>"
+        f"<p><span>Status</span><strong>{_e(status_label)}</strong></p>"
         f"<p><span>Telefon</span><strong>{_e(str(phone) if phone else '–')}</strong></p>"
         f"<p><span>E-Mail</span><strong>{_e(str(email) if email else '–')}</strong></p>"
         "</section>"

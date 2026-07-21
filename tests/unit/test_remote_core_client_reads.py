@@ -313,6 +313,8 @@ def test_list_contacts_accepts_valid_payload() -> None:
                 "inquiry_count": 1,
                 "open_inquiries": 1,
                 "active_orders": 0,
+                "linked_order_count": 0,
+                "contact_status": "interessent",
                 "last_activity": "2026-07-14T10:00:00+02:00",
             }
         ]
@@ -402,6 +404,8 @@ def test_list_contacts_rejects_unknown_identity_source() -> None:
                 "inquiry_count": 0,
                 "open_inquiries": 0,
                 "active_orders": 0,
+                "linked_order_count": 0,
+                "contact_status": "interessent",
                 "last_activity": "2026-07-14T10:00:00+02:00",
             }
         ]
@@ -600,6 +604,8 @@ def test_contact_detail_accepts_valid_payload() -> None:
         "inquiry_count": 1,
         "open_inquiries": 1,
         "active_orders": 0,
+        "linked_order_count": 0,
+        "contact_status": "interessent",
         "last_activity": "2026-07-14T10:00:00+02:00",
         "inquiry_ids": [inquiry_id],
         "inquiries": [

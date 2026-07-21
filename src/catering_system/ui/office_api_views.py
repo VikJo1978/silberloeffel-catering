@@ -678,6 +678,8 @@ def contact_list_row(projection: ContactProjection) -> dict[str, object]:
         "inquiry_count": projection.inquiry_count,
         "open_inquiries": projection.open_inquiries,
         "active_orders": projection.active_orders,
+        "linked_order_count": projection.linked_order_count,
+        "contact_status": projection.contact_status,
         "last_activity": projection.last_activity.isoformat(),
     }
 

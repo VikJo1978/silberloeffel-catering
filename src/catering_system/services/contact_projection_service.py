@@ -11,6 +11,7 @@ from catering_system.domain.contact_projection import (
     ContactIdentitySource,
     ContactProjection,
     derive_contact_identity,
+    derive_contact_status,
 )
 from catering_system.domain.inquiry import (
     Inquiry,
@@ -34,6 +35,7 @@ class _ContactAccumulator:
     phone: str | None = None
     open_inquiries: int = 0
     active_order_ids: set[str] = field(default_factory=set)
+    linked_order_ids: set[str] = field(default_factory=set)
     last_activity: datetime | None = None
 
 
@@ -130,6 +132,7 @@ class ContactProjectionService:
             if state.is_open:
                 aggregate.open_inquiries += 1
             for order in linked:
+                aggregate.linked_order_ids.add(order.order_id)
                 if order.cancelled_at is None:
                     aggregate.active_order_ids.add(order.order_id)
             activity = inquiry.updated_at
@@ -155,6 +158,7 @@ class ContactProjectionService:
         last_activity = aggregate.last_activity
         if last_activity is None:
             raise ValueError("contact aggregate requires last_activity")
+        linked_order_count = len(aggregate.linked_order_ids)
         return ContactProjection(
             contact_key=aggregate.contact_key,
             identity_source=aggregate.identity_source,
@@ -165,5 +169,7 @@ class ContactProjectionService:
             open_inquiries=aggregate.open_inquiries,
             active_orders=len(aggregate.active_order_ids),
             last_activity=last_activity,
+            linked_order_count=linked_order_count,
+            contact_status=derive_contact_status(linked_order_count=linked_order_count),
             inquiry_ids=inquiry_ids,
         )

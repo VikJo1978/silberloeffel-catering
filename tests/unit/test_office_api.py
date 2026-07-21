@@ -460,6 +460,8 @@ def test_list_contacts_schema(api) -> None:
         "inquiry_count",
         "open_inquiries",
         "active_orders",
+        "linked_order_count",
+        "contact_status",
         "last_activity",
     }
 
