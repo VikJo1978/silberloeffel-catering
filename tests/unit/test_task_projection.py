@@ -191,6 +191,7 @@ def test_verify_task_emitted() -> None:
     row = rows[0]
     assert row.task_id == f"inquiry:{inquiry.inquiry_id}:verify"
     assert row.category == "verify"
+    assert row.title == "Kundenprüfung durchführen"
     assert row.entity_type == "inquiry"
     assert row.action_href == f"/inquiry/{inquiry.inquiry_id}"
 

@@ -562,7 +562,7 @@ def test_aufgaben_parity_direct_vs_remote(parity_world) -> None:
     r_status, r_html = _get(f"{remote_url}/aufgaben")
     assert d_status == r_status == 200
     _assert_same_modulo_remote_fields(d_html, r_html)
-    assert "Rückrufprüfung durchführen" in d_html
+    assert "Kundenprüfung durchführen" in d_html
     assert f"/inquiry/{ids['inquiry_verify']}" in d_html
 
 

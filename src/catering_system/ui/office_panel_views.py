@@ -154,6 +154,7 @@ def _page(
     active_section: OfficeSection,
     context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
     show_title: bool = True,
+    auto_refresh_seconds: int | None = None,
 ) -> str:
     nav = "".join(
         (
@@ -194,9 +195,15 @@ def _page(
         )
     )
     page_title = f"<h1>{_e(title)}</h1>" if show_title else ""
+    refresh_meta = (
+        f'<meta http-equiv="refresh" content="{auto_refresh_seconds}">'
+        if auto_refresh_seconds is not None
+        else ""
+    )
     return (
         '<!DOCTYPE html><html lang="de"><head><meta charset="utf-8">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
+        f"{refresh_meta}"
         f"<title>{_e(title)}</title><style>{OFFICE_PANEL_STYLE}</style></head>"
         f"<body>{OFFICE_PANEL_ICON_SPRITE}"
         '<div class="office-app"><aside class="office-sidebar">'

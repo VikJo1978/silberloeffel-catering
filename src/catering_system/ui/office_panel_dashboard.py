@@ -61,6 +61,7 @@ class ArbeitszentraleData:
     tasks: list[dict[str, object]] = field(default_factory=list)
     calendar_entries: list[dict[str, object]] = field(default_factory=list)
     contact_check_open: int = 0
+    open_inquiries_open: int = 0
     kalender_view: str = "woche"
 
 
@@ -90,26 +91,35 @@ def _attention_section(data: ArbeitszentraleData) -> str:
     counts = _task_counts(data.tasks)
     snapshot = data.snapshot
     cards: list[str] = []
-    rueckrufe = snapshot.rueckrufe_open + snapshot.missed_calls_open
-    if rueckrufe:
+    if snapshot.missed_calls_open:
         cards.append(
             _attention_card(
                 icon="phone",
                 name="Rückrufe",
-                count=rueckrufe,
+                count=snapshot.missed_calls_open,
                 label="Rückrufe erforderlich",
                 href="/rueckruf",
                 action="Öffnen",
             )
         )
-    neue_anfragen = counts["convert"] + counts["convert_accepted"]
-    if neue_anfragen:
+    if data.open_inquiries_open:
         cards.append(
             _attention_card(
                 icon="doc",
-                name="Neue Anfragen",
-                count=neue_anfragen,
+                name="Offene Anfragen",
+                count=data.open_inquiries_open,
                 label="Anfragen prüfen",
+                href="/anfragen",
+                action="Öffnen",
+            )
+        )
+    if data.contact_check_open:
+        cards.append(
+            _attention_card(
+                icon="users",
+                name="Kundenprüfung",
+                count=data.contact_check_open,
+                label="offen",
                 href="/anfragen",
                 action="Öffnen",
             )
@@ -134,17 +144,6 @@ def _attention_section(data: ArbeitszentraleData) -> str:
                 count=counts["order_print"],
                 label="prüfen",
                 href="/aufgaben",
-                action="Öffnen",
-            )
-        )
-    if data.contact_check_open:
-        cards.append(
-            _attention_card(
-                icon="users",
-                name="Kundenprüfung",
-                count=data.contact_check_open,
-                label="offen",
-                href="/anfragen",
                 action="Öffnen",
             )
         )
@@ -375,4 +374,5 @@ def render_arbeitszentrale(data: ArbeitszentraleData) -> str:
         active_section="home",
         context=data.context,
         show_title=False,
+        auto_refresh_seconds=60,
     )

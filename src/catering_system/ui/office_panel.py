@@ -526,24 +526,33 @@ class OfficePanel:
     ) -> str:
         return render_kalender_list(self._calendar_list_rows(), context=context)
 
-    def _contact_check_open_count(self) -> int:
-        """Open (non-rejected, unconverted) inquiries with incomplete contacts.
-
-        Presentation-side aggregation over repo-shaped reads only — works
-        identically in direct and remote mode (remote inquiry list rows carry
-        the customer snapshot since INQUIRY_CONTACT_COMPLETENESS_V1 §10).
-        """
-        converted = {
+    def _converted_inquiry_ids(self) -> set[str]:
+        return {
             order.source_inquiry_id
             for order in self._orders.list_orders()
             if order.cancelled_at is None
         }
+
+    def _open_inquiries_count(self) -> int:
+        """Open inquiries without a linked active order (direct and remote)."""
+        converted = self._converted_inquiry_ids()
         return sum(
             1
             for inquiry in self._inquiries.list_all()
             if inquiry.crm_stage != "Abgelehnt / verloren"
             and inquiry.inquiry_id not in converted
-            and derive_inquiry_contact_completeness(inquiry) != "complete"
+        )
+
+    def _contact_check_open_count(self) -> int:
+        """Inquiries with pending call verification (Kundenprüfung)."""
+        converted = self._converted_inquiry_ids()
+        return sum(
+            1
+            for inquiry in self._inquiries.list_all()
+            if inquiry.crm_stage != "Abgelehnt / verloren"
+            and inquiry.inquiry_id not in converted
+            and inquiry.call_verification_required
+            and inquiry.call_verification_status != "verified"
         )
 
     def _render_v2_arbeitszentrale(
@@ -563,6 +572,7 @@ class OfficePanel:
                 tasks=self._task_list_rows(),
                 calendar_entries=self._calendar_list_rows(),
                 contact_check_open=self._contact_check_open_count(),
+                open_inquiries_open=self._open_inquiries_count(),
                 kalender_view=kalender_view,
             )
         )
