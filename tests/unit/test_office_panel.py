@@ -1241,7 +1241,14 @@ _AUERSWALD_ITEMS = [
 ]
 
 
-def _make_auerswald_stub(resolved: list, hits: list | None = None) -> HTTPServer:
+def _make_auerswald_stub(
+    resolved: list,
+    hits: list | None = None,
+    *,
+    board_items: list[dict] | None = None,
+) -> HTTPServer:
+    items_source = _AUERSWALD_ITEMS if board_items is None else board_items
+
     class StubHandler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
             pass
@@ -1253,9 +1260,7 @@ def _make_auerswald_stub(resolved: list, hits: list | None = None) -> HTTPServer
                 # Mirrors the real auerswald-sync: resolved calls drop out of
                 # the board on the next fetch (build_missed_board_items()
                 # excludes resolved_call_ids).
-                remaining = [
-                    it for it in _AUERSWALD_ITEMS if it["call_id"] not in resolved
-                ]
+                remaining = [it for it in items_source if it["call_id"] not in resolved]
                 payload = json.dumps({"items": remaining}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
@@ -1346,6 +1351,68 @@ def test_rueckruf_lists_items_from_auerswald_stub() -> None:
         )
         assert status == 200 and final_url == f"{base}/rueckruf"
         assert resolved == [_AUERSWALD_ITEMS[0]["call_id"]]
+    finally:
+        server.shutdown()
+        server.server_close()
+        stub.shutdown()
+        stub.server_close()
+
+
+def test_rueckruf_resolves_local_core_contact_over_auerswald_name() -> None:
+    from catering_system.services.inquiry_service import InquiryService
+
+    board_items = [
+        {
+            **_AUERSWALD_ITEMS[0],
+            "phone": "017642795029",
+            "normalized_phone": "+4917642795029",
+            "contact_found": True,
+            "contact_name": "Auerswald Wrong Name",
+            "contact_url": "https://example.invalid/contact",
+        }
+    ]
+    resolved: list = []
+    stub = _make_auerswald_stub(resolved, board_items=board_items)
+    stub_thread = threading.Thread(target=stub.serve_forever, daemon=True)
+    stub_thread.start()
+    stub_host, stub_port = stub.server_address[:2]
+
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    InquiryService(inquiry_repo).create_inquiry(
+        event_date=date(2026, 8, 1),
+        inquiry_source="manual",
+        crm_stage="Neue Anfrage",
+        customer_linkage={},
+        time_window_text="mittags",
+        location_text="Hamburg",
+        guest_count_estimate=25,
+        planning_mode="caterer_suggestion",
+        call_verification_required=False,
+        call_verification_status="not_required",
+        intake_message="Firma: JK-art\nTelefon: +4917642795029\n",
+    )
+    server = create_office_panel_server(
+        inquiry_repo,
+        order_repo,
+        _PASSWORD,
+        host="127.0.0.1",
+        port=0,
+        auerswald_url=f"http://{stub_host}:{stub_port}",
+        auerswald_user="office",
+        auerswald_password="secret",
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    base = f"http://{host}:{port}"
+    try:
+        status, body = _get(f"{base}/rueckruf")
+        assert status == 200
+        assert ">JK-art</a>" in body
+        assert 'href="/kontakt/intake%3Aphone%3A%2B4917642795029"' in body
+        assert "Auerswald Wrong Name" not in body
+        assert "Unbekannt" not in body
     finally:
         server.shutdown()
         server.server_close()
