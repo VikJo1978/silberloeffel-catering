@@ -547,9 +547,11 @@ def test_list_emails_email_source_only(api, tmp_path: Path) -> None:
         "email_id",
         "inquiry_id",
         "contact_key",
+        "sender_name",
         "sender_email",
         "subject",
         "preview",
+        "crm_stage",
         "received_at",
         "external_ref",
         "linked_offer_id",
@@ -557,9 +559,10 @@ def test_list_emails_email_source_only(api, tmp_path: Path) -> None:
     }
     assert row["email_id"] == email_inquiry.inquiry_id
     assert row["inquiry_id"] == email_inquiry.inquiry_id
-    assert row["subject"] == "Sommerfest"
+    assert row["subject"] is None
     assert row["preview"] == "E-Mail: mail@example.invalid"
     assert row["sender_email"] == "mail@example.invalid"
+    assert row["crm_stage"] == "Neue Anfrage"
     assert ids["inquiry_website"] not in {item["inquiry_id"] for item in body["emails"]}
 
 

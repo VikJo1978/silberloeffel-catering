@@ -1,4 +1,4 @@
-"""E-Mail intake detail presentation — read-only Zuordnung (5C-2)."""
+"""E-Mail intake detail — read-only projection of inquiry_source=email (V0)."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from catering_system.ui.office_panel_views import (
 )
 
 _BERLIN = ZoneInfo("Europe/Berlin")
+_MISSING = "Nicht angegeben"
 
 
 def _long_received(raw: str) -> str:
@@ -28,6 +29,17 @@ def _long_received(raw: str) -> str:
     )
 
 
+def _display(value: object | None) -> str:
+    if value is None:
+        return _MISSING
+    text = str(value).strip()
+    return text if text else _MISSING
+
+
+def _nl2br_escaped(text: str) -> str:
+    return "<br>".join(_e(line) for line in text.splitlines()) or _e(text)
+
+
 def render_email_detail(
     detail: dict[str, object],
     *,
@@ -35,8 +47,7 @@ def render_email_detail(
 ) -> str:
     inquiry_id = str(detail["inquiry_id"])
     contact_key = str(detail["contact_key"])
-    sender = detail.get("sender_email")
-    message = str(detail.get("preview") or "–")
+    message = detail.get("preview")
     offer_id = detail.get("linked_offer_id")
     order_ids = cast(list[str], detail.get("linked_order_ids") or [])
     offer_link = (
@@ -52,23 +63,33 @@ def render_email_detail(
         orders_block = f"<ul>{order_links}</ul>"
     else:
         orders_block = "<p>Keine Aufträge verknüpft</p>"
+    message_body = (
+        f"<p>{_nl2br_escaped(str(message))}</p>"
+        if message is not None and str(message).strip()
+        else f"<p>{_e(_MISSING)}</p>"
+    )
     body = (
-        f'<p class="subtitle">E-Mail-Anfrage {_e(inquiry_id[:8])}</p>'
+        f'<p class="subtitle">E-Mail-Anfrage {_e(inquiry_id)}</p>'
         '<section class="offer-detail-section">'
         "<h2>Absender</h2>"
-        f"<p><strong>{_e(str(sender) if sender else '–')}</strong></p>"
+        f"<p><span>Name</span><strong>{_e(_display(detail.get('sender_name')))}</strong></p>"
+        f"<p><span>E-Mail</span><strong>{_e(_display(detail.get('sender_email')))}</strong></p>"
         "</section>"
         '<section class="offer-detail-section">'
         "<h2>Betreff</h2>"
-        f"<p><strong>{_e(str(detail['subject']))}</strong></p>"
+        f"<p><strong>{_e(_display(detail.get('subject')))}</strong></p>"
         "</section>"
         '<section class="offer-detail-section">'
         "<h2>Eingang</h2>"
         f"<p><strong>{_e(_long_received(str(detail['received_at'])))}</strong></p>"
         "</section>"
         '<section class="offer-detail-section">'
+        "<h2>CRM-Stufe</h2>"
+        f"<p><strong>{_e(_display(detail.get('crm_stage')))}</strong></p>"
+        "</section>"
+        '<section class="offer-detail-section">'
         "<h2>Nachricht</h2>"
-        f'<pre class="email-message">{_e(message)}</pre>'
+        f"{message_body}"
         "</section>"
         '<section class="offer-detail-section">'
         "<h2>Zuordnung</h2>"
@@ -77,6 +98,6 @@ def render_email_detail(
         + offer_link
         + orders_block
         + "</section>"
-        + '<p><a href="/email">← Zurück zu E-Mail</a></p>'
+        + '<p><a href="/emails">← Zurück zu E-Mail</a></p>'
     )
     return _page("E-Mail", body, active_section="email", context=context)

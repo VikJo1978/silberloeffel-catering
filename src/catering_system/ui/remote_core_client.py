@@ -1648,9 +1648,11 @@ class RemoteCoreClient:
                     "email_id",
                     "inquiry_id",
                     "contact_key",
+                    "sender_name",
                     "sender_email",
                     "subject",
                     "preview",
+                    "crm_stage",
                     "received_at",
                     "external_ref",
                     "linked_offer_id",
@@ -1661,9 +1663,11 @@ class RemoteCoreClient:
             if _uuid4(row["email_id"]) != inquiry_id:
                 _bad_response()
             _str(row["contact_key"])
+            _optional_str(row["sender_name"])
             _optional_str(row["sender_email"])
-            _str(row["subject"])
-            _str(row["preview"])
+            _optional_str(row["subject"])
+            _optional_str(row["preview"])
+            _str(row["crm_stage"])
             _datetime(row["received_at"])
             _optional_str(row["external_ref"])
             _optional_uuid4(row["linked_offer_id"])
@@ -1684,9 +1688,11 @@ class RemoteCoreClient:
                 "email_id",
                 "inquiry_id",
                 "contact_key",
+                "sender_name",
                 "sender_email",
                 "subject",
                 "preview",
+                "crm_stage",
                 "received_at",
                 "external_ref",
                 "linked_offer_id",
@@ -1698,9 +1704,11 @@ class RemoteCoreClient:
         if _uuid4(body["email_id"]) != inquiry_id:
             _bad_response()
         _str(body["contact_key"])
+        _optional_str(body["sender_name"])
         _optional_str(body["sender_email"])
-        _str(body["subject"])
-        _str(body["preview"])
+        _optional_str(body["subject"])
+        _optional_str(body["preview"])
+        _str(body["crm_stage"])
         _datetime(body["received_at"])
         _optional_str(body["external_ref"])
         _optional_uuid4(body["linked_offer_id"])

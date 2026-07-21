@@ -389,7 +389,7 @@ def make_office_panel_handler(
                 )
             elif parts == ["gerichte"]:
                 self._html(panel.render_gerichte(context=context))
-            elif parts == ["email"]:
+            elif parts == ["emails"] or parts == ["email"]:
                 self._html(panel.render_email(context=context))
             elif parts == ["aufgaben"]:
                 self._html(panel.render_aufgaben(context=context))
@@ -439,7 +439,7 @@ def make_office_panel_handler(
             elif len(parts) == 3 and parts[0] == "gerichte" and parts[2] == "edit":
                 page = panel.render_gericht_edit(parts[1], context=context)
                 self._html(page) if page else self.send_error(404)
-            elif len(parts) == 2 and parts[0] == "email":
+            elif len(parts) == 2 and parts[0] in ("emails", "email"):
                 page = panel.render_email_detail(parts[1], context=context)
                 self._html(page) if page else self.send_error(404)
             elif len(parts) == 3 and parts[0] == "order" and parts[2] == "print":

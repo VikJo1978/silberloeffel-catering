@@ -590,12 +590,13 @@ def test_email_parity_direct_vs_remote(tmp_path: Path) -> None:
         inquiry_source="email",
         crm_stage="Neue Anfrage",
         customer_linkage={},
-        time_window_text="Wir planen ein Sommerfest.",
-        location_text="Catering Anfrage",
+        time_window_text="abends",
+        location_text="Hamburg",
         guest_count_estimate=40,
         planning_mode="caterer_suggestion",
         call_verification_required=True,
         call_verification_status="pending",
+        intake_subject="Catering Anfrage",
         intake_message="E-Mail: parity-mail@example.invalid\n",
     )
     inquiry_repo.close()
@@ -605,12 +606,13 @@ def test_email_parity_direct_vs_remote(tmp_path: Path) -> None:
     remote = RemoteCoreClient(api_url, _API_TOKEN)
     remote_url, remote_server = _start_remote_panel(remote)
     try:
-        d_status, d_html = _get(f"{direct_url}/email")
-        r_status, r_html = _get(f"{remote_url}/email")
+        d_status, d_html = _get(f"{direct_url}/emails")
+        r_status, r_html = _get(f"{remote_url}/emails")
         assert d_status == r_status == 200
         _assert_same_modulo_remote_fields(d_html, r_html)
         assert "Catering Anfrage" in d_html
         assert "parity-mail@example.invalid" in d_html
+        assert "Neue Anfrage" in d_html
     finally:
         for server in (direct_server, remote_server, api_server):
             server.shutdown()
