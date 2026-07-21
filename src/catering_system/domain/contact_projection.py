@@ -17,6 +17,45 @@ ContactIdentitySource = Literal[
     "inquiry",
 ]
 
+ContactStatus = Literal["interessent", "kunde"]
+ContactStatusFilter = Literal["all", "interessent", "kunde"]
+
+CONTACT_STATUS_LABELS: dict[ContactStatus, str] = {
+    "interessent": "Interessent",
+    "kunde": "Kunde",
+}
+
+CONTACT_STATUS_FILTER_VALUES: tuple[ContactStatusFilter, ...] = (
+    "all",
+    "interessent",
+    "kunde",
+)
+
+
+def derive_contact_status(*, linked_order_count: int) -> ContactStatus:
+    """Operational contact status — Order presence is authoritative for Kunde."""
+
+    if linked_order_count > 0:
+        return "kunde"
+    return "interessent"
+
+
+def parse_contact_status_filter(raw: str | None) -> ContactStatusFilter:
+    """Normalize GET status=… — unknown values fall back to Alle."""
+
+    value = (raw or "all").strip().casefold()
+    if value == "interessent":
+        return "interessent"
+    if value == "kunde":
+        return "kunde"
+    if value == "all":
+        return "all"
+    return "all"
+
+
+def contact_status_label(status: ContactStatus) -> str:
+    return CONTACT_STATUS_LABELS[status]
+
 
 @dataclass(frozen=True)
 class ContactProjection:
@@ -31,6 +70,8 @@ class ContactProjection:
     open_inquiries: int
     active_orders: int
     last_activity: datetime
+    linked_order_count: int = 0
+    contact_status: ContactStatus = "interessent"
     inquiry_ids: tuple[str, ...] = field(default_factory=tuple)
 
 

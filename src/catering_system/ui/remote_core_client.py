@@ -1406,6 +1406,8 @@ class RemoteCoreClient:
                     "inquiry_count",
                     "open_inquiries",
                     "active_orders",
+                    "linked_order_count",
+                    "contact_status",
                     "last_activity",
                 },
             )
@@ -1419,6 +1421,10 @@ class RemoteCoreClient:
             _nonnegative_int(row["inquiry_count"])
             _nonnegative_int(row["open_inquiries"])
             _nonnegative_int(row["active_orders"])
+            _nonnegative_int(row["linked_order_count"])
+            status = _str(row["contact_status"])
+            if status not in {"interessent", "kunde"}:
+                _bad_response()
             _datetime(row["last_activity"])
         return body
 
@@ -1580,6 +1586,8 @@ class RemoteCoreClient:
                 "inquiry_count",
                 "open_inquiries",
                 "active_orders",
+                "linked_order_count",
+                "contact_status",
                 "last_activity",
                 "inquiry_ids",
                 "inquiries",
@@ -1590,6 +1598,9 @@ class RemoteCoreClient:
         if _str(body["contact_key"]) != contact_key:
             _bad_response()
         if _str(body["identity_source"]) not in allowed_sources:
+            _bad_response()
+        _nonnegative_int(body["linked_order_count"])
+        if _str(body["contact_status"]) not in {"interessent", "kunde"}:
             _bad_response()
         _datetime(body["last_activity"])
         for raw in _list(body["inquiry_ids"]):

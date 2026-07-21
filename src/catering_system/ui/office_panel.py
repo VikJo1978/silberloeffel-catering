@@ -869,11 +869,17 @@ class OfficePanel:
     def render_kontakte(
         self,
         q: str = "",
+        status: str = "all",
         *,
         context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
     ) -> str:
+        from catering_system.domain.contact_projection import (
+            parse_contact_status_filter,
+        )
+
         rows = self._contact_list_rows()
         query = q.strip()
+        status_filter = parse_contact_status_filter(status)
         # Profiles must exist (with denormalized name/email/phone) before search.
         ensured: list[tuple[dict[str, object], str]] = [
             (row, self._ensure_profile_for_contact_row(row)) for row in rows
@@ -881,7 +887,28 @@ class OfficePanel:
         if query:
             matching_ids = set(self.contact_profile_service.search_profile_ids(query))
             rows = [row for row, profile_id in ensured if profile_id in matching_ids]
-        return render_kontakte_list(rows, q=query, context=context)
+        else:
+            rows = [row for row, _profile_id in ensured]
+        counts = {
+            "all": len(rows),
+            "interessent": sum(
+                1 for row in rows if str(row.get("contact_status")) == "interessent"
+            ),
+            "kunde": sum(
+                1 for row in rows if str(row.get("contact_status")) == "kunde"
+            ),
+        }
+        if status_filter != "all":
+            rows = [
+                row for row in rows if str(row.get("contact_status")) == status_filter
+            ]
+        return render_kontakte_list(
+            rows,
+            q=query,
+            status=status_filter,
+            counts=counts,
+            context=context,
+        )
 
     def _ensure_profile_for_contact_row(self, row: dict[str, object]) -> str:
         from datetime import datetime
@@ -903,6 +930,17 @@ class OfficePanel:
             open_inquiries=int(str(row["open_inquiries"])),
             active_orders=int(str(row["active_orders"])),
             last_activity=last_activity,
+            linked_order_count=int(
+                str(row.get("linked_order_count", row["active_orders"]))
+            ),
+            contact_status=str(  # type: ignore[arg-type]
+                row.get("contact_status")
+                or (
+                    "kunde"
+                    if int(str(row.get("linked_order_count", row["active_orders"]))) > 0
+                    else "interessent"
+                )
+            ),
             inquiry_ids=tuple(),
         )
         return self.contact_profile_service.ensure_for_projection(projection)

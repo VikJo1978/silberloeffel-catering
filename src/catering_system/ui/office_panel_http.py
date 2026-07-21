@@ -381,8 +381,12 @@ def make_office_panel_handler(
             elif parts == ["angebote"]:
                 self._html(panel.render_angebote(context=context))
             elif parts == ["kontakte"]:
-                search_query = parse_qs(parsed.query).get("q", [""])[0]
-                self._html(panel.render_kontakte(search_query, context=context))
+                query = parse_qs(parsed.query)
+                search_query = query.get("q", [""])[0]
+                status_filter = query.get("status", ["all"])[0]
+                self._html(
+                    panel.render_kontakte(search_query, status_filter, context=context)
+                )
             elif parts == ["gerichte"]:
                 self._html(panel.render_gerichte(context=context))
             elif parts == ["email"]:
