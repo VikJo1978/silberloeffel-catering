@@ -1,4 +1,4 @@
-"""E-Mail intake list presentation — read-only rows (5C-2)."""
+"""E-Mail intake list — read-only projection of inquiry_source=email (V0)."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from catering_system.ui.office_panel_views import (
 )
 
 _BERLIN = ZoneInfo("Europe/Berlin")
+_MISSING = "Nicht angegeben"
 
 
 def _short_received(raw: str) -> str:
@@ -21,14 +22,17 @@ def _short_received(raw: str) -> str:
     except ValueError:
         return raw
     local = value.astimezone(_BERLIN)
-    return f"{local.day:02d}.{local.month:02d}.{local.year}"
+    return (
+        f"{local.day:02d}.{local.month:02d}.{local.year} "
+        f"{local.hour:02d}:{local.minute:02d}"
+    )
 
 
-def _preview_line(raw: str) -> str:
-    text = raw.strip().replace("\n", " ")
-    if len(text) <= 80:
-        return text or "–"
-    return text[:77] + "…"
+def _display(value: object | None) -> str:
+    if value is None:
+        return _MISSING
+    text = str(value).strip()
+    return text if text else _MISSING
 
 
 def render_email_list(
@@ -39,23 +43,27 @@ def render_email_list(
     table_rows = []
     for row in rows:
         inquiry_id = str(row["inquiry_id"])
-        sender = row.get("sender_email") or "–"
         table_rows.append(
             "<tr>"
             f"<td>{_e(_short_received(str(row['received_at'])))}</td>"
-            f"<td>{_e(str(sender))}</td>"
-            f"<td>{_e(str(row['subject']))}</td>"
-            f"<td>{_e(_preview_line(str(row['preview'])))}</td>"
-            f'<td><a href="/email/{_e(quote(inquiry_id, safe=""))}">Öffnen</a></td>'
+            f"<td>{_e(_display(row.get('sender_name')))}</td>"
+            f"<td>{_e(_display(row.get('sender_email')))}</td>"
+            f"<td>{_e(_display(row.get('subject')))}</td>"
+            f"<td>{_e(_display(row.get('crm_stage')))}</td>"
+            f"<td>{_e(inquiry_id)}</td>"
+            f'<td><a href="/emails/{_e(quote(inquiry_id, safe=""))}">Öffnen</a></td>'
             "</tr>"
         )
+    if not table_rows:
+        table_body = '<tr><td colspan="7">Keine E-Mail-Anfragen vorhanden.</td></tr>'
+    else:
+        table_body = "".join(table_rows)
     body = (
-        '<p class="subtitle">Eingegangene E-Mail-Anfragen (inquiry_source=email).</p>'
-        "<table><tr><th>Eingang</th><th>Absender</th><th>Betreff</th>"
-        "<th>Vorschau</th><th></th></tr>"
-        + "".join(
-            table_rows or ['<tr><td colspan="5">Keine E-Mails vorhanden.</td></tr>']
-        )
+        '<p class="subtitle">Nur Anfragen mit Kanal E-Mail — '
+        "read-only Projektion, kein Postfach.</p>"
+        "<table><tr><th>Eingang</th><th>Name</th><th>E-Mail</th>"
+        "<th>Betreff</th><th>CRM-Stufe</th><th>Anfrage-ID</th><th></th></tr>"
+        + table_body
         + "</table>"
         + '<p><a href="/">← Zurück zur Arbeitszentrale</a></p>'
     )
