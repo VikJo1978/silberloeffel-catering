@@ -116,6 +116,9 @@ from catering_system.services.calendar_projection_service import (
 )
 from catering_system.services.task_projection_service import TaskProjectionService
 from catering_system.services.work_center_service import WorkCenterService
+from catering_system.ui.callback_contact_resolution import (
+    enrich_missed_board_with_core_contacts,
+)
 from catering_system.ui.office_panel_dashboard import (
     ArbeitszentraleData,
     render_arbeitszentrale,
@@ -224,6 +227,20 @@ _RUECKRUF_SUBTITLE = (
 )
 
 
+def _format_rueckruf_contact_cell(item: dict) -> str:
+    """Prefer Core-resolved contact display over Auerswald callback metadata."""
+
+    label = item.get("core_contact_label")
+    if label is not None:
+        href = item.get("core_contact_href")
+        if href:
+            return f'<a href="{_e(href)}">{_e(label)}</a>'
+        return _e(label)
+    if item.get("contact_found"):
+        return _e(item["contact_name"])
+    return "Unbekannt"
+
+
 def render_rueckruf(
     items: list[dict] | None,
     error: str | None,
@@ -245,7 +262,7 @@ def render_rueckruf(
         )
     rows = []
     for it in items:
-        contact = _e(it["contact_name"]) if it.get("contact_found") else "Unbekannt"
+        contact = _format_rueckruf_contact_cell(it)
         rows.append(
             "<tr>"
             f"<td>{_e(it.get('date', ''))}</td>"
@@ -820,6 +837,9 @@ class OfficePanel:
         )
         return api_views.contact_list_view(service.list_contacts())
 
+    def enrich_rueckruf_items(self, items: list[dict]) -> list[dict]:
+        return enrich_missed_board_with_core_contacts(items, self._contact_list_rows())
+
     def render_kontakte(
         self, *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
     ) -> str:
@@ -1326,9 +1346,7 @@ class OfficePanel:
         if rueckruf_items is not None:
             rows = []
             for it in rueckruf_items[:5]:
-                contact = (
-                    _e(it["contact_name"]) if it.get("contact_found") else "Unbekannt"
-                )
+                contact = _format_rueckruf_contact_cell(it)
                 phone = it.get("phone", "")
                 rows.append(
                     f"<li>{_e(it.get('date', ''))} {_e(it.get('time', ''))} — "
@@ -1477,11 +1495,7 @@ class OfficePanel:
         if rueckruf_items is not None:
             rows = []
             for item in rueckruf_items[:5]:
-                contact = (
-                    _e(item["contact_name"])
-                    if item.get("contact_found")
-                    else "Unbekannt"
-                )
+                contact = _format_rueckruf_contact_cell(item)
                 phone = item.get("phone", "")
                 rows.append(
                     f"<li>{_e(item.get('date', ''))} {_e(item.get('time', ''))} — "

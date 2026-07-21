@@ -251,6 +251,14 @@ def make_office_panel_handler(
                 csrf_token=csrf_token,
             )
 
+        def _fetch_enriched_missed_board(self) -> tuple[list[dict] | None, str | None]:
+            items, error = fetch_missed_board(
+                auerswald_url, auerswald_user, auerswald_password
+            )
+            if items is not None:
+                items = panel.enrich_rueckruf_items(items)
+            return items, error
+
         def _error_page(self, message: str, status: int = 400) -> None:
             self._html(
                 _page(
@@ -333,9 +341,7 @@ def make_office_panel_handler(
                         )
                     )
                     return
-                items, error = fetch_missed_board(
-                    auerswald_url, auerswald_user, auerswald_password
-                )
+                items, error = self._fetch_enriched_missed_board()
                 context = OfficePageContext(
                     rueckruf_count=len(items) if items is not None else None,
                     csrf_token=csrf_token,
@@ -343,9 +349,7 @@ def make_office_panel_handler(
                 self._html(render_rueckruf(items, error, context=context))
                 return
             if not parts:
-                items, error = fetch_missed_board(
-                    auerswald_url, auerswald_user, auerswald_password
-                )
+                items, error = self._fetch_enriched_missed_board()
                 context = OfficePageContext(
                     rueckruf_count=len(items) if items is not None else None,
                     csrf_token=csrf_token,
