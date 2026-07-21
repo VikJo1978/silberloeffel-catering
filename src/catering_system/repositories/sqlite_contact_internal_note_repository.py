@@ -63,7 +63,11 @@ def _migration_2_from_contact_key_if_present(connection: sqlite3.Connection) -> 
 
 _MIGRATIONS = (
     (1, "create_contact_internal_notes", _migration_1_create_table),
-    (2, "retarget_notes_to_contact_profile_id", _migration_2_from_contact_key_if_present),
+    (
+        2,
+        "retarget_notes_to_contact_profile_id",
+        _migration_2_from_contact_key_if_present,
+    ),
 )
 
 

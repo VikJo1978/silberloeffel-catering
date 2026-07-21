@@ -118,9 +118,7 @@ def test_note_persists_after_sqlite_reload(tmp_path: Path) -> None:
     profile_repo = SQLiteContactProfileRepository(db)
     note_repo = SQLiteContactInternalNoteRepository(db)
     profiles = ContactProfileService(profile_repo)
-    notes = ContactInternalNoteService(
-        note_repo, profiles, created_by="office-panel"
-    )
+    notes = ContactInternalNoteService(note_repo, profiles, created_by="office-panel")
     profile_id = profiles._ensure(  # noqa: SLF001
         [("phone", _PHONE)],
         display_name="JK-art",
@@ -189,9 +187,9 @@ def test_phone_and_email_aliases_resolve() -> None:
     panel.render_kontakt(contact_key)
     profile_id = panel.contact_profile_service.find_by_alias("contact_key", contact_key)
     assert profile_id is not None
-    assert panel.contact_profile_service.find_by_alias("email", "jk@example.invalid") == (
-        profile_id
-    )
+    assert panel.contact_profile_service.find_by_alias(
+        "email", "jk@example.invalid"
+    ) == (profile_id)
     assert panel.contact_profile_service.find_by_alias("phone", _PHONE) == profile_id
 
 
@@ -236,8 +234,12 @@ def test_notes_are_isolated_between_contacts() -> None:
         str(row["display_name"]): str(row["contact_key"])
         for row in panel._contact_list_rows()
     }
-    panel.add_contact_note(keys["Alpha"], {"category": "Allgemein", "note_text": "Nur Alpha"})
-    panel.add_contact_note(keys["Beta"], {"category": "Allgemein", "note_text": "Nur Beta"})
+    panel.add_contact_note(
+        keys["Alpha"], {"category": "Allgemein", "note_text": "Nur Alpha"}
+    )
+    panel.add_contact_note(
+        keys["Beta"], {"category": "Allgemein", "note_text": "Nur Beta"}
+    )
 
     alpha_page = panel.render_kontakt(keys["Alpha"]) or ""
     beta_page = panel.render_kontakt(keys["Beta"]) or ""

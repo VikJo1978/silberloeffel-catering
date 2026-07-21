@@ -47,7 +47,9 @@ class ContactProfileAlias:
     contact_profile_id: str
 
 
-def collect_inquiry_aliases(inquiry: Inquiry) -> list[tuple[ContactProfileAliasType, str]]:
+def collect_inquiry_aliases(
+    inquiry: Inquiry,
+) -> list[tuple[ContactProfileAliasType, str]]:
     """Stable identifier aliases for one inquiry — not display-name based."""
 
     aliases: list[tuple[ContactProfileAliasType, str]] = []

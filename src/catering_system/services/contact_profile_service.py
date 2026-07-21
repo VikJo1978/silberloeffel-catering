@@ -79,7 +79,10 @@ class ContactProfileService:
             aliases.append(("phone", projection.phone))
         if projection.identity_source == "linkage_contact":
             aliases.append(
-                ("linkage_contact", projection.contact_key.removeprefix("linkage:contact:"))
+                (
+                    "linkage_contact",
+                    projection.contact_key.removeprefix("linkage:contact:"),
+                )
             )
         elif projection.identity_source == "linkage_customer":
             aliases.append(
