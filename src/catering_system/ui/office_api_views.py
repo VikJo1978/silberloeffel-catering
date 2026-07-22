@@ -228,25 +228,72 @@ def _acceptance_shape(acceptance: object | None) -> dict[str, object] | None:
     }
 
 
+def _version_number_by_id(offer: Offer) -> dict[str, int]:
+    return {
+        version.offer_version_id: version.version_number for version in offer.versions
+    }
+
+
+def _version_history_label(prefix: str, version_number: int) -> str:
+    return f"Version {version_number} {prefix}"
+
+
 def _offer_history(offer: Offer) -> list[dict[str, object]]:
+    """Commercial history projection only — not an audit log."""
+    numbers = _version_number_by_id(offer)
     entries: list[tuple[datetime, str]] = []
     for version in sorted(offer.versions, key=lambda item: item.version_number):
-        label = (
-            "Angebot erstellt" if version.version_number == 1 else "Angebot vorbereitet"
+        entries.append(
+            (
+                version.created_at,
+                _version_history_label("vorbereitet", version.version_number),
+            )
         )
-        entries.append((version.created_at, label))
     for sent in offer.sent_evidence:
-        entries.append((sent.sent_at, "Angebot gesendet"))
+        number = numbers.get(sent.offer_version_id)
+        if number is not None:
+            entries.append((sent.sent_at, _version_history_label("gesendet", number)))
     for rejection in offer.rejection_evidence:
-        entries.append((rejection.rejected_at, "Angebot abgelehnt"))
+        number = numbers.get(rejection.offer_version_id)
+        if number is not None:
+            entries.append(
+                (rejection.rejected_at, _version_history_label("abgelehnt", number))
+            )
     for withdrawal in offer.withdrawal_evidence:
-        entries.append((withdrawal.withdrawn_at, "Angebot zurückgezogen"))
+        number = numbers.get(withdrawal.offer_version_id)
+        if number is not None:
+            entries.append(
+                (
+                    withdrawal.withdrawn_at,
+                    _version_history_label("zurückgezogen", number),
+                )
+            )
     if offer.acceptance_evidence is not None:
-        entries.append((offer.acceptance_evidence.accepted_at, "Angebot angenommen"))
+        number = numbers.get(offer.acceptance_evidence.accepted_offer_version_id)
+        if number is not None:
+            entries.append(
+                (
+                    offer.acceptance_evidence.accepted_at,
+                    _version_history_label("angenommen", number),
+                )
+            )
     if offer.conversion_link is not None:
-        entries.append((offer.conversion_link.created_at, "In Auftrag umgewandelt"))
+        number = numbers.get(offer.conversion_link.offer_version_id)
+        label = (
+            _version_history_label("in Auftrag umgewandelt", number)
+            if number is not None
+            else "In Auftrag umgewandelt"
+        )
+        entries.append((offer.conversion_link.created_at, label))
     entries.sort(key=lambda item: item[0])
     return [{"at": at.isoformat(), "label": label} for at, label in entries]
+
+
+def _version_sent_at(offer: Offer, offer_version_id: str) -> str | None:
+    for item in offer.sent_evidence:
+        if item.offer_version_id == offer_version_id:
+            return item.sent_at.isoformat()
+    return None
 
 
 def _position_detail(position: OfferPosition) -> dict[str, object]:
@@ -283,10 +330,13 @@ def offer_detail(offer: Offer, *, today: date | None = None) -> dict[str, object
         "acceptance_id": projection.acceptance_id,
         "versions": [
             {
+                "offer_version_id": version.offer_version_id,
                 "version": version.version_number,
                 "state": derive_offer_state(
                     offer, version.offer_version_id, today=operating_today
                 ),
+                "created_at": version.created_at.isoformat(),
+                "sent_at": _version_sent_at(offer, version.offer_version_id),
                 "event_date": version.event_date.isoformat(),
                 "valid_until": version.valid_until.isoformat(),
                 "time_window_text": version.time_window_text,

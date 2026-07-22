@@ -457,8 +457,11 @@ def test_offer_detail_schema_prepared(api) -> None:
     assert body["acceptance"] is None
     version = body["versions"][0]
     assert set(version) == {
+        "offer_version_id",
         "version",
         "state",
+        "created_at",
+        "sent_at",
         "event_date",
         "valid_until",
         "time_window_text",
@@ -467,12 +470,13 @@ def test_offer_detail_schema_prepared(api) -> None:
         "planning_mode",
         "variants",
     }
+    assert version["sent_at"] is None
     assert version["variants"][0]["name"] == "Variante A"
     assert "positions" in version["variants"][0]
     position = version["variants"][0]["positions"][0]
     assert position["allergens_unknown"] is True
     assert position["allergens"] is None
-    assert body["history"][0]["label"] == "Angebot erstellt"
+    assert body["history"][0]["label"] == "Version 1 vorbereitet"
 
 
 def test_offer_detail_schema_sent(api) -> None:
@@ -488,7 +492,7 @@ def test_offer_detail_schema_sent(api) -> None:
     assert body["sent_evidence"] is not None
     assert body["sent_evidence"]["channel"] == "email"
     labels = [entry["label"] for entry in body["history"]]
-    assert "Angebot gesendet" in labels
+    assert "Version 1 gesendet" in labels
 
 
 def test_list_contacts_schema(api) -> None:

@@ -31,6 +31,7 @@ _NOW = datetime(2026, 7, 15, 8, 0, tzinfo=UTC)
 _OFFER_ID = "11111111-1111-4111-8111-111111111111"
 _OFFER_ID_B = "22222222-2222-4222-8222-222222222222"
 _V1_ID = "33333333-3333-4333-8333-333333333331"
+_V2_ID = "33333333-3333-4333-8333-333333333332"
 _V1_ID_B = "44444444-4444-4444-8444-444444444444"
 _VARIANT_ID = "55555555-5555-5555-8555-555555555555"
 _ACCEPTANCE_ID = "66666666-6666-6666-8666-666666666666"
@@ -75,16 +76,19 @@ def _version(
     *,
     offer_id: str = _OFFER_ID,
     version_id: str = _V1_ID,
+    version_number: int = 1,
     valid_until: date | None = None,
     created_at: datetime | None = None,
+    snapshot_id: str = "88888888-8888-4888-8888-888888888881",
+    position_id: str = "99999999-9999-4999-8999-999999999991",
 ) -> OfferVersion:
     return OfferVersion(
         offer_version_id=version_id,
         offer_id=offer_id,
-        version_number=1,
+        version_number=version_number,
         created_at=created_at or _NOW,
         valid_until=valid_until or date(2026, 7, 31),
-        snapshot_id="88888888-8888-4888-8888-888888888881",
+        snapshot_id=snapshot_id,
         snapshot_hash=_HASH,
         event_date=date(2026, 8, 1),
         time_window_text="18:00–22:00",
@@ -95,12 +99,14 @@ def _version(
         payment_customer_visible_text="Zahlung per Rechnung",
         variants=(
             OfferVariant(
-                variant_id=_VARIANT_ID,
+                variant_id=_VARIANT_ID
+                if version_number == 1
+                else "55555555-5555-5555-8555-555555555556",
                 offer_version_id=version_id,
                 label="Variante A",
                 positions=(
                     OfferPosition(
-                        position_id="99999999-9999-4999-8999-999999999991",
+                        position_id=position_id,
                         kind="catalog",
                         name="Fingerfood Paket",
                         unit_net_cents=290,
@@ -469,3 +475,160 @@ def test_withdrawn_offer_in_history() -> None:
     assert item.queue_subkind == "withdrawn"
     assert item.next_action == "prepare_next_version"
     assert item.next_action_label == "Neue Version vorbereiten"
+
+
+def test_case_a_sent_v1_prepared_v2_surfaces_prepared() -> None:
+    inquiry = _inquiry()
+    offers = InMemoryOfferRepository()
+    v1 = _version(version_id=_V1_ID, version_number=1)
+    v2 = _version(
+        version_id=_V2_ID,
+        version_number=2,
+        created_at=_NOW + timedelta(days=1),
+        snapshot_id="88888888-8888-4888-8888-888888888882",
+        position_id="99999999-9999-4999-8999-999999999992",
+    )
+    offers.save(
+        Offer(
+            offer_id=_OFFER_ID,
+            source_inquiry_id=inquiry.inquiry_id,
+            created_at=_NOW,
+            versions=(v1, v2),
+            sent_evidence=(
+                SentEvidence(
+                    offer_id=_OFFER_ID,
+                    offer_version_id=_V1_ID,
+                    sent_at=_NOW,
+                    recorded_at=_NOW + timedelta(minutes=1),
+                    channel="email",
+                    recipient_reference="kunde@example.invalid",
+                    evidence_reference="mail-1",
+                    recorded_by="office",
+                ),
+            ),
+            acceptance_evidence=None,
+            rejection_evidence=(),
+            withdrawal_evidence=(),
+            conversion_link=None,
+        )
+    )
+    inquiries = InMemoryInquiryRepository()
+    inquiries.save(inquiry)
+    snapshot = _service(offers=offers, inquiries=inquiries).snapshot()
+    assert snapshot.total_count == 1
+    item = _section(snapshot, "action_required").items[0]
+    assert item.state == "Prepared"
+    assert item.version_number == 2
+    assert item.offer_version_id == _V2_ID
+    assert item.next_action == "mark_sent"
+    assert item.next_action_label == "Als gesendet markieren"
+
+
+def test_case_b_sent_v1_sent_v2_surfaces_await_customer() -> None:
+    inquiry = _inquiry()
+    offers = InMemoryOfferRepository()
+    v1 = _version(version_id=_V1_ID, version_number=1)
+    v2 = _version(
+        version_id=_V2_ID,
+        version_number=2,
+        created_at=_NOW + timedelta(days=1),
+        snapshot_id="88888888-8888-4888-8888-888888888882",
+        position_id="99999999-9999-4999-8999-999999999992",
+    )
+    offers.save(
+        Offer(
+            offer_id=_OFFER_ID,
+            source_inquiry_id=inquiry.inquiry_id,
+            created_at=_NOW,
+            versions=(v1, v2),
+            sent_evidence=(
+                SentEvidence(
+                    offer_id=_OFFER_ID,
+                    offer_version_id=_V1_ID,
+                    sent_at=_NOW,
+                    recorded_at=_NOW + timedelta(minutes=1),
+                    channel="email",
+                    recipient_reference="kunde@example.invalid",
+                    evidence_reference="mail-1",
+                    recorded_by="office",
+                ),
+                SentEvidence(
+                    offer_id=_OFFER_ID,
+                    offer_version_id=_V2_ID,
+                    sent_at=_NOW + timedelta(days=1),
+                    recorded_at=_NOW + timedelta(days=1, minutes=1),
+                    channel="email",
+                    recipient_reference="kunde@example.invalid",
+                    evidence_reference="mail-2",
+                    recorded_by="office",
+                ),
+            ),
+            acceptance_evidence=None,
+            rejection_evidence=(),
+            withdrawal_evidence=(),
+            conversion_link=None,
+        )
+    )
+    inquiries = InMemoryInquiryRepository()
+    inquiries.save(inquiry)
+    item = _section(
+        _service(offers=offers, inquiries=inquiries).snapshot(), "action_required"
+    ).items[0]
+    assert item.state == "Sent"
+    assert item.version_number == 2
+    assert item.next_action == "await_customer"
+    assert item.next_action_label == "Kundenantwort ausstehend"
+
+
+def test_case_c_rejected_v1_prepared_v2_surfaces_prepared() -> None:
+    inquiry = _inquiry()
+    offers = InMemoryOfferRepository()
+    v1 = _version(version_id=_V1_ID, version_number=1)
+    v2 = _version(
+        version_id=_V2_ID,
+        version_number=2,
+        created_at=_NOW + timedelta(days=1),
+        snapshot_id="88888888-8888-4888-8888-888888888882",
+        position_id="99999999-9999-4999-8999-999999999992",
+    )
+    offers.save(
+        Offer(
+            offer_id=_OFFER_ID,
+            source_inquiry_id=inquiry.inquiry_id,
+            created_at=_NOW,
+            versions=(v1, v2),
+            sent_evidence=(
+                SentEvidence(
+                    offer_id=_OFFER_ID,
+                    offer_version_id=_V1_ID,
+                    sent_at=_NOW,
+                    recorded_at=_NOW + timedelta(minutes=1),
+                    channel="email",
+                    recipient_reference="kunde@example.invalid",
+                    evidence_reference="mail-1",
+                    recorded_by="office",
+                ),
+            ),
+            acceptance_evidence=None,
+            rejection_evidence=(
+                RejectionEvidence(
+                    offer_id=_OFFER_ID,
+                    offer_version_id=_V1_ID,
+                    rejected_at=_NOW + timedelta(hours=2),
+                    recorded_at=_NOW + timedelta(hours=2, minutes=1),
+                    recorded_by="office",
+                    evidence_reference="reject-1",
+                ),
+            ),
+            withdrawal_evidence=(),
+            conversion_link=None,
+        )
+    )
+    inquiries = InMemoryInquiryRepository()
+    inquiries.save(inquiry)
+    item = _section(
+        _service(offers=offers, inquiries=inquiries).snapshot(), "action_required"
+    ).items[0]
+    assert item.state == "Prepared"
+    assert item.version_number == 2
+    assert item.next_action == "mark_sent"

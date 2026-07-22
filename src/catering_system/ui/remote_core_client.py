@@ -1475,20 +1475,20 @@ class RemoteCoreClient:
             "Rejected",
             "Superseded",
         }
-        _exact(
-            body,
-            {
-                "offer_id",
-                "inquiry_id",
-                "offer_version_id",
-                "commercial_state",
-                "acceptance_id",
-                "versions",
-                "sent_evidence",
-                "acceptance",
-                "history",
-            },
-        )
+        required = {
+            "offer_id",
+            "inquiry_id",
+            "offer_version_id",
+            "commercial_state",
+            "acceptance_id",
+            "versions",
+            "sent_evidence",
+            "acceptance",
+            "history",
+        }
+        keys = set(body)
+        if not required <= keys or keys - required - {"order_id"}:
+            _bad_response()
         _uuid4(body["offer_id"])
         _uuid4(body["inquiry_id"])
         _uuid4(body["offer_version_id"])
@@ -1517,8 +1517,11 @@ class RemoteCoreClient:
             _exact(
                 version,
                 {
+                    "offer_version_id",
                     "version",
                     "state",
+                    "created_at",
+                    "sent_at",
                     "event_date",
                     "valid_until",
                     "time_window_text",
@@ -1531,6 +1534,11 @@ class RemoteCoreClient:
             version_state = _str(version["state"])
             if version_state not in allowed_states:
                 _bad_response()
+            _uuid4(version["offer_version_id"])
+            _int(version["version"])
+            _datetime(version["created_at"])
+            if version["sent_at"] is not None:
+                _datetime(version["sent_at"])
             _date(version["event_date"])
             _date(version["valid_until"])
             _str(version["time_window_text"])

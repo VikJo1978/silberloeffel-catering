@@ -57,6 +57,7 @@ def test_angebote_queue_renders_sections_and_counters(monkeypatch) -> None:
     assert "Abgeschlossen / Verlauf" in page
     assert "Vorbereitet — versenden" in page
     assert "Als gesendet markieren" in page
+    assert "Angebot v1" in page
     assert f"/offer/{offer.offer_id}" in page
 
 
