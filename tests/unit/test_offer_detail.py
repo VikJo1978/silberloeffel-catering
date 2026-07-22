@@ -220,7 +220,7 @@ def test_sent_offer_detail_includes_evidence_and_history() -> None:
     assert sent is not None
     assert sent["channel"] == "email"
     labels = [entry["label"] for entry in detail["history"]]
-    assert labels == ["Angebot erstellt", "Angebot gesendet"]
+    assert labels == ["Version 1 vorbereitet", "Version 1 gesendet"]
 
 
 def test_accepted_offer_detail() -> None:
@@ -235,7 +235,7 @@ def test_accepted_offer_detail() -> None:
     assert acceptance is not None
     assert acceptance["accepted_variant_id"] == _VARIANT_ID
     labels = [entry["label"] for entry in detail["history"]]
-    assert "Angebot angenommen" in labels
+    assert "Version 1 angenommen" in labels
 
 
 def test_converted_offer_detail_includes_order_link() -> None:
@@ -247,7 +247,7 @@ def test_converted_offer_detail_includes_order_link() -> None:
     assert detail["commercial_state"] == "Converted"
     assert detail["order_id"] == _ORDER_ID
     labels = [entry["label"] for entry in detail["history"]]
-    assert labels[-1] == "In Auftrag umgewandelt"
+    assert labels[-1] == "Version 1 in Auftrag umgewandelt"
 
 
 def test_history_sorted_chronologically() -> None:
@@ -280,5 +280,11 @@ def test_second_version_history_label() -> None:
         withdrawal_evidence=(),
         conversion_link=None,
     )
-    labels = [entry["label"] for entry in offer_detail(offer, today=_TODAY)["history"]]
-    assert labels == ["Angebot erstellt", "Angebot vorbereitet"]
+    detail = offer_detail(offer, today=_TODAY)
+    labels = [entry["label"] for entry in detail["history"]]
+    assert labels == ["Version 1 vorbereitet", "Version 2 vorbereitet"]
+    assert detail["versions"][0]["offer_version_id"] == _V1_ID
+    assert detail["versions"][1]["offer_version_id"] == _V2_ID
+    assert detail["versions"][0]["sent_at"] is None
+    assert detail["offer_version_id"] == _V2_ID
+    assert detail["commercial_state"] == "Prepared"

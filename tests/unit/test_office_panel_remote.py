@@ -751,7 +751,7 @@ def test_offer_detail_parity_direct_vs_remote(tmp_path: Path) -> None:
             _assert_same_modulo_remote_fields(d_html, r_html)
             assert "Gesendet" in d_html
             assert "Angebotsvarianten" in d_html
-            assert "Angebot gesendet" in d_html
+            assert "Version 1 gesendet" in d_html
             assert f'href="/inquiry/{inquiry_id}"' in d_html
             assert 'name="_command_id"' not in d_html
             assert 'name="_command_id"' in r_html

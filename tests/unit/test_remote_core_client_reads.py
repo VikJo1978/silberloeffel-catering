@@ -626,11 +626,16 @@ def test_offer_detail_accepts_valid_payload() -> None:
         "acceptance_id": None,
         "sent_evidence": None,
         "acceptance": None,
-        "history": [{"at": "2026-07-14T10:00:00+02:00", "label": "Prepared"}],
+        "history": [
+            {"at": "2026-07-14T10:00:00+02:00", "label": "Version 1 vorbereitet"}
+        ],
         "versions": [
             {
+                "offer_version_id": version_id,
                 "version": 1,
                 "state": "Prepared",
+                "created_at": "2026-07-14T10:00:00+02:00",
+                "sent_at": None,
                 "event_date": "2026-10-01",
                 "valid_until": "2026-10-15",
                 "time_window_text": "mittags",
@@ -666,6 +671,77 @@ def test_offer_detail_accepts_valid_payload() -> None:
         parsed = RemoteCoreClient(url, _TOKEN).offer_detail(offer_id)
         assert parsed is not None
         assert parsed["offer_id"] == offer_id
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_offer_detail_accepts_converted_order_id() -> None:
+    offer_id = str(uuid.uuid4())
+    inquiry_id = str(uuid.uuid4())
+    version_id = str(uuid.uuid4())
+    order_id = str(uuid.uuid4())
+    variant_id = str(uuid.uuid4())
+    position_id = str(uuid.uuid4())
+    payload = {
+        "offer_id": offer_id,
+        "inquiry_id": inquiry_id,
+        "offer_version_id": version_id,
+        "commercial_state": "Converted",
+        "acceptance_id": str(uuid.uuid4()),
+        "order_id": order_id,
+        "sent_evidence": {"sent_at": "2026-07-14T11:00:00+02:00", "channel": "email"},
+        "acceptance": {
+            "accepted_at": "2026-07-14T12:00:00+02:00",
+            "channel": "email",
+            "accepted_variant_id": variant_id,
+        },
+        "history": [
+            {"at": "2026-07-14T10:00:00+02:00", "label": "Version 1 vorbereitet"}
+        ],
+        "versions": [
+            {
+                "offer_version_id": version_id,
+                "version": 1,
+                "state": "Converted",
+                "created_at": "2026-07-14T10:00:00+02:00",
+                "sent_at": "2026-07-14T11:00:00+02:00",
+                "event_date": "2026-10-01",
+                "valid_until": "2026-10-15",
+                "time_window_text": "mittags",
+                "location_text": "Hamburg",
+                "guest_count": 25,
+                "planning_mode": "caterer_suggestion",
+                "variants": [
+                    {
+                        "variant_id": variant_id,
+                        "name": "Variante A",
+                        "positions": [
+                            {
+                                "position_id": position_id,
+                                "kind": "catalog",
+                                "name": "Fingerfood",
+                                "unit_net_cents": 290,
+                                "net_total_cents": 23200,
+                                "catalog_item_id": None,
+                                "description": None,
+                                "composition": None,
+                                "allergens": None,
+                                "allergen_labels": None,
+                                "allergens_unknown": False,
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+    url, server = _serve(_json_handler(payload))
+    try:
+        parsed = RemoteCoreClient(url, _TOKEN).offer_detail(offer_id)
+        assert parsed is not None
+        assert parsed["order_id"] == order_id
+        assert parsed["commercial_state"] == "Converted"
     finally:
         server.shutdown()
         server.server_close()

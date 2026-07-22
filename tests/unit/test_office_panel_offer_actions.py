@@ -585,8 +585,11 @@ def test_html_escaping_in_variant_label() -> None:
         "acceptance_id": None,
         "versions": [
             {
+                "offer_version_id": "33333333-3333-4333-8333-333333333331",
                 "version": 1,
                 "state": "Sent",
+                "created_at": "2026-07-15T08:00:00+00:00",
+                "sent_at": "2026-07-15T10:00:00+00:00",
                 "event_date": "2026-08-01",
                 "valid_until": "2026-07-31",
                 "time_window_text": "18:00",
@@ -603,7 +606,9 @@ def test_html_escaping_in_variant_label() -> None:
         ],
         "sent_evidence": {"sent_at": "2026-07-15T10:00:00+00:00", "channel": "email"},
         "acceptance": None,
-        "history": [{"at": "2026-07-15T08:00:00+00:00", "label": "Angebot erstellt"}],
+        "history": [
+            {"at": "2026-07-15T08:00:00+00:00", "label": "Version 1 vorbereitet"}
+        ],
     }
     from catering_system.ui.office_panel_offer_detail import OfferDetailFormFields
 
@@ -626,8 +631,11 @@ def test_expired_offer_detail_shows_prepare_next_without_link() -> None:
         "acceptance_id": None,
         "versions": [
             {
+                "offer_version_id": "33333333-3333-4333-8333-333333333331",
                 "version": 1,
                 "state": "Expired",
+                "created_at": "2026-07-01T08:00:00+00:00",
+                "sent_at": "2026-07-01T10:00:00+00:00",
                 "event_date": "2026-08-01",
                 "valid_until": "2026-07-01",
                 "time_window_text": "18:00",
@@ -639,7 +647,9 @@ def test_expired_offer_detail_shows_prepare_next_without_link() -> None:
         ],
         "sent_evidence": {"sent_at": "2026-07-01T10:00:00+00:00", "channel": "email"},
         "acceptance": None,
-        "history": [{"at": "2026-07-01T08:00:00+00:00", "label": "Angebot erstellt"}],
+        "history": [
+            {"at": "2026-07-01T08:00:00+00:00", "label": "Version 1 vorbereitet"}
+        ],
     }
     from catering_system.ui.office_panel_offer_detail import OfferDetailFormFields
 
@@ -651,6 +661,8 @@ def test_expired_offer_detail_shows_prepare_next_without_link() -> None:
     )
     assert "Neue Version vorbereiten" in html
     assert "offer-revision-link" not in html
+    assert "Angebotsversionen" in html
+    assert "✓ Aktuell" in html
 
 
 def test_expired_offer_detail_shows_prepare_next_with_link() -> None:
@@ -662,8 +674,11 @@ def test_expired_offer_detail_shows_prepare_next_with_link() -> None:
         "acceptance_id": None,
         "versions": [
             {
+                "offer_version_id": "33333333-3333-4333-8333-333333333331",
                 "version": 1,
                 "state": "Expired",
+                "created_at": "2026-07-01T08:00:00+00:00",
+                "sent_at": "2026-07-01T10:00:00+00:00",
                 "event_date": "2026-08-01",
                 "valid_until": "2026-07-01",
                 "time_window_text": "18:00",
@@ -675,7 +690,9 @@ def test_expired_offer_detail_shows_prepare_next_with_link() -> None:
         ],
         "sent_evidence": {"sent_at": "2026-07-01T10:00:00+00:00", "channel": "email"},
         "acceptance": None,
-        "history": [{"at": "2026-07-01T08:00:00+00:00", "label": "Angebot erstellt"}],
+        "history": [
+            {"at": "2026-07-01T08:00:00+00:00", "label": "Version 1 vorbereitet"}
+        ],
     }
     from catering_system.ui.office_panel_offer_detail import OfferDetailFormFields
 

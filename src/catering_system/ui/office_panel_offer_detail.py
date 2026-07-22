@@ -58,16 +58,52 @@ def _history_date(raw: str) -> str:
     except ValueError:
         return raw
     local = value.astimezone(_BERLIN)
-    return f"{local.day:02d}.{local.month:02d}"
+    return f"{local.day:02d}.{local.month:02d}.{local.year}"
 
 
 def _surface_version(detail: dict[str, object]) -> dict[str, object]:
     versions = cast(list[dict[str, object]], detail["versions"])
     commercial = str(detail["commercial_state"])
+    current_id = str(detail["offer_version_id"])
+    for version in reversed(versions):
+        if str(version.get("offer_version_id", "")) == current_id:
+            return version
     for version in reversed(versions):
         if str(version["state"]) == commercial:
             return version
     return versions[-1]
+
+
+def _version_list(detail: dict[str, object]) -> str:
+    versions = cast(list[dict[str, object]], detail["versions"])
+    current_id = str(detail["offer_version_id"])
+    rows: list[str] = []
+    for version in sorted(
+        versions, key=lambda item: int(cast(int, item["version"])), reverse=True
+    ):
+        number = int(cast(int, version["version"]))
+        state = str(version["state"])
+        state_label = offer_state_label(state)  # type: ignore[arg-type]
+        aktuell = ""
+        if str(version.get("offer_version_id", "")) == current_id:
+            aktuell = '<p class="offer-version-current">✓ Aktuell</p>'
+        sent_at = version.get("sent_at")
+        sent_line = ""
+        if isinstance(sent_at, str) and sent_at:
+            sent_line = f"<p><span>Gesendet</span><strong>{_e(_history_date(sent_at))}</strong></p>"
+        rows.append(
+            '<li class="offer-version-item">'
+            f"<h3>Version {number}</h3>"
+            f"<p><span>Status</span><strong>{_e(state_label)}</strong></p>"
+            f"{aktuell}{sent_line}"
+            "</li>"
+        )
+    return (
+        '<section class="offer-detail-section">'
+        "<h2>Angebotsversionen</h2>"
+        f'<ul class="offer-version-list">{"".join(rows)}</ul>'
+        "</section>"
+    )
 
 
 def _allergen_block(labels: object, *, unknown: bool = False) -> str:
@@ -297,7 +333,7 @@ def render_offer_detail(
     history_rows = (
         "".join(
             f"<li><span>{_e(_history_date(str(entry['at'])))}</span> "
-            f"{_e(str(entry['label']))}</li>"
+            f"<strong>{_e(str(entry['label']))}</strong></li>"
             for entry in cast(list[dict[str, object]], detail["history"])
         )
         or "<li>Noch keine Historie</li>"
@@ -342,8 +378,7 @@ def render_offer_detail(
         + '<section class="offer-detail-section">'
         "<h2>Status</h2>"
         f"<p><strong>{_e(offer_state_label(state))}</strong></p>"  # type: ignore[arg-type]
-        "</section>"
-        '<section class="offer-detail-section">'
+        "</section>" + _version_list(detail) + '<section class="offer-detail-section">'
         "<h2>Veranstaltung</h2>"
         f"<p><span>Datum</span><strong>{_e(_long_date(str(surface['event_date'])))}</strong></p>"
         f"<p><span>Ort</span><strong>{_e(str(surface['location_text']))}</strong></p>"
@@ -360,7 +395,7 @@ def render_offer_detail(
         f'<ul class="offer-variant-list">{variant_rows}</ul>'
         "</section>"
         '<section class="offer-detail-section">'
-        "<h2>Historie</h2>"
+        "<h2>Angebotshistorie</h2>"
         f'<ul class="offer-history-list">{history_rows}</ul>'
         "</section>"
         + order_link

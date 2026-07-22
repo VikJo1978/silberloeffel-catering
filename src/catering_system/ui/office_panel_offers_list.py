@@ -36,13 +36,15 @@ def _queue_table(items: list[dict[str, object]]) -> str:
         label = customer
         if subtitle and str(subtitle) != customer:
             label = f"{customer} — {subtitle}"
+        version_number = int(cast(int, item["version_number"]))
         overdue_note = ""
         days_overdue = item.get("days_overdue")
         if days_overdue is not None and int(cast(int, days_overdue)) > 0:
             overdue_note = f" ({int(cast(int, days_overdue))} Tage)"
         rows.append(
             "<tr>"
-            f"<td>{_e(label)}</td>"
+            f"<td>{_e(label)}"
+            f'<br><span class="muted">Angebot v{version_number}</span></td>'
             f"<td>{_e(_short_date(str(item['event_date'])))}</td>"
             f"<td>{_e(str(item['state_label']))}</td>"
             f"<td>{_e(str(item['next_action_label']))}{_e(overdue_note)}</td>"
