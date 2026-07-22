@@ -1707,6 +1707,8 @@ class OfficeApi:
             )
         except OrderConfirmationDocumentStaleVersionError as exc:
             raise ApiError(409, "stale_state") from exc
+        except MissingCommercialSnapshotError as exc:
+            raise ApiError(422, "confirmation_document_blocked") from exc
         except OrderConfirmationDocumentBlockedError as exc:
             message = str(exc)
             if message == "aenderung_wartet":

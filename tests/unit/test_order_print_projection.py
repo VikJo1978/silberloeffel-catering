@@ -603,7 +603,7 @@ def test_print_fails_when_commercial_snapshot_missing_after_convert() -> None:
         version_id,
         variant_id,
         acceptance_id,
-        _offers,
+        offers,
         orders,
         _inq,
         offer_service,
@@ -616,8 +616,11 @@ def test_print_fails_when_commercial_snapshot_missing_after_convert() -> None:
     )
     snapshots = offer_service._commercial_snapshots
     assert snapshots.get_by_order_id(order.order_id) is not None
+    assert offers.get(offer.offer_id) is not None
     snapshots._by_id.clear()
     snapshots._by_order_id.clear()
+    # OfferRepository still has the Offer — must not hide missing Snapshot.
+    assert offers.get(offer.offer_id) is not None
 
     with pytest.raises(MissingCommercialSnapshotError):
         _projection_service(orders, snapshots).resolve(
@@ -626,7 +629,9 @@ def test_print_fails_when_commercial_snapshot_missing_after_convert() -> None:
         )
 
 
-def test_print_and_confirmation_services_must_not_depend_on_offer_repository() -> None:
+def test_print_and_confirmation_services_must_not_depend_on_offer_or_conversion_link() -> (
+    None
+):
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[2] / "src" / "catering_system" / "services"
@@ -636,3 +641,4 @@ def test_print_and_confirmation_services_must_not_depend_on_offer_repository() -
     ):
         text = (root / name).read_text(encoding="utf-8")
         assert "OfferRepository" not in text, name
+        assert "conversion_link" not in text, name

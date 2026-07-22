@@ -11,6 +11,9 @@ from pathlib import Path
 
 import pytest
 
+from catering_system.domain.order_commercial_snapshot import (
+    MissingCommercialSnapshotError,
+)
 from catering_system.domain.offer import OfferPosition
 from catering_system.repositories.in_memory_inquiry_repository import (
     InMemoryInquiryRepository,
@@ -703,11 +706,15 @@ def test_confirmation_snapshot_immune_to_later_offer_mutation() -> None:
 def test_confirmation_fails_when_commercial_snapshot_missing() -> None:
     services = _services()
     order, version = _effective_order(services)
-    orders, _offers, inquiries, documents, _service, _core, offer_service = services
+    orders, offers, inquiries, documents, _service, _core, offer_service = services
     snapshots = offer_service._commercial_snapshots
-    assert snapshots.get_by_order_id(order.order_id) is not None
+    commercial = snapshots.get_by_order_id(order.order_id)
+    assert commercial is not None
+    assert offers.get(commercial.source_offer_id) is not None
     snapshots._by_id.clear()
     snapshots._by_order_id.clear()
+    # Offer remains available — must not hide the invariant violation.
+    assert offers.get(commercial.source_offer_id) is not None
     service = OrderConfirmationDocumentService(
         orders,
         inquiries,
@@ -715,7 +722,7 @@ def test_confirmation_fails_when_commercial_snapshot_missing() -> None:
         snapshots,
         now=lambda: datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
     )
-    with pytest.raises(OrderConfirmationDocumentBlockedError, match="nicht_verfuegbar"):
+    with pytest.raises(MissingCommercialSnapshotError):
         service.prepare_snapshot(
             order.order_id,
             version.order_version_id,

@@ -205,7 +205,7 @@ class OrderConfirmationDocumentService:
         order = self._orders.get_order(order_id)
         if order is None:
             raise OrderConfirmationDocumentNotFoundError(order_id)
-        blocker = self._prepare_blocker(order)
+        blocker = self._operational_blocker(order)
         if blocker is not None:
             raise OrderConfirmationDocumentBlockedError(blocker)
         if order.effective_order_version_id != expected_effective_order_version_id:
@@ -334,7 +334,7 @@ class OrderConfirmationDocumentService:
             effective_version_number=version_number,
         )
 
-    def _prepare_blocker(self, order: Order) -> str | None:
+    def _operational_blocker(self, order: Order) -> str | None:
         if order.cancelled_at is not None:
             return "nicht_verfuegbar"
         if order.effective_order_version_id is None:
@@ -346,6 +346,12 @@ class OrderConfirmationDocumentService:
             return "aenderung_wartet"
         if version.kitchen_print_confirmed_at is None:
             return "aenderung_wartet"
+        return None
+
+    def _prepare_blocker(self, order: Order) -> str | None:
+        blocked = self._operational_blocker(order)
+        if blocked is not None:
+            return blocked
         if self._commercial_snapshots.get_by_order_id(order.order_id) is None:
             return "nicht_verfuegbar"
         return None
