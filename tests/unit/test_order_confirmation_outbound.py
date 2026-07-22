@@ -98,6 +98,7 @@ def _world() -> tuple[
         offers,
         inquiries,
         documents,
+        offer_service._commercial_snapshots,
         now=lambda: datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
     )
     outbound_service = OrderConfirmationOutboundService(

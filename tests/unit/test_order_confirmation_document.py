@@ -98,6 +98,7 @@ def _services() -> tuple[
         offers,
         inquiries,
         documents,
+        offer_service._commercial_snapshots,
         now=lambda: datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
     )
     return orders, offers, inquiries, documents, service, core, offer_service
@@ -185,6 +186,7 @@ def test_kitchen_print_not_confirmed_blocked() -> None:
         offers,
         inquiries,
         InMemoryOrderConfirmationDocumentRepository(),
+        offer_service._commercial_snapshots,
     )
     with pytest.raises(OrderConfirmationDocumentBlockedError, match="aenderung_wartet"):
         service.prepare_snapshot(
@@ -377,6 +379,7 @@ def test_recipient_snapshot_and_missing_email() -> None:
         offers,
         inquiries,
         InMemoryOrderConfirmationDocumentRepository(),
+        offer_service._commercial_snapshots,
         now=lambda: datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
     )
     snapshot = service.prepare_snapshot(
@@ -638,3 +641,103 @@ def test_office_panel_confirmation_block_renders() -> None:
     assert "Vorschau öffnen" in page_created.body
     assert "Testversand erzeugen" in page_created.body
     assert views.confirmation_document_shape(created)["state"] == "dokument_erstellt"
+
+
+def test_confirmation_uses_snapshot_when_offer_repository_unavailable() -> None:
+    services = _services()
+    order, version = _effective_order(services)
+    orders, _offers, inquiries, documents, _service, _core, offer_service = services
+
+    class _UnavailableOfferRepository:
+        def get_by_source_inquiry_id(self, inquiry_id: str):  # noqa: ANN201
+            raise RuntimeError("offer repository unavailable")
+
+    service = OrderConfirmationDocumentService(
+        orders,
+        _UnavailableOfferRepository(),  # type: ignore[arg-type]
+        inquiries,
+        documents,
+        offer_service._commercial_snapshots,
+        now=lambda: datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
+    )
+    snapshot = service.prepare_snapshot(
+        order.order_id,
+        version.order_version_id,
+        "office-panel",
+    )
+    assert snapshot.gross_total_cents == 24824
+    assert snapshot.payment_method == "RECHNUNG"
+    assert snapshot.positions[0].name == "Fingerfood Paket"
+    assert (
+        snapshot.offer_id
+        == offer_service._commercial_snapshots.get_by_order_id(
+            order.order_id
+        ).source_offer_id
+    )  # type: ignore[union-attr]
+
+
+def test_confirmation_snapshot_immune_to_later_offer_mutation() -> None:
+    services = _services()
+    order, version = _effective_order(services)
+    orders, offers, inquiries, documents, _service, _core, offer_service = services
+    commercial = offer_service._commercial_snapshots.get_by_order_id(order.order_id)
+    assert commercial is not None
+    stored = offers.get(commercial.source_offer_id)
+    assert stored is not None
+    offer_version = stored.versions[0]
+    variant = offer_version.variants[0]
+    offers._offers[stored.offer_id] = replace(
+        stored,
+        versions=(
+            replace(
+                offer_version,
+                variants=(
+                    replace(
+                        variant,
+                        positions=(
+                            replace(variant.positions[0], name="MUTATED LIVE OFFER"),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+    service = OrderConfirmationDocumentService(
+        orders,
+        offers,
+        inquiries,
+        documents,
+        offer_service._commercial_snapshots,
+        now=lambda: datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
+    )
+    snapshot = service.prepare_snapshot(
+        order.order_id,
+        version.order_version_id,
+        "office-panel",
+    )
+    assert snapshot.positions[0].name == "Fingerfood Paket"
+
+
+def test_confirmation_legacy_offer_fallback_when_commercial_snapshot_missing() -> None:
+    services = _services()
+    order, version = _effective_order(services)
+    orders, offers, inquiries, documents, _service, _core, offer_service = services
+    snapshots = offer_service._commercial_snapshots
+    assert snapshots.get_by_order_id(order.order_id) is not None
+    snapshots._by_id.clear()
+    snapshots._by_order_id.clear()
+    service = OrderConfirmationDocumentService(
+        orders,
+        offers,
+        inquiries,
+        documents,
+        snapshots,
+        now=lambda: datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
+    )
+    snapshot = service.prepare_snapshot(
+        order.order_id,
+        version.order_version_id,
+        "office-panel",
+    )
+    assert snapshot.positions[0].name == "Fingerfood Paket"
+    assert snapshot.gross_total_cents == 24824

@@ -5,9 +5,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Literal, Protocol
 
-from catering_system.domain.offer import Offer, OfferPosition, OfferVariant
+from catering_system.domain.offer import (
+    Offer,
+    OfferPosition,
+    OfferVariant,
+    PositionQuantityMode,
+)
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.repositories.offer_repository import OfferRepository
 from catering_system.repositories.order_repository import OrderRepository
@@ -80,8 +85,19 @@ class OrderPrintProjection:
     flags: PrintFlagsBlock
 
 
+class _QuantityDisplaySource(Protocol):
+    @property
+    def quantity(self) -> Decimal | None: ...
+
+    @property
+    def quantity_mode(self) -> PositionQuantityMode | None: ...
+
+    @property
+    def unit_label(self) -> str | None: ...
+
+
 def format_quantity_display(
-    position: OfferPosition, guest_count_estimate: int | None
+    position: _QuantityDisplaySource, guest_count_estimate: int | None
 ) -> str | None:
     if position.quantity is None:
         return None

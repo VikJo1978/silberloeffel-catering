@@ -421,6 +421,7 @@ class OfficeApi:
             self.offers,
             self.inquiries,
             self.confirmation_documents,
+            self.commercial_snapshots,
         )
         self.core = OperationalCoreService(
             self.orders,

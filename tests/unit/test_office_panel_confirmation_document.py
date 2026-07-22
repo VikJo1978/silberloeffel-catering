@@ -173,6 +173,7 @@ def _sqlite_world(
         offers,
         inquiries,
         documents,
+        offer_service._commercial_snapshots,
         now=lambda: datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
     )
     return db, doc_service, core, orders, order.order_id, order_version.order_version_id
@@ -527,6 +528,7 @@ def test_confirmation_card_escapes_hostile_user_data() -> None:
         offers,
         inquiries,
         documents,
+        offer_service._commercial_snapshots,
         now=lambda: datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
     )
     snapshot = doc_service.prepare_snapshot(
