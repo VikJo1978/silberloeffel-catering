@@ -1,4 +1,8 @@
-"""Read-only print projection joining OrderVersion facts with Offer menu data."""
+"""Read-only print projection joining OrderVersion facts with commercial menu data.
+
+Primary commercial source is OrderCommercialSnapshot (frozen at conversion).
+Legacy Offer lookup remains only as a temporary bridge for pre-snapshot Orders.
+"""
 
 from __future__ import annotations
 
@@ -14,7 +18,17 @@ from catering_system.domain.offer import (
     PositionQuantityMode,
 )
 from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.order_commercial_snapshot import (
+    OrderCommercialPosition,
+    OrderCommercialSnapshot,
+)
+from catering_system.repositories.in_memory_order_commercial_snapshot_repository import (
+    InMemoryOrderCommercialSnapshotRepository,
+)
 from catering_system.repositories.offer_repository import OfferRepository
+from catering_system.repositories.order_commercial_snapshot_repository import (
+    OrderCommercialSnapshotRepository,
+)
 from catering_system.repositories.order_repository import OrderRepository
 
 PrintIntent = Literal["preview", "change_preview", "final"]
@@ -130,9 +144,14 @@ class OrderPrintProjectionService:
         self,
         order_repository: OrderRepository,
         offer_repository: OfferRepository,
+        commercial_snapshot_repository: OrderCommercialSnapshotRepository | None = None,
     ) -> None:
         self._orders = order_repository
         self._offers = offer_repository
+        self._commercial_snapshots = (
+            commercial_snapshot_repository
+            or InMemoryOrderCommercialSnapshotRepository()
+        )
 
     def resolve(
         self,
@@ -162,6 +181,15 @@ class OrderPrintProjectionService:
     def _resolve_commercial(
         self, order: Order, version: OrderVersion
     ) -> PrintCommercialBlock:
+        snapshot = self._commercial_snapshots.get_by_order_id(order.order_id)
+        if snapshot is not None:
+            return _commercial_from_snapshot(snapshot, version.guest_count_estimate)
+        # TODO: remove legacy fallback after snapshot migration window
+        return self._legacy_offer_commercial(order, version)
+
+    def _legacy_offer_commercial(
+        self, order: Order, version: OrderVersion
+    ) -> PrintCommercialBlock:
         offer = self._offers.get_by_source_inquiry_id(order.source_inquiry_id)
         if offer is None:
             return PrintCommercialBlock(source="none")
@@ -178,7 +206,7 @@ class OrderPrintProjectionService:
             accepted_variant_id=link.variant_id,
             variant_label=variant.label,
             positions=tuple(
-                _position_line(position, version.guest_count_estimate)
+                _position_line_from_offer(position, version.guest_count_estimate)
                 for position in variant.positions
             ),
         )
@@ -260,6 +288,22 @@ def _event_block(order: Order, version: OrderVersion) -> PrintEventBlock:
     )
 
 
+def _commercial_from_snapshot(
+    snapshot: OrderCommercialSnapshot, guest_count_estimate: int | None
+) -> PrintCommercialBlock:
+    return PrintCommercialBlock(
+        source="offer_conversion",
+        offer_id=snapshot.source_offer_id,
+        offer_version_id=snapshot.source_offer_version_id,
+        accepted_variant_id=snapshot.source_variant_id,
+        variant_label=snapshot.variant_label,
+        positions=tuple(
+            _position_line_from_snapshot(position, guest_count_estimate)
+            for position in snapshot.positions
+        ),
+    )
+
+
 def _accepted_variant(
     offer: Offer, offer_version_id: str, variant_id: str
 ) -> OfferVariant | None:
@@ -275,8 +319,23 @@ def _accepted_variant(
     )
 
 
-def _position_line(
+def _position_line_from_offer(
     position: OfferPosition, guest_count_estimate: int | None
+) -> PrintPositionLine:
+    return PrintPositionLine(
+        position_id=position.position_id,
+        kind=position.kind,
+        name=position.name,
+        description=position.description,
+        composition=position.composition,
+        notes=position.notes,
+        quantity_display=format_quantity_display(position, guest_count_estimate),
+        unit_label=position.unit_label,
+    )
+
+
+def _position_line_from_snapshot(
+    position: OrderCommercialPosition, guest_count_estimate: int | None
 ) -> PrintPositionLine:
     return PrintPositionLine(
         position_id=position.position_id,

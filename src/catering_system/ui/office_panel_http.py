@@ -508,6 +508,7 @@ def make_office_panel_handler(
             return OrderPrintProjectionService(
                 order_repo,
                 panel._offers,
+                panel._commercial_snapshots,
             ).resolve(order_id, version_id, intent="preview")
 
         def _resolve_buffet_cards_view(self, order_id: str, version_id: str):
@@ -515,7 +516,11 @@ def make_office_panel_handler(
                 return remote.buffet_cards_data(order_id, version_id)
             return BuffetCardsService(
                 order_repo,
-                OrderPrintProjectionService(order_repo, panel._offers),
+                OrderPrintProjectionService(
+                    order_repo,
+                    panel._offers,
+                    panel._commercial_snapshots,
+                ),
             ).resolve(order_id, version_id)
 
         def _print_sheet(self, order_id: str, query: str) -> None:
