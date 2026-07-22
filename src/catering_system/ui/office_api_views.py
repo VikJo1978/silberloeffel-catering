@@ -33,6 +33,11 @@ from catering_system.domain.calendar_entry_projection import (
     CALENDAR_ENTRY_KIND_LABELS,
     CalendarEntryProjection,
 )
+from catering_system.domain.offer_queue import (
+    OfferQueueItem,
+    OfferQueueSection,
+    OfferQueueSnapshot,
+)
 from catering_system.domain.task_projection import TaskProjection
 from catering_system.domain.offer import (
     Offer,
@@ -141,6 +146,60 @@ def offer_list_view(
         rows.append(offer_list_row(offer, inquiry, today=operating_today))
     rows.sort(key=lambda row: (str(row["event_date"]), str(row["offer_id"])))
     return rows
+
+
+_QUEUE_SUBKIND_LABELS = {
+    "prepared": "Vorbereitet — versenden",
+    "sent": "Wartet auf Kunde",
+    "accepted": "Umwandeln",
+    "accepted_contact_blocked": "Umwandeln",
+}
+
+
+def offer_queue_item_row(item: OfferQueueItem) -> dict[str, object]:
+    row: dict[str, object] = {
+        "offer_id": item.offer_id,
+        "inquiry_id": item.inquiry_id,
+        "offer_version_id": item.offer_version_id,
+        "version_number": item.version_number,
+        "state": item.state,
+        "state_label": offer_state_label(item.state),
+        "queue_group": item.queue_group,
+        "queue_subkind": item.queue_subkind,
+        "next_action": item.next_action,
+        "next_action_label": item.next_action_label,
+        "customer_display": item.customer_display,
+        "intake_subject": item.intake_subject,
+        "event_date": item.event_date.isoformat(),
+        "guest_count": item.guest_count,
+        "valid_until": item.valid_until.isoformat(),
+        "days_until_valid_until": item.days_until_valid_until,
+        "days_overdue": item.days_overdue,
+        "prepared_at": item.prepared_at.isoformat(),
+        "sent_at": item.sent_at.isoformat() if item.sent_at is not None else None,
+    }
+    if item.validity_hint is not None:
+        row["validity_hint"] = item.validity_hint
+    return row
+
+
+def offer_queue_section_row(section: OfferQueueSection) -> dict[str, object]:
+    return {
+        "group": section.group,
+        "label": section.label,
+        "count": section.count,
+        "items": [offer_queue_item_row(item) for item in section.items],
+    }
+
+
+def offer_queue_view(snapshot: OfferQueueSnapshot) -> dict[str, object]:
+    return {
+        "today": snapshot.today.isoformat(),
+        "sections": [offer_queue_section_row(section) for section in snapshot.sections],
+        "total_count": snapshot.total_count,
+        "limit": snapshot.limit,
+        "offset": snapshot.offset,
+    }
 
 
 def _surface_sent_evidence(

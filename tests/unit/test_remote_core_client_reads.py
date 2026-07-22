@@ -193,6 +193,81 @@ def test_list_offers_accepts_valid_payload() -> None:
         server.server_close()
 
 
+def test_offer_queue_accepts_valid_payload() -> None:
+    offer_id = str(uuid.uuid4())
+    inquiry_id = str(uuid.uuid4())
+    version_id = str(uuid.uuid4())
+    payload = {
+        "today": "2026-07-15",
+        "sections": [
+            {
+                "group": "action_required",
+                "label": "Aktion erforderlich",
+                "count": 1,
+                "items": [
+                    {
+                        "offer_id": offer_id,
+                        "inquiry_id": inquiry_id,
+                        "offer_version_id": version_id,
+                        "version_number": 1,
+                        "state": "Prepared",
+                        "state_label": "Vorbereitet",
+                        "queue_group": "action_required",
+                        "queue_subkind": "prepared",
+                        "next_action": "mark_sent",
+                        "next_action_label": "Als gesendet markieren",
+                        "customer_display": "Müller GmbH",
+                        "intake_subject": "Hochzeit",
+                        "event_date": "2026-08-01",
+                        "guest_count": 80,
+                        "valid_until": "2026-07-31",
+                        "days_until_valid_until": 16,
+                        "days_overdue": None,
+                        "prepared_at": "2026-07-15T08:00:00+00:00",
+                        "sent_at": None,
+                    }
+                ],
+            },
+            {
+                "group": "overdue",
+                "label": "Frist überschritten",
+                "count": 0,
+                "items": [],
+            },
+            {
+                "group": "history",
+                "label": "Abgeschlossen / Verlauf",
+                "count": 0,
+                "items": [],
+            },
+        ],
+        "total_count": 1,
+        "limit": 100,
+        "offset": 0,
+    }
+    body = json.dumps(payload).encode()
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    url, server = _serve(Handler)
+    try:
+        parsed = RemoteCoreClient(url, _TOKEN).offer_queue()
+        assert parsed["total_count"] == 1
+        assert parsed["sections"][0]["items"][0]["offer_id"] == offer_id
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 def test_list_offers_rejects_unknown_state() -> None:
     payload = {
         "offers": [

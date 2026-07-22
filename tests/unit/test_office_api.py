@@ -387,6 +387,46 @@ def test_list_offers_schema_and_states(api) -> None:
     assert row["state"] == "Sent"
 
 
+def test_offer_queue_empty(api) -> None:
+    base, _ids, _db = api
+    status, body, _h = _get(f"{base}/office/v1/offer-queue")
+    assert status == 200
+    assert body["total_count"] == 0
+    assert body["limit"] == 100
+    assert body["offset"] == 0
+    assert len(body["sections"]) == 3
+    assert all(section["count"] == 0 for section in body["sections"])
+
+
+def test_offer_queue_prepared_and_sent_grouping(api) -> None:
+    base, ids, _db = api
+    offer_id, version_id = _prepare_offer(api)
+    status, body, _h = _get(f"{base}/office/v1/offer-queue")
+    assert status == 200
+    assert body["total_count"] == 1
+    action = next(s for s in body["sections"] if s["group"] == "action_required")
+    assert action["count"] == 1
+    item = action["items"][0]
+    assert item["offer_id"] == offer_id
+    assert item["queue_subkind"] == "prepared"
+    assert item["next_action"] == "mark_sent"
+
+    mark_url = _mark_sent_url(base, offer_id, version_id)
+    assert _post(mark_url, args=_MARK_SENT_ARGS)[0] == 200
+    status, body, _h = _get(f"{base}/office/v1/offer-queue")
+    action = next(s for s in body["sections"] if s["group"] == "action_required")
+    item = action["items"][0]
+    assert item["queue_subkind"] == "sent"
+    assert item["next_action"] == "await_customer"
+
+
+def test_offer_queue_invalid_group(api) -> None:
+    base, _ids, _db = api
+    status, body, _h = _get(f"{base}/office/v1/offer-queue?group=unknown")
+    assert status == 400
+    assert body["error"] == "invalid_request"
+
+
 def test_offer_detail_not_found(api) -> None:
     base, _ids, _db = api
     missing = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"

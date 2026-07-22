@@ -587,6 +587,23 @@ def test_angebote_parity_direct_vs_remote(parity_world) -> None:
     assert "Keine Angebote vorhanden" in d_html
 
 
+def test_offer_queue_json_parity_direct_api_vs_remote_client(tmp_path: Path) -> None:
+    db = tmp_path / "offer-queue-json-parity.db"
+    _seed(db)
+    api_url, api_server = _start_api_server(db)
+    remote = RemoteCoreClient(api_url, _API_TOKEN)
+    try:
+        status, direct_body = _api_get(f"{api_url}/office/v1/offer-queue")
+        assert status == 200
+        remote_body = remote.offer_queue()
+        assert direct_body == remote_body
+        assert direct_body["total_count"] == 0
+        assert len(direct_body["sections"]) == 3
+    finally:
+        api_server.shutdown()
+        api_server.server_close()
+
+
 def test_kontakte_parity_direct_vs_remote(parity_world) -> None:
     direct_url, remote_url, _ids = parity_world
     d_status, d_html = _get(f"{direct_url}/kontakte")
