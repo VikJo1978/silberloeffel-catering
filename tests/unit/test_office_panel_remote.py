@@ -402,7 +402,7 @@ def test_legacy_convert_offer_gate_parity_direct_vs_remote(tmp_path: Path) -> No
     convert while a Prepared Offer blocks the inquiry path."""
     db = tmp_path / "offer-gate.db"
     ids = _seed(db)
-    inquiry_id = ids["inquiry_cancelled_order"]
+    inquiry_id = ids["inquiry_convertible"]
 
     api_url, api_server = _start_api_server(db)
     try:
@@ -877,9 +877,35 @@ def test_v2_remote_inquiry_detail_preserves_linked_order_truncation_warning(
     )
     order_service = OrderService(orders)
     core = OperationalCoreService(orders)
-    for _index in range(51):
-        order, _version = order_service.convert_inquiry_to_order(inquiry)
-        core.cancel_order(order.order_id)
+    first, version = order_service.convert_inquiry_to_order(inquiry)
+    core.cancel_order(first.order_id)
+    from datetime import UTC, datetime
+    import uuid
+    from catering_system.domain.order import Order, OrderVersion
+
+    now = datetime.now(UTC)
+    for _index in range(50):
+        order_id = str(uuid.uuid4())
+        orders.save_order_with_initial_version(
+            Order(
+                order_id=order_id,
+                source_inquiry_id=inquiry.inquiry_id,
+                created_at=now,
+                updated_at=now,
+                cancelled_at=now,
+            ),
+            OrderVersion(
+                order_version_id=str(uuid.uuid4()),
+                order_id=order_id,
+                version_number=1,
+                created_at=now,
+                event_date=inquiry.event_date,
+                time_window_text=inquiry.time_window_text,
+                location_text=inquiry.location_text,
+                guest_count_estimate=inquiry.guest_count_estimate,
+                planning_mode=inquiry.planning_mode,
+            ),
+        )
     inquiries.close()
     orders.close()
 
@@ -891,8 +917,8 @@ def test_v2_remote_inquiry_detail_preserves_linked_order_truncation_warning(
         assert status == 200
         assert "Unvollständige Ansicht" in body
         assert "Nicht alle 51 verknüpften Aufträge" in body
-        assert "Stornierten Auftrag öffnen" in body
-        assert "In Auftrag umwandeln" in body
+        assert "Auftrag öffnen" in body
+        assert "Auftrag erstellen" not in body
     finally:
         panel_server.shutdown()
         panel_server.server_close()
@@ -1046,7 +1072,7 @@ def test_full_write_flow_through_remote_panel(remote_world) -> None:
     status, converted_inquiry_html = _get(f"{base}/inquiry/{inquiry_id}")
     assert status == 200
     assert "Bestätigt / Auftrag" in converted_inquiry_html
-    assert "In Auftrag umwandeln" not in converted_inquiry_html
+    assert "Auftrag erstellen" not in converted_inquiry_html
     assert '<select name="crm_stage">' not in converted_inquiry_html
     assert (
         '<input type="hidden" name="crm_stage" value="Bestätigt / Auftrag">'
@@ -1203,7 +1229,7 @@ def test_verify_flow_through_remote_panel(remote_world) -> None:
 
     _status, detail_html = _get(f"{base}/inquiry/{inquiry_id}")
     assert "Telefonisch verifiziert" not in detail_html  # button gone once verified
-    assert "In Auftrag umwandeln" in detail_html  # convert now offered
+    assert "Auftrag erstellen" in detail_html  # convert now offered
 
 
 def test_idempotent_retry_same_command_id_and_preconditions(remote_world) -> None:

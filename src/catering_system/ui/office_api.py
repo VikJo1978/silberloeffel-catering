@@ -1018,7 +1018,12 @@ class OfficeApi:
             for order in self.orders.list_orders()
             if order.source_inquiry_id == inquiry.inquiry_id
         ]
-        has_active_order = any(order.cancelled_at is None for order in linked_orders)
+        if linked_orders:
+            order, version = self.order_service.convert_inquiry_to_order(inquiry)
+            return 200, {
+                "order_id": order.order_id,
+                "order_version_id": version.order_version_id,
+            }
         offer = self.offers.get_by_source_inquiry_id(inquiry.inquiry_id)
         state = views.inquiry_office_state(
             inquiry,
@@ -1026,8 +1031,6 @@ class OfficeApi:
             offer=offer,
             today=views.berlin_today(),
         )
-        if has_active_order:
-            raise ApiError(409, "already_converted")
         if inquiry.crm_stage == "Abgelehnt / verloren":
             raise ApiError(422, "inquiry_rejected")
         if offer is not None and offer_blocks_direct_inquiry_conversion(
@@ -1041,11 +1044,24 @@ class OfficeApi:
         try:
             order, version = self.order_service.convert_inquiry_to_order(inquiry)
         except sqlite3.IntegrityError:
-            # Recognized only when the re-query confirms the cause (pack §4.5)
-            if self._active_order_for_inquiry(inquiry.inquiry_id) is not None:
-                raise ApiError(409, "already_converted") from None
+            # Race: another writer created the order — return it idempotently.
+            if self.order_service.orders_for_inquiry(inquiry.inquiry_id):
+                order, version = self.order_service.convert_inquiry_to_order(inquiry)
+                return 200, {
+                    "order_id": order.order_id,
+                    "order_version_id": version.order_version_id,
+                }
             raise
         except ValueError as exc:
+            message = str(exc)
+            if "contact information incomplete" in message:
+                raise ApiError(422, "contact_information_incomplete") from exc
+            if "already has a linked order" in message:
+                order, version = self.order_service.convert_inquiry_to_order(inquiry)
+                return 200, {
+                    "order_id": order.order_id,
+                    "order_version_id": version.order_version_id,
+                }
             raise ApiError(422, "verification_gate_blocked") from exc
         self.inquiry_service.update_inquiry(
             inquiry.inquiry_id,

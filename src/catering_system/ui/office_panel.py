@@ -570,11 +570,8 @@ class OfficePanel:
         return render_kalender_list(self._calendar_list_rows(), context=context)
 
     def _converted_inquiry_ids(self) -> set[str]:
-        return {
-            order.source_inquiry_id
-            for order in self._orders.list_orders()
-            if order.cancelled_at is None
-        }
+        """Inquiry IDs that already have any linked Order (active or cancelled)."""
+        return {order.source_inquiry_id for order in self._orders.list_orders()}
 
     def _open_inquiries_count(self) -> int:
         """Open inquiries without a linked active order (direct and remote)."""
@@ -1365,7 +1362,7 @@ class OfficePanel:
             return (
                 f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/convert">'
                 f"{_csrf_input(context)}{self._command_fields()}"
-                "<button>In Auftrag umwandeln</button></form>"
+                "<button>Auftrag erstellen</button></form>"
             )
         if state.next_action == "offer-pending":
             return '<span class="muted">Angebot ausstehend</span>'
@@ -1700,7 +1697,7 @@ class OfficePanel:
                 action = (
                     f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/convert">'
                     f"{_csrf_input(context)}{self._command_fields()}"
-                    "<button>In Auftrag umwandeln</button></form>"
+                    "<button>Auftrag erstellen</button></form>"
                 )
             elif action_name == "offer-pending":
                 action = '<span class="muted">Angebot ausstehend</span>'
@@ -2290,12 +2287,15 @@ class OfficePanel:
                 + (" (storniert)" if o.cancelled_at is not None else "")
                 for o in existing
             )
-            convert += f"<p>Auftrag vorhanden: {links}</p>"
+            convert += (
+                f"<p>Auftrag vorhanden: {links} — "
+                f'<a href="/order/{_e(existing[0].order_id)}">Auftrag öffnen</a></p>'
+            )
         if state.next_action == "convert":
             convert += (
                 f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/convert">'
                 f"{_csrf_input(context)}{self._command_fields()}"
-                "<button>In Auftrag umwandeln</button></form>"
+                "<button>Auftrag erstellen</button></form>"
             )
         elif state.next_action == "offer-pending":
             convert += '<p class="muted">Angebot ausstehend</p>'
@@ -2429,7 +2429,8 @@ class OfficePanel:
     def convert_inquiry_to_order(self, inquiry_id: str) -> tuple[Order, OrderVersion]:
         """Run the truthful gate and stage transition as one direct command.
 
-        Remote mode delegates the same atomic command to Core Office API.
+        Idempotent: an existing linked Order is returned instead of creating
+        another. Remote mode delegates the same atomic command to Core Office API.
         """
 
         def work() -> tuple[Order, OrderVersion]:
@@ -2441,16 +2442,13 @@ class OfficePanel:
                 for order in self._orders.list_orders()
                 if order.source_inquiry_id == inquiry_id
             ]
-            has_active_order = any(
-                order.cancelled_at is None for order in linked_orders
-            )
+            if linked_orders:
+                return self.order_service.convert_inquiry_to_order(inquiry)
             state = self._inquiry_office_state(
                 inquiry,
                 linked_orders,
                 inquiry_id=inquiry_id,
             )
-            if has_active_order:
-                raise ValueError("inquiry already converted")
             if inquiry.crm_stage == "Abgelehnt / verloren":
                 raise ValueError("rejected inquiry cannot be converted")
             offer = self._offers.get_by_source_inquiry_id(inquiry_id)

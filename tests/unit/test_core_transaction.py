@@ -250,18 +250,18 @@ def test_fingerprint_distinguishes_every_command_dimension() -> None:
 # --- orders migration 6: partial unique active-order index (pack §6.2) ---
 
 
-def test_second_active_order_for_same_inquiry_hits_the_index(shared) -> None:
+def test_second_convert_is_idempotent_for_same_inquiry(shared) -> None:
     connection, inquiries, orders, _ledger = shared
     executor = CoreCommandExecutor(connection)
     inq = _inquiry()
     executor.run(lambda: inquiries.save(inq))
-    executor.run(lambda: OrderService(orders).convert_inquiry_to_order(inq))
-    with pytest.raises(sqlite3.IntegrityError):
-        executor.run(lambda: OrderService(orders).convert_inquiry_to_order(inq))
+    first = executor.run(lambda: OrderService(orders).convert_inquiry_to_order(inq))
+    second = executor.run(lambda: OrderService(orders).convert_inquiry_to_order(inq))
+    assert second[0].order_id == first[0].order_id
     assert len([o for o in orders.list_orders() if o.cancelled_at is None]) == 1
 
 
-def test_reconvert_after_storno_still_works(shared) -> None:
+def test_convert_after_storno_returns_existing_order(shared) -> None:
     connection, inquiries, orders, _ledger = shared
     executor = CoreCommandExecutor(connection)
     core = OperationalCoreService(orders)
@@ -270,9 +270,8 @@ def test_reconvert_after_storno_still_works(shared) -> None:
     first = executor.run(lambda: OrderService(orders).convert_inquiry_to_order(inq))
     executor.run(lambda: core.cancel_order(first[0].order_id))
     second = executor.run(lambda: OrderService(orders).convert_inquiry_to_order(inq))
-    assert second[0].order_id != first[0].order_id
-    active = [o for o in orders.list_orders() if o.cancelled_at is None]
-    assert [o.order_id for o in active] == [second[0].order_id]
+    assert second[0].order_id == first[0].order_id
+    assert len(orders.list_orders()) == 1
 
 
 def test_migration_6_aborts_on_existing_active_duplicates(tmp_path: Path) -> None:

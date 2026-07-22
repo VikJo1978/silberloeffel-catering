@@ -813,7 +813,12 @@ def test_state_signature_eligible_and_blocked_missing_shapes() -> None:
     order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     sig_ok = prog.get_order_progression_state_signature(order.order_id)
-    order2, _v1b = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order2, _v1b = osvc.convert_inquiry_to_order(
+        replace(
+            _sample_inquiry(),
+            inquiry_id="22222222-2222-4222-8222-222222222222",
+        )
+    )
     sig_blocked = prog.get_order_progression_state_signature(order2.order_id)
     assert sig_ok is not None and sig_blocked is not None
     assert (

@@ -323,7 +323,7 @@ class OfferService:
                 )
             return offer, order, order_version
 
-        if self._has_active_order(offer.source_inquiry_id):
+        if self._has_linked_order(offer.source_inquiry_id):
             raise ValueError(
                 f"active order blocks conversion (inquiry_id={offer.source_inquiry_id!r})"
             )
@@ -371,6 +371,12 @@ class OfferService:
     def _has_active_order(self, inquiry_id: str) -> bool:
         return any(
             order.source_inquiry_id == inquiry_id and order.cancelled_at is None
+            for order in self._order_repository.list_orders()
+        )
+
+    def _has_linked_order(self, inquiry_id: str) -> bool:
+        return any(
+            order.source_inquiry_id == inquiry_id
             for order in self._order_repository.list_orders()
         )
 

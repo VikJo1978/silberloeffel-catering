@@ -263,11 +263,11 @@ def derive_inquiry_office_state(
         if offer is not None
         else None
     )
-    if inquiry.crm_stage == "Abgelehnt / verloren" or has_active_order:
+    if inquiry.crm_stage == "Abgelehnt / verloren" or has_order:
         return InquiryOfficeState(
             is_open=False, next_action=None, offer=offer_projection
         )
-    is_open = not has_order
+    is_open = True
     if (
         inquiry.call_verification_required
         and inquiry.call_verification_status != "verified"

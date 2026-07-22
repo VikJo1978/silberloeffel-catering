@@ -164,7 +164,7 @@ def _primary_action(
             "Auftragsprozess gestartet."
         )
         path = "convert"
-        label = "In Auftrag umwandeln"
+        label = "Auftrag erstellen"
     elif inquiry_shows_convert_accepted_button(state):
         return (
             '<section class="inquiry-next-step">'
@@ -217,10 +217,10 @@ def _linked_orders(linked_orders: Sequence[Order]) -> str:
     links = []
     for order in linked_orders:
         if order.cancelled_at is None:
-            label = "Aktiven Auftrag öffnen"
+            label = "Auftrag öffnen"
             status = "Aktiver Auftrag"
         else:
-            label = "Stornierten Auftrag öffnen"
+            label = "Auftrag öffnen"
             status = "Storniert"
         links.append(
             '<li><span class="inquiry-order-status">'

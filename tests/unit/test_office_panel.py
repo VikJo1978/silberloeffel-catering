@@ -390,7 +390,7 @@ def test_unverified_inquiry_shows_progression_block_and_convert_fails(
         "Rückrufprüfung noch nicht erfüllt" in body
     )  # B7 vocabulary, human label, on inquiry view
     assert "Telefonisch verifiziert" in body
-    assert "In Auftrag umwandeln" not in body
+    assert "Auftrag erstellen" not in body
     with pytest.raises(urllib.error.HTTPError) as exc:
         _post(f"{panel}/inquiry/{iid}/convert", {})
     assert exc.value.code == 400
@@ -453,7 +453,7 @@ def test_converted_inquiry_shows_order_link_instead_of_button(panel: str) -> Non
     oid = _convert(panel, iid)
     _status, body = _get(f"{panel}/inquiry/{iid}")
     assert "Auftrag vorhanden" in body and oid[:8] in body
-    assert "In Auftrag umwandeln" not in body
+    assert "Auftrag erstellen" not in body
     assert '<select name="crm_stage">' not in body
     assert '<input type="hidden" name="crm_stage" value="Bestätigt / Auftrag">' in body
 
@@ -498,7 +498,7 @@ def test_rejected_inquiry_is_closed_without_queue_or_actions(panel: str) -> None
     _status, detail = _get(f"{panel}/inquiry/{iid}")
     assert "Anfrage wurde abgelehnt" in detail
     assert "Telefonisch verifiziert" not in detail
-    assert "In Auftrag umwandeln" not in detail
+    assert "Auftrag erstellen" not in detail
     _status, dashboard = _get(f"{panel}/")
     assert _attention_counts(dashboard)["Offene Anfragen prüfen"] == 0
 
@@ -528,13 +528,13 @@ def test_v2_inquiry_detail_ready_to_convert_and_verification_required(
     assert "<h1>Sommerfest HafenCity</h1>" in ready
     assert "Bereit für Auftrag" in ready
     assert f'action="/inquiry/{ready_id}/convert"' in ready
-    assert "In Auftrag umwandeln" in ready
+    assert "Auftrag erstellen" in ready
     assert "Telefonisch verifiziert" not in ready
     assert "Rückruf erforderlich" in verify
     assert "Rückrufprüfung noch nicht erfüllt" in verify
     assert f'action="/inquiry/{verify_id}/verify"' in verify
     assert "Telefonisch verifiziert" in verify
-    assert "In Auftrag umwandeln" not in verify
+    assert "Auftrag erstellen" not in verify
 
 
 def test_v2_inquiry_detail_rejected_has_no_primary_action(
@@ -581,15 +581,15 @@ def test_v2_inquiry_detail_active_and_cancelled_order_history(
 
     assert "Auftrag vorhanden" in active
     assert f'href="/order/{active_order_id}"' in active
-    assert "Aktiven Auftrag öffnen" in active
+    assert "Auftrag öffnen" in active
     assert f'action="/inquiry/{active_inquiry_id}/convert"' not in active
     assert '<select name="crm_stage">' not in active
     assert (
         '<input type="hidden" name="crm_stage" value="Bestätigt / Auftrag">' in active
     )
     assert f'href="/order/{cancelled_order_id}"' in cancelled
-    assert "Stornierten Auftrag öffnen" in cancelled
-    assert f'action="/inquiry/{cancelled_inquiry_id}/convert"' in cancelled
+    assert "Auftrag öffnen" in cancelled
+    assert f'action="/inquiry/{cancelled_inquiry_id}/convert"' not in cancelled
 
     visible_active = html.unescape(re.sub(r"<[^>]+>", " ", active))
     visible_cancelled = html.unescape(re.sub(r"<[^>]+>", " ", cancelled))
@@ -1151,18 +1151,19 @@ def test_cancelled_print_sheet_shows_storniert_banner(panel: str) -> None:
     assert "STORNIERT" in sheet  # kitchen must see the cancellation on the sheet
 
 
-def test_reconvert_possible_after_storno(panel: str) -> None:
-    """A cancelled order must not suppress the convert button (Storno semantics)."""
+def test_convert_after_storno_returns_existing_order(panel: str) -> None:
+    """Order existence remains authoritative — Storno does not unlock a second Order."""
     iid = _create_inquiry(panel)
     oid = _convert(panel, iid)
     _post(f"{panel}/order/{oid}/cancel", {})
     _status, body = _get(f"{panel}/inquiry/{iid}")
     assert "(storniert)" in body
-    assert "In Auftrag umwandeln" in body  # button back after Storno
+    assert "Auftrag erstellen" not in body
+    assert "Auftrag öffnen" in body
     oid2 = _convert(panel, iid)
-    assert oid2 != oid
+    assert oid2 == oid
     _status, body = _get(f"{panel}/inquiry/{iid}")
-    assert "In Auftrag umwandeln" not in body  # active order suppresses it again
+    assert "Auftrag erstellen" not in body
 
 
 def test_xss_escaped_in_views(panel: str) -> None:
@@ -1790,7 +1791,7 @@ def test_dashboard_queues_capped_at_five_with_alle_anzeigen_link(panel: str) -> 
         _create_inquiry(panel)
     _status, body = _get(f"{panel}/")
     assert _attention_counts(body)["Offene Anfragen prüfen"] == 7
-    assert body.count("<button>In Auftrag umwandeln</button>") == 5
+    assert body.count("<button>Auftrag erstellen</button>") == 5
     assert '<a href="/anfragen">Alle anzeigen</a>' in body
     _status, full_body = _get(f"{panel}/anfragen")
     assert full_body.count("<tr>") == 8  # header row + all 7, not just top 5

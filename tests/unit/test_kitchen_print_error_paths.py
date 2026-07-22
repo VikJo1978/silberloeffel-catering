@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from dataclasses import replace
 
 import pytest
 
@@ -79,7 +80,7 @@ def test_request_print_rejects_conflicting_existing_job_id() -> None:
     orders, service, order_id, version_id = _service()
     service.request_print(order_id, version_id, print_job_id=JOB_1)
     other_order, other_version = OrderService(orders).convert_inquiry_to_order(
-        _inquiry()
+        replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     )
     with pytest.raises(
         ValueError, match="print_job_id already exists with different facts"

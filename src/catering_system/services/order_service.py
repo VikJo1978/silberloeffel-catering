@@ -56,8 +56,15 @@ class OrderService:
     def convert_inquiry_to_order(self, inquiry: Inquiry) -> tuple[Order, OrderVersion]:
         """Create Order + v1 after the Core inquiry conversion gate passes.
 
+        Idempotent: if any Order already exists for the inquiry, return that
+        Order and its initial version instead of creating another. Order
+        existence is authoritative for “already converted”.
         The application command owns the accompanying Inquiry stage update.
         """
+        existing = self.orders_for_inquiry(inquiry.inquiry_id)
+        if existing:
+            return self._existing_conversion_result(existing)
+
         if not inquiry_allows_order_conversion(inquiry):
             raise ValueError(
                 "inquiry_to_order conversion blocked "
@@ -97,6 +104,30 @@ class OrderService:
             order_id,
             version.version_number,
         )
+        return order, version
+
+    def orders_for_inquiry(self, inquiry_id: str) -> list[Order]:
+        return [
+            order
+            for order in self._order_repository.list_orders()
+            if order.source_inquiry_id == inquiry_id
+        ]
+
+    def _existing_conversion_result(
+        self, existing: list[Order]
+    ) -> tuple[Order, OrderVersion]:
+        active = [order for order in existing if order.cancelled_at is None]
+        candidates = active or existing
+        order = sorted(candidates, key=lambda item: (item.created_at, item.order_id))[0]
+        versions = self._order_repository.list_order_versions(order.order_id)
+        version = next(
+            (item for item in versions if item.version_number == 1),
+            None,
+        )
+        if version is None:
+            raise ValueError(
+                f"linked order {order.order_id!r} is missing initial version"
+            )
         return order, version
 
     def create_order_from_offer_version(
