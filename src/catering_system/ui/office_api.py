@@ -474,6 +474,7 @@ class OfficeApi:
         self.print_projection_service = OrderPrintProjectionService(
             self.orders,
             self.offers,
+            self.commercial_snapshots,
         )
         self.buffet_cards_service = BuffetCardsService(
             self.orders,

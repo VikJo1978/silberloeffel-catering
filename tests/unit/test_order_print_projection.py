@@ -17,6 +17,9 @@ from catering_system.services.operational_core_service import OperationalCoreSer
 from catering_system.repositories.in_memory_offer_repository import (
     InMemoryOfferRepository,
 )
+from catering_system.repositories.in_memory_order_commercial_snapshot_repository import (
+    InMemoryOrderCommercialSnapshotRepository,
+)
 from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
 )
@@ -30,8 +33,12 @@ from tests.unit.test_offer_service import (
 )
 
 
-def _projection_service(offers, orders) -> OrderPrintProjectionService:
-    return OrderPrintProjectionService(orders, offers)
+def _projection_service(
+    offers,
+    orders,
+    snapshots: InMemoryOrderCommercialSnapshotRepository | None = None,
+) -> OrderPrintProjectionService:
+    return OrderPrintProjectionService(orders, offers, snapshots)
 
 
 def test_order_with_offer_conversion_has_menu_positions() -> None:
@@ -46,7 +53,9 @@ def test_order_with_offer_conversion_has_menu_positions() -> None:
     )
     assert converted.conversion_link is not None
 
-    projection = _projection_service(offers, orders).resolve(
+    projection = _projection_service(
+        offers, orders, service._commercial_snapshots
+    ).resolve(
         order.order_id,
         order_version.order_version_id,
     )
@@ -583,3 +592,123 @@ def test_commercial_none_when_variant_resolution_returns_none(monkeypatch) -> No
         order_version.order_version_id,
     )
     assert projection.commercial.source == "none"
+
+
+def test_print_uses_snapshot_when_offer_repository_unavailable() -> None:
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        _offers,
+        orders,
+        _inq,
+        offer_service,
+    ) = _accepted_offer_state()
+    _converted, order, order_version = offer_service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
+    )
+    snapshots = offer_service._commercial_snapshots
+    assert snapshots.get_by_order_id(order.order_id) is not None
+
+    class _UnavailableOfferRepository:
+        def get_by_source_inquiry_id(self, inquiry_id: str):  # noqa: ANN201
+            raise RuntimeError("offer repository unavailable")
+
+    projection = OrderPrintProjectionService(
+        orders,
+        _UnavailableOfferRepository(),  # type: ignore[arg-type]
+        snapshots,
+    ).resolve(order.order_id, order_version.order_version_id)
+
+    assert projection.commercial.source == "offer_conversion"
+    assert projection.commercial.positions[0].name == "Fingerfood Paket"
+    assert projection.commercial.positions[0].description == "Frozen description"
+    assert projection.commercial.positions[0].quantity_display == "80 Stück"
+    sheet = render_print_sheet(projection)
+    assert "Fingerfood Paket" in sheet
+    assert "Menge: 80 Stück" in sheet
+
+
+def test_print_snapshot_immune_to_later_offer_mutation() -> None:
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        _inq,
+        offer_service,
+    ) = _accepted_offer_state()
+    _converted, order, order_version = offer_service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
+    )
+    snapshots = offer_service._commercial_snapshots
+    from dataclasses import replace
+
+    stored = offers.get(offer.offer_id)
+    assert stored is not None
+    version = stored.versions[0]
+    variant = version.variants[0]
+    mutated = replace(
+        stored,
+        versions=(
+            replace(
+                version,
+                variants=(
+                    replace(
+                        variant,
+                        positions=(
+                            replace(variant.positions[0], name="MUTATED LIVE OFFER"),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+    offers._offers[stored.offer_id] = mutated
+
+    projection = _projection_service(offers, orders, snapshots).resolve(
+        order.order_id,
+        order_version.order_version_id,
+    )
+    assert projection.commercial.positions[0].name == "Fingerfood Paket"
+    assert "MUTATED LIVE OFFER" not in render_print_sheet(projection)
+
+
+def test_print_legacy_offer_fallback_when_snapshot_missing() -> None:
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        _inq,
+        offer_service,
+    ) = _accepted_offer_state()
+    _converted, order, order_version = offer_service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
+    )
+    snapshots = offer_service._commercial_snapshots
+    assert snapshots.get_by_order_id(order.order_id) is not None
+    snapshots._by_id.clear()
+    snapshots._by_order_id.clear()
+
+    projection = _projection_service(offers, orders, snapshots).resolve(
+        order.order_id,
+        order_version.order_version_id,
+    )
+    assert projection.commercial.source == "offer_conversion"
+    assert projection.commercial.positions[0].name == "Fingerfood Paket"
+    assert "Fingerfood Paket" in render_print_sheet(projection)
