@@ -550,10 +550,44 @@ def derive_offer_state(
     return "Prepared"
 
 
+def offer_allows_prepare_next_version(offer: Offer, *, today: date) -> bool:
+    """True when the aggregate may receive OfferVersion N+1 (revision).
+
+    Latest commercial state must be Sent, Expired, Rejected, or Withdrawn.
+    Acceptance/conversion and an open Prepared draft block revisions.
+    """
+    if offer.acceptance_evidence is not None or offer.conversion_link is not None:
+        return False
+    latest = max(offer.versions, key=lambda item: item.version_number)
+    return derive_offer_state(offer, latest.offer_version_id, today=today) in {
+        "Sent",
+        "Expired",
+        "Rejected",
+        "Withdrawn",
+    }
+
+
+def offer_has_newer_open_version(
+    offer: Offer, offer_version_id: str, *, today: date
+) -> bool:
+    """True when a higher version_number is still Prepared or Sent."""
+    version = _version(offer, offer_version_id)
+    return any(
+        other.version_number > version.version_number
+        and derive_offer_state(offer, other.offer_version_id, today=today)
+        in ("Prepared", "Sent")
+        for other in offer.versions
+    )
+
+
 def offer_allows_acceptance(
     offer: Offer, offer_version_id: str, variant_id: str, *, today: date
 ) -> bool:
-    """True only for one exact eligible sent version/variant."""
+    """True only for one exact eligible sent version/variant.
+
+    Strict V1-A: a newer Prepared or Sent version blocks acceptance of an older
+    Sent version.
+    """
     if offer.acceptance_evidence is not None or offer.conversion_link is not None:
         return False
     try:
@@ -562,7 +596,9 @@ def offer_allows_acceptance(
         return False
     if not any(variant.variant_id == variant_id for variant in version.variants):
         return False
-    return derive_offer_state(offer, offer_version_id, today=today) == "Sent"
+    if derive_offer_state(offer, offer_version_id, today=today) != "Sent":
+        return False
+    return not offer_has_newer_open_version(offer, offer_version_id, today=today)
 
 
 def offer_allows_sent_recording(

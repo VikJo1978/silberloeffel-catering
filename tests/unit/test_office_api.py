@@ -2194,6 +2194,270 @@ def test_prepare_offer_failure_leaves_no_offer_or_ledger(api) -> None:
     assert ledger_count == 0
 
 
+_SNAPSHOT_ID_V2 = "88888888-8888-4888-8888-888888888882"
+
+
+def _revision_offer_snapshot(*, inquiry_id: str) -> dict[str, object]:
+    payload = _valid_offer_snapshot(inquiry_id=inquiry_id)
+    payload["snapshot_id"] = _SNAPSHOT_ID_V2
+    payload["source_draft_id"] = "draft-2"
+    payload["snapshot_created_at"] = "2026-07-16T08:30:00+00:00"
+    payload["valid_until"] = "2026-08-05"
+    variant_id = "55555555-5555-4555-8555-555555555552"
+    position_id = "99999999-9999-4999-8999-999999999992"
+    variants = payload["variants"]
+    assert isinstance(variants, list)
+    variant = variants[0]
+    assert isinstance(variant, dict)
+    variant["variant_id"] = variant_id
+    positions = variant["positions"]
+    assert isinstance(positions, list)
+    position = positions[0]
+    assert isinstance(position, dict)
+    position["position_id"] = position_id
+    from catering_system.domain.offer_snapshot import compute_snapshot_hash
+
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+    return payload
+
+
+def _prepare_next_url(base: str, offer_id: str) -> str:
+    return f"{base}/office/v1/offers/{offer_id}/prepare-next-version"
+
+
+def test_prepare_next_version_happy_path_and_replay(api) -> None:
+    base, ids, db = api
+    offer_id, version_id = _prepare_offer(api)
+    inquiry_id = ids["inquiry_offer_ready"]
+    assert (
+        _post(_mark_sent_url(base, offer_id, version_id), args=_MARK_SENT_ARGS)[0]
+        == 200
+    )
+    url = _prepare_next_url(base, offer_id)
+    snapshot = _revision_offer_snapshot(inquiry_id=inquiry_id)
+    command_id = str(uuid.uuid4())
+
+    status, body, _h = _post(
+        url,
+        args={"snapshot": snapshot},
+        expect={"latest_version_number": 1},
+        command_id=command_id,
+    )
+    assert status == 201
+    assert set(body) == {
+        "command_id",
+        "offer_id",
+        "offer_version_id",
+        "version_number",
+        "snapshot_id",
+    }
+    assert body["offer_id"] == offer_id
+    assert body["version_number"] == 2
+    assert body["snapshot_id"] == _SNAPSHOT_ID_V2
+
+    status2, body2, _h = _post(
+        url,
+        args={"snapshot": snapshot},
+        expect={"latest_version_number": 1},
+        command_id=command_id,
+    )
+    assert (status2, body2) == (status, body)
+
+    offers = SQLiteOfferRepository(db)
+    stored = offers.get(offer_id)
+    assert stored is not None
+    assert len(stored.versions) == 2
+    offers.close()
+
+
+def test_prepare_next_version_conflict_and_blocked(api) -> None:
+    base, ids, _db = api
+    offer_id, version_id = _prepare_offer(api)
+    inquiry_id = ids["inquiry_offer_ready"]
+    url = _prepare_next_url(base, offer_id)
+    snapshot = _revision_offer_snapshot(inquiry_id=inquiry_id)
+
+    status, body, _h = _post(
+        url,
+        args={"snapshot": snapshot},
+        expect={"latest_version_number": 1},
+    )
+    assert (status, body["error"]) == (422, "prepare_next_blocked")
+
+    assert (
+        _post(_mark_sent_url(base, offer_id, version_id), args=_MARK_SENT_ARGS)[0]
+        == 200
+    )
+    status, body, _h = _post(
+        url,
+        args={"snapshot": snapshot},
+        expect={"latest_version_number": 0},
+    )
+    assert (status, body["error"]) == (409, "version_conflict")
+
+
+def test_acceptance_blocked_newer_version_exists(api) -> None:
+    base, ids, _db = api
+    offer_id, version_id = _prepare_offer(api)
+    inquiry_id = ids["inquiry_offer_ready"]
+    assert (
+        _post(_mark_sent_url(base, offer_id, version_id), args=_MARK_SENT_ARGS)[0]
+        == 200
+    )
+    assert (
+        _post(
+            _prepare_next_url(base, offer_id),
+            args={"snapshot": _revision_offer_snapshot(inquiry_id=inquiry_id)},
+            expect={"latest_version_number": 1},
+        )[0]
+        == 201
+    )
+    status, body, _h = _post(
+        _record_acceptance_url(base, offer_id, version_id),
+        args=_RECORD_ACCEPTANCE_ARGS,
+    )
+    assert (status, body["error"]) == (
+        422,
+        "acceptance_blocked_newer_version_exists",
+    )
+
+
+def test_prepare_next_version_inquiry_mismatch(api) -> None:
+    base, ids, _db = api
+    offer_id, version_id = _prepare_offer(api)
+    assert (
+        _post(_mark_sent_url(base, offer_id, version_id), args=_MARK_SENT_ARGS)[0]
+        == 200
+    )
+    status, body, _h = _post(
+        _prepare_next_url(base, offer_id),
+        args={
+            "snapshot": _revision_offer_snapshot(
+                inquiry_id="33333333-3333-4333-8333-333333333333"
+            )
+        },
+        expect={"latest_version_number": 1},
+    )
+    assert (status, body["error"]) == (422, "inquiry_id_mismatch")
+
+
+def test_prepare_next_version_rejects_non_object_snapshot(api) -> None:
+    base, _ids, _db = api
+    offer_id, version_id = _prepare_offer(api)
+    assert (
+        _post(_mark_sent_url(base, offer_id, version_id), args=_MARK_SENT_ARGS)[0]
+        == 200
+    )
+    status, body, _h = _post(
+        _prepare_next_url(base, offer_id),
+        args={"snapshot": "not-a-dict"},
+        expect={"latest_version_number": 1},
+    )
+    assert status == 400
+    assert body["error"] == "invalid_request"
+
+
+def test_prepare_next_version_not_found(api) -> None:
+    base, ids, _db = api
+    inquiry_id = ids["inquiry_offer_ready"]
+    status, body, _h = _post(
+        _prepare_next_url(base, "11111111-1111-4111-8111-111111111111"),
+        args={"snapshot": _revision_offer_snapshot(inquiry_id=inquiry_id)},
+        expect={"latest_version_number": 1},
+    )
+    assert (status, body["error"]) == (404, "not_found")
+
+
+def test_prepare_next_version_contact_incomplete(api) -> None:
+    from dataclasses import replace
+
+    base, ids, db = api
+    offer_id, version_id = _prepare_offer(api)
+    inquiry_id = ids["inquiry_offer_ready"]
+    assert (
+        _post(_mark_sent_url(base, offer_id, version_id), args=_MARK_SENT_ARGS)[0]
+        == 200
+    )
+    inquiries = SQLiteInquiryRepository(db)
+    inquiry = inquiries.get_by_id(inquiry_id)
+    assert inquiry is not None
+    inquiries.update(replace(inquiry, customer_snapshot=None))
+    status, body, _h = _post(
+        _prepare_next_url(base, offer_id),
+        args={"snapshot": _revision_offer_snapshot(inquiry_id=inquiry_id)},
+        expect={"latest_version_number": 1},
+    )
+    assert (status, body["error"]) == (422, "contact_information_incomplete")
+
+
+def test_prepare_next_version_active_order_blocks(api) -> None:
+    base, ids, db = api
+    offer_id, version_id = _prepare_offer(api)
+    inquiry_id = ids["inquiry_offer_ready"]
+    assert (
+        _post(_mark_sent_url(base, offer_id, version_id), args=_MARK_SENT_ARGS)[0]
+        == 200
+    )
+    inquiries = SQLiteInquiryRepository(db)
+    orders = SQLiteOrderRepository(db)
+    inquiry = inquiries.get_by_id(inquiry_id)
+    assert inquiry is not None
+    seed_order(orders, inquiry)
+    status, body, _h = _post(
+        _prepare_next_url(base, offer_id),
+        args={"snapshot": _revision_offer_snapshot(inquiry_id=inquiry_id)},
+        expect={"latest_version_number": 1},
+    )
+    assert (status, body["error"]) == (409, "active_order_exists")
+
+
+def test_prepare_next_version_invalid_snapshot(api) -> None:
+    base, ids, _db = api
+    offer_id, version_id = _prepare_offer(api)
+    inquiry_id = ids["inquiry_offer_ready"]
+    assert (
+        _post(_mark_sent_url(base, offer_id, version_id), args=_MARK_SENT_ARGS)[0]
+        == 200
+    )
+    bad = _revision_offer_snapshot(inquiry_id=inquiry_id)
+    bad["snapshot_hash"] = "sha256:" + ("0" * 64)
+    status, body, _h = _post(
+        _prepare_next_url(base, offer_id),
+        args={"snapshot": bad},
+        expect={"latest_version_number": 1},
+    )
+    assert (status, body["error"]) == (422, "invalid_snapshot")
+
+
+def test_prepare_next_version_integrity_conflict_on_reused_position(api) -> None:
+    base, ids, _db = api
+    offer_id, version_id = _prepare_offer(api)
+    inquiry_id = ids["inquiry_offer_ready"]
+    assert (
+        _post(_mark_sent_url(base, offer_id, version_id), args=_MARK_SENT_ARGS)[0]
+        == 200
+    )
+    reused = _revision_offer_snapshot(inquiry_id=inquiry_id)
+    variants = reused["variants"]
+    assert isinstance(variants, list)
+    variant = variants[0]
+    assert isinstance(variant, dict)
+    positions = variant["positions"]
+    assert isinstance(positions, list)
+    position = positions[0]
+    assert isinstance(position, dict)
+    position["position_id"] = _POSITION_ID
+    from catering_system.domain.offer_snapshot import compute_snapshot_hash
+
+    reused["snapshot_hash"] = compute_snapshot_hash(reused)
+    status, body, _h = _post(
+        _prepare_next_url(base, offer_id),
+        args={"snapshot": reused},
+        expect={"latest_version_number": 1},
+    )
+    assert (status, body["error"]) == (409, "version_conflict")
+
+
 _MARK_SENT_ARGS = {
     "sent_at": "2026-07-15T10:00:00+00:00",
     "channel": "email",

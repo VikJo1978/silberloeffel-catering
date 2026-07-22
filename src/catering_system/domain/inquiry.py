@@ -67,7 +67,11 @@ CALL_VERIFICATION_STATUSES: tuple[CallVerificationStatus, ...] = (
 CALL_VERIFICATION_STATUS_SET: frozenset[str] = frozenset(CALL_VERIFICATION_STATUSES)
 
 InquiryOfficeNextAction = Literal[
-    "verify", "prepare-offer", "convert-accepted", "offer-pending"
+    "verify",
+    "prepare-offer",
+    "prepare-next-version",
+    "convert-accepted",
+    "offer-pending",
 ]
 
 
@@ -311,6 +315,16 @@ def derive_inquiry_office_state(
                 is_open=is_open,
                 next_action="offer-pending",
                 offer=offer_projection,
+            )
+        if commercial in ("Expired", "Rejected", "Withdrawn"):
+            if contact_complete:
+                return InquiryOfficeState(
+                    is_open=is_open,
+                    next_action="prepare-next-version",
+                    offer=offer_projection,
+                )
+            return InquiryOfficeState(
+                is_open=is_open, next_action=None, offer=offer_projection
             )
     if inquiry_allows_order_conversion(inquiry) and contact_complete:
         return InquiryOfficeState(

@@ -332,6 +332,17 @@ def test_offer_allows_withdrawal_for_prepared_or_sent() -> None:
     )
 
 
+def test_offer_allows_rejection_and_withdrawal_blocked_after_acceptance() -> None:
+    accepted = _offer(sent=(_sent(),), acceptance=_acceptance())
+    assert not offer_allows_rejection(accepted, _V1_ID, today=date(2026, 7, 20))
+    assert not offer_allows_withdrawal(accepted, _V1_ID, today=date(2026, 7, 20))
+    unknown = "99999999-9999-4999-8999-999999999999"
+    assert not offer_allows_rejection(
+        _offer(sent=(_sent(),)), unknown, today=date(2026, 7, 20)
+    )
+    assert not offer_allows_withdrawal(_offer(), unknown, today=date(2026, 7, 20))
+
+
 def test_offer_allows_sent_recording_only_for_prepared_versions() -> None:
     prepared = _offer()
     assert offer_allows_sent_recording(prepared, _V1_ID, today=date(2026, 7, 15))

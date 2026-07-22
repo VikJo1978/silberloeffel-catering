@@ -231,7 +231,9 @@ def _next_action(
     if subkind == "accepted_contact_blocked":
         return "complete_contact", "Kontaktdaten vervollständigen"
     if subkind == "expired":
-        return "none", "Frist abgelaufen"
+        return "prepare_next_version", "Neue Version vorbereiten"
+    if subkind in ("rejected", "withdrawn"):
+        return "prepare_next_version", "Neue Version vorbereiten"
     return "none", "—"
 
 

@@ -614,6 +614,90 @@ def test_html_escaping_in_variant_label() -> None:
     )
     assert "<script>" not in html
     assert "&lt;script&gt;" in html
+    assert "Neue Version vorbereiten" in html
+
+
+def test_expired_offer_detail_shows_prepare_next_without_link() -> None:
+    detail: dict[str, object] = {
+        "offer_id": "11111111-1111-4111-8111-111111111111",
+        "inquiry_id": "22222222-2222-4222-8222-222222222222",
+        "offer_version_id": "33333333-3333-4333-8333-333333333331",
+        "commercial_state": "Expired",
+        "acceptance_id": None,
+        "versions": [
+            {
+                "version": 1,
+                "state": "Expired",
+                "event_date": "2026-08-01",
+                "valid_until": "2026-07-01",
+                "time_window_text": "18:00",
+                "location_text": "Hamburg",
+                "guest_count": 50,
+                "planning_mode": "caterer_suggestion",
+                "variants": [{"variant_id": _VARIANT_ID, "name": "Variante A"}],
+            }
+        ],
+        "sent_evidence": {"sent_at": "2026-07-01T10:00:00+00:00", "channel": "email"},
+        "acceptance": None,
+        "history": [{"at": "2026-07-01T08:00:00+00:00", "label": "Angebot erstellt"}],
+    }
+    from catering_system.ui.office_panel_offer_detail import OfferDetailFormFields
+
+    html = render_offer_detail(
+        detail,
+        context=OfficePageContext(csrf_token=_CSRF_TOKEN),
+        forms=OfferDetailFormFields(csrf_input="", command_fields=""),
+        revision_prefill_url=None,
+    )
+    assert "Neue Version vorbereiten" in html
+    assert "offer-revision-link" not in html
+
+
+def test_expired_offer_detail_shows_prepare_next_with_link() -> None:
+    detail: dict[str, object] = {
+        "offer_id": "11111111-1111-4111-8111-111111111111",
+        "inquiry_id": "22222222-2222-4222-8222-222222222222",
+        "offer_version_id": "33333333-3333-4333-8333-333333333331",
+        "commercial_state": "Expired",
+        "acceptance_id": None,
+        "versions": [
+            {
+                "version": 1,
+                "state": "Expired",
+                "event_date": "2026-08-01",
+                "valid_until": "2026-07-01",
+                "time_window_text": "18:00",
+                "location_text": "Hamburg",
+                "guest_count": 50,
+                "planning_mode": "caterer_suggestion",
+                "variants": [{"variant_id": _VARIANT_ID, "name": "Variante A"}],
+            }
+        ],
+        "sent_evidence": {"sent_at": "2026-07-01T10:00:00+00:00", "channel": "email"},
+        "acceptance": None,
+        "history": [{"at": "2026-07-01T08:00:00+00:00", "label": "Angebot erstellt"}],
+    }
+    from catering_system.ui.office_panel_offer_detail import OfferDetailFormFields
+
+    html = render_offer_detail(
+        detail,
+        context=OfficePageContext(csrf_token=_CSRF_TOKEN),
+        forms=OfferDetailFormFields(csrf_input="", command_fields=""),
+        revision_prefill_url="/configurator?offer=11111111-1111-4111-8111-111111111111",
+    )
+    assert 'class="offer-revision-link"' in html
+    assert "/configurator?offer=" in html
+
+
+def test_acceptance_blocked_newer_version_error_message() -> None:
+    from catering_system.ui.office_panel_http import office_command_error_message
+
+    assert office_command_error_message("acceptance_blocked_newer_version_exists") == (
+        "Annahme nicht möglich: Eine neuere Angebotsversion ist bereits vorbereitet."
+    )
+    assert office_command_error_message(
+        "ValueError: acceptance_blocked_newer_version_exists (offer_id='x')"
+    ).startswith("Annahme nicht möglich:")
 
 
 def test_remote_offer_mark_sent_parity(tmp_path: Path) -> None:

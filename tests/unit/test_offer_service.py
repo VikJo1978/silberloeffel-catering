@@ -180,10 +180,15 @@ class _CountingOfferRepository(InMemoryOfferRepository):
     def __init__(self) -> None:
         super().__init__()
         self.save_calls = 0
+        self.append_version_calls = 0
 
     def save(self, offer: Offer) -> None:
         self.save_calls += 1
         super().save(offer)
+
+    def append_offer_version(self, offer_id: str, version: OfferVersion) -> Offer:
+        self.append_version_calls += 1
+        return super().append_offer_version(offer_id, version)
 
 
 class _FailingOfferRepository(InMemoryOfferRepository):
@@ -1208,3 +1213,226 @@ def test_convert_accepted_offer_append_failure_leaves_no_order_or_link() -> None
     reloaded = failing.get(offer.offer_id)
     assert reloaded is not None
     assert reloaded.conversion_link is None
+
+
+_SNAPSHOT_ID_V2 = "88888888-8888-4888-8888-888888888882"
+
+
+def _revision_snapshot(*, inquiry_id: str = _INQUIRY_ID) -> dict[str, object]:
+    payload = _valid_snapshot(inquiry_id=inquiry_id)
+    payload["snapshot_id"] = _SNAPSHOT_ID_V2
+    payload["source_draft_id"] = "draft-2"
+    payload["snapshot_created_at"] = "2026-07-16T08:30:00+00:00"
+    payload["valid_until"] = "2026-08-05"
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+    return payload
+
+
+def test_prepare_next_offer_version_after_sent() -> None:
+    offers = _CountingOfferRepository()
+    _inquiries, _orders, _offers, service = _world(
+        inquiry=_sample_inquiry(), offers=offers
+    )
+    offer = service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
+    version_id = offer.versions[0].offer_version_id
+    service.record_sent_evidence(offer.offer_id, version_id, **_record_args())
+
+    updated = service.prepare_next_offer_version(
+        offer.offer_id,
+        _revision_snapshot(),
+        expected_latest_version_number=1,
+    )
+
+    assert offers.save_calls == 1
+    assert offers.append_version_calls == 1
+    assert len(updated.versions) == 2
+    assert updated.versions[1].version_number == 2
+    assert updated.versions[1].snapshot_id == _SNAPSHOT_ID_V2
+    assert derive_offer_state(updated, version_id, today=date(2026, 7, 16)) == "Sent"
+    assert (
+        derive_offer_state(
+            updated, updated.versions[1].offer_version_id, today=date(2026, 7, 16)
+        )
+        == "Prepared"
+    )
+
+
+def test_prepare_next_blocked_while_prepared() -> None:
+    offers = _CountingOfferRepository()
+    _inquiries, _orders, _offers, service = _world(
+        inquiry=_sample_inquiry(), offers=offers
+    )
+    offer = service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
+
+    with pytest.raises(ValueError, match="prepare next version blocked"):
+        service.prepare_next_offer_version(
+            offer.offer_id,
+            _revision_snapshot(),
+            expected_latest_version_number=1,
+        )
+    assert offers.append_version_calls == 0
+
+
+def test_prepare_next_version_conflict_on_stale_expect() -> None:
+    offers = _CountingOfferRepository()
+    _inquiries, _orders, _offers, service = _world(
+        inquiry=_sample_inquiry(), offers=offers
+    )
+    offer = service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
+    service.record_sent_evidence(
+        offer.offer_id, offer.versions[0].offer_version_id, **_record_args()
+    )
+
+    with pytest.raises(ValueError, match="version conflict"):
+        service.prepare_next_offer_version(
+            offer.offer_id,
+            _revision_snapshot(),
+            expected_latest_version_number=0,
+        )
+
+
+def test_acceptance_blocked_when_newer_prepared_exists() -> None:
+    offers = InMemoryOfferRepository()
+    _inquiries, _orders, _offers, service = _world(
+        inquiry=_sample_inquiry(), offers=offers
+    )
+    offer = service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
+    v1 = offer.versions[0].offer_version_id
+    service.record_sent_evidence(offer.offer_id, v1, **_record_args())
+    updated = service.prepare_next_offer_version(
+        offer.offer_id,
+        _revision_snapshot(),
+        expected_latest_version_number=1,
+    )
+    assert len(updated.versions) == 2
+
+    with pytest.raises(ValueError, match="acceptance_blocked_newer_version_exists"):
+        service.record_acceptance_evidence(
+            offer.offer_id,
+            v1,
+            _VARIANT_ID,
+            **_acceptance_args(),
+        )
+
+
+def test_prepare_next_blocked_after_acceptance() -> None:
+    offer, version_id, _variant, _acc, offers, _orders, _inq, service = (
+        _accepted_offer_state()
+    )
+    with pytest.raises(ValueError, match="prepare next version blocked"):
+        service.prepare_next_offer_version(
+            offer.offer_id,
+            _revision_snapshot(),
+            expected_latest_version_number=1,
+        )
+
+
+def test_prepare_next_after_rejection() -> None:
+    offers = _CountingOfferRepository()
+    _inquiries, _orders, _offers, service = _world(
+        inquiry=_sample_inquiry(), offers=offers
+    )
+    offer = service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
+    v1 = offer.versions[0].offer_version_id
+    service.record_sent_evidence(offer.offer_id, v1, **_record_args())
+    service.record_rejection_evidence(
+        offer.offer_id,
+        v1,
+        rejected_at=_ACCEPTED_AT,
+        recorded_by="office-panel",
+        evidence_reference="decline",
+    )
+    updated = service.prepare_next_offer_version(
+        offer.offer_id,
+        _revision_snapshot(),
+        expected_latest_version_number=1,
+    )
+    assert len(updated.versions) == 2
+    assert offers.append_version_calls == 1
+
+
+def test_prepare_next_unknown_offer() -> None:
+    _inquiries, _orders, offers, service = _world(inquiry=_sample_inquiry())
+    with pytest.raises(KeyError):
+        service.prepare_next_offer_version(
+            "11111111-1111-4111-8111-111111111111",
+            _revision_snapshot(),
+            expected_latest_version_number=1,
+        )
+    assert offers.list_all() == []
+
+
+def test_prepare_next_inquiry_mismatch() -> None:
+    offers = _CountingOfferRepository()
+    _inquiries, _orders, _offers, service = _world(
+        inquiry=_sample_inquiry(), offers=offers
+    )
+    offer = service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
+    service.record_sent_evidence(
+        offer.offer_id, offer.versions[0].offer_version_id, **_record_args()
+    )
+    bad = _revision_snapshot(inquiry_id="33333333-3333-4333-8333-333333333333")
+    with pytest.raises(ValueError, match="snapshot inquiry_id mismatch"):
+        service.prepare_next_offer_version(
+            offer.offer_id,
+            bad,
+            expected_latest_version_number=1,
+        )
+    assert offers.append_version_calls == 0
+
+
+def test_prepare_next_missing_inquiry() -> None:
+    offers = _CountingOfferRepository()
+    _inquiries, orders, _offers, service = _world(
+        inquiry=_sample_inquiry(), offers=offers
+    )
+    offer = service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
+    service.record_sent_evidence(
+        offer.offer_id, offer.versions[0].offer_version_id, **_record_args()
+    )
+    orphan = OfferService(offers, InMemoryInquiryRepository(), orders)
+    with pytest.raises(KeyError, match=_INQUIRY_ID):
+        orphan.prepare_next_offer_version(
+            offer.offer_id,
+            _revision_snapshot(),
+            expected_latest_version_number=1,
+        )
+    assert offers.append_version_calls == 0
+
+
+def test_prepare_next_incomplete_contact() -> None:
+    offers = _CountingOfferRepository()
+    inquiries, _orders, _offers, service = _world(
+        inquiry=_sample_inquiry(), offers=offers
+    )
+    offer = service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
+    service.record_sent_evidence(
+        offer.offer_id, offer.versions[0].offer_version_id, **_record_args()
+    )
+    inquiries.update(replace(_sample_inquiry(), customer_snapshot=None))
+    with pytest.raises(ValueError, match="inquiry contact information incomplete"):
+        service.prepare_next_offer_version(
+            offer.offer_id,
+            _revision_snapshot(),
+            expected_latest_version_number=1,
+        )
+    assert offers.append_version_calls == 0
+
+
+def test_prepare_next_active_order_blocks() -> None:
+    offers = _CountingOfferRepository()
+    inquiries, orders, _offers, service = _world(
+        inquiry=_sample_inquiry(), offers=offers
+    )
+    offer = service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
+    service.record_sent_evidence(
+        offer.offer_id, offer.versions[0].offer_version_id, **_record_args()
+    )
+    seed_order(orders, inquiries.get_by_id(_INQUIRY_ID))
+    with pytest.raises(ValueError, match="active order blocks offer preparation"):
+        service.prepare_next_offer_version(
+            offer.offer_id,
+            _revision_snapshot(),
+            expected_latest_version_number=1,
+        )
+    assert offers.append_version_calls == 0

@@ -667,7 +667,23 @@ class OfficePanel:
             csrf_input=_csrf_input(context),
             command_fields=self._command_fields(),
         )
-        return render_offer_detail(detail, context=context, forms=forms)
+        revision_prefill_url: str | None = None
+        if (
+            str(detail["commercial_state"])
+            in {"Sent", "Expired", "Rejected", "Withdrawn"}
+            and self.configurator_url
+        ):
+            inquiry = self._inquiries.get_by_id(str(detail["inquiry_id"]))
+            if inquiry is not None:
+                revision_prefill_url = build_offer_prefill_url(
+                    self.configurator_url, inquiry
+                )
+        return render_offer_detail(
+            detail,
+            context=context,
+            forms=forms,
+            revision_prefill_url=revision_prefill_url or None,
+        )
 
     def _offer_detail_dict(self, offer_id: str) -> dict[str, object]:
         if self._remote is not None:
@@ -1439,6 +1455,8 @@ class OfficePanel:
             )
         if state.next_action == "prepare-offer":
             return '<span class="muted">Angebot vorbereiten</span>'
+        if state.next_action == "prepare-next-version":
+            return '<span class="muted">Neue Version vorbereiten</span>'
         if state.next_action == "offer-pending":
             return '<span class="muted">Angebot ausstehend</span>'
         if state.next_action == "convert-accepted":
@@ -1770,6 +1788,8 @@ class OfficePanel:
                 )
             elif action_name == "prepare-offer":
                 action = '<span class="muted">Angebot vorbereiten</span>'
+            elif action_name == "prepare-next-version":
+                action = '<span class="muted">Neue Version vorbereiten</span>'
             elif action_name == "offer-pending":
                 action = '<span class="muted">Angebot ausstehend</span>'
             elif action_name == "convert-accepted":
@@ -2364,6 +2384,8 @@ class OfficePanel:
             )
         if state.next_action == "prepare-offer":
             convert += '<p class="muted">Auftrag nur aus angenommenem Angebot.</p>'
+        elif state.next_action == "prepare-next-version":
+            convert += '<p class="muted">Neue Angebotsversion vorbereiten.</p>'
         elif state.next_action == "offer-pending":
             convert += '<p class="muted">Angebot ausstehend</p>'
         elif state.next_action == "convert-accepted":

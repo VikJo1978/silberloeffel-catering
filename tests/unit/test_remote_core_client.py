@@ -577,3 +577,132 @@ def test_create_relevant_order_change_version_returns_the_version_not_bad_respon
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_prepare_next_offer_version_parses_success_payload() -> None:
+    offer_id = str(uuid.uuid4())
+    version_id = str(uuid.uuid4())
+    snapshot_id = str(uuid.uuid4())
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers["Content-Length"])
+            payload = json.loads(self.rfile.read(length))
+            assert self.path.endswith(f"/offers/{offer_id}/prepare-next-version")
+            assert payload["expect"]["latest_version_number"] == 1
+            body = json.dumps(
+                {
+                    "command_id": payload["command_id"],
+                    "offer_id": offer_id,
+                    "offer_version_id": version_id,
+                    "version_number": 2,
+                    "snapshot_id": snapshot_id,
+                }
+            ).encode()
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    url, server = _serve(Handler)
+    try:
+        client = RemoteCoreClient(url, _TOKEN)
+        client.begin_request({})
+        result = client.prepare_next_offer_version(
+            offer_id,
+            {"snapshot_id": snapshot_id},
+            latest_version_number=1,
+        )
+        assert result["offer_id"] == offer_id
+        assert result["offer_version_id"] == version_id
+        assert result["version_number"] == 2
+        assert result["snapshot_id"] == snapshot_id
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_prepare_next_offer_version_rejects_wrong_version_number() -> None:
+    offer_id = str(uuid.uuid4())
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers["Content-Length"])
+            payload = json.loads(self.rfile.read(length))
+            body = json.dumps(
+                {
+                    "command_id": payload["command_id"],
+                    "offer_id": offer_id,
+                    "offer_version_id": str(uuid.uuid4()),
+                    "version_number": 3,
+                    "snapshot_id": str(uuid.uuid4()),
+                }
+            ).encode()
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    url, server = _serve(Handler)
+    try:
+        client = RemoteCoreClient(url, _TOKEN)
+        client.begin_request({})
+        with pytest.raises(RemoteCoreError) as exc:
+            client.prepare_next_offer_version(
+                offer_id,
+                {"snapshot_id": str(uuid.uuid4())},
+                latest_version_number=1,
+            )
+        assert exc.value.code == "invalid_response"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_prepare_next_offer_version_rejects_offer_id_mismatch() -> None:
+    offer_id = str(uuid.uuid4())
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            length = int(self.headers["Content-Length"])
+            payload = json.loads(self.rfile.read(length))
+            body = json.dumps(
+                {
+                    "command_id": payload["command_id"],
+                    "offer_id": str(uuid.uuid4()),
+                    "offer_version_id": str(uuid.uuid4()),
+                    "version_number": 2,
+                    "snapshot_id": str(uuid.uuid4()),
+                }
+            ).encode()
+            self.send_response(201)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    url, server = _serve(Handler)
+    try:
+        client = RemoteCoreClient(url, _TOKEN)
+        client.begin_request({})
+        with pytest.raises(RemoteCoreError) as exc:
+            client.prepare_next_offer_version(
+                offer_id,
+                {"snapshot_id": str(uuid.uuid4())},
+                latest_version_number=1,
+            )
+        assert exc.value.code == "invalid_response"
+    finally:
+        server.shutdown()
+        server.server_close()

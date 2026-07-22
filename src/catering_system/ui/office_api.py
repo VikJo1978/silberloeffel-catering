@@ -1082,6 +1082,47 @@ class OfficeApi:
             "snapshot_id": version.snapshot_id,
         }
 
+    def cmd_prepare_next_version(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        snapshot = args.get("snapshot")
+        if not isinstance(snapshot, dict):
+            raise _invalid()
+        offer_id = path_ids["offer_id"]
+        try:
+            offer = self.offer_service.prepare_next_offer_version(
+                offer_id,
+                snapshot,
+                expected_latest_version_number=_v_int(expect["latest_version_number"]),
+            )
+        except KeyError as exc:
+            raise ApiError(404, "not_found") from exc
+        except ValueError as exc:
+            message = str(exc)
+            if "version conflict" in message:
+                raise ApiError(409, "version_conflict") from exc
+            if "snapshot inquiry_id mismatch" in message:
+                raise ApiError(422, "inquiry_id_mismatch") from exc
+            if "active order blocks offer preparation" in message:
+                raise ApiError(409, "active_order_exists") from exc
+            if "prepare next version blocked" in message:
+                raise ApiError(422, "prepare_next_blocked") from exc
+            if "contact information incomplete" in message:
+                raise ApiError(422, "contact_information_incomplete") from exc
+            if "version_number must be" in message:
+                raise ApiError(409, "version_conflict") from exc
+            raise ApiError(422, "invalid_snapshot") from exc
+        except sqlite3.IntegrityError:
+            # Do not re-read the Offer in the aborted write transaction.
+            raise ApiError(409, "version_conflict") from None
+        version = max(offer.versions, key=lambda item: item.version_number)
+        return 201, {
+            "offer_id": offer.offer_id,
+            "offer_version_id": version.offer_version_id,
+            "version_number": version.version_number,
+            "snapshot_id": version.snapshot_id,
+        }
+
     def cmd_mark_sent(
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict
     ) -> tuple[int, dict[str, object]]:
@@ -1155,6 +1196,8 @@ class OfficeApi:
                 raise ApiError(422, "invalid_variant") from exc
             if "conversion link blocks acceptance" in message:
                 raise ApiError(422, "acceptance_blocked") from exc
+            if "acceptance_blocked_newer_version_exists" in message:
+                raise ApiError(422, "acceptance_blocked_newer_version_exists") from exc
             if "acceptance blocked" in message:
                 raise ApiError(422, "acceptance_blocked") from exc
             if "contact information incomplete" in message:
@@ -1904,6 +1947,11 @@ _COMMANDS: dict[str, _CommandSpec] = {
     "verify": _CommandSpec("cmd_verify", _NO_ARGS, set()),
     "convert": _CommandSpec("cmd_convert", _NO_ARGS, set()),
     "prepare-offer": _CommandSpec("cmd_prepare_offer", _SNAPSHOT_ARGS, set()),
+    "prepare-next-version": _CommandSpec(
+        "cmd_prepare_next_version",
+        _SNAPSHOT_ARGS,
+        {"latest_version_number"},
+    ),
     "mark-sent": _CommandSpec("cmd_mark_sent", _MARK_SENT_ARGS, set()),
     "record-acceptance": _CommandSpec(
         "cmd_record_acceptance", _RECORD_ACCEPTANCE_ARGS, set()
@@ -2011,6 +2059,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/inquiries/(?P<id>[^/]+)/prepare-offer$"),
         "/office/v1/inquiries/{id}/prepare-offer",
         {"POST": "prepare-offer"},
+    ),
+    (
+        re.compile(r"^/office/v1/offers/(?P<offer_id>[^/]+)/prepare-next-version$"),
+        "/office/v1/offers/{offer_id}/prepare-next-version",
+        {"POST": "prepare-next-version"},
     ),
     (
         re.compile(r"^/office/v1/tasks$"),
@@ -2594,7 +2647,7 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             spec = _COMMANDS[kind]
             max_body = (
                 _MAX_PREPARE_OFFER_BODY_BYTES
-                if kind == "prepare-offer"
+                if kind in {"prepare-offer", "prepare-next-version"}
                 else _MAX_BODY_BYTES
             )
             raw = self._read_command_body(max_body)

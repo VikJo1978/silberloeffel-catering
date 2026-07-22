@@ -573,6 +573,32 @@ class SQLiteOfferRepository:
             self._insert_conversion_link(link)
             return updated
 
+    def append_offer_version(self, offer_id: str, version: OfferVersion) -> Offer:
+        with self._write_scope():
+            offer = self.get(offer_id)
+            if offer is None:
+                raise KeyError(offer_id)
+            if version.offer_id != offer_id:
+                raise ValueError("OfferVersion belongs to a different Offer")
+            latest = max(item.version_number for item in offer.versions)
+            if version.version_number != latest + 1:
+                raise ValueError(
+                    f"version_number must be {latest + 1}, got {version.version_number}"
+                )
+            updated = Offer(
+                offer_id=offer.offer_id,
+                source_inquiry_id=offer.source_inquiry_id,
+                created_at=offer.created_at,
+                versions=(*offer.versions, version),
+                sent_evidence=offer.sent_evidence,
+                acceptance_evidence=offer.acceptance_evidence,
+                rejection_evidence=offer.rejection_evidence,
+                withdrawal_evidence=offer.withdrawal_evidence,
+                conversion_link=offer.conversion_link,
+            )
+            self._insert_version(offer_id, version)
+            return updated
+
     def _insert_version(self, offer_id: str, version: OfferVersion) -> None:
         self._conn.execute(
             """

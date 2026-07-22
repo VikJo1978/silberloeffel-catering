@@ -28,9 +28,11 @@ from catering_system.domain.offer import (
     derive_offer_state,
     offer_allows_acceptance,
     offer_allows_conversion,
+    offer_allows_prepare_next_version,
     offer_allows_rejection,
     offer_allows_sent_recording,
     offer_allows_withdrawal,
+    offer_has_newer_open_version,
 )
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.offer_snapshot import (
@@ -113,6 +115,71 @@ class OfferService:
             offer.versions[0].snapshot_id,
         )
         return offer
+
+    def prepare_next_offer_version(
+        self,
+        offer_id: str,
+        snapshot: dict[str, object] | OfferSnapshotV1 | OfferSnapshotV2,
+        *,
+        expected_latest_version_number: int,
+    ) -> Offer:
+        """Append OfferVersion N+1 for an existing Offer (revision path)."""
+        validated = (
+            snapshot
+            if isinstance(snapshot, (OfferSnapshotV1, OfferSnapshotV2))
+            else validate_offer_snapshot(snapshot)
+        )
+        offer = self._offer_repository.get(offer_id)
+        if offer is None:
+            raise KeyError(offer_id)
+
+        if validated.inquiry_id != offer.source_inquiry_id:
+            raise ValueError(
+                "snapshot inquiry_id mismatch "
+                f"(expected {offer.source_inquiry_id!r}, got {validated.inquiry_id!r})"
+            )
+
+        inquiry = self._inquiry_repository.get_by_id(offer.source_inquiry_id)
+        if inquiry is None:
+            raise KeyError(offer.source_inquiry_id)
+
+        if not inquiry_contact_complete(inquiry):
+            raise ValueError(
+                "inquiry contact information incomplete "
+                f"(inquiry_id={offer.source_inquiry_id!r})"
+            )
+
+        if self._has_active_order(offer.source_inquiry_id):
+            raise ValueError(
+                "active order blocks offer preparation "
+                f"(inquiry_id={offer.source_inquiry_id!r})"
+            )
+
+        latest = max(item.version_number for item in offer.versions)
+        if expected_latest_version_number != latest:
+            raise ValueError(
+                f"version conflict (expected latest_version_number="
+                f"{expected_latest_version_number!r}, actual={latest!r})"
+            )
+
+        if not offer_allows_prepare_next_version(offer, today=self._today()):
+            raise ValueError(
+                f"prepare next version blocked (offer_id={offer_id!r}, "
+                f"latest_state="
+                f"{derive_offer_state(offer, max(offer.versions, key=lambda v: v.version_number).offer_version_id, today=self._today())!r})"
+            )
+
+        next_version = _build_next_version_from_snapshot(
+            offer, validated, version_number=latest + 1
+        )
+        updated = self._offer_repository.append_offer_version(offer_id, next_version)
+        _log.info(
+            "prepare_next_offer_version offer_id=%s version=%s snapshot_id=%s",
+            offer_id,
+            next_version.version_number,
+            next_version.snapshot_id,
+        )
+        return updated
 
     def record_sent_evidence(
         self,
@@ -220,17 +287,28 @@ class OfferService:
         ):
             raise ValueError("accepted variant does not belong to OfferVersion")
 
+        today = self._today()
+        if derive_offer_state(
+            offer, offer_version_id, today=today
+        ) == "Sent" and offer_has_newer_open_version(
+            offer, offer_version_id, today=today
+        ):
+            raise ValueError(
+                "acceptance_blocked_newer_version_exists "
+                f"(offer_id={offer_id!r}, offer_version_id={offer_version_id!r})"
+            )
+
         if not offer_allows_acceptance(
             offer,
             offer_version_id,
             accepted_variant_id,
-            today=self._today(),
+            today=today,
         ):
             raise ValueError(
                 f"acceptance blocked (offer_id={offer_id!r}, "
                 f"offer_version_id={offer_version_id!r}, "
                 f"accepted_variant_id={accepted_variant_id!r}, "
-                f"state={derive_offer_state(offer, offer_version_id, today=self._today())!r})"
+                f"state={derive_offer_state(offer, offer_version_id, today=today)!r})"
             )
 
         acceptance_id = str(uuid.uuid4())
@@ -502,13 +580,40 @@ class OfferService:
 
 def _build_offer_from_snapshot(snapshot: OfferSnapshotV1 | OfferSnapshotV2) -> Offer:
     offer_id = str(uuid.uuid4())
+    version = _build_version_from_snapshot(
+        snapshot, offer_id=offer_id, version_number=1
+    )
+    return Offer(
+        offer_id=offer_id,
+        source_inquiry_id=snapshot.inquiry_id,
+        created_at=snapshot.snapshot_created_at,
+        versions=(version,),
+    )
+
+
+def _build_next_version_from_snapshot(
+    offer: Offer,
+    snapshot: OfferSnapshotV1 | OfferSnapshotV2,
+    *,
+    version_number: int,
+) -> OfferVersion:
+    return _build_version_from_snapshot(
+        snapshot, offer_id=offer.offer_id, version_number=version_number
+    )
+
+
+def _build_version_from_snapshot(
+    snapshot: OfferSnapshotV1 | OfferSnapshotV2,
+    *,
+    offer_id: str,
+    version_number: int,
+) -> OfferVersion:
     offer_version_id = str(uuid.uuid4())
-    created_at = snapshot.snapshot_created_at
-    version = OfferVersion(
+    return OfferVersion(
         offer_version_id=offer_version_id,
         offer_id=offer_id,
-        version_number=1,
-        created_at=created_at,
+        version_number=version_number,
+        created_at=snapshot.snapshot_created_at,
         valid_until=snapshot.valid_until,
         snapshot_id=snapshot.snapshot_id,
         snapshot_hash=snapshot.snapshot_hash,
@@ -522,12 +627,6 @@ def _build_offer_from_snapshot(snapshot: OfferSnapshotV1 | OfferSnapshotV2) -> O
         variants=tuple(
             _map_variant(variant, offer_version_id) for variant in snapshot.variants
         ),
-    )
-    return Offer(
-        offer_id=offer_id,
-        source_inquiry_id=snapshot.inquiry_id,
-        created_at=created_at,
-        versions=(version,),
     )
 
 
