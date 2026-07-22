@@ -270,7 +270,12 @@ def _sort_key(
             return (_SUBKIND_ORDER[subkind], version.created_at, offer.offer_id)
         if subkind == "sent":
             sent_boundary = sent_at or version.created_at
-            return (_SUBKIND_ORDER[subkind], version.valid_until, sent_boundary, offer.offer_id)
+            return (
+                _SUBKIND_ORDER[subkind],
+                version.valid_until,
+                sent_boundary,
+                offer.offer_id,
+            )
         if subkind in ("accepted", "accepted_contact_blocked"):
             accepted_at = (
                 offer.acceptance_evidence.accepted_at

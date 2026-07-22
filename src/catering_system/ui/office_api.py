@@ -2457,7 +2457,9 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
                         raise _invalid()
                     group = group_raw
                 limit, offset = self._pagination(params)
-                self._respond(200, api.offer_queue(group=group, limit=limit, offset=offset))
+                self._respond(
+                    200, api.offer_queue(group=group, limit=limit, offset=offset)
+                )
             elif kind == "list_contacts":
                 self._query(set())
                 self._respond(200, api.list_contacts())

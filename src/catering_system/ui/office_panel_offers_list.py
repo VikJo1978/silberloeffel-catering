@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date
+from typing import cast
 
 from catering_system.ui.office_panel_views import (
     OfficePageContext,
@@ -37,8 +38,8 @@ def _queue_table(items: list[dict[str, object]]) -> str:
             label = f"{customer} — {subtitle}"
         overdue_note = ""
         days_overdue = item.get("days_overdue")
-        if days_overdue is not None and int(days_overdue) > 0:
-            overdue_note = f" ({int(days_overdue)} Tage)"
+        if days_overdue is not None and int(cast(int, days_overdue)) > 0:
+            overdue_note = f" ({int(cast(int, days_overdue))} Tage)"
         rows.append(
             "<tr>"
             f"<td>{_e(label)}</td>"
@@ -50,16 +51,14 @@ def _queue_table(items: list[dict[str, object]]) -> str:
         )
     return (
         "<table><tr><th>Kunde</th><th>Termin</th><th>Status</th>"
-        "<th>Nächste Aktion</th><th></th></tr>"
-        + "".join(rows)
-        + "</table>"
+        "<th>Nächste Aktion</th><th></th></tr>" + "".join(rows) + "</table>"
     )
 
 
 def _render_action_required(section: dict[str, object]) -> str:
     label = str(section["label"])
-    count = int(section["count"])
-    items = list(section["items"])  # type: ignore[arg-type]
+    count = int(cast(int, section["count"]))
+    items = cast(list[dict[str, object]], section["items"])
     html = f'<section class="offer-queue-section"><h2>{_e(label)} ({count})</h2>'
     if count == 0:
         html += '<p class="muted">Keine offenen Aktionen.</p>'
@@ -85,8 +84,8 @@ def _render_action_required(section: dict[str, object]) -> str:
 
 def _render_overdue(section: dict[str, object]) -> str:
     label = str(section["label"])
-    count = int(section["count"])
-    items = list(section["items"])  # type: ignore[arg-type]
+    count = int(cast(int, section["count"]))
+    items = cast(list[dict[str, object]], section["items"])
     html = f'<section class="offer-queue-section"><h2>{_e(label)} ({count})</h2>'
     if count == 0:
         html += '<p class="muted">Keine überfälligen Angebote.</p>'
@@ -96,8 +95,8 @@ def _render_overdue(section: dict[str, object]) -> str:
 
 
 def _render_history(section: dict[str, object]) -> str:
-    count = int(section["count"])
-    items = list(section["items"])  # type: ignore[arg-type]
+    count = int(cast(int, section["count"]))
+    items = cast(list[dict[str, object]], section["items"])
     summary = f"Abgeschlossen / Verlauf ({count})"
     if count == 0:
         return (
@@ -108,9 +107,7 @@ def _render_history(section: dict[str, object]) -> str:
         )
     return (
         '<details class="offer-queue-history">'
-        f"<summary>{_e(summary)}</summary>"
-        + _queue_table(items)
-        + "</details>"
+        f"<summary>{_e(summary)}</summary>" + _queue_table(items) + "</details>"
     )
 
 
@@ -119,9 +116,11 @@ def render_angebote_queue(
     *,
     context: OfficePageContext,
 ) -> str:
-    sections = list(snapshot["sections"])  # type: ignore[arg-type]
-    total_count = int(snapshot["total_count"])
-    counters: dict[str, int] = {str(s["group"]): int(s["count"]) for s in sections}
+    sections = cast(list[dict[str, object]], snapshot["sections"])
+    total_count = int(cast(int, snapshot["total_count"]))
+    counters: dict[str, int] = {
+        str(s["group"]): int(cast(int, s["count"])) for s in sections
+    }
     action_count = counters.get("action_required", 0)
     overdue_count = counters.get("overdue", 0)
     history_count = counters.get("history", 0)

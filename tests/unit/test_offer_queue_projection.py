@@ -173,7 +173,14 @@ def _offer(
         offer_id=offer_id,
         source_inquiry_id=inquiry_id,
         created_at=created_at or _NOW,
-        versions=(_version(offer_id=offer_id, version_id=version_id, valid_until=valid_until, created_at=created_at),),
+        versions=(
+            _version(
+                offer_id=offer_id,
+                version_id=version_id,
+                valid_until=valid_until,
+                created_at=created_at,
+            ),
+        ),
         sent_evidence=sent_evidence,
         acceptance_evidence=acceptance,
         rejection_evidence=(),
@@ -215,7 +222,9 @@ def test_prepared_in_action_required() -> None:
     )
     offers = InMemoryOfferRepository()
     offers.save(_offer(inquiry.inquiry_id))
-    item = _section(_service(offers=offers, inquiries=inquiries).snapshot(), "action_required").items[0]
+    item = _section(
+        _service(offers=offers, inquiries=inquiries).snapshot(), "action_required"
+    ).items[0]
     assert item.queue_subkind == "prepared"
     assert item.next_action == "mark_sent"
     assert item.next_action_label == "Als gesendet markieren"
@@ -233,7 +242,9 @@ def test_sent_expires_today_stays_sent_with_hint() -> None:
     )
     inquiries = InMemoryInquiryRepository()
     inquiries.save(inquiry)
-    item = _section(_service(offers=offers, inquiries=inquiries).snapshot(), "action_required").items[0]
+    item = _section(
+        _service(offers=offers, inquiries=inquiries).snapshot(), "action_required"
+    ).items[0]
     assert item.state == "Sent"
     assert item.validity_hint == "expires_today"
     assert item.next_action_label == "Läuft heute ab"
@@ -251,7 +262,9 @@ def test_expired_in_overdue_without_action_button() -> None:
     )
     inquiries = InMemoryInquiryRepository()
     inquiries.save(inquiry)
-    item = _section(_service(offers=offers, inquiries=inquiries).snapshot(), "overdue").items[0]
+    item = _section(
+        _service(offers=offers, inquiries=inquiries).snapshot(), "overdue"
+    ).items[0]
     assert item.state == "Expired"
     assert item.next_action == "none"
     assert item.next_action_label == "Frist abgelaufen"
@@ -264,7 +277,9 @@ def test_accepted_with_incomplete_contact_is_blocked() -> None:
     offers.save(_offer(inquiry.inquiry_id, sent=True, accepted=True))
     inquiries = InMemoryInquiryRepository()
     inquiries.save(inquiry)
-    item = _section(_service(offers=offers, inquiries=inquiries).snapshot(), "action_required").items[0]
+    item = _section(
+        _service(offers=offers, inquiries=inquiries).snapshot(), "action_required"
+    ).items[0]
     assert item.queue_subkind == "accepted_contact_blocked"
     assert item.next_action == "complete_contact"
     assert item.next_action_label == "Kontaktdaten vervollständigen"
@@ -344,7 +359,9 @@ def test_accepted_with_complete_contact_can_convert() -> None:
     offers.save(_offer(inquiry.inquiry_id, sent=True, accepted=True))
     inquiries = InMemoryInquiryRepository()
     inquiries.save(inquiry)
-    item = _section(_service(offers=offers, inquiries=inquiries).snapshot(), "action_required").items[0]
+    item = _section(
+        _service(offers=offers, inquiries=inquiries).snapshot(), "action_required"
+    ).items[0]
     assert item.queue_subkind == "accepted"
     assert item.next_action == "convert_accepted"
     assert item.next_action_label == "In Auftrag umwandeln"
@@ -356,7 +373,9 @@ def test_customer_display_uses_location_when_no_snapshot() -> None:
     offers.save(_offer(inquiry.inquiry_id))
     inquiries = InMemoryInquiryRepository()
     inquiries.save(inquiry)
-    item = _section(_service(offers=offers, inquiries=inquiries).snapshot(), "action_required").items[0]
+    item = _section(
+        _service(offers=offers, inquiries=inquiries).snapshot(), "action_required"
+    ).items[0]
     assert item.customer_display == "Hamburg"
 
 
@@ -394,7 +413,9 @@ def test_rejected_offer_in_history() -> None:
     offers.save(rejected)
     inquiries = InMemoryInquiryRepository()
     inquiries.save(inquiry)
-    item = _section(_service(offers=offers, inquiries=inquiries).snapshot(), "history").items[0]
+    item = _section(
+        _service(offers=offers, inquiries=inquiries).snapshot(), "history"
+    ).items[0]
     assert item.queue_subkind == "rejected"
     assert item.next_action == "none"
 
@@ -425,5 +446,7 @@ def test_withdrawn_offer_in_history() -> None:
     offers.save(withdrawn)
     inquiries = InMemoryInquiryRepository()
     inquiries.save(inquiry)
-    item = _section(_service(offers=offers, inquiries=inquiries).snapshot(), "history").items[0]
+    item = _section(
+        _service(offers=offers, inquiries=inquiries).snapshot(), "history"
+    ).items[0]
     assert item.queue_subkind == "withdrawn"
