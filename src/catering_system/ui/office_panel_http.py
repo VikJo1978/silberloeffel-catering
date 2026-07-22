@@ -119,6 +119,18 @@ _OFFER_COMMAND_ERROR_LABELS: dict[str, str] = {
     "conversion_blocked": (
         "Das angenommene Angebot kann derzeit nicht in einen Auftrag umgewandelt werden."
     ),
+    "rejection_evidence_exists": (
+        "Für diese Angebotsversion ist bereits eine Ablehnung erfasst."
+    ),
+    "withdrawal_evidence_exists": (
+        "Für diese Angebotsversion ist bereits ein Rückzug erfasst."
+    ),
+    "rejection_blocked": (
+        "Die Ablehnung kann in diesem Angebotsstatus nicht erfasst werden."
+    ),
+    "withdrawal_blocked": (
+        "Der Rückzug kann in diesem Angebotsstatus nicht erfasst werden."
+    ),
 }
 
 
@@ -138,6 +150,17 @@ def office_command_error_message(code_or_text: str) -> str:
         return _OFFER_COMMAND_ERROR_LABELS["acceptance_blocked"]
     if "sent recording blocked" in lowered:
         return _OFFER_COMMAND_ERROR_LABELS["sent_recording_blocked"]
+    if "rejection blocked" in lowered or "rejection evidence already exists" in lowered:
+        if "already exists" in lowered:
+            return _OFFER_COMMAND_ERROR_LABELS["rejection_evidence_exists"]
+        return _OFFER_COMMAND_ERROR_LABELS["rejection_blocked"]
+    if (
+        "withdrawal blocked" in lowered
+        or "withdrawal evidence already exists" in lowered
+    ):
+        if "already exists" in lowered:
+            return _OFFER_COMMAND_ERROR_LABELS["withdrawal_evidence_exists"]
+        return _OFFER_COMMAND_ERROR_LABELS["withdrawal_blocked"]
     if "conversion link already exists" in lowered or "conversion already" in lowered:
         return _OFFER_COMMAND_ERROR_LABELS["conversion_already_exists"]
     if "accepted offer conversion gate" in lowered or "conversion blocked" in lowered:
@@ -675,6 +698,12 @@ def make_office_panel_handler(
                 self._redirect(f"/offer/{offer_id}")
             elif action == "record-acceptance":
                 panel.record_offer_acceptance(offer_id, form)
+                self._redirect(f"/offer/{offer_id}")
+            elif action == "record-rejection":
+                panel.record_offer_rejection(offer_id, form)
+                self._redirect(f"/offer/{offer_id}")
+            elif action == "record-withdrawal":
+                panel.record_offer_withdrawal(offer_id, form)
                 self._redirect(f"/offer/{offer_id}")
             elif action == "convert":
                 order, _version = panel.convert_accepted_offer(offer_id, form)

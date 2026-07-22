@@ -21,12 +21,16 @@ from catering_system.domain.offer import (
     OfferPosition,
     OfferVariant,
     OfferVersion,
+    RejectionEvidence,
     SentChannel,
     SentEvidence,
+    WithdrawalEvidence,
     derive_offer_state,
     offer_allows_acceptance,
     offer_allows_conversion,
+    offer_allows_rejection,
     offer_allows_sent_recording,
+    offer_allows_withdrawal,
 )
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.offer_snapshot import (
@@ -249,6 +253,121 @@ class OfferService:
             offer_id,
             offer_version_id,
             accepted_variant_id,
+        )
+        return updated
+
+    def record_rejection_evidence(
+        self,
+        offer_id: str,
+        offer_version_id: str,
+        *,
+        rejected_at: datetime,
+        recorded_by: str,
+        evidence_reference: str | None = None,
+    ) -> Offer:
+        """Append RejectionEvidence for one eligible sent OfferVersion."""
+        offer = self._offer_repository.get(offer_id)
+        if offer is None:
+            raise KeyError(offer_id)
+
+        if not any(
+            version.offer_version_id == offer_version_id for version in offer.versions
+        ):
+            raise ValueError(
+                f"offer_version_id {offer_version_id!r} is not a version of "
+                f"offer {offer_id!r}"
+            )
+
+        if offer.acceptance_evidence is not None or offer.conversion_link is not None:
+            raise ValueError("acceptance blocks rejection recording")
+
+        self._require_contact_complete_inquiry(offer.source_inquiry_id)
+
+        if any(
+            item.offer_version_id == offer_version_id
+            for item in offer.rejection_evidence
+        ):
+            raise ValueError(
+                f"rejection evidence already exists for offer_version_id={offer_version_id!r}"
+            )
+
+        if not offer_allows_rejection(offer, offer_version_id, today=self._today()):
+            raise ValueError(
+                f"rejection blocked (offer_id={offer_id!r}, "
+                f"offer_version_id={offer_version_id!r}, "
+                f"state={derive_offer_state(offer, offer_version_id, today=self._today())!r})"
+            )
+
+        recorded_at = self._now()
+        evidence = RejectionEvidence(
+            offer_id=offer_id,
+            offer_version_id=offer_version_id,
+            rejected_at=rejected_at,
+            recorded_at=recorded_at,
+            recorded_by=recorded_by,
+            evidence_reference=evidence_reference,
+        )
+        updated = self._offer_repository.append_rejection_evidence(evidence)
+        _log.info(
+            "record_rejection_evidence offer_id=%s offer_version_id=%s",
+            offer_id,
+            offer_version_id,
+        )
+        return updated
+
+    def record_withdrawal_evidence(
+        self,
+        offer_id: str,
+        offer_version_id: str,
+        *,
+        recorded_by: str,
+        reason: str | None = None,
+    ) -> Offer:
+        """Append WithdrawalEvidence for one eligible Prepared or Sent version."""
+        offer = self._offer_repository.get(offer_id)
+        if offer is None:
+            raise KeyError(offer_id)
+
+        if not any(
+            version.offer_version_id == offer_version_id for version in offer.versions
+        ):
+            raise ValueError(
+                f"offer_version_id {offer_version_id!r} is not a version of "
+                f"offer {offer_id!r}"
+            )
+
+        if offer.acceptance_evidence is not None or offer.conversion_link is not None:
+            raise ValueError("acceptance blocks withdrawal recording")
+
+        self._require_contact_complete_inquiry(offer.source_inquiry_id)
+
+        if any(
+            item.offer_version_id == offer_version_id
+            for item in offer.withdrawal_evidence
+        ):
+            raise ValueError(
+                f"withdrawal evidence already exists for offer_version_id={offer_version_id!r}"
+            )
+
+        if not offer_allows_withdrawal(offer, offer_version_id, today=self._today()):
+            raise ValueError(
+                f"withdrawal blocked (offer_id={offer_id!r}, "
+                f"offer_version_id={offer_version_id!r}, "
+                f"state={derive_offer_state(offer, offer_version_id, today=self._today())!r})"
+            )
+
+        evidence = WithdrawalEvidence(
+            offer_id=offer_id,
+            offer_version_id=offer_version_id,
+            withdrawn_at=self._now(),
+            recorded_by=recorded_by,
+            reason=reason,
+        )
+        updated = self._offer_repository.append_withdrawal_evidence(evidence)
+        _log.info(
+            "record_withdrawal_evidence offer_id=%s offer_version_id=%s",
+            offer_id,
+            offer_version_id,
         )
         return updated
 

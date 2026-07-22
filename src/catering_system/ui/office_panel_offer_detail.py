@@ -183,6 +183,52 @@ def _record_acceptance_form(
     )
 
 
+def _record_rejection_form(offer_id: str, *, forms: OfferDetailFormFields) -> str:
+    default_at = default_datetime_local_berlin()
+    return (
+        '<section class="offer-detail-section offer-action-section">'
+        "<h2>Kunde lehnt ab</h2>"
+        f'<form method="post" action="/offer/{_e(offer_id)}/record-rejection">'
+        f"{forms.csrf_input}{forms.command_fields}"
+        "<fieldset>"
+        f'<label>Ablehnungszeitpunkt <input type="datetime-local" name="rejected_at" '
+        f'value="{_e(default_at)}" required></label>'
+        '<label>Kommentar / Nachweis (optional) <input name="evidence_reference" '
+        'maxlength="1000" placeholder="Telefonische Absage"></label>'
+        "</fieldset>"
+        '<button type="submit">Kunde lehnt ab</button>'
+        "</form></section>"
+    )
+
+
+def _record_withdrawal_form(offer_id: str, *, forms: OfferDetailFormFields) -> str:
+    return (
+        '<section class="offer-detail-section offer-action-section">'
+        "<h2>Angebot zurückziehen</h2>"
+        f'<form method="post" action="/offer/{_e(offer_id)}/record-withdrawal">'
+        f"{forms.csrf_input}{forms.command_fields}"
+        "<fieldset>"
+        '<label>Grund (optional) <textarea name="reason" rows="3" maxlength="20000">'
+        "</textarea></label>"
+        "</fieldset>"
+        '<button type="submit">Angebot zurückziehen</button>'
+        "</form></section>"
+    )
+
+
+def _sent_offer_actions(
+    offer_id: str,
+    variants: list[dict[str, object]],
+    *,
+    forms: OfferDetailFormFields,
+) -> str:
+    return (
+        _record_acceptance_form(offer_id, variants, forms=forms)
+        + _record_rejection_form(offer_id, forms=forms)
+        + _record_withdrawal_form(offer_id, forms=forms)
+    )
+
+
 def _convert_form(
     offer_id: str,
     *,
@@ -244,7 +290,7 @@ def render_offer_detail(
     if state == "Prepared":
         action_section = _mark_sent_form(offer_id, forms=forms)
     elif state == "Sent":
-        action_section = _record_acceptance_form(offer_id, variants, forms=forms)
+        action_section = _sent_offer_actions(offer_id, variants, forms=forms)
     elif state == "Accepted":
         acceptance_id = detail.get("acceptance_id")
         acceptance = cast(dict[str, object] | None, detail.get("acceptance"))

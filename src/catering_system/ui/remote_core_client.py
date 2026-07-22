@@ -207,6 +207,8 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
             "conversion_already_exists",
             "sent_evidence_exists",
             "acceptance_already_exists",
+            "rejection_evidence_exists",
+            "withdrawal_evidence_exists",
             "order_already_paused",
             "order_not_paused",
         }
@@ -230,6 +232,10 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
             "acceptance_blocked",
             "invalid_variant",
             "invalid_acceptance_evidence",
+            "rejection_blocked",
+            "withdrawal_blocked",
+            "invalid_rejection_evidence",
+            "invalid_withdrawal_evidence",
             "order_version_not_current_candidate",
         }
     ),
@@ -1099,6 +1105,45 @@ class RemoteCoreClient:
                 "accepted_variant_id",
                 "acceptance_id",
             },
+        )
+
+    def record_offer_rejection(
+        self,
+        offer_id: str,
+        offer_version_id: str,
+        *,
+        rejected_at: str,
+        evidence_reference: str | None = None,
+    ) -> None:
+        args: dict[str, object] = {"rejected_at": rejected_at}
+        if evidence_reference is not None:
+            args["evidence_reference"] = evidence_reference
+        self.command(
+            f"/office/v1/offers/{quote(offer_id, safe='')}/versions/"
+            f"{quote(offer_version_id, safe='')}/record-rejection",
+            args,
+            {},
+            expected={200},
+            result_keys={"offer_id", "offer_version_id", "rejected_at"},
+        )
+
+    def record_offer_withdrawal(
+        self,
+        offer_id: str,
+        offer_version_id: str,
+        *,
+        reason: str | None = None,
+    ) -> None:
+        args: dict[str, object] = {}
+        if reason is not None:
+            args["reason"] = reason
+        self.command(
+            f"/office/v1/offers/{quote(offer_id, safe='')}/versions/"
+            f"{quote(offer_version_id, safe='')}/record-withdrawal",
+            args,
+            {},
+            expected={200},
+            result_keys={"offer_id", "offer_version_id", "withdrawn_at"},
         )
 
     # -- reads / repository-shaped facade ---------------------------------

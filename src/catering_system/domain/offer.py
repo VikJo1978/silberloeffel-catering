@@ -580,6 +580,39 @@ def offer_allows_sent_recording(
     return derive_offer_state(offer, offer_version_id, today=today) == "Prepared"
 
 
+def offer_allows_rejection(offer: Offer, offer_version_id: str, *, today: date) -> bool:
+    """True only when one exact sent OfferVersion may receive RejectionEvidence."""
+    if offer.acceptance_evidence is not None or offer.conversion_link is not None:
+        return False
+    try:
+        _version(offer, offer_version_id)
+    except ValueError:
+        return False
+    if any(
+        item.offer_version_id == offer_version_id for item in offer.rejection_evidence
+    ):
+        return False
+    return derive_offer_state(offer, offer_version_id, today=today) == "Sent"
+
+
+def offer_allows_withdrawal(
+    offer: Offer, offer_version_id: str, *, today: date
+) -> bool:
+    """True when one Prepared or Sent version may receive WithdrawalEvidence."""
+    if offer.acceptance_evidence is not None or offer.conversion_link is not None:
+        return False
+    try:
+        _version(offer, offer_version_id)
+    except ValueError:
+        return False
+    if any(
+        item.offer_version_id == offer_version_id for item in offer.withdrawal_evidence
+    ):
+        return False
+    state = derive_offer_state(offer, offer_version_id, today=today)
+    return state in ("Prepared", "Sent")
+
+
 def offer_allows_conversion(
     offer: Offer,
     offer_version_id: str,

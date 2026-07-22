@@ -1151,6 +1151,93 @@ class OfficeApi:
             "acceptance_id": acceptance.acceptance_id,
         }
 
+    def cmd_record_rejection(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        offer_id = path_ids["offer_id"]
+        offer_version_id = path_ids["version_id"]
+        try:
+            offer = self.offer_service.record_rejection_evidence(
+                offer_id,
+                offer_version_id,
+                rejected_at=_v_datetime(args["rejected_at"]),
+                recorded_by=CLIENT_ID,
+                evidence_reference=_v_optional_str(
+                    args.get("evidence_reference"), 1000
+                ),
+            )
+        except KeyError as exc:
+            raise ApiError(404, "not_found") from exc
+        except ValueError as exc:
+            message = str(exc)
+            if "rejection evidence already exists" in message:
+                raise ApiError(409, "rejection_evidence_exists") from exc
+            if "not a version of offer" in message:
+                raise ApiError(422, "version_not_owned") from exc
+            if "acceptance blocks rejection" in message:
+                raise ApiError(422, "rejection_blocked") from exc
+            if "rejection blocked" in message:
+                raise ApiError(422, "rejection_blocked") from exc
+            if "contact information incomplete" in message:
+                raise ApiError(422, "contact_information_incomplete") from exc
+            raise ApiError(422, "invalid_rejection_evidence") from exc
+        except sqlite3.IntegrityError:
+            if self.offers.get(offer_id) is None:
+                raise ApiError(404, "not_found") from None
+            raise ApiError(409, "rejection_evidence_exists") from None
+        evidence = next(
+            item
+            for item in offer.rejection_evidence
+            if item.offer_version_id == offer_version_id
+        )
+        return 200, {
+            "offer_id": offer.offer_id,
+            "offer_version_id": offer_version_id,
+            "rejected_at": evidence.rejected_at.isoformat(),
+        }
+
+    def cmd_record_withdrawal(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        offer_id = path_ids["offer_id"]
+        offer_version_id = path_ids["version_id"]
+        try:
+            offer = self.offer_service.record_withdrawal_evidence(
+                offer_id,
+                offer_version_id,
+                recorded_by=CLIENT_ID,
+                reason=_v_optional_str(args.get("reason"), 20000),
+            )
+        except KeyError as exc:
+            raise ApiError(404, "not_found") from exc
+        except ValueError as exc:
+            message = str(exc)
+            if "withdrawal evidence already exists" in message:
+                raise ApiError(409, "withdrawal_evidence_exists") from exc
+            if "not a version of offer" in message:
+                raise ApiError(422, "version_not_owned") from exc
+            if "acceptance blocks withdrawal" in message:
+                raise ApiError(422, "withdrawal_blocked") from exc
+            if "withdrawal blocked" in message:
+                raise ApiError(422, "withdrawal_blocked") from exc
+            if "contact information incomplete" in message:
+                raise ApiError(422, "contact_information_incomplete") from exc
+            raise ApiError(422, "invalid_withdrawal_evidence") from exc
+        except sqlite3.IntegrityError:
+            if self.offers.get(offer_id) is None:
+                raise ApiError(404, "not_found") from None
+            raise ApiError(409, "withdrawal_evidence_exists") from None
+        evidence = next(
+            item
+            for item in offer.withdrawal_evidence
+            if item.offer_version_id == offer_version_id
+        )
+        return 200, {
+            "offer_id": offer.offer_id,
+            "offer_version_id": offer_version_id,
+            "withdrawn_at": evidence.withdrawn_at.isoformat(),
+        }
+
     def cmd_convert_accepted(
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict
     ) -> tuple[int, dict[str, object]]:
@@ -1737,6 +1824,14 @@ _RECORD_ACCEPTANCE_ARGS = _ArgKeys(
     ),
     optional=frozenset({"note"}),
 )
+_RECORD_REJECTION_ARGS = _ArgKeys(
+    required=frozenset({"rejected_at"}),
+    optional=frozenset({"evidence_reference"}),
+)
+_RECORD_WITHDRAWAL_ARGS = _ArgKeys(
+    required=frozenset(),
+    optional=frozenset({"reason"}),
+)
 _CONVERT_ACCEPTED_ARGS = _ArgKeys(
     required=frozenset({"accepted_variant_id", "acceptance_id"})
 )
@@ -1790,6 +1885,12 @@ _COMMANDS: dict[str, _CommandSpec] = {
     "mark-sent": _CommandSpec("cmd_mark_sent", _MARK_SENT_ARGS, set()),
     "record-acceptance": _CommandSpec(
         "cmd_record_acceptance", _RECORD_ACCEPTANCE_ARGS, set()
+    ),
+    "record-rejection": _CommandSpec(
+        "cmd_record_rejection", _RECORD_REJECTION_ARGS, set()
+    ),
+    "record-withdrawal": _CommandSpec(
+        "cmd_record_withdrawal", _RECORD_WITHDRAWAL_ARGS, set()
     ),
     "convert-accepted": _CommandSpec(
         "cmd_convert_accepted", _CONVERT_ACCEPTED_ARGS, set()
@@ -1964,6 +2065,22 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         ),
         "/office/v1/offers/{offer_id}/versions/{version_id}/record-acceptance",
         {"POST": "record-acceptance"},
+    ),
+    (
+        re.compile(
+            r"^/office/v1/offers/(?P<offer_id>[^/]+)/versions/"
+            r"(?P<version_id>[^/]+)/record-rejection$"
+        ),
+        "/office/v1/offers/{offer_id}/versions/{version_id}/record-rejection",
+        {"POST": "record-rejection"},
+    ),
+    (
+        re.compile(
+            r"^/office/v1/offers/(?P<offer_id>[^/]+)/versions/"
+            r"(?P<version_id>[^/]+)/record-withdrawal$"
+        ),
+        "/office/v1/offers/{offer_id}/versions/{version_id}/record-withdrawal",
+        {"POST": "record-withdrawal"},
     ),
     (
         re.compile(

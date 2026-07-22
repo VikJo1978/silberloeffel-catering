@@ -23,6 +23,7 @@ from catering_system.domain.offer import (
     OfferPosition,
     OfferVariant,
     OfferVersion,
+    RejectionEvidence,
     SentEvidence,
     WithdrawalEvidence,
     derive_offer_state,
@@ -207,6 +208,14 @@ class _FailingAppendRepository(InMemoryOfferRepository):
         raise self._error
 
     def append_acceptance_evidence(self, evidence: AcceptanceEvidence) -> Offer:
+        self.append_calls += 1
+        raise self._error
+
+    def append_rejection_evidence(self, evidence: RejectionEvidence) -> Offer:
+        self.append_calls += 1
+        raise self._error
+
+    def append_withdrawal_evidence(self, evidence: WithdrawalEvidence) -> Offer:
         self.append_calls += 1
         raise self._error
 
@@ -893,6 +902,117 @@ def test_record_acceptance_evidence_append_failure_leaves_offer_unchanged() -> N
 
     assert offers.append_calls == 1
     assert offers.get(offer.offer_id) == sent
+
+
+_REJECTED_AT = _SENT_AT + timedelta(seconds=1)
+
+
+def _rejection_args() -> dict[str, object]:
+    return {
+        "rejected_at": _REJECTED_AT,
+        "recorded_by": "office-panel",
+        "evidence_reference": "phone-decline",
+    }
+
+
+def test_record_rejection_evidence_sent_to_rejected() -> None:
+    offer, version_id, _offers, service = _sent_offer_state()
+
+    updated = service.record_rejection_evidence(
+        offer.offer_id,
+        version_id,
+        **_rejection_args(),
+    )
+
+    assert len(updated.rejection_evidence) == 1
+    evidence = updated.rejection_evidence[0]
+    assert evidence.rejected_at == _REJECTED_AT
+    assert evidence.recorded_at == _RECORDED_AT
+    assert evidence.evidence_reference == "phone-decline"
+    assert (
+        derive_offer_state(updated, version_id, today=date(2026, 7, 15)) == "Rejected"
+    )
+
+
+def test_record_rejection_evidence_rejects_prepared() -> None:
+    offer = _existing_offer()
+    version_id = offer.versions[0].offer_version_id
+    offers = InMemoryOfferRepository()
+    offers.save(offer)
+    service = _service(offers)
+
+    with pytest.raises(ValueError, match="rejection blocked"):
+        service.record_rejection_evidence(
+            offer.offer_id, version_id, **_rejection_args()
+        )
+
+
+def test_record_rejection_evidence_rejects_second_rejection() -> None:
+    offer, version_id, _offers, service = _sent_offer_state()
+    service.record_rejection_evidence(offer.offer_id, version_id, **_rejection_args())
+
+    with pytest.raises(ValueError, match="rejection evidence already exists"):
+        service.record_rejection_evidence(
+            offer.offer_id, version_id, **_rejection_args()
+        )
+
+
+def test_record_rejection_evidence_blocks_acceptance() -> None:
+    offer, version_id, _offers, service = _sent_offer_state()
+    service.record_rejection_evidence(offer.offer_id, version_id, **_rejection_args())
+
+    with pytest.raises(ValueError, match="acceptance blocked"):
+        service.record_acceptance_evidence(
+            offer.offer_id, version_id, _VARIANT_ID, **_acceptance_args()
+        )
+
+
+def test_record_withdrawal_evidence_sent_to_withdrawn() -> None:
+    offer, version_id, _offers, service = _sent_offer_state()
+
+    updated = service.record_withdrawal_evidence(
+        offer.offer_id,
+        version_id,
+        recorded_by="office-panel",
+        reason="Angebot zurückgezogen",
+    )
+
+    assert len(updated.withdrawal_evidence) == 1
+    evidence = updated.withdrawal_evidence[0]
+    assert evidence.withdrawn_at == _RECORDED_AT
+    assert evidence.reason == "Angebot zurückgezogen"
+    assert (
+        derive_offer_state(updated, version_id, today=date(2026, 7, 15)) == "Withdrawn"
+    )
+
+
+def test_record_withdrawal_evidence_rejects_prepared_in_ui_but_domain_allows() -> None:
+    offer = _existing_offer()
+    version_id = offer.versions[0].offer_version_id
+    offers = InMemoryOfferRepository()
+    offers.save(offer)
+    service = _service(offers)
+
+    updated = service.record_withdrawal_evidence(
+        offer.offer_id,
+        version_id,
+        recorded_by="office-panel",
+    )
+    assert (
+        derive_offer_state(updated, version_id, today=date(2026, 7, 15)) == "Withdrawn"
+    )
+
+
+def test_record_withdrawal_evidence_rejects_second_withdrawal() -> None:
+    offer, version_id, _offers, service = _sent_offer_state()
+    service.record_withdrawal_evidence(
+        offer.offer_id, version_id, recorded_by="office-panel"
+    )
+
+    with pytest.raises(ValueError, match="withdrawal evidence already exists"):
+        service.record_withdrawal_evidence(
+            offer.offer_id, version_id, recorded_by="office-panel"
+        )
 
 
 def _accepted_offer_state() -> tuple[

@@ -6,7 +6,9 @@ from catering_system.domain.offer import (
     AcceptanceEvidence,
     ConversionLink,
     Offer,
+    RejectionEvidence,
     SentEvidence,
+    WithdrawalEvidence,
 )
 
 
@@ -71,6 +73,42 @@ class InMemoryOfferRepository:
             acceptance_evidence=evidence,
             rejection_evidence=offer.rejection_evidence,
             withdrawal_evidence=offer.withdrawal_evidence,
+            conversion_link=offer.conversion_link,
+        )
+        self._offers[offer.offer_id] = updated
+        return updated
+
+    def append_rejection_evidence(self, evidence: RejectionEvidence) -> Offer:
+        offer = self.get(evidence.offer_id)
+        if offer is None:
+            raise KeyError(evidence.offer_id)
+        updated = Offer(
+            offer_id=offer.offer_id,
+            source_inquiry_id=offer.source_inquiry_id,
+            created_at=offer.created_at,
+            versions=offer.versions,
+            sent_evidence=offer.sent_evidence,
+            acceptance_evidence=offer.acceptance_evidence,
+            rejection_evidence=(*offer.rejection_evidence, evidence),
+            withdrawal_evidence=offer.withdrawal_evidence,
+            conversion_link=offer.conversion_link,
+        )
+        self._offers[offer.offer_id] = updated
+        return updated
+
+    def append_withdrawal_evidence(self, evidence: WithdrawalEvidence) -> Offer:
+        offer = self.get(evidence.offer_id)
+        if offer is None:
+            raise KeyError(evidence.offer_id)
+        updated = Offer(
+            offer_id=offer.offer_id,
+            source_inquiry_id=offer.source_inquiry_id,
+            created_at=offer.created_at,
+            versions=offer.versions,
+            sent_evidence=offer.sent_evidence,
+            acceptance_evidence=offer.acceptance_evidence,
+            rejection_evidence=offer.rejection_evidence,
+            withdrawal_evidence=(*offer.withdrawal_evidence, evidence),
             conversion_link=offer.conversion_link,
         )
         self._offers[offer.offer_id] = updated

@@ -512,6 +512,44 @@ class SQLiteOfferRepository:
             self._insert_acceptance_evidence(evidence)
             return updated
 
+    def append_rejection_evidence(self, evidence: RejectionEvidence) -> Offer:
+        with self._write_scope():
+            offer = self.get(evidence.offer_id)
+            if offer is None:
+                raise KeyError(evidence.offer_id)
+            updated = Offer(
+                offer_id=offer.offer_id,
+                source_inquiry_id=offer.source_inquiry_id,
+                created_at=offer.created_at,
+                versions=offer.versions,
+                sent_evidence=offer.sent_evidence,
+                acceptance_evidence=offer.acceptance_evidence,
+                rejection_evidence=(*offer.rejection_evidence, evidence),
+                withdrawal_evidence=offer.withdrawal_evidence,
+                conversion_link=offer.conversion_link,
+            )
+            self._insert_rejection_evidence(evidence)
+            return updated
+
+    def append_withdrawal_evidence(self, evidence: WithdrawalEvidence) -> Offer:
+        with self._write_scope():
+            offer = self.get(evidence.offer_id)
+            if offer is None:
+                raise KeyError(evidence.offer_id)
+            updated = Offer(
+                offer_id=offer.offer_id,
+                source_inquiry_id=offer.source_inquiry_id,
+                created_at=offer.created_at,
+                versions=offer.versions,
+                sent_evidence=offer.sent_evidence,
+                acceptance_evidence=offer.acceptance_evidence,
+                rejection_evidence=offer.rejection_evidence,
+                withdrawal_evidence=(*offer.withdrawal_evidence, evidence),
+                conversion_link=offer.conversion_link,
+            )
+            self._insert_withdrawal_evidence(evidence)
+            return updated
+
     def append_conversion_link(self, link: ConversionLink) -> Offer:
         with self._write_scope():
             offer = self.get(link.offer_id)

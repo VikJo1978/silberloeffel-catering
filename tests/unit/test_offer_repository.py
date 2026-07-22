@@ -158,6 +158,27 @@ def _link() -> ConversionLink:
     )
 
 
+def _rejection() -> RejectionEvidence:
+    return RejectionEvidence(
+        offer_id=_OFFER_ID,
+        offer_version_id=_V1_ID,
+        rejected_at=_NOW + timedelta(days=1),
+        recorded_at=_NOW + timedelta(days=1, minutes=1),
+        recorded_by="office",
+        evidence_reference="phone-decline",
+    )
+
+
+def _withdrawal() -> WithdrawalEvidence:
+    return WithdrawalEvidence(
+        offer_id=_OFFER_ID,
+        offer_version_id=_V1_ID,
+        withdrawn_at=_NOW + timedelta(minutes=1),
+        recorded_by="office",
+        reason="Kunde nicht erreichbar",
+    )
+
+
 def _offer(
     *,
     versions: tuple[OfferVersion, ...] | None = None,
@@ -329,6 +350,46 @@ def test_append_acceptance_evidence_rejects_second_acceptance() -> None:
     repo.save(_offer(sent=(_sent(),), acceptance=_acceptance()))
     with pytest.raises(ValueError, match="acceptance already exists"):
         repo.append_acceptance_evidence(_acceptance())
+
+
+def test_append_rejection_evidence_roundtrip_in_memory_and_sqlite(
+    tmp_path: Path,
+) -> None:
+    evidence = _rejection()
+    sent_offer = _offer(sent=(_sent(),))
+    for repo_factory in (
+        lambda: InMemoryOfferRepository(),
+        lambda: SQLiteOfferRepository(tmp_path / "reject.db"),
+    ):
+        repo = repo_factory()
+        repo.save(sent_offer)
+        updated = repo.append_rejection_evidence(evidence)
+        assert len(updated.rejection_evidence) == 1
+        assert (
+            derive_offer_state(updated, _V1_ID, today=date(2026, 7, 20)) == "Rejected"
+        )
+        reloaded = repo.get(_OFFER_ID)
+        assert reloaded == updated
+
+
+def test_append_withdrawal_evidence_roundtrip_in_memory_and_sqlite(
+    tmp_path: Path,
+) -> None:
+    evidence = _withdrawal()
+    sent_offer = _offer(sent=(_sent(),))
+    for repo_factory in (
+        lambda: InMemoryOfferRepository(),
+        lambda: SQLiteOfferRepository(tmp_path / "withdraw.db"),
+    ):
+        repo = repo_factory()
+        repo.save(sent_offer)
+        updated = repo.append_withdrawal_evidence(evidence)
+        assert len(updated.withdrawal_evidence) == 1
+        assert (
+            derive_offer_state(updated, _V1_ID, today=date(2026, 7, 20)) == "Withdrawn"
+        )
+        reloaded = repo.get(_OFFER_ID)
+        assert reloaded == updated
 
 
 def test_append_conversion_link_roundtrip_in_memory_and_sqlite(tmp_path: Path) -> None:

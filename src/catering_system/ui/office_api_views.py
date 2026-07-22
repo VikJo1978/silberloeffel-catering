@@ -178,6 +178,10 @@ def _offer_history(offer: Offer) -> list[dict[str, object]]:
         entries.append((version.created_at, label))
     for sent in offer.sent_evidence:
         entries.append((sent.sent_at, "Angebot gesendet"))
+    for rejection in offer.rejection_evidence:
+        entries.append((rejection.rejected_at, "Angebot abgelehnt"))
+    for withdrawal in offer.withdrawal_evidence:
+        entries.append((withdrawal.withdrawn_at, "Angebot zurückgezogen"))
     if offer.acceptance_evidence is not None:
         entries.append((offer.acceptance_evidence.accepted_at, "Angebot angenommen"))
     if offer.conversion_link is not None:
