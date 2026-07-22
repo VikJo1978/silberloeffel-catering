@@ -118,7 +118,7 @@ _CONTACT_FIELD_VALUES = frozenset({"email", "phone"})
 _INQUIRY_OFFER_KEYS = frozenset({"offer_id", "offer_version_id", "commercial_state"})
 _INQUIRY_OFFER_OPTIONAL_KEYS = frozenset({"accepted_variant_id", "acceptance_id"})
 _INQUIRY_NEXT_ACTIONS = frozenset(
-    {"verify", "convert", "convert-accepted", "offer-pending"}
+    {"verify", "prepare-offer", "convert-accepted", "offer-pending"}
 )
 _OFFER_COMMERCIAL_STATES = frozenset(
     {
@@ -223,6 +223,7 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
             "version_not_owned",
             "invalid_payment_reminder",
             "conversion_blocked",
+            "accepted_offer_required",
             "offer_blocks_conversion",
             "sent_recording_blocked",
             "invalid_sent_evidence",
@@ -1721,7 +1722,7 @@ class RemoteCoreClient:
         _exact(body, {"tasks"})
         allowed_categories = {
             "verify",
-            "convert",
+            "prepare_offer",
             "convert_accepted",
             "order_print",
             "order_effective",

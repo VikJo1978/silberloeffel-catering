@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 from datetime import UTC, date, datetime, timedelta
 
 from catering_system.domain.offer import (
@@ -27,7 +29,6 @@ from catering_system.services.calendar_projection_service import (
 )
 from catering_system.services.inquiry_service import InquiryService
 from catering_system.services.operational_core_service import OperationalCoreService
-from catering_system.services.order_service import OrderService
 from catering_system.services.work_center_service import WorkCenterService
 
 _TODAY = date(2026, 7, 15)
@@ -229,7 +230,7 @@ def test_active_order_replaces_offer() -> None:
     orders = InMemoryOrderRepository()
     inquiry = _save_inquiry(inquiries)
     _save_offer(offers, inquiry.inquiry_id, sent=True)
-    order, _version = OrderService(orders).convert_inquiry_to_order(inquiry)
+    order, _version = seed_order(orders, inquiry)
     rows = _service(inquiries=inquiries, offers=offers, orders=orders).list_entries(
         date(2026, 8, 1), date(2026, 8, 31)
     )
@@ -242,7 +243,7 @@ def test_effective_order_is_confirmed() -> None:
     inquiries = InMemoryInquiryRepository()
     orders = InMemoryOrderRepository()
     inquiry = _save_inquiry(inquiries)
-    order, version = OrderService(orders).convert_inquiry_to_order(inquiry)
+    order, version = seed_order(orders, inquiry)
     core = OperationalCoreService(orders)
     core.confirm_kitchen_print(order.order_id, version.order_version_id)
     core.make_order_version_effective(order.order_id, version.order_version_id)
@@ -257,7 +258,7 @@ def test_candidate_only_order_is_planned() -> None:
     inquiries = InMemoryInquiryRepository()
     orders = InMemoryOrderRepository()
     inquiry = _save_inquiry(inquiries)
-    order, _version = OrderService(orders).convert_inquiry_to_order(inquiry)
+    order, _version = seed_order(orders, inquiry)
     rows = _service(inquiries=inquiries, orders=orders).list_entries(
         date(2026, 8, 1), date(2026, 8, 31)
     )
@@ -270,7 +271,7 @@ def test_cancelled_order_excluded() -> None:
     inquiries = InMemoryInquiryRepository()
     orders = InMemoryOrderRepository()
     inquiry = _save_inquiry(inquiries)
-    order, _version = OrderService(orders).convert_inquiry_to_order(inquiry)
+    order, _version = seed_order(orders, inquiry)
     OperationalCoreService(orders).cancel_order(order.order_id)
     rows = _service(inquiries=inquiries, orders=orders).list_entries(
         date(2026, 8, 1), date(2026, 8, 31)
@@ -284,7 +285,7 @@ def test_cancelled_order_suppresses_inquiry_and_offer() -> None:
     orders = InMemoryOrderRepository()
     inquiry = _save_inquiry(inquiries, intake_subject="War Auftrag")
     _save_offer(offers, inquiry.inquiry_id, sent=True)
-    order, _version = OrderService(orders).convert_inquiry_to_order(inquiry)
+    order, _version = seed_order(orders, inquiry)
     OperationalCoreService(orders).cancel_order(order.order_id)
     rows = _service(inquiries=inquiries, offers=offers, orders=orders).list_entries(
         date(2026, 1, 1), date(2026, 12, 31)
@@ -311,7 +312,7 @@ def test_no_duplicate_per_source_inquiry_id() -> None:
     orders = InMemoryOrderRepository()
     inquiry = _save_inquiry(inquiries)
     _save_offer(offers, inquiry.inquiry_id, sent=True, accepted=True)
-    order, version = OrderService(orders).convert_inquiry_to_order(inquiry)
+    order, version = seed_order(orders, inquiry)
     core = OperationalCoreService(orders)
     core.confirm_kitchen_print(order.order_id, version.order_version_id)
     core.make_order_version_effective(order.order_id, version.order_version_id)

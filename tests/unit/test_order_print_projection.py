@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 from datetime import date
 
 import pytest
@@ -64,10 +66,10 @@ def test_order_with_offer_conversion_has_menu_positions() -> None:
 
 def test_order_without_offer_has_empty_menu() -> None:
     inquiries, orders, offers, _service = _world(inquiry=_sample_inquiry())
-    order_service = OrderService(orders)
+    OrderService(orders)
     inquiry = inquiries.get_by_id(_INQUIRY_ID)
     assert inquiry is not None
-    order, version = order_service.convert_inquiry_to_order(inquiry)
+    order, version = seed_order(orders, inquiry)
 
     projection = _projection_service(offers, orders).resolve(
         order.order_id,
@@ -437,7 +439,7 @@ def test_commercial_block_is_none_without_conversion_link() -> None:
 
     inquiries = InMemoryInquiryRepository()
     inquiries.save(inquiry)
-    order, version = OrderService(orders).convert_inquiry_to_order(inquiry)
+    order, version = seed_order(orders, inquiry)
     projection = _projection_service(offers, orders).resolve(
         order.order_id, version.order_version_id
     )
@@ -502,7 +504,7 @@ def test_preview_entwurf_when_effective_version_record_is_missing() -> None:
     inquiries, orders, offers, _service = _world(inquiry=_sample_inquiry())
     inquiry = inquiries.get_by_id(_INQUIRY_ID)
     assert inquiry is not None
-    order, version = OrderService(orders).convert_inquiry_to_order(inquiry)
+    order, version = seed_order(orders, inquiry)
     broken = replace(
         order,
         effective_order_version_id="00000000-0000-4000-8000-000000000077",

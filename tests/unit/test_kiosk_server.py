@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 import json
 import threading
 import urllib.error
@@ -67,11 +69,9 @@ def _repo_with_effective_order(
     location: str = "Hamburg", guest_count: int | None = 25
 ) -> InMemoryOrderRepository:
     repo = InMemoryOrderRepository()
-    osvc = OrderService(repo)
+    OrderService(repo)
     core = OperationalCoreService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(
-        _inquiry(date(2026, 10, 1), location, guest_count)
-    )
+    order, v1 = seed_order(repo, _inquiry(date(2026, 10, 1), location, guest_count))
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
     return repo
@@ -210,9 +210,9 @@ def test_kiosk_serves_sqlite_like_on_lenovo(tmp_path) -> None:
 
     db = tmp_path / "core.db"
     seed = SQLiteOrderRepository(db)
-    osvc = OrderService(seed)
+    OrderService(seed)
     core = OperationalCoreService(seed)
-    order, v1 = osvc.convert_inquiry_to_order(_inquiry(date(2026, 10, 1)))
+    order, v1 = seed_order(seed, _inquiry(date(2026, 10, 1)))
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
     seed.close()

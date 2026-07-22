@@ -8,7 +8,7 @@ from typing import Literal
 
 TaskCategory = Literal[
     "verify",
-    "convert",
+    "prepare_offer",
     "convert_accepted",
     "order_print",
     "order_effective",
@@ -68,6 +68,6 @@ def _sort_tier(task: TaskProjection) -> int:
         return 4
     if task.category == "payment":
         return 5
-    if task.category == "convert":
+    if task.category == "prepare_offer":
         return 6
     raise AssertionError(f"unexpected task category: {task.category!r}")

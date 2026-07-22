@@ -173,7 +173,7 @@ def test_open_inquiry_derives_convert_action() -> None:
         today=_TODAY,
     )
     assert state.is_open is True
-    assert state.next_action == "convert"
+    assert state.next_action == "prepare-offer"
     assert state.offer is None
 
 

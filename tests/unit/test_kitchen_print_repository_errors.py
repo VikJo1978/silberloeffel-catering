@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -25,7 +27,6 @@ from catering_system.repositories.sqlite_kitchen_print_job_repository import (
     SQLiteKitchenPrintJobRepository,
 )
 from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepository
-from catering_system.services.order_service import OrderService
 
 from catering_system.domain.inquiry_customer_snapshot import (
     InquiryCustomerSnapshot as _CCSnapshot,
@@ -64,7 +65,7 @@ def _memory_world() -> tuple[
     InMemoryOrderRepository, InMemoryKitchenPrintJobRepository, str, str
 ]:
     orders = InMemoryOrderRepository()
-    order, version = OrderService(orders).convert_inquiry_to_order(_inquiry())
+    order, version = seed_order(orders, _inquiry())
     jobs = InMemoryKitchenPrintJobRepository(orders)
     return orders, jobs, order.order_id, version.order_version_id
 
@@ -74,7 +75,7 @@ def _sqlite_world(
 ) -> tuple[SQLiteOrderRepository, SQLiteKitchenPrintJobRepository, str, str]:
     db = tmp_path / "core.db"
     orders = SQLiteOrderRepository(db)
-    order, version = OrderService(orders).convert_inquiry_to_order(_inquiry())
+    order, version = seed_order(orders, _inquiry())
     jobs = SQLiteKitchenPrintJobRepository(db)
     return orders, jobs, order.order_id, version.order_version_id
 

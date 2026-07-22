@@ -8,6 +8,8 @@ never opening core.db in remote mode, and half-config startup rejection.
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 import base64
 import json
 import os
@@ -75,7 +77,7 @@ def _seed(db_path: Path) -> dict[str, str]:
     inquiries = SQLiteInquiryRepository(db_path)
     orders = SQLiteOrderRepository(db_path)
     inquiry_service = InquiryService(inquiries)
-    order_service = OrderService(orders)
+    OrderService(orders)
     core = OperationalCoreService(orders)
 
     def make_inquiry(**overrides):  # noqa: ANN202
@@ -108,19 +110,19 @@ def _seed(db_path: Path) -> dict[str, str]:
     ids["inquiry_convertible"] = convertible.inquiry_id
 
     printed_src = make_inquiry(location_text="Bremen")
-    order_printed, v1 = order_service.convert_inquiry_to_order(printed_src)
+    order_printed, v1 = seed_order(orders, printed_src)
     core.confirm_kitchen_print(order_printed.order_id, v1.order_version_id)
     core.make_order_version_effective(order_printed.order_id, v1.order_version_id)
     ids["order_ready"] = order_printed.order_id
     ids["version_ready"] = v1.order_version_id
 
     unprinted_src = make_inquiry(location_text="Lübeck")
-    order_unprinted, v1u = order_service.convert_inquiry_to_order(unprinted_src)
+    order_unprinted, v1u = seed_order(orders, unprinted_src)
     ids["order_unprinted"] = order_unprinted.order_id
     ids["version_unprinted"] = v1u.order_version_id
 
     cancelled_src = make_inquiry(location_text="Flensburg")
-    order_cancelled, _v1c = order_service.convert_inquiry_to_order(cancelled_src)
+    order_cancelled, _v1c = seed_order(orders, cancelled_src)
     core.cancel_order(order_cancelled.order_id)
     ids["order_cancelled"] = order_cancelled.order_id
     ids["inquiry_cancelled_order"] = cancelled_src.inquiry_id
@@ -247,6 +249,18 @@ def _post_form(url: str, fields: dict[str, str]) -> tuple[int, str]:
 
 _VARIANT_ID = "44444444-4444-4444-8444-444444444441"
 _POSITION_ID = "88888888-8888-4888-8888-888888888881"
+_MARK_SENT_ARGS = {
+    "sent_at": "2026-07-15T10:00:00+00:00",
+    "channel": "email",
+    "recipient_reference": "customer@example.invalid",
+    "evidence_reference": "mail-123",
+}
+_RECORD_ACCEPTANCE_ARGS = {
+    "accepted_variant_id": _VARIANT_ID,
+    "accepted_at": "2026-07-15T11:00:00+00:00",
+    "channel": "email",
+    "evidence_reference": "reply-1",
+}
 
 
 def _api_get(url: str) -> tuple[int, dict]:
@@ -397,6 +411,30 @@ def _active_orders_for_inquiry(db: Path, inquiry_id: str) -> int:
         orders.close()
 
 
+def _accept_offer_via_api(api_url: str, inquiry_id: str) -> None:
+    status, body = _api_post(
+        f"{api_url}/office/v1/inquiries/{inquiry_id}/prepare-offer",
+        args={"snapshot": _valid_offer_snapshot(inquiry_id=inquiry_id)},
+    )
+    assert status == 201
+    offer_id = body["offer_id"]
+    version_id = body["offer_version_id"]
+    assert (
+        _api_post(
+            f"{api_url}/office/v1/offers/{offer_id}/versions/{version_id}/mark-sent",
+            args=_MARK_SENT_ARGS,
+        )[0]
+        == 200
+    )
+    assert (
+        _api_post(
+            f"{api_url}/office/v1/offers/{offer_id}/versions/{version_id}/record-acceptance",
+            args=_RECORD_ACCEPTANCE_ARGS,
+        )[0]
+        == 200
+    )
+
+
 def test_legacy_convert_offer_gate_parity_direct_vs_remote(tmp_path: Path) -> None:
     """Direct panel work() and remote panel → Core API must both refuse legacy
     convert while a Prepared Offer blocks the inquiry path."""
@@ -424,9 +462,11 @@ def test_legacy_convert_offer_gate_parity_direct_vs_remote(tmp_path: Path) -> No
             )
 
             assert direct_status == 400
-            assert "Angebotsprozess blockiert" in direct_body
+            assert "angenommenem Angebot" in direct_body
             assert remote_status == 422
-            assert "Angebotsprozess blockiert" in remote_body
+            assert "accepted_offer_required" in remote_body or (
+                "angenommenem Angebot" in remote_body
+            )
             assert _active_orders_for_inquiry(db, inquiry_id) == 0
         finally:
             for server in (direct_server, remote_server):
@@ -821,7 +861,7 @@ def test_truncated_order_detail_warns_and_uses_true_latest_version(
         contact_phone="030 1234567",
     )
     service = OrderService(orders)
-    order, _version = service.convert_inquiry_to_order(inquiry)
+    order, _version = seed_order(orders, inquiry)
     for number in range(2, 202):
         service.create_relevant_order_change_version(
             order,
@@ -875,9 +915,9 @@ def test_v2_remote_inquiry_detail_preserves_linked_order_truncation_warning(
         contact_email="kunde@example.com",
         contact_phone="030 1234567",
     )
-    order_service = OrderService(orders)
+    OrderService(orders)
     core = OperationalCoreService(orders)
-    first, version = order_service.convert_inquiry_to_order(inquiry)
+    first, version = seed_order(orders, inquiry)
     core.cancel_order(first.order_id)
     from datetime import UTC, datetime
     import uuid
@@ -994,7 +1034,7 @@ def remote_world(tmp_path: Path):
     api_url, api_server = _start_api_server(db)
     remote = RemoteCoreClient(api_url, _API_TOKEN)
     panel_url, panel_server = _start_remote_panel(remote)
-    yield panel_url
+    yield panel_url, api_url
     panel_server.shutdown()
     panel_server.server_close()
     api_server.shutdown()
@@ -1002,7 +1042,7 @@ def remote_world(tmp_path: Path):
 
 
 def test_full_write_flow_through_remote_panel(remote_world) -> None:
-    base = remote_world
+    base, api_url = remote_world
     status, form_html = _get(f"{base}/inquiry/new")
     assert status == 200
     command_id = _extract_hidden(form_html, "_command_id")
@@ -1059,13 +1099,34 @@ def test_full_write_flow_through_remote_panel(remote_world) -> None:
     status, detail_html = _get(f"{base}/inquiry/{inquiry_id}")
     assert status == 200
     assert "Rostock-Ost" in detail_html
-    convert_command_id = _extract_hidden(
-        re.search(r"(<form[^>]*convert[^\"]*\"[^>]*>.*?</form>)", detail_html).group(0),
-        "_command_id",
-    )
-    status, _body = _post_form(
+    assert f'action="/inquiry/{inquiry_id}/convert"' not in detail_html
+    assert "Auftrag erstellen" not in detail_html
+    status, error_html = _post_form(
         f"{base}/inquiry/{inquiry_id}/convert",
-        {"_csrf_token": _CSRF_TOKEN, "_command_id": convert_command_id},
+        {"_csrf_token": _CSRF_TOKEN, "_command_id": str(uuid.uuid4())},
+    )
+    assert status == 422
+    assert (
+        "angenommenem Angebot" in error_html or "accepted_offer_required" in error_html
+    )
+
+    _accept_offer_via_api(api_url, inquiry_id)
+    status, detail_html = _get(f"{base}/inquiry/{inquiry_id}")
+    assert status == 200
+    convert_accepted_form = re.search(
+        r"(<form[^>]*convert-accepted[^>]*>.*?</form>)",
+        detail_html,
+        re.DOTALL,
+    )
+    assert convert_accepted_form is not None
+    status, _body = _post_form(
+        f"{base}/inquiry/{inquiry_id}/convert-accepted",
+        {
+            "_csrf_token": _CSRF_TOKEN,
+            "_command_id": _extract_hidden(
+                convert_accepted_form.group(0), "_command_id"
+            ),
+        },
     )
     assert status == 200
 
@@ -1079,7 +1140,7 @@ def test_full_write_flow_through_remote_panel(remote_world) -> None:
         in converted_inquiry_html
     )
     locked_update_form = re.search(
-        r'(<form method="post" action="/inquiry/[^\"]*/update".*</form>)',
+        r'(<form method="post" action="/inquiry/[^"]*/update".*</form>)',
         converted_inquiry_html,
         re.DOTALL,
     ).group(0)
@@ -1193,7 +1254,7 @@ def test_full_write_flow_through_remote_panel(remote_world) -> None:
 def test_verify_flow_through_remote_panel(remote_world) -> None:
     """The main flow above never sets call_verification_required, so it never
     exercises verify_customer_by_call — cover it here."""
-    base = remote_world
+    base, _api_url = remote_world
     _status, form_html = _get(f"{base}/inquiry/new")
     command_id = _extract_hidden(form_html, "_command_id")
     _status, _body = _post_form(
@@ -1229,14 +1290,19 @@ def test_verify_flow_through_remote_panel(remote_world) -> None:
 
     _status, detail_html = _get(f"{base}/inquiry/{inquiry_id}")
     assert "Telefonisch verifiziert" not in detail_html  # button gone once verified
-    assert "Auftrag erstellen" in detail_html  # convert now offered
+    assert "Auftrag erstellen" not in detail_html
+    assert (
+        "Angebot vorbereiten" in detail_html
+        or "Auftrag nur aus angenommenem Angebot" in detail_html
+        or "Angebot kann vorbereitet werden" in detail_html
+    )
 
 
 def test_idempotent_retry_same_command_id_and_preconditions(remote_world) -> None:
-    """§6.1/§6.3: after an indeterminate failure, retrying with the identical
-    envelope must not double the effect — convert twice with the same
-    command_id must produce exactly one order."""
-    base = remote_world
+    """§6.1/§6.3: identical command_id retries must not double create.
+    Inquiry create stays idempotent; legacy /convert hard-blocks without Order;
+    after Order exists via convert-accepted, /convert lookup is idempotent."""
+    base, api_url = remote_world
     _status, form_html = _get(f"{base}/inquiry/new")
     command_id = _extract_hidden(form_html, "_command_id")
     fields = {
@@ -1261,15 +1327,39 @@ def test_idempotent_retry_same_command_id_and_preconditions(remote_world) -> Non
     assert list_html.count("<td>Idempotenz-Stadt</td>") == 1
 
     inquiry_id = re.search(r'/inquiry/([0-9a-f-]{36})"', list_html).group(1)
+    convert_fields = {
+        "_csrf_token": _CSRF_TOKEN,
+        "_command_id": str(uuid.uuid4()),
+    }
+    status1, body1 = _post_form(f"{base}/inquiry/{inquiry_id}/convert", convert_fields)
+    status2, body2 = _post_form(f"{base}/inquiry/{inquiry_id}/convert", convert_fields)
+    assert status1 == status2 == 422
+    assert "angenommenem Angebot" in body1 or "accepted_offer_required" in body1
+    assert "angenommenem Angebot" in body2 or "accepted_offer_required" in body2
+
+    _accept_offer_via_api(api_url, inquiry_id)
     _status, detail_html = _get(f"{base}/inquiry/{inquiry_id}")
-    convert_form = re.search(
-        r'(<form[^>]*action="/inquiry/[^"]*/convert"[^>]*>.*?</form>)', detail_html
+    convert_accepted_form = re.search(
+        r"(<form[^>]*convert-accepted[^>]*>.*?</form>)",
+        detail_html,
+        re.DOTALL,
     ).group(0)
-    convert_command_id = _extract_hidden(convert_form, "_command_id")
-    convert_fields = {"_csrf_token": _CSRF_TOKEN, "_command_id": convert_command_id}
-    status1, _ = _post_form(f"{base}/inquiry/{inquiry_id}/convert", convert_fields)
-    status2, _ = _post_form(f"{base}/inquiry/{inquiry_id}/convert", convert_fields)
-    assert status1 == status2 == 200  # replay returns the recorded result
+    status, _ = _post_form(
+        f"{base}/inquiry/{inquiry_id}/convert-accepted",
+        {
+            "_csrf_token": _CSRF_TOKEN,
+            "_command_id": _extract_hidden(convert_accepted_form, "_command_id"),
+        },
+    )
+    assert status == 200
+
+    lookup_fields = {
+        "_csrf_token": _CSRF_TOKEN,
+        "_command_id": str(uuid.uuid4()),
+    }
+    status1, _ = _post_form(f"{base}/inquiry/{inquiry_id}/convert", lookup_fields)
+    status2, _ = _post_form(f"{base}/inquiry/{inquiry_id}/convert", lookup_fields)
+    assert status1 == status2 == 200  # replay / lookup of existing Order
 
     _status, orders_html = _get(f"{base}/auftraege?q={inquiry_id[:8]}")
     # exactly one order row for this inquiry, not two — one header <tr> plus

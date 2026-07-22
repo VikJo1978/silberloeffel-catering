@@ -48,7 +48,6 @@ from catering_system.repositories.sqlite_inquiry_repository import (
 )
 from catering_system.repositories.sqlite_migrations import apply_migrations
 from catering_system.services.inquiry_service import InquiryService
-from catering_system.services.order_service import OrderService
 from catering_system.ui import office_api_views as views
 
 UTC = timezone.utc
@@ -369,10 +368,11 @@ def test_no_customer_identity_records_created_on_inquiry_create() -> None:
 
 
 def test_inquiry_to_order_behavior_unchanged() -> None:
+    from tests.helpers.order_seed import seed_order
+
     inquiry_repo = InMemoryInquiryRepository()
     order_repo = InMemoryOrderRepository()
     inquiry_svc = InquiryService(inquiry_repo)
-    order_svc = OrderService(order_repo)
     kwargs = _base_kwargs()
     kwargs["customer_linkage"] = {"placeholder": True}
     inquiry = inquiry_svc.create_inquiry(
@@ -385,7 +385,7 @@ def test_inquiry_to_order_behavior_unchanged() -> None:
         customer_id="cust-1",
         snapshot=inquiry.customer_snapshot or _snapshot(contact_name="Alex"),
     )
-    order, _version = order_svc.convert_inquiry_to_order(inquiry)
+    order, _version = seed_order(order_repo, inquiry)
     assert order.source_inquiry_id == inquiry.inquiry_id
     assert not hasattr(order, "customer_id")
 

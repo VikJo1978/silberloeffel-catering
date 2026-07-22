@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 from dataclasses import fields
 from datetime import date, datetime, timedelta, timezone
 
@@ -27,7 +29,6 @@ from catering_system.repositories.in_memory_order_repository import (
 )
 from catering_system.services.kitchen_print_service import KitchenPrintService
 from catering_system.services.operational_core_service import OperationalCoreService
-from catering_system.services.order_service import OrderService
 
 from catering_system.domain.inquiry_customer_snapshot import (
     InquiryCustomerSnapshot as _CCSnapshot,
@@ -83,7 +84,7 @@ def _setup() -> tuple[
     list[object],
 ]:
     orders = InMemoryOrderRepository()
-    order, version = OrderService(orders).convert_inquiry_to_order(_inquiry())
+    order, version = seed_order(orders, _inquiry())
     jobs = InMemoryKitchenPrintJobRepository(orders)
     clock = MutableClock(datetime(2026, 7, 14, 9, 0, tzinfo=timezone.utc))
     events: list[object] = []

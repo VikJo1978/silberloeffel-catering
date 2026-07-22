@@ -9,6 +9,8 @@ in test_office_panel_remote.py.
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 import json
 import queue
 import socket
@@ -27,7 +29,6 @@ from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
 from catering_system.services.inquiry_service import InquiryService
-from catering_system.services.order_service import OrderService
 from catering_system.ui import remote_core_client as rcc
 from catering_system.ui.remote_core_client import RemoteCoreClient, RemoteCoreError
 
@@ -517,7 +518,7 @@ def test_confirm_kitchen_print_returns_the_version_not_bad_response(
         contact_email="kunde@example.com",
         contact_phone="+49301234567",
     )
-    order, version = OrderService(orders).convert_inquiry_to_order(inquiry)
+    order, version = seed_order(orders, inquiry)
     inquiries.close()
     orders.close()
 
@@ -555,7 +556,7 @@ def test_create_relevant_order_change_version_returns_the_version_not_bad_respon
         contact_email="kunde@example.com",
         contact_phone="+49301234567",
     )
-    order, _v1 = OrderService(orders).convert_inquiry_to_order(inquiry)
+    order, _v1 = seed_order(orders, inquiry)
     inquiries.close()
     orders.close()
 

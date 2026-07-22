@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 import sys
 from dataclasses import replace
 from datetime import date, datetime, timezone
@@ -139,8 +141,8 @@ def test_inquiry_to_order_not_blocked_when_gate_satisfied() -> None:
 def test_candidate_progression_blocked_when_candidate_missing() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
-    osvc = OrderService(repo)
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    OrderService(repo)
+    order, _v1 = seed_order(repo, _sample_inquiry())
     ev = prog.evaluate_candidate_version_progression(order.order_id)
     assert ev.blocked is True
     assert REASON_CANDIDATE_ORDER_VERSION_MISSING in ev.reasons
@@ -150,7 +152,7 @@ def test_candidate_progression_not_blocked_when_candidate_set() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     ev = prog.evaluate_candidate_version_progression(order.order_id)
     assert ev.blocked is False
@@ -169,7 +171,7 @@ def test_candidate_progression_blocked_when_candidate_id_not_resolvable() -> Non
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     del repo._versions[v1.order_version_id]
     ev = prog.evaluate_candidate_version_progression(order.order_id)
@@ -181,7 +183,7 @@ def test_order_progression_view_composes_latest_candidate_and_blocked() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     v2 = osvc.create_relevant_order_change_version(
         order,
         event_date=date(2026, 11, 2),
@@ -208,8 +210,8 @@ def test_order_progression_view_composes_latest_candidate_and_blocked() -> None:
 def test_order_progression_view_when_candidate_absent() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
-    osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    OrderService(repo)
+    order, v1 = seed_order(repo, _sample_inquiry())
     view = prog.get_order_progression_view(order.order_id)
     assert view is not None
     assert view.latest_order_version is not None
@@ -232,7 +234,7 @@ def test_progression_decision_eligible_when_candidate_ok_and_not_blocked() -> No
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     d = prog.evaluate_order_progression_decision(order.order_id)
     assert isinstance(d, OrderProgressionDecision)
@@ -244,8 +246,8 @@ def test_progression_decision_eligible_when_candidate_ok_and_not_blocked() -> No
 def test_progression_decision_not_eligible_when_candidate_missing() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
-    osvc = OrderService(repo)
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    OrderService(repo)
+    order, _v1 = seed_order(repo, _sample_inquiry())
     d = prog.evaluate_order_progression_decision(order.order_id)
     assert d.eligible_for_progression_review is False
     assert REASON_CANDIDATE_ORDER_VERSION_MISSING in d.reasons
@@ -256,7 +258,7 @@ def test_progression_decision_not_eligible_when_candidate_not_resolvable() -> No
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     del repo._versions[v1.order_version_id]
     d = prog.evaluate_order_progression_decision(order.order_id)
@@ -279,7 +281,7 @@ def test_checkpoint_composes_view_and_decision() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     v2 = osvc.create_relevant_order_change_version(
         order,
         event_date=date(2026, 11, 2),
@@ -305,8 +307,8 @@ def test_checkpoint_composes_view_and_decision() -> None:
 def test_checkpoint_when_candidate_absent() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
-    osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    OrderService(repo)
+    order, v1 = seed_order(repo, _sample_inquiry())
     cp = prog.get_order_progression_checkpoint(order.order_id)
     assert cp is not None
     assert cp.latest_order_version_id == v1.order_version_id
@@ -329,7 +331,7 @@ def test_review_summary_matches_checkpoint_and_reason_count() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     v2 = osvc.create_relevant_order_change_version(
         order,
         event_date=date(2026, 11, 2),
@@ -361,8 +363,8 @@ def test_review_summary_matches_checkpoint_and_reason_count() -> None:
 def test_review_summary_when_candidate_absent() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
-    osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    OrderService(repo)
+    order, v1 = seed_order(repo, _sample_inquiry())
     sm = prog.get_order_progression_review_summary(order.order_id)
     assert sm is not None
     assert sm.latest_order_version_id == v1.order_version_id
@@ -386,7 +388,7 @@ def test_consistency_check_consistent_when_layers_align() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     cc = prog.get_order_progression_consistency_check(order.order_id)
     assert cc is not None
@@ -420,7 +422,7 @@ def test_bundle_matches_individual_derived_getters() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     v2 = osvc.create_relevant_order_change_version(
         order,
         event_date=date(2026, 11, 2),
@@ -468,7 +470,7 @@ def test_export_flattened_from_bundle_checkpoint_and_consistency() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     v2 = osvc.create_relevant_order_change_version(
         order,
         event_date=date(2026, 11, 2),
@@ -514,7 +516,7 @@ def test_text_summary_deterministic_from_export() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     oid = order.order_id
     ex = prog.get_order_progression_export(oid)
@@ -562,7 +564,7 @@ def test_reason_codes_matches_export_order_and_count() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     oid = order.order_id
     ex = prog.get_order_progression_export(oid)
@@ -588,7 +590,7 @@ def test_status_label_eligible_when_export_eligible_and_consistent() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     oid = order.order_id
     ex = prog.get_order_progression_export(oid)
@@ -603,8 +605,8 @@ def test_status_label_eligible_when_export_eligible_and_consistent() -> None:
 def test_status_label_blocked_when_candidate_missing() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
-    osvc = OrderService(repo)
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    OrderService(repo)
+    order, _v1 = seed_order(repo, _sample_inquiry())
     sl = prog.get_order_progression_status_label(order.order_id)
     assert sl is not None
     assert sl.status_label == "blocked"
@@ -623,7 +625,7 @@ def test_badges_matches_export_derived_tuple() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     oid = order.order_id
     ex = prog.get_order_progression_export(oid)
@@ -638,8 +640,8 @@ def test_badges_matches_export_derived_tuple() -> None:
 def test_badges_blocked_candidate_missing_has_reasons_present() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
-    osvc = OrderService(repo)
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    OrderService(repo)
+    order, _v1 = seed_order(repo, _sample_inquiry())
     bg = prog.get_order_progression_badges(order.order_id)
     assert bg is not None
     assert bg.badges == (
@@ -680,7 +682,7 @@ def test_severity_matches_export_derived_string() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     oid = order.order_id
     ex = prog.get_order_progression_export(oid)
@@ -696,8 +698,8 @@ def test_severity_matches_export_derived_string() -> None:
 def test_severity_blocked_candidate_missing_is_high() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
-    osvc = OrderService(repo)
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    OrderService(repo)
+    order, _v1 = seed_order(repo, _sample_inquiry())
     sv = prog.get_order_progression_severity(order.order_id)
     assert sv is not None
     assert sv.severity == "high"
@@ -794,7 +796,7 @@ def test_state_signature_matches_export_derived_string() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     oid = order.order_id
     ex = prog.get_order_progression_export(oid)
@@ -810,14 +812,15 @@ def test_state_signature_eligible_and_blocked_missing_shapes() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     sig_ok = prog.get_order_progression_state_signature(order.order_id)
-    order2, _v1b = osvc.convert_inquiry_to_order(
+    order2, _v1b = seed_order(
+        repo,
         replace(
             _sample_inquiry(),
             inquiry_id="22222222-2222-4222-8222-222222222222",
-        )
+        ),
     )
     sig_blocked = prog.get_order_progression_state_signature(order2.order_id)
     assert sig_ok is not None and sig_blocked is not None
@@ -861,7 +864,7 @@ def test_facts_matches_from_export_eligible() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     oid = order.order_id
     ex = prog.get_order_progression_export(oid)
@@ -883,8 +886,8 @@ def test_facts_matches_from_export_eligible() -> None:
 def test_facts_blocked_candidate_missing() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
-    osvc = OrderService(repo)
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    OrderService(repo)
+    order, _v1 = seed_order(repo, _sample_inquiry())
     facts = prog.get_order_progression_facts(order.order_id)
     assert facts is not None
     assert facts.has_reasons is True
@@ -927,7 +930,7 @@ def test_reason_fingerprint_eligible_no_reasons_is_none() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     oid = order.order_id
     ex = prog.get_order_progression_export(oid)
@@ -943,8 +946,8 @@ def test_reason_fingerprint_eligible_no_reasons_is_none() -> None:
 def test_reason_fingerprint_blocked_candidate_missing_joins_pipe() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
-    osvc = OrderService(repo)
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    OrderService(repo)
+    order, _v1 = seed_order(repo, _sample_inquiry())
     oid = order.order_id
     ex = prog.get_order_progression_export(oid)
     fp = prog.get_order_progression_reason_fingerprint(oid)
@@ -984,7 +987,7 @@ def test_readiness_flags_eligible_with_candidate_expected_booleans() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     oid = order.order_id
     ex = prog.get_order_progression_export(oid)
@@ -1004,8 +1007,8 @@ def test_readiness_flags_eligible_with_candidate_expected_booleans() -> None:
 def test_readiness_flags_blocked_candidate_missing_expected_booleans() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
-    osvc = OrderService(repo)
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    OrderService(repo)
+    order, _v1 = seed_order(repo, _sample_inquiry())
     ex = prog.get_order_progression_export(order.order_id)
     rf = prog.get_order_progression_readiness_flags(order.order_id)
     assert ex is not None and rf is not None
@@ -1051,7 +1054,7 @@ def test_reason_presence_eligible_with_candidate_has_reasons_false() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     oid = order.order_id
     ex = prog.get_order_progression_export(oid)
@@ -1066,8 +1069,8 @@ def test_reason_presence_eligible_with_candidate_has_reasons_false() -> None:
 def test_reason_presence_blocked_candidate_missing_has_reasons_true() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
-    osvc = OrderService(repo)
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    OrderService(repo)
+    order, _v1 = seed_order(repo, _sample_inquiry())
     ex = prog.get_order_progression_export(order.order_id)
     rp = prog.get_order_progression_reason_presence(order.order_id)
     assert ex is not None and rp is not None

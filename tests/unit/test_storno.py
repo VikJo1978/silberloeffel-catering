@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 from datetime import date, datetime, timezone
 from pathlib import Path
 
@@ -67,7 +69,7 @@ def _setup() -> tuple[
 
 def test_cancel_sets_fact_and_emits() -> None:
     repo, osvc, core, events = _setup()
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, _v1 = seed_order(repo, _sample_inquiry())
     cancelled = core.cancel_order(order.order_id)
     assert cancelled.cancelled_at is not None
     stored = repo.get_order(order.order_id)
@@ -77,7 +79,7 @@ def test_cancel_sets_fact_and_emits() -> None:
 
 def test_cancel_is_idempotent() -> None:
     _repo, osvc, core, events = _setup()
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, _v1 = seed_order(_repo, _sample_inquiry())
     first = core.cancel_order(order.order_id)
     second = core.cancel_order(order.order_id)
     assert second == first
@@ -93,7 +95,7 @@ def test_cancel_unknown_order_raises() -> None:
 def test_cancel_preserves_history_candidate_effective() -> None:
     """§1: nothing deleted, nothing reverted — references stay as historical truth."""
     repo, osvc, core, _events = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
@@ -109,7 +111,7 @@ def test_cancel_preserves_history_candidate_effective() -> None:
 
 def test_operational_commands_refused_after_cancel() -> None:
     _repo, osvc, core, _events = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(_repo, _sample_inquiry())
     core.cancel_order(order.order_id)
     with pytest.raises(ValueError, match="cancelled"):
         core.confirm_kitchen_print(order.order_id, v1.order_version_id)
@@ -119,7 +121,7 @@ def test_operational_commands_refused_after_cancel() -> None:
 
 def test_order_side_mutations_refused_after_cancel() -> None:
     _repo, osvc, core, _events = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(_repo, _sample_inquiry())
     core.cancel_order(order.order_id)
     with pytest.raises(ValueError, match="Storno"):
         osvc.create_relevant_order_change_version(
@@ -137,7 +139,7 @@ def test_order_side_mutations_refused_after_cancel() -> None:
 def test_ready_to_send_blocked_with_cancelled_reason() -> None:
     """§3: cancelled beats everything, even a previously fully-released order."""
     _repo, osvc, core, _events = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(_repo, _sample_inquiry())
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
     assert core.evaluate_ready_to_send(order.order_id).ready is True
@@ -150,7 +152,7 @@ def test_ready_to_send_blocked_with_cancelled_reason() -> None:
 def test_cancelled_order_disappears_from_wochenuebersicht() -> None:
     repo, osvc, core, _events = _setup()
     week = WochenuebersichtService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
     assert len(week.get_week_overview(2026, 40).entries) == 1

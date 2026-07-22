@@ -52,11 +52,13 @@ def _inquiry() -> Inquiry:
 
 
 def _effective_v1():  # noqa: ANN202
+    from tests.helpers.order_seed import seed_order
+
     repository = InMemoryOrderRepository()
     events: list[object] = []
     orders = OrderService(repository, event_sink=events.append)
     core = OperationalCoreService(repository)
-    order, version = orders.convert_inquiry_to_order(_inquiry())
+    order, version = seed_order(repository, _inquiry())
     core.confirm_kitchen_print(order.order_id, version.order_version_id)
     core.make_order_version_effective(order.order_id, version.order_version_id)
     return repository, orders, core, events, order, version

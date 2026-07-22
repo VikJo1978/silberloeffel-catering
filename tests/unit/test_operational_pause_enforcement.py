@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 import sqlite3
 import re
 from pathlib import Path
@@ -231,7 +233,7 @@ def test_fake_send_during_pause_returns_blocked_with_zero_rows(tmp_path: Path) -
 
 def test_effective_switch_during_pause_does_not_clear_pause() -> None:
     repo, _pauses, osvc, core, _events = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
     v2 = osvc.propose_order_version_change(
@@ -270,7 +272,7 @@ def test_effective_switch_during_pause_does_not_clear_pause() -> None:
 
 def test_storno_blocks_pause_and_preserves_history() -> None:
     _repo, pauses, osvc, core, _events = _setup()
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, _v1 = seed_order(_repo, _sample_inquiry())
     _pause(
         core,
         order.order_id,

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 from dataclasses import FrozenInstanceError, replace
 from datetime import date, datetime, timezone
 
@@ -74,7 +76,7 @@ def _setup() -> tuple[
 
 def test_confirm_kitchen_print_sets_timestamp_and_emits() -> None:
     repo, osvc, core, events = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     confirmed = core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     assert confirmed.kitchen_print_confirmed_at is not None
     stored = repo.get_order_version(v1.order_version_id)
@@ -88,7 +90,7 @@ def test_confirm_kitchen_print_sets_timestamp_and_emits() -> None:
 
 def test_confirm_kitchen_print_is_idempotent() -> None:
     _repo, osvc, core, events = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(_repo, _sample_inquiry())
     first = core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     second = core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     assert second == first  # same timestamp, no re-stamp
@@ -97,12 +99,13 @@ def test_confirm_kitchen_print_is_idempotent() -> None:
 
 def test_confirm_kitchen_print_rejects_foreign_or_unknown_version() -> None:
     _repo, osvc, core, _events = _setup()
-    order_a, _va = osvc.convert_inquiry_to_order(_sample_inquiry())
-    order_b, vb = osvc.convert_inquiry_to_order(
+    order_a, _va = seed_order(_repo, _sample_inquiry())
+    order_b, vb = seed_order(
+        _repo,
         replace(
             _sample_inquiry(),
             inquiry_id="22222222-2222-4222-8222-222222222222",
-        )
+        ),
     )
     with pytest.raises(ValueError):
         core.confirm_kitchen_print(order_a.order_id, vb.order_version_id)
@@ -114,7 +117,7 @@ def test_confirm_kitchen_print_rejects_foreign_or_unknown_version() -> None:
 
 def test_make_effective_blocked_without_kitchen_print() -> None:
     repo, osvc, core, events = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     with pytest.raises(ValueError, match="kitchen print not confirmed"):
         core.make_order_version_effective(order.order_id, v1.order_version_id)
     stored = repo.get_order(order.order_id)
@@ -124,7 +127,7 @@ def test_make_effective_blocked_without_kitchen_print() -> None:
 
 def test_make_effective_succeeds_after_confirmation() -> None:
     repo, osvc, core, events = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     updated = core.make_order_version_effective(order.order_id, v1.order_version_id)
     assert updated.effective_order_version_id == v1.order_version_id
@@ -139,7 +142,7 @@ def test_make_effective_succeeds_after_confirmation() -> None:
 
 def test_make_effective_clears_current_candidate() -> None:
     repo, osvc, core, _events = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
     v2 = osvc.propose_order_version_change(
@@ -162,7 +165,7 @@ def test_make_effective_clears_current_candidate() -> None:
 
 def test_make_effective_rejects_non_candidate_version() -> None:
     _repo, osvc, core, _events = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(_repo, _sample_inquiry())
     v2 = osvc.create_relevant_order_change_version(
         order,
         event_date=date(2026, 10, 2),
@@ -179,7 +182,7 @@ def test_make_effective_rejects_non_candidate_version() -> None:
 
 def test_history_immutable_after_switch() -> None:
     repo, osvc, core, _events = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     v2 = osvc.create_relevant_order_change_version(
         order,
         event_date=date(2026, 10, 2),
@@ -200,7 +203,7 @@ def test_history_immutable_after_switch() -> None:
 
 def test_confirming_old_version_does_not_affect_current_effective() -> None:
     repo, osvc, core, _events = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     v2 = osvc.create_relevant_order_change_version(
         order,
         event_date=date(2026, 10, 2),
@@ -228,7 +231,7 @@ def test_ready_to_send_unknown_order_blocked() -> None:
 
 def test_ready_to_send_blocked_without_effective_version() -> None:
     _repo, osvc, core, _events = _setup()
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, _v1 = seed_order(_repo, _sample_inquiry())
     ev = core.evaluate_ready_to_send(order.order_id)
     assert ev.ready is False
     assert ev.reasons == (READY_REASON_NO_EFFECTIVE_VERSION,)
@@ -236,7 +239,7 @@ def test_ready_to_send_blocked_without_effective_version() -> None:
 
 def test_ready_to_send_ready_after_confirm_and_switch() -> None:
     _repo, osvc, core, _events = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(_repo, _sample_inquiry())
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
     ev = core.evaluate_ready_to_send(order.order_id)
@@ -246,7 +249,7 @@ def test_ready_to_send_ready_after_confirm_and_switch() -> None:
 
 def test_evaluate_ready_to_send_is_pure() -> None:
     repo, osvc, core, events = _setup()
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, _v1 = seed_order(repo, _sample_inquiry())
     before_order = repo.get_order(order.order_id)
     core.evaluate_ready_to_send(order.order_id)
     assert repo.get_order(order.order_id) == before_order
@@ -255,7 +258,7 @@ def test_evaluate_ready_to_send_is_pure() -> None:
 
 def test_request_ready_to_send_emits_blocked_and_changes_nothing() -> None:
     repo, osvc, core, events = _setup()
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, _v1 = seed_order(repo, _sample_inquiry())
     before_order = repo.get_order(order.order_id)
     ev = core.request_ready_to_send(order.order_id)
     assert ev.ready is False
@@ -269,7 +272,7 @@ def test_request_ready_to_send_emits_blocked_and_changes_nothing() -> None:
 
 def test_request_ready_to_send_emits_success() -> None:
     _repo, osvc, core, events = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(_repo, _sample_inquiry())
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
     ev = core.request_ready_to_send(order.order_id)
@@ -285,7 +288,7 @@ def test_ready_reason_when_effective_set_but_print_missing_is_unreachable_via_se
     from catering_system.domain.ready_to_send import evaluate_ready_to_send_from_facts
 
     _repo, osvc, _core, _events = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(_repo, _sample_inquiry())
     from dataclasses import replace
 
     tampered = replace(order, effective_order_version_id=v1.order_version_id)
@@ -296,7 +299,7 @@ def test_ready_reason_when_effective_set_but_print_missing_is_unreachable_via_se
 
 def test_order_and_version_are_frozen() -> None:
     _repo, osvc, _core, _events = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(_repo, _sample_inquiry())
     with pytest.raises(FrozenInstanceError):
         order.effective_order_version_id = v1.order_version_id  # type: ignore[misc]
     with pytest.raises(FrozenInstanceError):

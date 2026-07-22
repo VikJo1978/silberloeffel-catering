@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 import re
 from datetime import date, datetime, timezone
 
@@ -75,7 +77,7 @@ def _order_states() -> list[tuple[InMemoryOrderRepository, Order]]:
         repo = InMemoryOrderRepository()
         osvc = OrderService(repo)
         core = OperationalCoreService(repo)
-        order, v1 = osvc.convert_inquiry_to_order(_inquiry())
+        order, v1 = seed_order(repo, _inquiry())
         configure(repo, osvc, core, order, v1)
         refreshed = repo.get_order(order.order_id)
         assert refreshed is not None
@@ -152,8 +154,8 @@ def test_week_uses_berlin_calendar() -> None:
 
 def test_detail_caps_and_truncation_flags() -> None:
     repo = InMemoryOrderRepository()
-    osvc = OrderService(repo)
-    order, _v1 = osvc.convert_inquiry_to_order(_inquiry())
+    OrderService(repo)
+    order, _v1 = seed_order(repo, _inquiry())
     fresh = repo.get_order(order.order_id)
     assert fresh is not None
     many_orders = [

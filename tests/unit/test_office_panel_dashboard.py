@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 from datetime import date, timedelta
 
 from catering_system.ui.office_api_views import berlin_today
@@ -396,7 +398,7 @@ def _panel_with_order(event_date: date) -> OfficePanel:
         contact_email="kunde@example.com",
         contact_phone="030 1234567",
     )
-    panel.order_service.convert_inquiry_to_order(inquiry)
+    seed_order(orders, inquiry)
     return panel
 
 

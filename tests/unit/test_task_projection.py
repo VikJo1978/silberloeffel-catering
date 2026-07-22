@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 from datetime import UTC, date, datetime, timedelta
 
 from catering_system.domain.offer import (
@@ -27,7 +29,6 @@ from catering_system.repositories.in_memory_payment_reminder_repository import (
 )
 from catering_system.services.inquiry_service import InquiryService
 from catering_system.services.operational_core_service import OperationalCoreService
-from catering_system.services.order_service import OrderService
 from catering_system.services.payment_reminder_service import PaymentReminderService
 from catering_system.services.task_projection_service import TaskProjectionService
 from catering_system.services.work_center_service import WorkCenterService
@@ -196,13 +197,13 @@ def test_verify_task_emitted() -> None:
     assert row.action_href == f"/inquiry/{inquiry.inquiry_id}"
 
 
-def test_convert_task_emitted() -> None:
+def test_prepare_offer_task_emitted() -> None:
     inquiries = InMemoryInquiryRepository()
     inquiry = _save_inquiry(inquiries, intake_subject="Bereit")
     rows = _service(inquiries=inquiries).list_tasks()
     assert len(rows) == 1
-    assert rows[0].task_id == f"inquiry:{inquiry.inquiry_id}:convert"
-    assert rows[0].category == "convert"
+    assert rows[0].task_id == f"inquiry:{inquiry.inquiry_id}:prepare-offer"
+    assert rows[0].category == "prepare_offer"
 
 
 def test_convert_accepted_task_emitted() -> None:
@@ -229,7 +230,7 @@ def test_print_confirm_task_emitted() -> None:
     inquiries = InMemoryInquiryRepository()
     orders = InMemoryOrderRepository()
     inquiry = _save_inquiry(inquiries)
-    order, version = OrderService(orders).convert_inquiry_to_order(inquiry)
+    order, version = seed_order(orders, inquiry)
     rows = _service(inquiries=inquiries, orders=orders).list_tasks()
     task_ids = {row.task_id for row in rows}
     assert (
@@ -243,7 +244,7 @@ def test_effective_task_emitted() -> None:
     inquiries = InMemoryInquiryRepository()
     orders = InMemoryOrderRepository()
     inquiry = _save_inquiry(inquiries)
-    order, version = OrderService(orders).convert_inquiry_to_order(inquiry)
+    order, version = seed_order(orders, inquiry)
     OperationalCoreService(orders).confirm_kitchen_print(
         order.order_id, version.order_version_id
     )
@@ -260,7 +261,7 @@ def test_payment_task_emitted_with_overdue_urgency() -> None:
     orders = InMemoryOrderRepository()
     reminders = InMemoryPaymentReminderRepository()
     inquiry = _save_inquiry(inquiries, event_date=date(2026, 8, 1))
-    order, _version = OrderService(orders).convert_inquiry_to_order(inquiry)
+    order, _version = seed_order(orders, inquiry)
     reminders.save(
         OrderPaymentReminder(
             order_id=order.order_id,
@@ -292,8 +293,8 @@ def test_sort_overdue_payment_before_verify() -> None:
         call_verification_required=True,
         call_verification_status="pending",
     )
-    order, _version = OrderService(orders).convert_inquiry_to_order(
-        _save_inquiry(inquiries, location_text="Second")
+    order, _version = seed_order(
+        orders, _save_inquiry(inquiries, location_text="Second")
     )
     reminders.save(
         OrderPaymentReminder(

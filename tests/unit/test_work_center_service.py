@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from unittest.mock import patch
@@ -183,9 +185,9 @@ def _save_upcoming_order(
     cancelled: bool = False,
 ) -> Order:
     inquiry = _save_inquiry(inquiries, event_date=event_date)
-    order_service = OrderService(orders)
+    OrderService(orders)
     core = OperationalCoreService(orders)
-    order, version = order_service.convert_inquiry_to_order(inquiry)
+    order, version = seed_order(orders, inquiry)
     updated_version = replace(version, event_date=event_date)
     orders.update_order_version(updated_version)
     if effective:
