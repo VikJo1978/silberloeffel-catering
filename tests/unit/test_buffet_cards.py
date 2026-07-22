@@ -127,10 +127,14 @@ def _three_position_snapshot() -> dict[str, object]:
     return payload
 
 
-def _buffet_service(offers, orders) -> BuffetCardsService:
+def _buffet_service(
+    offers,
+    orders,
+    snapshots=None,
+) -> BuffetCardsService:
     return BuffetCardsService(
         orders,
-        OrderPrintProjectionService(orders, offers),
+        OrderPrintProjectionService(orders, offers, snapshots),
     )
 
 
@@ -312,7 +316,7 @@ def test_buffet_cards_from_conversion_link() -> None:
         acceptance_id,
     )
 
-    view = _buffet_service(offers, orders).resolve(
+    view = _buffet_service(offers, orders, offer_service._commercial_snapshots).resolve(
         order.order_id,
         order_version.order_version_id,
     )
@@ -342,7 +346,7 @@ def test_buffet_cards_three_positions_from_offer_snapshot() -> None:
         updated.acceptance_evidence.acceptance_id,
     )
 
-    view = _buffet_service(offers, orders).resolve(
+    view = _buffet_service(offers, orders, service._commercial_snapshots).resolve(
         order.order_id,
         order_version.order_version_id,
     )
