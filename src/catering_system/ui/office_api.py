@@ -36,7 +36,6 @@ from catering_system.domain.inquiry import (
 )
 from catering_system.domain.inquiry_contact_completeness import (
     derive_inquiry_contact_completeness,
-    inquiry_contact_complete,
     missing_contact_fields,
 )
 from catering_system.domain.offer import (
@@ -44,7 +43,6 @@ from catering_system.domain.offer import (
     SENT_CHANNELS,
     AcceptanceChannel,
     SentChannel,
-    offer_blocks_direct_inquiry_conversion,
 )
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_payment_reminder import (
@@ -1012,6 +1010,10 @@ class OfficeApi:
     def cmd_convert(
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict
     ) -> tuple[int, dict[str, object]]:
+        """Compatibility endpoint: return existing Order or refuse create.
+
+        Order creation is only allowed via convert-accepted (Accepted Offer).
+        """
         inquiry = self._require_inquiry(path_ids["id"])
         linked_orders = [
             order
@@ -1024,53 +1026,7 @@ class OfficeApi:
                 "order_id": order.order_id,
                 "order_version_id": version.order_version_id,
             }
-        offer = self.offers.get_by_source_inquiry_id(inquiry.inquiry_id)
-        state = views.inquiry_office_state(
-            inquiry,
-            linked_orders,
-            offer=offer,
-            today=views.berlin_today(),
-        )
-        if inquiry.crm_stage == "Abgelehnt / verloren":
-            raise ApiError(422, "inquiry_rejected")
-        if offer is not None and offer_blocks_direct_inquiry_conversion(
-            offer, today=views.berlin_today()
-        ):
-            raise ApiError(422, "offer_blocks_conversion")
-        if not inquiry_contact_complete(inquiry):
-            raise ApiError(422, "contact_information_incomplete")
-        if state.next_action != "convert":
-            raise ApiError(422, "verification_gate_blocked")
-        try:
-            order, version = self.order_service.convert_inquiry_to_order(inquiry)
-        except sqlite3.IntegrityError:
-            # Race: another writer created the order — return it idempotently.
-            if self.order_service.orders_for_inquiry(inquiry.inquiry_id):
-                order, version = self.order_service.convert_inquiry_to_order(inquiry)
-                return 200, {
-                    "order_id": order.order_id,
-                    "order_version_id": version.order_version_id,
-                }
-            raise
-        except ValueError as exc:
-            message = str(exc)
-            if "contact information incomplete" in message:
-                raise ApiError(422, "contact_information_incomplete") from exc
-            if "already has a linked order" in message:
-                order, version = self.order_service.convert_inquiry_to_order(inquiry)
-                return 200, {
-                    "order_id": order.order_id,
-                    "order_version_id": version.order_version_id,
-                }
-            raise ApiError(422, "verification_gate_blocked") from exc
-        self.inquiry_service.update_inquiry(
-            inquiry.inquiry_id,
-            crm_stage="Bestätigt / Auftrag",
-        )
-        return 201, {
-            "order_id": order.order_id,
-            "order_version_id": version.order_version_id,
-        }
+        raise ApiError(422, "accepted_offer_required")
 
     def cmd_prepare_offer(
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict

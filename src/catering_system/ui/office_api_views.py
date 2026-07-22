@@ -337,7 +337,7 @@ def inquiry_detail(
     detail["intake_summary"] = inquiry.intake_summary
     detail["intake_external_ref"] = inquiry.intake_external_ref
     state = inquiry_office_state(inquiry, orders, offer=offer, today=today)
-    detail["allows_conversion"] = state.next_action == "convert"
+    detail["allows_conversion"] = False
     detail["next_action"] = state.next_action
     if state.offer is not None:
         detail["offer"] = inquiry_offer_projection_shape(state.offer)

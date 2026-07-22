@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 import json
 import queue
 import sqlite3
@@ -47,7 +49,7 @@ def _seed(db_path: Path) -> dict[str, str]:
     inquiries = SQLiteInquiryRepository(db_path)
     orders = SQLiteOrderRepository(db_path)
     inquiry_service = InquiryService(inquiries)
-    order_service = OrderService(orders)
+    OrderService(orders)
     core = OperationalCoreService(orders)
 
     def make_inquiry(**overrides):  # noqa: ANN202
@@ -79,7 +81,7 @@ def _seed(db_path: Path) -> dict[str, str]:
     ids["inquiry_convertible"] = convertible.inquiry_id
 
     printed_src = make_inquiry(location_text="Bremen")
-    order_printed, v1 = order_service.convert_inquiry_to_order(printed_src)
+    order_printed, v1 = seed_order(orders, printed_src)
     core.confirm_kitchen_print(order_printed.order_id, v1.order_version_id)
     core.make_order_version_effective(order_printed.order_id, v1.order_version_id)
     ids["inquiry_printed"] = printed_src.inquiry_id
@@ -87,13 +89,13 @@ def _seed(db_path: Path) -> dict[str, str]:
     ids["version_ready"] = v1.order_version_id
 
     unprinted_src = make_inquiry(location_text="Lübeck")
-    order_unprinted, v1u = order_service.convert_inquiry_to_order(unprinted_src)
+    order_unprinted, v1u = seed_order(orders, unprinted_src)
     ids["order_unprinted"] = order_unprinted.order_id
     ids["version_unprinted"] = v1u.order_version_id
     ids["inquiry_unprinted"] = unprinted_src.inquiry_id
 
     cancelled_src = make_inquiry(location_text="Flensburg")
-    order_cancelled, v1c = order_service.convert_inquiry_to_order(cancelled_src)
+    order_cancelled, v1c = seed_order(orders, cancelled_src)
     core.cancel_order(order_cancelled.order_id)
     ids["order_cancelled"] = order_cancelled.order_id
     ids["version_cancelled"] = v1c.order_version_id
@@ -299,8 +301,8 @@ def test_queue_view_attention_counts_and_tops(api) -> None:
         row["inquiry_id"]: row["next_action"] for row in body["neue_anfragen_top"]
     }
     assert top_actions[ids["inquiry_verify"]] == "verify"
-    assert top_actions[ids["inquiry_convertible"]] == "convert"
-    assert top_actions[ids["inquiry_offer_ready"]] == "convert"
+    assert top_actions[ids["inquiry_convertible"]] == "prepare-offer"
+    assert top_actions[ids["inquiry_offer_ready"]] == "prepare-offer"
     assert top_actions[ids["inquiry_website"]] == "verify"
     assert ids["inquiry_rejected"] not in top_actions
     (blocked_row,) = body["auftraege_top"]
@@ -1023,46 +1025,19 @@ def test_update_requires_matching_updated_at(api) -> None:
     assert body["updated_at"] != detail["updated_at"]
 
 
-def test_verify_then_convert_flow_with_gates(api) -> None:
+def test_verify_then_convert_hard_blocks_without_accepted_offer(api) -> None:
     base, ids, _db = api
     inquiry_id = ids["inquiry_verify"]
-    # convert before verification: B5 gate
     status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
-    assert (status, body["error"]) == (422, "verification_gate_blocked")
+    assert (status, body["error"]) == (422, "accepted_offer_required")
     status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/verify")
     assert status == 200
-    # repeated verify stays success (current behavior)
-    status, _body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/verify")
-    assert status == 200
     status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
-    assert status == 201
-    assert set(body) == {"command_id", "order_id", "order_version_id"}
+    assert (status, body["error"]) == (422, "accepted_offer_required")
     status, detail, _h = _get(f"{base}/office/v1/inquiries/{inquiry_id}")
     assert status == 200
-    assert detail["crm_stage"] == "Bestätigt / Auftrag"
     assert detail["allows_conversion"] is False
-    status, body, _h = _post(
-        f"{base}/office/v1/inquiries/{inquiry_id}/update",
-        args={
-            "event_date": detail["event_date"],
-            "crm_stage": "Abgelehnt / verloren",
-            "time_window_text": detail["time_window_text"],
-            "location_text": detail["location_text"],
-            "guest_count_estimate": detail["guest_count_estimate"],
-            "planning_mode": detail["planning_mode"],
-        },
-        expect={"updated_at": detail["updated_at"]},
-    )
-    assert (status, body["error"]) == (422, "active_order_crm_stage_conflict")
-    status, detail_after_rejection, _h = _get(
-        f"{base}/office/v1/inquiries/{inquiry_id}"
-    )
-    assert status == 200
-    assert detail_after_rejection["crm_stage"] == "Bestätigt / Auftrag"
-    # second convert while active: idempotent success (same order)
-    status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
-    assert status == 200
-    assert set(body) >= {"order_id", "order_version_id"}
+    assert detail["orders_total_count"] == 0
 
 
 def test_rejected_inquiry_cannot_convert(api) -> None:
@@ -1070,7 +1045,7 @@ def test_rejected_inquiry_cannot_convert(api) -> None:
     status, body, _h = _post(
         f"{base}/office/v1/inquiries/{ids['inquiry_rejected']}/convert"
     )
-    assert (status, body["error"]) == (422, "inquiry_rejected")
+    assert (status, body["error"]) == (422, "accepted_offer_required")
 
 
 def test_convert_after_storno_returns_existing_order_via_api(api) -> None:
@@ -1084,17 +1059,24 @@ def test_convert_after_storno_returns_existing_order_via_api(api) -> None:
     assert body["order_id"] == existing_order_id
 
 
-def test_legacy_convert_blocked_with_prepared_offer(api) -> None:
+def test_legacy_convert_without_order_requires_accepted_offer(api) -> None:
+    base, ids, _db = api
+    inquiry_id = ids["inquiry_convertible"]
+    status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
+    assert (status, body["error"]) == (422, "accepted_offer_required")
+
+
+def test_legacy_convert_with_prepared_offer_still_requires_accepted_offer(api) -> None:
     base, ids, db = api
     offer_id, _version_id = _prepare_offer(api)
     inquiry_id = ids["inquiry_offer_ready"]
     status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
-    assert (status, body["error"]) == (422, "offer_blocks_conversion")
+    assert (status, body["error"]) == (422, "accepted_offer_required")
     conn = sqlite3.connect(db)
     order_count = conn.execute(
         """
         SELECT COUNT(*) FROM orders
-        WHERE source_inquiry_id = ? AND cancelled_at IS NULL
+        WHERE source_inquiry_id = ?
         """,
         (inquiry_id,),
     ).fetchone()[0]
@@ -1107,38 +1089,7 @@ def test_legacy_convert_blocked_with_prepared_offer(api) -> None:
     offers.close()
 
 
-def test_legacy_convert_blocked_with_accepted_offer(api) -> None:
-    base, ids, db = api
-    offer_id, _version_id, _acceptance_id, _variant_id = _prepare_send_accept(api)
-    inquiry_id = ids["inquiry_offer_ready"]
-    status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
-    assert (status, body["error"]) == (422, "offer_blocks_conversion")
-    conn = sqlite3.connect(db)
-    order_count = conn.execute(
-        """
-        SELECT COUNT(*) FROM orders
-        WHERE source_inquiry_id = ? AND cancelled_at IS NULL
-        """,
-        (inquiry_id,),
-    ).fetchone()[0]
-    conn.close()
-    assert order_count == 0
-    offers = SQLiteOfferRepository(db)
-    stored = offers.get(offer_id)
-    assert stored is not None
-    assert stored.conversion_link is None
-    offers.close()
-
-
-def test_legacy_convert_without_offer_still_works(api) -> None:
-    base, ids, _db = api
-    inquiry_id = ids["inquiry_convertible"]
-    status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
-    assert status == 201
-    assert set(body) == {"command_id", "order_id", "order_version_id"}
-
-
-def test_legacy_convert_allowed_with_expired_offer(api) -> None:
+def test_legacy_convert_with_expired_offer_still_requires_accepted_offer(api) -> None:
     base, ids, db = api
     inquiry_id = ids["inquiry_offer_ready"]
     snapshot = _valid_offer_snapshot(inquiry_id=inquiry_id)
@@ -1159,18 +1110,17 @@ def test_legacy_convert_allowed_with_expired_offer(api) -> None:
         == 200
     )
     status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
-    assert status == 201
-    assert set(body) == {"command_id", "order_id", "order_version_id"}
+    assert (status, body["error"]) == (422, "accepted_offer_required")
     conn = sqlite3.connect(db)
     order_count = conn.execute(
         """
         SELECT COUNT(*) FROM orders
-        WHERE source_inquiry_id = ? AND cancelled_at IS NULL
+        WHERE source_inquiry_id = ?
         """,
         (inquiry_id,),
     ).fetchone()[0]
     conn.close()
-    assert order_count == 1
+    assert order_count == 0
 
 
 def test_versions_expect_and_cancelled_gate(api) -> None:
@@ -1652,13 +1602,15 @@ def test_external_ref_conflict_is_recognized_typed(api) -> None:
 def test_command_replay_returns_recorded_result_without_double_effect(api) -> None:
     base, ids, _db = api
     command_id = str(uuid.uuid4())
-    url = f"{base}/office/v1/inquiries/{ids['inquiry_convertible']}/convert"
+    # Compatibility convert on an inquiry that already has an Order.
+    url = f"{base}/office/v1/inquiries/{ids['inquiry_cancelled_order']}/convert"
     status1, body1, _h = _post(url, command_id=command_id)
-    assert status1 == 201
+    assert status1 == 200
     status2, body2, _h = _post(url, command_id=command_id)
     assert (status2, body2) == (status1, body1)  # verbatim replay
-    # only one active order exists
-    _s, detail, _h = _get(f"{base}/office/v1/inquiries/{ids['inquiry_convertible']}")
+    _s, detail, _h = _get(
+        f"{base}/office/v1/inquiries/{ids['inquiry_cancelled_order']}"
+    )
     assert detail["orders_total_count"] == 1
 
 
@@ -1684,7 +1636,7 @@ def test_same_command_id_different_fingerprint_conflicts(api) -> None:
 def test_lock_contention_503_then_safe_retry_same_command_id(api) -> None:
     base, ids, db = api
     command_id = str(uuid.uuid4())
-    url = f"{base}/office/v1/inquiries/{ids['inquiry_convertible']}/convert"
+    url = f"{base}/office/v1/inquiries/{ids['inquiry_cancelled_order']}/convert"
 
     holder = sqlite3.connect(db)
     holder.execute("PRAGMA busy_timeout = 0")
@@ -1698,8 +1650,10 @@ def test_lock_contention_503_then_safe_retry_same_command_id(api) -> None:
         holder.close()
 
     status, body, _h = _post(url, command_id=command_id)
-    assert status == 201  # retry with the same command_id succeeds exactly once
-    _s, detail, _h = _get(f"{base}/office/v1/inquiries/{ids['inquiry_convertible']}")
+    assert status == 200  # retry with the same command_id succeeds exactly once
+    _s, detail, _h = _get(
+        f"{base}/office/v1/inquiries/{ids['inquiry_cancelled_order']}"
+    )
     assert detail["orders_total_count"] == 1
 
 

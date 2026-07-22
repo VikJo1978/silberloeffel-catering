@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 from datetime import UTC, datetime
 
 import pytest
@@ -16,7 +18,6 @@ from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
 )
 from catering_system.services.offer_service import OfferService
-from catering_system.services.order_service import OrderService
 from tests.unit.test_offer_service import (
     _INQUIRY_ID,
     _acceptance_args,
@@ -61,7 +62,7 @@ def test_prepare_offer_rejects_when_active_order_exists() -> None:
     orders = InMemoryOrderRepository()
     inquiry = _sample_inquiry()
     inquiries.save(inquiry)
-    OrderService(orders).convert_inquiry_to_order(inquiry)
+    seed_order(orders, inquiry)
     service = OfferService(offers, inquiries, orders)
     with pytest.raises(ValueError, match="active order blocks offer preparation"):
         service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())

@@ -79,6 +79,10 @@ _INQUIRY_COMMAND_ERROR_LABELS: dict[str, str] = {
         "Das angenommene Angebot kann derzeit nicht in einen Auftrag umgewandelt werden."
     ),
     "already_converted": "Für diese Anfrage existiert bereits ein Auftrag.",
+    "accepted_offer_required": (
+        "Auftrag nur aus angenommenem Angebot — "
+        "direkte Umwandlung aus der Anfrage ist nicht möglich."
+    ),
     "verification_gate_blocked": (
         "Die Rückrufprüfung ist noch nicht erfüllt — "
         "eine Umwandlung ist noch nicht möglich."
@@ -138,6 +142,8 @@ def office_command_error_message(code_or_text: str) -> str:
         return _OFFER_COMMAND_ERROR_LABELS["conversion_already_exists"]
     if "accepted offer conversion gate" in lowered or "conversion blocked" in lowered:
         return _OFFER_COMMAND_ERROR_LABELS["conversion_blocked"]
+    if "accepted offer required" in lowered:
+        return _INQUIRY_COMMAND_ERROR_LABELS["accepted_offer_required"]
     if "offer blocks conversion" in lowered:
         return _INQUIRY_COMMAND_ERROR_LABELS["offer_blocks_conversion"]
     if "contact information incomplete" in lowered:

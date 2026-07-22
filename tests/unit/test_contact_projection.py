@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 from datetime import UTC, date, datetime
 
 from catering_system.domain.contact_projection import derive_contact_identity
@@ -131,8 +133,8 @@ def test_open_inquiry_and_active_order_counts() -> None:
         intake_subject="Offene Anfrage",
     )
     orders = InMemoryOrderRepository()
-    order_service = OrderService(orders)
-    order, _version = order_service.convert_inquiry_to_order(inquiry)
+    OrderService(orders)
+    order, _version = seed_order(orders, inquiry)
     assert order.cancelled_at is None
     rows = _service(inquiries=inquiries, orders=orders).list_contacts()
     assert rows[0].open_inquiries == 0
@@ -197,7 +199,7 @@ def test_offer_and_order_linkage_in_detail() -> None:
         )
     )
     orders = InMemoryOrderRepository()
-    order, _version = OrderService(orders).convert_inquiry_to_order(inquiry)
+    order, _version = seed_order(orders, inquiry)
     detail = _service(
         inquiries=inquiries,
         offers=offers,

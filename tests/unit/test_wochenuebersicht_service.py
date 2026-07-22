@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 from datetime import date, datetime, timezone
 from uuid import uuid4
 
@@ -37,7 +39,7 @@ _WEEK = 40
 def _inquiry(event_date: date) -> Inquiry:
     now = datetime.now(timezone.utc)
     return Inquiry(
-        inquiry_id="11111111-1111-1111-1111-111111111111",
+        inquiry_id=str(uuid4()),
         event_date=event_date,
         created_at=now,
         updated_at=now,
@@ -73,7 +75,7 @@ def _setup() -> tuple[
 def _make_effective_order(
     osvc: OrderService, core: OperationalCoreService, event_date: date
 ) -> str:
-    order, v1 = osvc.convert_inquiry_to_order(_inquiry(event_date))
+    order, v1 = seed_order(osvc._order_repository, _inquiry(event_date))
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
     return order.order_id
@@ -88,7 +90,7 @@ def test_empty_week_returns_empty_overview() -> None:
 
 def test_order_without_effective_version_never_appears() -> None:
     _repo, osvc, _core, week = _setup()
-    osvc.convert_inquiry_to_order(_inquiry(date(2026, 10, 1)))  # no confirm, no switch
+    seed_order(_repo, _inquiry(date(2026, 10, 1)))  # no confirm, no switch
     assert week.get_week_overview(_WEEK_YEAR, _WEEK).entries == ()
 
 
@@ -114,7 +116,7 @@ def test_effective_order_outside_week_excluded() -> None:
 def test_overview_shows_effective_not_latest_version() -> None:
     """A newer historical version must not leak in — effective is the only kitchen truth."""
     repo, osvc, core, week = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_inquiry(date(2026, 10, 1)))
+    order, v1 = seed_order(repo, _inquiry(date(2026, 10, 1)))
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
     osvc.create_relevant_order_change_version(
@@ -135,7 +137,7 @@ def test_overview_shows_effective_not_latest_version() -> None:
 
 def test_candidate_change_reaches_week_and_day_only_after_effective_switch() -> None:
     _repo, osvc, core, week = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_inquiry(date(2026, 10, 1)))
+    order, v1 = seed_order(_repo, _inquiry(date(2026, 10, 1)))
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
     v2 = osvc.propose_order_version_change(
@@ -188,7 +190,7 @@ def test_overview_read_is_pure() -> None:
 
 def test_pause_projection_follows_effective_v2_and_disappears_after_resume() -> None:
     _repo, osvc, core, week = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_inquiry(date(2026, 10, 1)))
+    order, v1 = seed_order(_repo, _inquiry(date(2026, 10, 1)))
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
     v2 = osvc.propose_order_version_change(
@@ -256,7 +258,7 @@ def test_day_overview_excludes_cancelled_and_unreleased_orders() -> None:
     _repo, osvc, core, week = _setup()
     cancelled = _make_effective_order(osvc, core, date(2026, 10, 1))
     core.cancel_order(cancelled)
-    osvc.convert_inquiry_to_order(_inquiry(date(2026, 10, 1)))  # no effective version
+    seed_order(_repo, _inquiry(date(2026, 10, 1)))  # no effective version
     assert week.get_day_overview(date(2026, 10, 1)) == ()
 
 

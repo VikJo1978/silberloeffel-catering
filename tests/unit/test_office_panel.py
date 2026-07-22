@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 import base64
 import html
 import json
@@ -37,6 +39,7 @@ from catering_system.ui.office_panel_views import _page
 _PASSWORD = "test-pw"
 _AUTH = "Basic " + base64.b64encode(f"office:{_PASSWORD}".encode()).decode()
 _CSRF_TOKEN = csrf_token_for_password(_PASSWORD)
+_PANEL_REPOS: dict[str, tuple[InMemoryInquiryRepository, InMemoryOrderRepository]] = {}
 
 
 @pytest.fixture()
@@ -49,7 +52,10 @@ def panel():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     host, port = server.server_address[:2]
-    yield f"http://{host}:{port}"
+    base = f"http://{host}:{port}"
+    _PANEL_REPOS[base] = (inquiry_repo, order_repo)
+    yield base
+    _PANEL_REPOS.pop(base, None)
     server.shutdown()
     server.server_close()
 
@@ -69,7 +75,10 @@ def premium_panel():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     host, port = server.server_address[:2]
-    yield f"http://{host}:{port}"
+    base = f"http://{host}:{port}"
+    _PANEL_REPOS[base] = (inquiry_repo, order_repo)
+    yield base
+    _PANEL_REPOS.pop(base, None)
     server.shutdown()
     server.server_close()
 
@@ -121,8 +130,17 @@ def _create_inquiry(base: str, **overrides: str) -> str:
 
 
 def _convert(base: str, inquiry_id: str) -> str:
-    _status, url, _body = _post(f"{base}/inquiry/{inquiry_id}/convert", {})
-    return url.rsplit("/", 1)[-1]  # order id
+    """Seed an Order for panel tests (no production Inquiry→Order create)."""
+    from dataclasses import replace
+
+    inquiries, orders = _PANEL_REPOS[base]
+    inquiry = inquiries.get_by_id(inquiry_id)
+    assert inquiry is not None
+    order, _version = seed_order(orders, inquiry)
+    inquiries.update(
+        replace(inquiry, crm_stage="Bestätigt / Auftrag")  # type: ignore[arg-type]
+    )
+    return order.order_id
 
 
 def test_page_context_badge_does_not_leak_between_renders() -> None:
@@ -396,16 +414,20 @@ def test_unverified_inquiry_shows_progression_block_and_convert_fails(
     assert exc.value.code == 400
 
 
-def test_verify_then_convert(panel: str) -> None:
+def test_verify_then_prepare_offer_path(panel: str) -> None:
     iid = _create_inquiry(panel, call_verification_required="1")
     _status, _url, body = _post(f"{panel}/inquiry/{iid}/verify", {})
     assert "verifiziert" in body
-    oid = _convert(panel, iid)
-    status, body = _get(f"{panel}/order/{oid}")
-    assert status == 200
-    assert "v1" in body
     _status, inquiry_body = _get(f"{panel}/inquiry/{iid}")
-    assert "Bestätigt / Auftrag" in inquiry_body
+    assert (
+        "Angebot vorbereiten" in inquiry_body
+        or "Auftrag nur aus angenommenem Angebot" in inquiry_body
+        or "Angebot kann vorbereitet werden" in inquiry_body
+    )
+    assert "Auftrag erstellen" not in inquiry_body
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _post(f"{panel}/inquiry/{iid}/convert", {})
+    assert exc.value.code == 400
 
 
 def test_order_payment_reminder_is_separate_and_truthful(panel: str) -> None:
@@ -526,9 +548,9 @@ def test_v2_inquiry_detail_ready_to_convert_and_verification_required(
 
     assert "inquiry-hero" in ready
     assert "<h1>Sommerfest HafenCity</h1>" in ready
-    assert "Bereit für Auftrag" in ready
-    assert f'action="/inquiry/{ready_id}/convert"' in ready
-    assert "Auftrag erstellen" in ready
+    assert "Angebot vorbereiten" in ready
+    assert f'action="/inquiry/{ready_id}/convert"' not in ready
+    assert "Auftrag erstellen" not in ready
     assert "Telefonisch verifiziert" not in ready
     assert "Rückruf erforderlich" in verify
     assert "Rückrufprüfung noch nicht erfüllt" in verify
@@ -642,7 +664,8 @@ def test_open_queue_shows_actual_crm_stage(panel: str) -> None:
 
     _status, dashboard = _get(f"{panel}/")
     assert "Angebot gesendet / Rückmeldung offen" in dashboard
-    assert f'action="/inquiry/{iid}/convert"' in dashboard
+    assert "Angebot vorbereiten" in dashboard
+    assert f'action="/inquiry/{iid}/convert"' not in dashboard
 
 
 # -- intake context (INQUIRY_INTAKE_CONTEXT_FIELDS_IMPLEMENTATION_PACK_V1) --
@@ -1160,8 +1183,9 @@ def test_convert_after_storno_returns_existing_order(panel: str) -> None:
     assert "(storniert)" in body
     assert "Auftrag erstellen" not in body
     assert "Auftrag öffnen" in body
-    oid2 = _convert(panel, iid)
-    assert oid2 == oid
+    # Compatibility POST convert returns the existing Order (no second create).
+    _status, url, _body = _post(f"{panel}/inquiry/{iid}/convert", {})
+    assert url.rsplit("/", 1)[-1] == oid
     _status, body = _get(f"{panel}/inquiry/{iid}")
     assert "Auftrag erstellen" not in body
 
@@ -1205,7 +1229,14 @@ def test_panel_serves_sqlite_like_on_lenovo(tmp_path) -> None:
     base = f"http://{host}:{port}"
     try:
         iid = _create_inquiry(base)  # POST → sqlite write over HTTP
-        oid = _convert(base, iid)
+        inquiries = SQLiteInquiryRepository(db)
+        orders = SQLiteOrderRepository(db)
+        inquiry = inquiries.get_by_id(iid)
+        assert inquiry is not None
+        order, _version = seed_order(orders, inquiry)
+        oid = order.order_id
+        inquiries.close()
+        orders.close()
         status, body = _get(f"{base}/order/{oid}")
         assert status == 200 and "v1" in body
     finally:
@@ -1791,7 +1822,8 @@ def test_dashboard_queues_capped_at_five_with_alle_anzeigen_link(panel: str) -> 
         _create_inquiry(panel)
     _status, body = _get(f"{panel}/")
     assert _attention_counts(body)["Offene Anfragen prüfen"] == 7
-    assert body.count("<button>Auftrag erstellen</button>") == 5
+    assert "<button>Auftrag erstellen</button>" not in body
+    assert "Angebot vorbereiten" in body
     assert '<a href="/anfragen">Alle anzeigen</a>' in body
     _status, full_body = _get(f"{panel}/anfragen")
     assert full_body.count("<tr>") == 8  # header row + all 7, not just top 5
@@ -1823,7 +1855,7 @@ def _panel_with_order():
         contact_email="kunde@example.com",
         contact_phone="+49301234567",
     )
-    order, v1 = panel.order_service.convert_inquiry_to_order(inquiry)
+    order, v1 = seed_order(order_repo, inquiry)
     return panel, order, v1
 
 
@@ -2459,7 +2491,7 @@ def test_website_intake_to_office_verification_and_conversion_workflow() -> None
         verified
     ).blocked
 
-    order, version = office.order_service.convert_inquiry_to_order(verified)
+    order, version = seed_order(order_repo, verified)
     assert order.source_inquiry_id == inquiry.inquiry_id
     assert version.version_number == 1
     assert [saved.order_id for saved in order_repo.list_orders()] == [order.order_id]

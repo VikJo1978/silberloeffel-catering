@@ -40,7 +40,7 @@ _WEEKDAYS = ("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
 # Task-category → monochrome sprite icon (office_panel_shell.py sprite).
 _TASK_ICONS = {
     "verify": "phone",
-    "convert": "doc",
+    "prepare_offer": "doc",
     "convert_accepted": "doc",
     "order_print": "printer",
     "order_effective": "check",

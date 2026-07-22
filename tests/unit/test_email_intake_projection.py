@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 import threading
 import urllib.error
 import urllib.request
@@ -31,7 +33,6 @@ from catering_system.services.email_intake_projection_service import (
     EmailIntakeProjectionService,
 )
 from catering_system.services.inquiry_service import InquiryService
-from catering_system.services.order_service import OrderService
 from catering_system.ui.office_panel import OfficePanel, create_office_panel_server
 from catering_system.ui.office_panel_email_detail import render_email_detail
 from catering_system.ui.office_panel_emails_list import render_email_list
@@ -251,7 +252,7 @@ def test_offer_and_order_linkage() -> None:
         )
     )
     orders = InMemoryOrderRepository()
-    order, _version = OrderService(orders).convert_inquiry_to_order(inquiry)
+    order, _version = seed_order(orders, inquiry)
     row = _service(inquiries=inquiries, offers=offers, orders=orders).email_detail(
         inquiry.inquiry_id
     )

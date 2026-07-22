@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 import sqlite3
 from dataclasses import replace
 from datetime import date, datetime, timedelta, timezone
@@ -238,7 +240,7 @@ def test_inquiry_save_does_not_overwrite_existing_id(tmp_path: Path) -> None:
 def test_order_roundtrip_and_version_ordering(tmp_path: Path) -> None:
     repo = SQLiteOrderRepository(tmp_path / "test.db")
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     v2 = osvc.create_relevant_order_change_version(
         order,
         event_date=date(2026, 10, 2),
@@ -260,9 +262,7 @@ def test_order_roundtrip_and_version_ordering(tmp_path: Path) -> None:
 def test_initial_order_and_version_creation_rolls_back_together(tmp_path: Path) -> None:
     """A failed v1 insert must not leave an order without its initial version."""
     repo = SQLiteOrderRepository(tmp_path / "test.db")
-    existing_order, existing_v1 = OrderService(repo).convert_inquiry_to_order(
-        _sample_inquiry()
-    )
+    existing_order, existing_v1 = seed_order(repo, _sample_inquiry())
     new_order = replace(
         existing_order,
         order_id="new-order",
@@ -280,7 +280,7 @@ def test_initial_order_and_version_creation_rolls_back_together(tmp_path: Path) 
 
 def test_initial_version_must_belong_to_order_and_be_v1(tmp_path: Path) -> None:
     repo = SQLiteOrderRepository(tmp_path / "test.db")
-    order, v1 = OrderService(repo).convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     invalid_order = replace(order, order_id="new-order")
 
     with pytest.raises(ValueError, match="must be v1 of the supplied order"):
@@ -292,7 +292,7 @@ def test_initial_version_must_belong_to_order_and_be_v1(tmp_path: Path) -> None:
 def test_append_version_conflict_rolls_back_order_update(tmp_path: Path) -> None:
     """A duplicate version number must not leave updated aggregate metadata."""
     repo = SQLiteOrderRepository(tmp_path / "test.db")
-    order, v1 = OrderService(repo).convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     updated_order = replace(order, updated_at=order.updated_at + timedelta(minutes=1))
     duplicate_number = replace(v1, order_version_id="different-version-id")
 
@@ -305,7 +305,7 @@ def test_append_version_conflict_rolls_back_order_update(tmp_path: Path) -> None
 
 def test_update_unknown_order_version_does_not_insert(tmp_path: Path) -> None:
     repo = SQLiteOrderRepository(tmp_path / "test.db")
-    _order, v1 = OrderService(repo).convert_inquiry_to_order(_sample_inquiry())
+    _order, v1 = seed_order(repo, _sample_inquiry())
     missing = replace(v1, order_version_id="missing-version")
 
     with pytest.raises(KeyError):
@@ -316,7 +316,7 @@ def test_update_unknown_order_version_does_not_insert(tmp_path: Path) -> None:
 
 def test_order_version_snapshot_fields_cannot_be_updated(tmp_path: Path) -> None:
     repo = SQLiteOrderRepository(tmp_path / "test.db")
-    order, v1 = OrderService(repo).convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
 
     with pytest.raises(ValueError, match="snapshot is immutable"):
         repo.update_order_version(replace(v1, location_text="Andere Adresse"))
@@ -333,8 +333,8 @@ def test_order_version_snapshot_fields_cannot_be_updated(tmp_path: Path) -> None
 
 def test_order_update_missing_raises(tmp_path: Path) -> None:
     repo = SQLiteOrderRepository(tmp_path / "test.db")
-    osvc = OrderService(repo)
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    OrderService(repo)
+    order, _v1 = seed_order(repo, _sample_inquiry())
     ghost = order.__class__(
         order_id="missing",
         source_inquiry_id=order.source_inquiry_id,
@@ -349,9 +349,9 @@ def test_operational_core_flow_survives_reconnect(tmp_path: Path) -> None:
     """Kitchen print confirmation and effective switch persist across process restarts."""
     db = tmp_path / "test.db"
     repo = SQLiteOrderRepository(db)
-    osvc = OrderService(repo)
+    OrderService(repo)
     core = OperationalCoreService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
     repo.close()
@@ -372,7 +372,7 @@ def test_progression_chain_works_over_sqlite(tmp_path: Path) -> None:
     repo = SQLiteOrderRepository(tmp_path / "test.db")
     osvc = OrderService(repo)
     prog = ProgressionService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     cp = prog.get_order_progression_checkpoint(order.order_id)
     assert cp is not None
@@ -410,7 +410,7 @@ def test_component_migrations_are_recorded_once(tmp_path: Path) -> None:
 def test_sqlite_rejects_orphan_order_version(tmp_path: Path) -> None:
     db = tmp_path / "test.db"
     repo = SQLiteOrderRepository(db)
-    OrderService(repo).convert_inquiry_to_order(_sample_inquiry())
+    seed_order(repo, _sample_inquiry())
     repo.close()
     connection = sqlite3.connect(db)
 
@@ -430,7 +430,7 @@ def test_sqlite_rejects_orphan_order_version(tmp_path: Path) -> None:
 def test_sqlite_rejects_unowned_order_reference(tmp_path: Path) -> None:
     db = tmp_path / "test.db"
     repo = SQLiteOrderRepository(db)
-    order, _v1 = OrderService(repo).convert_inquiry_to_order(_sample_inquiry())
+    order, _v1 = seed_order(repo, _sample_inquiry())
     repo.close()
     connection = sqlite3.connect(db)
 
@@ -445,7 +445,7 @@ def test_sqlite_rejects_unowned_order_reference(tmp_path: Path) -> None:
 def test_sqlite_rejects_deleting_order_that_owns_versions(tmp_path: Path) -> None:
     db = tmp_path / "test.db"
     repo = SQLiteOrderRepository(db)
-    order, _v1 = OrderService(repo).convert_inquiry_to_order(_sample_inquiry())
+    order, _v1 = seed_order(repo, _sample_inquiry())
     repo.close()
     connection = sqlite3.connect(db)
 
@@ -458,10 +458,10 @@ def test_sqlite_rejects_moving_referenced_version(tmp_path: Path) -> None:
     db = tmp_path / "test.db"
     repo = SQLiteOrderRepository(db)
     service = OrderService(repo)
-    order, version = service.convert_inquiry_to_order(_sample_inquiry())
+    order, version = seed_order(repo, _sample_inquiry())
     service.set_candidate_order_version(order.order_id, version.order_version_id)
-    other_order, _other_version = service.convert_inquiry_to_order(
-        replace(_sample_inquiry(), inquiry_id="other-inquiry")
+    other_order, _other_version = seed_order(
+        repo, replace(_sample_inquiry(), inquiry_id="other-inquiry")
     )
     repo.close()
     connection = sqlite3.connect(db)

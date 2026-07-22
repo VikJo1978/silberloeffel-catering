@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 import json
 import sqlite3
 from dataclasses import replace
@@ -98,9 +100,7 @@ def test_business_write_and_ledger_row_commit_atomically(shared) -> None:
 
     def work() -> str:
         inquiries.save(inquiries_service_input)
-        order, _v1 = OrderService(orders).convert_inquiry_to_order(
-            inquiries_service_input
-        )
+        order, _v1 = seed_order(orders, inquiries_service_input)
         ledger.record("cmd-1", "fp-1", 201, '{"order_id": "x"}')
         return order.order_id
 
@@ -116,7 +116,7 @@ def test_failure_rolls_back_business_write_and_ledger_together(shared) -> None:
 
     def work() -> None:
         inquiries.save(saved)
-        OrderService(orders).convert_inquiry_to_order(saved)
+        seed_order(orders, saved)
         ledger.record("cmd-2", "fp", 201, "{}")
         raise RuntimeError("crash between service write and response")
 
@@ -137,7 +137,7 @@ def test_events_flush_only_after_commit_and_never_on_rollback(shared) -> None:
 
     def create() -> str:
         inquiries.save(inq)
-        order, v1 = OrderService(orders).convert_inquiry_to_order(inq)
+        order, v1 = seed_order(orders, inq)
         core.confirm_kitchen_print(order.order_id, v1.order_version_id)
         assert delivered == []  # nothing may leave before COMMIT
         return order.order_id
@@ -250,12 +250,12 @@ def test_fingerprint_distinguishes_every_command_dimension() -> None:
 # --- orders migration 6: partial unique active-order index (pack §6.2) ---
 
 
-def test_second_convert_is_idempotent_for_same_inquiry(shared) -> None:
+def test_second_convert_lookup_is_idempotent_for_same_inquiry(shared) -> None:
     connection, inquiries, orders, _ledger = shared
     executor = CoreCommandExecutor(connection)
     inq = _inquiry()
     executor.run(lambda: inquiries.save(inq))
-    first = executor.run(lambda: OrderService(orders).convert_inquiry_to_order(inq))
+    first = executor.run(lambda: seed_order(orders, inq))
     second = executor.run(lambda: OrderService(orders).convert_inquiry_to_order(inq))
     assert second[0].order_id == first[0].order_id
     assert len([o for o in orders.list_orders() if o.cancelled_at is None]) == 1
@@ -267,7 +267,7 @@ def test_convert_after_storno_returns_existing_order(shared) -> None:
     core = OperationalCoreService(orders)
     inq = _inquiry()
     executor.run(lambda: inquiries.save(inq))
-    first = executor.run(lambda: OrderService(orders).convert_inquiry_to_order(inq))
+    first = executor.run(lambda: seed_order(orders, inq))
     executor.run(lambda: core.cancel_order(first[0].order_id))
     second = executor.run(lambda: OrderService(orders).convert_inquiry_to_order(inq))
     assert second[0].order_id == first[0].order_id

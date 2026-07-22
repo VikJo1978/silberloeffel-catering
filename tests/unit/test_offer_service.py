@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
@@ -38,7 +40,6 @@ from catering_system.repositories.in_memory_order_repository import (
 )
 from catering_system.services.offer_service import OfferService
 from catering_system.services.operational_core_service import OperationalCoreService
-from catering_system.services.order_service import OrderService
 
 from catering_system.domain.inquiry_customer_snapshot import (
     InquiryCustomerSnapshot as _CCSnapshot,
@@ -1048,7 +1049,7 @@ def test_convert_accepted_offer_rejects_active_order_without_link() -> None:
     ) = _accepted_offer_state()
     inquiry = inquiries.get_by_id(_INQUIRY_ID)
     assert inquiry is not None
-    OrderService(orders).convert_inquiry_to_order(inquiry)
+    seed_order(orders, inquiry)
     with pytest.raises(ValueError, match="active order blocks conversion"):
         service.convert_accepted_offer(
             offer.offer_id, version_id, variant_id, acceptance_id

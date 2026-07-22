@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 import threading
 import urllib.request
 from datetime import date
@@ -27,7 +29,6 @@ from catering_system.repositories.in_memory_order_repository import (
 )
 from catering_system.services.contact_projection_service import ContactProjectionService
 from catering_system.services.inquiry_service import InquiryService
-from catering_system.services.order_service import OrderService
 from catering_system.ui.office_panel import OfficePanel, create_office_panel_server
 
 _PASSWORD = "test-secret"
@@ -132,7 +133,7 @@ def test_contact_with_one_order_is_kunde() -> None:
     inquiries = InMemoryInquiryRepository()
     inquiry = _inquiry(inquiries, company="Buyer", email="buyer@example.invalid")
     orders = InMemoryOrderRepository()
-    OrderService(orders).convert_inquiry_to_order(inquiry)
+    seed_order(orders, inquiry)
     rows = ContactProjectionService(
         inquiries,
         InMemoryOfferRepository(),
@@ -159,7 +160,7 @@ def test_several_inquiries_and_one_order_is_kunde() -> None:
         customer_linkage={"customer_id": "cust-multi"},
     )
     orders = InMemoryOrderRepository()
-    OrderService(orders).convert_inquiry_to_order(first)
+    seed_order(orders, first)
     rows = ContactProjectionService(
         inquiries,
         InMemoryOfferRepository(),
@@ -185,7 +186,7 @@ def test_filter_interessenten_kunden_and_alle() -> None:
         email="buy@example.invalid",
         phone="+49305555555",
     )
-    OrderService(orders).convert_inquiry_to_order(buyer)
+    seed_order(orders, buyer)
 
     alle = panel.render_kontakte("", "all")
     assert "LeadCo" in alle and "BuyCo" in alle
@@ -224,7 +225,7 @@ def test_search_and_status_filter_together() -> None:
         email="other@example.invalid",
         phone="+49303333333",
     )
-    OrderService(orders).convert_inquiry_to_order(buyer)
+    seed_order(orders, buyer)
 
     page = panel.render_kontakte("jk", "kunde")
     assert "JK Buyer" in page
@@ -251,7 +252,7 @@ def test_invalid_status_falls_back_to_all() -> None:
     buyer = _inquiry(
         inquiries, company="Buyer", email="b@example.invalid", phone="+49307777777"
     )
-    OrderService(orders).convert_inquiry_to_order(buyer)
+    seed_order(orders, buyer)
     page = panel.render_kontakte("", "gesperrt")
     assert "Lead" in page and "Buyer" in page
     assert "<strong>Alle (2)</strong>" in page
@@ -271,7 +272,7 @@ def test_detail_shows_derived_status() -> None:
         email="dbuy@example.invalid",
         phone="+49309999999",
     )
-    OrderService(orders).convert_inquiry_to_order(buyer)
+    seed_order(orders, buyer)
 
     lead_key = "intake:email:dlead@example.invalid"
     buy_key = "intake:email:dbuy@example.invalid"
@@ -297,7 +298,7 @@ def test_http_status_filter_preserves_search() -> None:
         email="httpbuy@example.invalid",
         phone="+49301222222",
     )
-    OrderService(orders).convert_inquiry_to_order(buyer)
+    seed_order(orders, buyer)
     server = create_office_panel_server(
         panel._inquiries,
         panel._orders,

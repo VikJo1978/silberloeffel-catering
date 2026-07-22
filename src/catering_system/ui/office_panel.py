@@ -39,7 +39,6 @@ from catering_system.domain.offer import (
     SENT_CHANNELS,
     AcceptanceChannel,
     SentChannel,
-    offer_blocks_direct_inquiry_conversion,
 )
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_payment_reminder import (
@@ -1358,12 +1357,8 @@ class OfficePanel:
                 f"{_csrf_input(context)}{self._command_fields()}"
                 "<button>Telefonisch verifiziert</button></form>"
             )
-        if state.next_action == "convert":
-            return (
-                f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/convert">'
-                f"{_csrf_input(context)}{self._command_fields()}"
-                "<button>Auftrag erstellen</button></form>"
-            )
+        if state.next_action == "prepare-offer":
+            return '<span class="muted">Angebot vorbereiten</span>'
         if state.next_action == "offer-pending":
             return '<span class="muted">Angebot ausstehend</span>'
         if state.next_action == "convert-accepted":
@@ -1693,12 +1688,8 @@ class OfficePanel:
                     f"{_csrf_input(context)}{self._command_fields()}"
                     "<button>Telefonisch verifiziert</button></form>"
                 )
-            elif action_name == "convert":
-                action = (
-                    f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/convert">'
-                    f"{_csrf_input(context)}{self._command_fields()}"
-                    "<button>Auftrag erstellen</button></form>"
-                )
+            elif action_name == "prepare-offer":
+                action = '<span class="muted">Angebot vorbereiten</span>'
             elif action_name == "offer-pending":
                 action = '<span class="muted">Angebot ausstehend</span>'
             elif action_name == "convert-accepted":
@@ -2242,7 +2233,7 @@ class OfficePanel:
                     csrf_input=_csrf_input(context),
                     primary_command_fields=(
                         self._command_fields()
-                        if state.next_action in ("verify", "convert")
+                        if state.next_action == "verify"
                         or inquiry_shows_convert_accepted_button(state)
                         else ""
                     ),
@@ -2272,7 +2263,7 @@ class OfficePanel:
             )
             prog = f'<p class="blocked">Konvertierung blockiert:</p><ul>{reasons}</ul>'
         else:
-            prog = '<p class="ok">Konvertierung möglich.</p>'
+            prog = '<p class="ok">Angebot kann vorbereitet werden.</p>'
         verify_btn = ""
         if state.next_action == "verify":
             verify_btn = (
@@ -2291,12 +2282,8 @@ class OfficePanel:
                 f"<p>Auftrag vorhanden: {links} — "
                 f'<a href="/order/{_e(existing[0].order_id)}">Auftrag öffnen</a></p>'
             )
-        if state.next_action == "convert":
-            convert += (
-                f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/convert">'
-                f"{_csrf_input(context)}{self._command_fields()}"
-                "<button>Auftrag erstellen</button></form>"
-            )
+        if state.next_action == "prepare-offer":
+            convert += '<p class="muted">Auftrag nur aus angenommenem Angebot.</p>'
         elif state.next_action == "offer-pending":
             convert += '<p class="muted">Angebot ausstehend</p>'
         elif state.next_action == "convert-accepted":
@@ -2427,44 +2414,16 @@ class OfficePanel:
         )
 
     def convert_inquiry_to_order(self, inquiry_id: str) -> tuple[Order, OrderVersion]:
-        """Run the truthful gate and stage transition as one direct command.
+        """Compatibility lookup: return linked Order or refuse create.
 
-        Idempotent: an existing linked Order is returned instead of creating
-        another. Remote mode delegates the same atomic command to Core Office API.
+        Remote mode delegates to Core Office API (same hard-block contract).
         """
 
         def work() -> tuple[Order, OrderVersion]:
             inquiry = self._inquiries.get_by_id(inquiry_id)
             if inquiry is None:
                 raise KeyError(inquiry_id)
-            linked_orders = [
-                order
-                for order in self._orders.list_orders()
-                if order.source_inquiry_id == inquiry_id
-            ]
-            if linked_orders:
-                return self.order_service.convert_inquiry_to_order(inquiry)
-            state = self._inquiry_office_state(
-                inquiry,
-                linked_orders,
-                inquiry_id=inquiry_id,
-            )
-            if inquiry.crm_stage == "Abgelehnt / verloren":
-                raise ValueError("rejected inquiry cannot be converted")
-            offer = self._offers.get_by_source_inquiry_id(inquiry_id)
-            if offer is not None and offer_blocks_direct_inquiry_conversion(
-                offer, today=api_views.berlin_today()
-            ):
-                raise ValueError("offer blocks conversion")
-            if state.next_action != "convert":
-                raise ValueError("inquiry conversion gate is not satisfied")
-            order, version = self.order_service.convert_inquiry_to_order(inquiry)
-            if self._remote is None:
-                self.inquiry_service.update_inquiry(
-                    inquiry_id,
-                    crm_stage="Bestätigt / Auftrag",
-                )
-            return order, version
+            return self.order_service.convert_inquiry_to_order(inquiry)
 
         if self._remote is not None:
             inquiry = self._inquiries.get_by_id(inquiry_id)

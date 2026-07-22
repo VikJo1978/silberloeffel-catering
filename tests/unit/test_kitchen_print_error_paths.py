@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 from datetime import date, datetime, timedelta, timezone
 from dataclasses import replace
 
@@ -21,7 +23,6 @@ from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
 )
 from catering_system.services.kitchen_print_service import KitchenPrintService
-from catering_system.services.order_service import OrderService
 
 from catering_system.domain.inquiry_customer_snapshot import (
     InquiryCustomerSnapshot as _CCSnapshot,
@@ -58,7 +59,7 @@ def _inquiry() -> Inquiry:
 
 def _service() -> tuple[InMemoryOrderRepository, KitchenPrintService, str, str]:
     orders = InMemoryOrderRepository()
-    order, version = OrderService(orders).convert_inquiry_to_order(_inquiry())
+    order, version = seed_order(orders, _inquiry())
     jobs = InMemoryKitchenPrintJobRepository(orders)
     service = KitchenPrintService(orders, jobs, clock=lambda: _NOW)
     return orders, service, order.order_id, version.order_version_id
@@ -79,8 +80,8 @@ def test_request_print_rejects_foreign_version() -> None:
 def test_request_print_rejects_conflicting_existing_job_id() -> None:
     orders, service, order_id, version_id = _service()
     service.request_print(order_id, version_id, print_job_id=JOB_1)
-    other_order, other_version = OrderService(orders).convert_inquiry_to_order(
-        replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
+    other_order, other_version = seed_order(
+        orders, replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     )
     with pytest.raises(
         ValueError, match="print_job_id already exists with different facts"
@@ -103,7 +104,7 @@ def test_accept_print_job_rejects_after_deadline() -> None:
         return clock[0]
 
     orders = InMemoryOrderRepository()
-    order, version = OrderService(orders).convert_inquiry_to_order(_inquiry())
+    order, version = seed_order(orders, _inquiry())
     jobs = InMemoryKitchenPrintJobRepository(orders)
     service = KitchenPrintService(orders, jobs, clock=tick)
     service.request_print(order.order_id, version.order_version_id, print_job_id=JOB_1)

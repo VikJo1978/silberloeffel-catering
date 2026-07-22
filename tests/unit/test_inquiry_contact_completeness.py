@@ -555,14 +555,14 @@ def test_existing_conversion_replay_not_blocked_retroactively() -> None:
 def test_incomplete_inquiry_cannot_direct_convert() -> None:
     inquiry = _inquiry(customer_snapshot=InquiryCustomerSnapshot(email="a@b.de"))
     svc = OrderService(InMemoryOrderRepository())
-    with pytest.raises(ValueError, match="contact information incomplete"):
+    with pytest.raises(ValueError, match="accepted offer required"):
         svc.convert_inquiry_to_order(inquiry)
 
 
-def test_complete_inquiry_converts_as_before() -> None:
+def test_complete_inquiry_still_requires_accepted_offer() -> None:
     svc = OrderService(InMemoryOrderRepository())
-    order, version = svc.convert_inquiry_to_order(_inquiry())
-    assert order.order_id and version.version_number == 1
+    with pytest.raises(ValueError, match="accepted offer required"):
+        svc.convert_inquiry_to_order(_inquiry())
 
 
 def test_office_state_hides_convert_for_incomplete_inquiry() -> None:
@@ -574,7 +574,7 @@ def test_office_state_hides_convert_for_incomplete_inquiry() -> None:
     complete_state = derive_inquiry_office_state(
         _inquiry(), has_order=False, has_active_order=False, today=_TODAY
     )
-    assert complete_state.next_action == "convert"
+    assert complete_state.next_action == "prepare-offer"
 
 
 def test_progression_reasons_include_contact_blockers() -> None:
@@ -594,16 +594,17 @@ def test_existing_verification_gate_still_applies() -> None:
         call_verification_status="pending",
     )
     svc = OrderService(InMemoryOrderRepository())
-    with pytest.raises(ValueError, match="conversion blocked"):
+    with pytest.raises(ValueError, match="accepted offer required"):
         svc.convert_inquiry_to_order(inquiry)
     evaluation = evaluate_inquiry_to_order_progression(inquiry)
     assert "inquiry_call_verification_unsatisfied" in evaluation.reasons
 
 
 def test_existing_order_unaffected_by_incomplete_source_inquiry() -> None:
+    from tests.helpers.order_seed import seed_order
+
     orders = InMemoryOrderRepository()
-    svc = OrderService(orders)
-    order, _version = svc.convert_inquiry_to_order(_inquiry())
+    order, _version = seed_order(orders, _inquiry())
     # The stored Order keeps working even when the source inquiry is later
     # seen without contacts — no Order/OrderVersion schema fields involved.
     loaded = orders.get_order(order.order_id)

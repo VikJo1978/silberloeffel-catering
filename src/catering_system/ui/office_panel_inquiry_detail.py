@@ -106,16 +106,15 @@ def _state_copy(
             "Rückruf erforderlich",
             "Die Angaben müssen vor dem nächsten Schritt telefonisch bestätigt werden.",
         )
-    if state.next_action == "convert":
+    if state.next_action == "prepare-offer":
         return (
-            "Bereit für Auftrag",
-            "Die vorhandenen Angaben erlauben die Umwandlung in einen Auftrag.",
+            "Angebot vorbereiten",
+            "Ein Auftrag entsteht nur aus einem angenommenen Angebot.",
         )
     if state.next_action == "offer-pending":
         return (
             "Angebot ausstehend",
-            "Für diese Anfrage läuft der Angebotsprozess. "
-            "Ein direkter Legacy-Auftrag ist derzeit nicht vorgesehen.",
+            "Für diese Anfrage läuft der Angebotsprozess.",
         )
     if state.next_action == "convert-accepted":
         if state.offer is not None and state.offer.commercial_state == "Converted":
@@ -157,14 +156,15 @@ def _primary_action(
         )
         path = "verify"
         label = "Telefonisch verifiziert"
-    elif state.next_action == "convert":
-        heading = "Anfrage in einen Auftrag übernehmen"
-        explanation = (
-            "Die Prüfung ist erfüllt. Mit diesem Schritt wird der bestehende "
-            "Auftragsprozess gestartet."
+    elif state.next_action == "prepare-offer":
+        return (
+            '<section class="inquiry-next-step">'
+            '<div class="inquiry-eyebrow">Nächster Schritt</div>'
+            "<h2>Angebot vorbereiten</h2>"
+            "<p>Ein Auftrag wird nur aus einem angenommenen Angebot erstellt. "
+            "Bereiten Sie zuerst ein Angebot vor.</p>"
+            "</section>"
         )
-        path = "convert"
-        label = "Auftrag erstellen"
     elif inquiry_shows_convert_accepted_button(state):
         return (
             '<section class="inquiry-next-step">'
@@ -194,8 +194,7 @@ def _primary_action(
             '<section class="inquiry-next-step">'
             '<div class="inquiry-eyebrow">Nächster Schritt</div>'
             "<h2>Angebot ausstehend</h2>"
-            "<p>Der Angebotsprozess ist noch offen. "
-            "Es gibt derzeit keine direkte Legacy-Umwandlung in einen Auftrag.</p>"
+            "<p>Der Angebotsprozess ist noch offen.</p>"
             "</section>"
         )
     else:

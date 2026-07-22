@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 import sqlite3
 from datetime import date, datetime, timezone
 from uuid import uuid4
@@ -190,7 +192,7 @@ def test_reason_code_validation() -> None:
 
 def test_pause_active_order_success() -> None:
     repo, _pauses, osvc, core, events = _setup()
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, _v1 = seed_order(repo, _sample_inquiry())
     event = _pause(
         core,
         order.order_id,
@@ -210,7 +212,7 @@ def test_pause_active_order_success() -> None:
 
 def test_pause_without_effective_version_succeeds() -> None:
     _repo, _pauses, osvc, core, _events = _setup()
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, _v1 = seed_order(_repo, _sample_inquiry())
     assert core.get_active_operational_pause(order.order_id) is None
     _pause(
         core,
@@ -225,7 +227,7 @@ def test_pause_without_effective_version_succeeds() -> None:
 
 def test_repeat_pause_with_new_command_rejected() -> None:
     _repo, _pauses, osvc, core, events = _setup()
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, _v1 = seed_order(_repo, _sample_inquiry())
     _pause(
         core,
         order.order_id,
@@ -248,7 +250,7 @@ def test_repeat_pause_with_new_command_rejected() -> None:
 
 def test_resume_active_pause_and_history_preserved() -> None:
     repo, pauses, osvc, core, events = _setup()
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, _v1 = seed_order(repo, _sample_inquiry())
     paused = _pause(
         core,
         order.order_id,
@@ -277,7 +279,7 @@ def test_resume_active_pause_and_history_preserved() -> None:
 
 def test_resume_not_paused_order_rejected() -> None:
     _repo, _pauses, osvc, core, _events = _setup()
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, _v1 = seed_order(_repo, _sample_inquiry())
     with pytest.raises(ValueError, match="not paused"):
         core.resume_order(
             order.order_id,
@@ -292,7 +294,7 @@ def test_resume_not_paused_order_rejected() -> None:
 
 def test_pause_resume_do_not_change_order_version_or_effective() -> None:
     repo, _pauses, osvc, core, _events = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
     before = repo.get_order(order.order_id)
@@ -336,7 +338,7 @@ def test_pause_unknown_order_not_found() -> None:
 
 def test_pause_missing_reason_or_actor_validation() -> None:
     _repo, _pauses, osvc, core, _events = _setup()
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, _v1 = seed_order(_repo, _sample_inquiry())
     with pytest.raises(ValueError, match="invalid pause reason_code"):
         _pause(
             core,
@@ -410,7 +412,7 @@ def test_in_memory_duplicate_event_or_command_id_rejected() -> None:
 def test_sqlite_pause_events_round_trip_and_migration(tmp_path) -> None:
     db = tmp_path / "core.db"
     orders = SQLiteOrderRepository(db)
-    order, _v1 = OrderService(orders).convert_inquiry_to_order(_sample_inquiry())
+    order, _v1 = seed_order(orders, _sample_inquiry())
     orders.close()
     pauses = SQLiteOrderOperationalPauseRepository(db)
     event = _paused_event(order_id=order.order_id)
@@ -450,10 +452,9 @@ def test_sqlite_pause_migration_on_existing_database(tmp_path) -> None:
 def test_paused_effective_order_still_in_wochenuebersicht_and_kiosk_feed() -> None:
     orders = InMemoryOrderRepository()
     pauses = InMemoryOrderOperationalPauseRepository()
-    osvc = OrderService(orders)
     core = OperationalCoreService(orders, pause_repository=pauses)
     week = WochenuebersichtService(orders, pause_repository=pauses)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(orders, _sample_inquiry())
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
     _pause(
@@ -480,7 +481,7 @@ def test_paused_effective_order_still_in_wochenuebersicht_and_kiosk_feed() -> No
 
 def test_pause_blocks_ready_to_send_and_resume_clears_only_pause_blocker() -> None:
     _repo, _pauses, osvc, core, _events = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(_repo, _sample_inquiry())
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
     assert core.evaluate_ready_to_send(order.order_id).ready is True
@@ -508,7 +509,7 @@ def test_pause_blocks_ready_to_send_and_resume_clears_only_pause_blocker() -> No
 
 def test_pause_with_pending_candidate_reports_both_blockers() -> None:
     repo, _pauses, osvc, core, _events = _setup()
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
     _pause(
@@ -538,7 +539,7 @@ def test_pause_with_pending_candidate_reports_both_blockers() -> None:
 
 def test_storniert_order_cannot_be_paused_or_resumed() -> None:
     _repo, _pauses, osvc, core, _events = _setup()
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, _v1 = seed_order(_repo, _sample_inquiry())
     core.cancel_order(order.order_id)
     with pytest.raises(ValueError, match="cancelled"):
         _pause(
@@ -577,7 +578,7 @@ def test_derive_operational_pause_projection_inactive_and_active() -> None:
 
 def test_stale_pause_after_resume_cycle_rejected() -> None:
     _repo, _pauses, osvc, core, _events = _setup()
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, _v1 = seed_order(_repo, _sample_inquiry())
     _pause(
         core,
         order.order_id,
@@ -607,7 +608,7 @@ def test_stale_pause_after_resume_cycle_rejected() -> None:
 
 def test_stale_resume_for_previous_pause_event_rejected() -> None:
     _repo, _pauses, osvc, core, _events = _setup()
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, _v1 = seed_order(_repo, _sample_inquiry())
     pause_a = _pause(
         core,
         order.order_id,
@@ -653,7 +654,7 @@ def test_sqlite_pause_update_and_delete_triggers_reject(tmp_path) -> None:
     conn = open_core_connection(db)
     orders = SQLiteOrderRepository.from_connection(conn)
     pauses = SQLiteOrderOperationalPauseRepository.from_connection(conn)
-    order, _v1 = OrderService(orders).convert_inquiry_to_order(_sample_inquiry())
+    order, _v1 = seed_order(orders, _sample_inquiry())
     event = _paused_event(order_id=order.order_id)
     pauses.append_event(event)
     with pytest.raises(sqlite3.IntegrityError):
@@ -673,7 +674,7 @@ def test_sqlite_pause_update_and_delete_triggers_reject(tmp_path) -> None:
 
 def test_resume_on_other_order_with_foreign_pause_id_rejected() -> None:
     _repo, _pauses, osvc, core, _events = _setup()
-    order_a, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order_a, _v1 = seed_order(_repo, _sample_inquiry())
     inquiry_b = Inquiry(
         inquiry_id="33333333-3333-4333-8333-333333333333",
         event_date=date(2026, 10, 2),
@@ -690,7 +691,7 @@ def test_resume_on_other_order_with_foreign_pause_id_rejected() -> None:
         call_verification_status=CALL_VERIFICATION_STATUSES[0],
         customer_snapshot=_CONTACT_COMPLETE_SNAPSHOT,
     )
-    order_b, _v2 = osvc.convert_inquiry_to_order(inquiry_b)
+    order_b, _v2 = seed_order(_repo, inquiry_b)
     paused = _pause(
         core,
         order_a.order_id,
@@ -787,7 +788,7 @@ def test_projection_tolerates_duplicate_resume_fact_and_keeps_latest_id() -> Non
 
 def test_pause_history_and_remaining_stale_service_branches() -> None:
     _repo, pauses, osvc, core, _events = _setup()
-    order, _version = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, _version = seed_order(_repo, _sample_inquiry())
     paused = _pause(
         core,
         order.order_id,
@@ -823,7 +824,7 @@ def test_pause_history_and_remaining_stale_service_branches() -> None:
 def test_sqlite_owner_trigger_malformed_row_and_idempotent_migration(tmp_path) -> None:
     db = tmp_path / "pause-integrity.db"
     orders = SQLiteOrderRepository(db)
-    order, _version = OrderService(orders).convert_inquiry_to_order(_sample_inquiry())
+    order, _version = seed_order(orders, _sample_inquiry())
     orders.close()
     pauses = SQLiteOrderOperationalPauseRepository(db)
     with pytest.raises(sqlite3.IntegrityError, match="owner does not exist"):
@@ -858,7 +859,7 @@ def test_sqlite_pause_append_rolls_back_with_failed_command_bundle(tmp_path) -> 
     connection = open_core_connection(tmp_path / "pause-rollback.db")
     orders = SQLiteOrderRepository.from_connection(connection)
     pauses = SQLiteOrderOperationalPauseRepository.from_connection(connection)
-    order, _version = OrderService(orders).convert_inquiry_to_order(_sample_inquiry())
+    order, _version = seed_order(orders, _sample_inquiry())
     event = _paused_event(order_id=order.order_id)
 
     def fail_after_append() -> None:

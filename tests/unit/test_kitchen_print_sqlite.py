@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -21,7 +23,6 @@ from catering_system.repositories.sqlite_kitchen_print_job_repository import (
 from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepository
 from catering_system.services.kitchen_print_service import KitchenPrintService
 from catering_system.services.operational_core_service import OperationalCoreService
-from catering_system.services.order_service import OrderService
 
 from catering_system.domain.inquiry_customer_snapshot import (
     InquiryCustomerSnapshot as _CCSnapshot,
@@ -73,7 +74,7 @@ def _sqlite_world(
     str,
 ]:
     orders = SQLiteOrderRepository(db)
-    order, version = OrderService(orders).convert_inquiry_to_order(_inquiry())
+    order, version = seed_order(orders, _inquiry())
     jobs = SQLiteKitchenPrintJobRepository(db)
     clock = MutableClock()
     service = KitchenPrintService(
@@ -93,7 +94,7 @@ def test_migration_is_additive_and_does_not_backfill_manual_confirmation(
 ) -> None:
     db = tmp_path / "core.db"
     orders = SQLiteOrderRepository(db)
-    order, version = OrderService(orders).convert_inquiry_to_order(_inquiry())
+    order, version = seed_order(orders, _inquiry())
     manually_confirmed = OperationalCoreService(orders).confirm_kitchen_print(
         order.order_id, version.order_version_id
     )

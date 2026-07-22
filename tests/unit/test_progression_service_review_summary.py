@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 from datetime import date, datetime, timezone
 
 from catering_system.domain.inquiry import (
@@ -62,7 +64,7 @@ def test_composed_derived_review_eligible_matches_checkpoint_and_derived_getters
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     oid = order.order_id
     cp = prog.get_order_progression_checkpoint(oid)
@@ -101,8 +103,8 @@ def test_composed_derived_review_eligible_matches_checkpoint_and_derived_getters
 def test_composed_derived_review_blocked_candidate_missing_matches_parts() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
-    osvc = OrderService(repo)
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    OrderService(repo)
+    order, _v1 = seed_order(repo, _sample_inquiry())
     oid = order.order_id
     cp = prog.get_order_progression_checkpoint(oid)
     sv = prog.get_order_progression_severity(oid)
@@ -133,8 +135,8 @@ def test_composed_derived_review_blocked_candidate_missing_matches_parts() -> No
 def test_composed_derived_review_facts_count_matches_b23_flags_only() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
-    osvc = OrderService(repo)
-    order, _v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    OrderService(repo)
+    order, _v1 = seed_order(repo, _sample_inquiry())
     oid = order.order_id
     facts = prog.get_order_progression_facts(oid)
     comp = prog.get_order_progression_composed_derived_review_summary(oid)
@@ -156,7 +158,7 @@ def test_composed_derived_review_no_mutations_on_repo() -> None:
     repo = InMemoryOrderRepository()
     prog = ProgressionService(repo)
     osvc = OrderService(repo)
-    order, v1 = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     osvc.set_candidate_order_version(order.order_id, v1.order_version_id)
     oid = order.order_id
     before = len(repo._orders)

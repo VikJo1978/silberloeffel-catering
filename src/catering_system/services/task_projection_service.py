@@ -72,14 +72,14 @@ class TaskProjectionService:
                         inquiry.event_date,
                     )
                 )
-            elif state.next_action == "convert":
+            elif state.next_action == "prepare-offer":
                 tasks.append(
                     (
                         _inquiry_task(
                             inquiry,
-                            task_id=f"inquiry:{inquiry.inquiry_id}:convert",
-                            category="convert",
-                            title="Anfrage in Auftrag umwandeln",
+                            task_id=f"inquiry:{inquiry.inquiry_id}:prepare-offer",
+                            category="prepare_offer",
+                            title="Angebot vorbereiten",
                             subtitle=subtitle,
                         ),
                         inquiry.event_date,

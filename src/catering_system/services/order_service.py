@@ -16,11 +16,7 @@ from datetime import date, datetime, timezone
 
 from catering_system.domain.inquiry import (
     Inquiry,
-    inquiry_allows_order_conversion,
     validate_planning_mode,
-)
-from catering_system.domain.inquiry_contact_completeness import (
-    inquiry_contact_complete,
 )
 from catering_system.domain.offer import OfferVersion as CommercialOfferVersion
 from catering_system.domain.operational_core_events import (
@@ -54,57 +50,16 @@ class OrderService:
             self._event_sink(event)
 
     def convert_inquiry_to_order(self, inquiry: Inquiry) -> tuple[Order, OrderVersion]:
-        """Create Order + v1 after the Core inquiry conversion gate passes.
+        """Compatibility lookup only — never creates an Order.
 
-        Idempotent: if any Order already exists for the inquiry, return that
-        Order and its initial version instead of creating another. Order
-        existence is authoritative for “already converted”.
-        The application command owns the accompanying Inquiry stage update.
+        If a linked Order already exists, return it (prefer active). Otherwise
+        raise: Order creation requires an Accepted Offer via
+        ``create_order_from_offer_version`` / ``convert_accepted_offer``.
         """
         existing = self.orders_for_inquiry(inquiry.inquiry_id)
         if existing:
             return self._existing_conversion_result(existing)
-
-        if not inquiry_allows_order_conversion(inquiry):
-            raise ValueError(
-                "inquiry_to_order conversion blocked "
-                f"(inquiry_id={inquiry.inquiry_id!r}, "
-                f"crm_stage={inquiry.crm_stage!r}, "
-                f"call_verification_required={inquiry.call_verification_required!r}, "
-                f"call_verification_status={inquiry.call_verification_status!r})"
-            )
-        if not inquiry_contact_complete(inquiry):
-            raise ValueError(
-                "inquiry contact information incomplete "
-                f"(inquiry_id={inquiry.inquiry_id!r})"
-            )
-        now = _utc_now()
-        order_id = str(uuid.uuid4())
-        order = Order(
-            order_id=order_id,
-            source_inquiry_id=inquiry.inquiry_id,
-            created_at=now,
-            updated_at=now,
-        )
-        version = OrderVersion(
-            order_version_id=str(uuid.uuid4()),
-            order_id=order_id,
-            version_number=1,
-            created_at=now,
-            event_date=inquiry.event_date,
-            time_window_text=inquiry.time_window_text,
-            location_text=inquiry.location_text,
-            guest_count_estimate=inquiry.guest_count_estimate,
-            planning_mode=inquiry.planning_mode,
-        )
-        self._order_repository.save_order_with_initial_version(order, version)
-        _log.info(
-            "convert_inquiry_to_order inquiry_id=%s order_id=%s version=%s",
-            inquiry.inquiry_id,
-            order_id,
-            version.version_number,
-        )
-        return order, version
+        raise ValueError(f"accepted offer required (inquiry_id={inquiry.inquiry_id!r})")
 
     def orders_for_inquiry(self, inquiry_id: str) -> list[Order]:
         return [

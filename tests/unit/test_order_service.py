@@ -13,6 +13,8 @@ _SRC = Path(__file__).resolve().parents[2] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
+from tests.helpers.order_seed import seed_order
+
 from catering_system.domain.inquiry import (
     CALL_VERIFICATION_STATUSES,
     CRM_PIPELINE,
@@ -70,83 +72,25 @@ def _sample_inquiry() -> Inquiry:
     )
 
 
-def test_convert_inquiry_to_order_blocked_when_verification_required_not_verified() -> (
-    None
-):
+def test_convert_inquiry_to_order_requires_accepted_offer_when_missing() -> None:
     svc = OrderService(InMemoryOrderRepository())
-    for status in ("pending", "failed", "blocked"):
-        inquiry = replace(
-            _sample_inquiry(),
-            call_verification_required=True,
-            call_verification_status=status,  # type: ignore[arg-type]
-        )
-        with pytest.raises(ValueError, match="inquiry_to_order conversion blocked"):
-            svc.convert_inquiry_to_order(inquiry)
+    with pytest.raises(ValueError, match="accepted offer required"):
+        svc.convert_inquiry_to_order(_sample_inquiry())
 
 
-def test_convert_inquiry_to_order_blocked_when_required_but_not_verified_status() -> (
-    None
-):
-    """required=True with not_required status is inconsistent — still blocked (not verified)."""
-    svc = OrderService(InMemoryOrderRepository())
-    inquiry = replace(
-        _sample_inquiry(),
-        call_verification_required=True,
-        call_verification_status="not_required",
-    )
-    with pytest.raises(ValueError, match="inquiry_to_order conversion blocked"):
-        svc.convert_inquiry_to_order(inquiry)
-
-
-def test_convert_inquiry_to_order_blocked_when_rejected() -> None:
+def test_convert_inquiry_to_order_returns_existing_order() -> None:
     repo = InMemoryOrderRepository()
-    inquiry = replace(_sample_inquiry(), crm_stage="Abgelehnt / verloren")
-
-    with pytest.raises(ValueError, match="inquiry_to_order conversion blocked"):
-        OrderService(repo).convert_inquiry_to_order(inquiry)
-
-    assert repo.list_orders() == []
-
-
-def test_convert_inquiry_to_order_allowed_when_verification_required_and_verified() -> (
-    None
-):
-    svc = OrderService(InMemoryOrderRepository())
-    inquiry = replace(
-        _sample_inquiry(),
-        call_verification_required=True,
-        call_verification_status="verified",
-    )
-    order, ver = svc.convert_inquiry_to_order(inquiry)
-    assert order.source_inquiry_id == inquiry.inquiry_id
-    assert ver.version_number == 1
-
-
-def test_convert_inquiry_to_order_creates_order_and_initial_version() -> None:
-    repo = InMemoryOrderRepository()
-    svc = OrderService(repo)
     inquiry = _sample_inquiry()
-    order, ver = svc.convert_inquiry_to_order(inquiry)
-    assert order.source_inquiry_id == inquiry.inquiry_id
-    assert ver.order_id == order.order_id
-    assert ver.version_number == 1
-    assert ver.event_date == inquiry.event_date
-    assert ver.time_window_text == inquiry.time_window_text
-    assert ver.location_text == inquiry.location_text
-    assert ver.guest_count_estimate == inquiry.guest_count_estimate
-    assert ver.planning_mode == inquiry.planning_mode
-    loaded = repo.get_order(order.order_id)
-    assert loaded is not None
-    assert loaded.order_id == order.order_id
-    stored = repo.get_order_version(ver.order_version_id)
-    assert stored is not None
-    assert stored.version_number == 1
+    seeded, ver = seed_order(repo, inquiry)
+    order, got = OrderService(repo).convert_inquiry_to_order(inquiry)
+    assert order.order_id == seeded.order_id
+    assert got.order_version_id == ver.order_version_id
 
 
 def test_create_relevant_order_change_version_second_preserves_first() -> None:
     repo = InMemoryOrderRepository()
     svc = OrderService(repo)
-    order, v1 = svc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     v2 = svc.create_relevant_order_change_version(
         order,
         event_date=date(2026, 11, 2),
@@ -173,7 +117,7 @@ def test_create_relevant_order_change_version_second_preserves_first() -> None:
 
 def test_in_memory_repository_rejects_operational_version_update() -> None:
     repo = InMemoryOrderRepository()
-    order, v1 = OrderService(repo).convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     with pytest.raises(ValueError, match="snapshot is immutable"):
         repo.update_order_version(replace(v1, location_text="Andere Adresse"))
     assert repo.get_order(order.order_id) is not None
@@ -184,7 +128,7 @@ def test_list_order_versions_and_get_latest_match_history_not_activation() -> No
     """Full history via service; latest is max(version_number); history not collapsed to one active row."""
     repo = InMemoryOrderRepository()
     svc = OrderService(repo)
-    order, v1 = svc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     v2 = svc.create_relevant_order_change_version(
         order,
         event_date=date(2026, 12, 3),
@@ -219,7 +163,7 @@ def test_get_latest_order_version_returns_none_when_no_versions() -> None:
 def test_set_and_get_candidate_order_version_office_side_only() -> None:
     repo = InMemoryOrderRepository()
     svc = OrderService(repo)
-    order, v1 = svc.convert_inquiry_to_order(_sample_inquiry())
+    order, v1 = seed_order(repo, _sample_inquiry())
     assert repo.get_order(order.order_id) is not None
     assert repo.get_order(order.order_id).candidate_order_version_id is None
     assert svc.get_candidate_order_version(order.order_id) is None
@@ -231,8 +175,9 @@ def test_set_and_get_candidate_order_version_office_side_only() -> None:
 
 
 def test_changing_candidate_preserves_full_version_history() -> None:
-    svc = OrderService(InMemoryOrderRepository())
-    order, v1 = svc.convert_inquiry_to_order(_sample_inquiry())
+    repo = InMemoryOrderRepository()
+    svc = OrderService(repo)
+    order, v1 = seed_order(repo, _sample_inquiry())
     v2 = svc.create_relevant_order_change_version(
         order,
         event_date=date(2026, 11, 2),
@@ -257,8 +202,9 @@ def test_changing_candidate_preserves_full_version_history() -> None:
 
 def test_candidate_can_differ_from_latest_historical_version() -> None:
     """B6: candidate is not latest-in-history; not effective operational selection."""
-    svc = OrderService(InMemoryOrderRepository())
-    order, v1 = svc.convert_inquiry_to_order(_sample_inquiry())
+    repo = InMemoryOrderRepository()
+    svc = OrderService(repo)
+    order, v1 = seed_order(repo, _sample_inquiry())
     v2 = svc.create_relevant_order_change_version(
         order,
         event_date=date(2026, 11, 2),
@@ -277,8 +223,9 @@ def test_candidate_can_differ_from_latest_historical_version() -> None:
 
 
 def test_set_candidate_rejects_foreign_version_id() -> None:
-    svc = OrderService(InMemoryOrderRepository())
-    order, _ = svc.convert_inquiry_to_order(_sample_inquiry())
+    repo = InMemoryOrderRepository()
+    svc = OrderService(repo)
+    order, _ = seed_order(repo, _sample_inquiry())
     with pytest.raises(ValueError, match="not a version of order"):
         svc.set_candidate_order_version(
             order.order_id, "00000000-0000-0000-0000-000000000001"

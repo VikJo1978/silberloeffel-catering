@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from tests.helpers.order_seed import seed_order
+
 import base64
 import json
 import queue
@@ -71,7 +73,7 @@ def _seed(db_path: Path) -> dict[str, str]:
     inquiries = SQLiteInquiryRepository(db_path)
     orders = SQLiteOrderRepository(db_path)
     inquiry_service = InquiryService(inquiries)
-    order_service = OrderService(orders)
+    OrderService(orders)
     core = OperationalCoreService(orders)
     inquiry = inquiry_service.create_inquiry(
         event_date=date(2026, 10, 1),
@@ -102,7 +104,7 @@ def _seed(db_path: Path) -> dict[str, str]:
         contact_email="kunde@example.com",
         contact_phone="+49301234567",
     )
-    cancelled_order, _version = order_service.convert_inquiry_to_order(cancelled_src)
+    cancelled_order, _version = seed_order(orders, cancelled_src)
     core.cancel_order(cancelled_order.order_id)
     offer_ready = inquiry_service.create_inquiry(
         event_date=date(2026, 10, 3),
