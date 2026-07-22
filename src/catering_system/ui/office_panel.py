@@ -151,7 +151,7 @@ from catering_system.ui.office_panel_offer_detail import (
     OfferDetailFormFields,
     render_offer_detail,
 )
-from catering_system.ui.office_panel_offers_list import render_angebote_list
+from catering_system.ui.office_panel_offers_list import render_angebote_queue
 from catering_system.ui.office_panel_inquiry_detail import (
     InquiryDetailFormFields,
     render_inquiry_detail,
@@ -629,20 +629,25 @@ class OfficePanel:
             today=api_views.berlin_today(),
         )
 
+    def _offer_queue_snapshot(self) -> dict[str, object]:
+        if self._remote is not None:
+            return self._remote.offer_queue()
+        from catering_system.services.offer_queue_projection_service import (
+            OfferQueueProjectionService,
+        )
+
+        service = OfferQueueProjectionService(
+            self._offers,
+            self._inquiries,
+            today=api_views.berlin_today,
+        )
+        return api_views.offer_queue_view(service.snapshot())
+
     def render_angebote(
         self, *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
     ) -> str:
-        rows = self._offer_list_rows()
-        inquiries_by_id = {
-            inquiry.inquiry_id: inquiry for inquiry in self._inquiries.list_all()
-        }
-        titles_by_inquiry = {
-            inquiry_id: (inquiry.intake_subject or inquiry.location_text or "–")
-            for inquiry_id, inquiry in inquiries_by_id.items()
-        }
-        return render_angebote_list(
-            rows,
-            titles_by_inquiry,
+        return render_angebote_queue(
+            self._offer_queue_snapshot(),
             context=context,
         )
 

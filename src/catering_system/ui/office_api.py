@@ -125,6 +125,9 @@ from catering_system.services.calendar_projection_service import (
     CalendarProjectionService,
 )
 from catering_system.services.task_projection_service import TaskProjectionService
+from catering_system.services.offer_queue_projection_service import (
+    OfferQueueProjectionService,
+)
 from catering_system.services.work_center_service import WorkCenterService
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjectionService,
@@ -456,6 +459,11 @@ class OfficeApi:
             task_projection_service=self.task_projection_service,
             calendar_projection_service=self.calendar_projection_service,
         )
+        self.offer_queue_projection_service = OfferQueueProjectionService(
+            self.offers,
+            self.inquiries,
+            today=views.berlin_today,
+        )
         self.print_projection_service = OrderPrintProjectionService(
             self.orders,
             self.offers,
@@ -571,6 +579,20 @@ class OfficeApi:
                 today=views.berlin_today(),
             )
         }
+
+    def offer_queue(
+        self,
+        *,
+        group: str | None = None,
+        limit: int = views.LIST_LIMIT_DEFAULT,
+        offset: int = 0,
+    ) -> dict[str, object]:
+        snapshot = self.offer_queue_projection_service.snapshot(
+            group=group,  # type: ignore[arg-type]
+            limit=limit,
+            offset=offset,
+        )
+        return views.offer_queue_view(snapshot)
 
     def offer_detail(self, offer_id: str) -> dict[str, object]:
         offer = self.offers.get(offer_id)
@@ -2046,6 +2068,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         {"GET": "list_offers"},
     ),
     (
+        re.compile(r"^/office/v1/offer-queue$"),
+        "/office/v1/offer-queue",
+        {"GET": "offer_queue"},
+    ),
+    (
         re.compile(r"^/office/v1/offers/(?P<offer_id>[^/]+)$"),
         "/office/v1/offers/{offer_id}",
         {"GET": "offer_detail"},
@@ -2417,6 +2444,20 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             elif kind == "list_offers":
                 self._query(set())
                 self._respond(200, api.list_offers())
+            elif kind == "offer_queue":
+                params = self._query({"group", "limit", "offset"})
+                group_raw = params.get("group")
+                group: str | None = None
+                if group_raw is not None:
+                    if group_raw not in {
+                        "action_required",
+                        "overdue",
+                        "history",
+                    }:
+                        raise _invalid()
+                    group = group_raw
+                limit, offset = self._pagination(params)
+                self._respond(200, api.offer_queue(group=group, limit=limit, offset=offset))
             elif kind == "list_contacts":
                 self._query(set())
                 self._respond(200, api.list_contacts())

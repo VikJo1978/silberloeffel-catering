@@ -1301,6 +1301,126 @@ class RemoteCoreClient:
             _date(row["valid_until"])
         return body
 
+    def offer_queue(
+        self,
+        *,
+        group: str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, object]:
+        params: list[str] = []
+        if group is not None:
+            params.append(f"group={quote(group, safe='')}")
+        if limit != 100:
+            params.append(f"limit={limit}")
+        if offset != 0:
+            params.append(f"offset={offset}")
+        path = "/office/v1/offer-queue"
+        if params:
+            path = f"{path}?{'&'.join(params)}"
+        body = self.get(path)
+        _exact(body, {"today", "sections", "total_count", "limit", "offset"})
+        _date(body["today"])
+        _nonnegative_int(body["total_count"])
+        limit_value = _nonnegative_int(body["limit"])
+        offset_value = _nonnegative_int(body["offset"])
+        if limit_value < 1 or offset_value < 0:
+            _bad_response()
+        allowed_groups = {"action_required", "overdue", "history"}
+        allowed_subkinds = {
+            "prepared",
+            "sent",
+            "accepted",
+            "accepted_contact_blocked",
+            "expired",
+            "converted",
+            "rejected",
+            "withdrawn",
+            "superseded",
+            "inquiry_closed",
+        }
+        allowed_next_actions = {
+            "mark_sent",
+            "await_customer",
+            "convert_accepted",
+            "complete_contact",
+            "none",
+        }
+        allowed_states = {
+            "Prepared",
+            "Sent",
+            "Accepted",
+            "Converted",
+            "Expired",
+            "Withdrawn",
+            "Rejected",
+            "Superseded",
+        }
+        for raw_section in _list(body["sections"]):
+            section = _dict(raw_section)
+            _exact(section, {"group", "label", "count", "items"})
+            group_value = _str(section["group"])
+            if group_value not in allowed_groups:
+                _bad_response()
+            _str(section["label"])
+            _nonnegative_int(section["count"])
+            for raw_item in _list(section["items"]):
+                item = _dict(raw_item)
+                keys = {
+                    "offer_id",
+                    "inquiry_id",
+                    "offer_version_id",
+                    "version_number",
+                    "state",
+                    "state_label",
+                    "queue_group",
+                    "queue_subkind",
+                    "next_action",
+                    "next_action_label",
+                    "customer_display",
+                    "intake_subject",
+                    "event_date",
+                    "guest_count",
+                    "valid_until",
+                    "days_until_valid_until",
+                    "days_overdue",
+                    "prepared_at",
+                    "sent_at",
+                }
+                if not keys <= set(item):
+                    _bad_response()
+                if item.get("validity_hint") is not None:
+                    if _str(item["validity_hint"]) != "expires_today":
+                        _bad_response()
+                _uuid4(item["offer_id"])
+                _uuid4(item["inquiry_id"])
+                _uuid4(item["offer_version_id"])
+                _int(item["version_number"])
+                if _str(item["state"]) not in allowed_states:
+                    _bad_response()
+                _str(item["state_label"])
+                if _str(item["queue_group"]) not in allowed_groups:
+                    _bad_response()
+                if _str(item["queue_subkind"]) not in allowed_subkinds:
+                    _bad_response()
+                if _str(item["next_action"]) not in allowed_next_actions:
+                    _bad_response()
+                _str(item["next_action_label"])
+                _str(item["customer_display"])
+                if item["intake_subject"] is not None:
+                    _str(item["intake_subject"])
+                _date(item["event_date"])
+                if item["guest_count"] is not None:
+                    _guest_count(item["guest_count"])
+                _date(item["valid_until"])
+                _int(item["days_until_valid_until"])
+                if item["days_overdue"] is not None:
+                    _int(item["days_overdue"])
+                _datetime(item["prepared_at"])
+                if item["sent_at"] is not None:
+                    _datetime(item["sent_at"])
+        return body
+
     def offer_detail(self, offer_id: str) -> dict[str, object] | None:
         try:
             body = self.get(f"/office/v1/offers/{quote(offer_id, safe='')}")
