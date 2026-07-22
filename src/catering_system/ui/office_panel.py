@@ -50,6 +50,9 @@ from catering_system.domain.order_payment_reminder import (
 from catering_system.repositories.in_memory_offer_repository import (
     InMemoryOfferRepository,
 )
+from catering_system.repositories.in_memory_order_commercial_snapshot_repository import (
+    InMemoryOrderCommercialSnapshotRepository,
+)
 from catering_system.repositories.in_memory_catalog_repository import (
     InMemoryCatalogRepository,
 )
@@ -83,6 +86,9 @@ from catering_system.repositories.order_confirmation_outbound_repository import 
 from catering_system.repositories.catalog_repository import CatalogRepository
 from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.repositories.offer_repository import OfferRepository
+from catering_system.repositories.order_commercial_snapshot_repository import (
+    OrderCommercialSnapshotRepository,
+)
 from uuid import uuid4
 
 from catering_system.repositories.in_memory_order_operational_pause_repository import (
@@ -319,6 +325,7 @@ class OfficePanel:
         contact_profile_repo: ContactProfileRepository | None = None,
         offer_repo: OfferRepository | None = None,
         catalog_repo: CatalogRepository | None = None,
+        commercial_snapshot_repo: OrderCommercialSnapshotRepository | None = None,
         ui_version: str = "legacy",
     ) -> None:
         if ui_version not in {"legacy", "v2"}:
@@ -326,6 +333,9 @@ class OfficePanel:
         self._inquiries = inquiry_repo
         self._orders = order_repo
         self._offers = offer_repo or InMemoryOfferRepository()
+        self._commercial_snapshots = (
+            commercial_snapshot_repo or InMemoryOrderCommercialSnapshotRepository()
+        )
         self._catalog = catalog_repo or InMemoryCatalogRepository()
         self._pause_repository: OrderOperationalPauseRepository | None
         self.catalog_dish_write_service = CatalogDishWriteService(self._catalog)
@@ -733,6 +743,7 @@ class OfficePanel:
                 self._offers,
                 self._inquiries,
                 self._orders,
+                self._commercial_snapshots,
                 today=api_views.berlin_today,
             )
             offer_service.record_sent_evidence(
@@ -783,6 +794,7 @@ class OfficePanel:
                 self._offers,
                 self._inquiries,
                 self._orders,
+                self._commercial_snapshots,
                 today=api_views.berlin_today,
             )
             offer_service.record_acceptance_evidence(
@@ -828,6 +840,7 @@ class OfficePanel:
                 self._offers,
                 self._inquiries,
                 self._orders,
+                self._commercial_snapshots,
                 today=api_views.berlin_today,
             )
             offer_service.record_rejection_evidence(
@@ -866,6 +879,7 @@ class OfficePanel:
                 self._offers,
                 self._inquiries,
                 self._orders,
+                self._commercial_snapshots,
                 today=api_views.berlin_today,
             )
             offer_service.record_withdrawal_evidence(
@@ -904,6 +918,7 @@ class OfficePanel:
                 self._offers,
                 self._inquiries,
                 self._orders,
+                self._commercial_snapshots,
                 today=api_views.berlin_today,
             )
             converted, order, order_version = offer_service.convert_accepted_offer(
@@ -2579,6 +2594,7 @@ class OfficePanel:
                 self._offers,
                 self._inquiries,
                 self._orders,
+                self._commercial_snapshots,
                 today=api_views.berlin_today,
             )
             converted, order, order_version = offer_service.convert_accepted_offer(
@@ -3240,6 +3256,7 @@ def make_office_panel_handler(
     contact_profile_repo: ContactProfileRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
+    commercial_snapshot_repo: OrderCommercialSnapshotRepository | None = None,
     ui_version: str = "legacy",
 ) -> type[BaseHTTPRequestHandler]:
     """Compatibility wrapper; HTTP routing lives in office_panel_http."""
@@ -3266,6 +3283,7 @@ def make_office_panel_handler(
         contact_profile_repo=contact_profile_repo,
         offer_repo=offer_repo,
         catalog_repo=catalog_repo,
+        commercial_snapshot_repo=commercial_snapshot_repo,
         ui_version=ui_version,
     )
 
@@ -3292,6 +3310,7 @@ def create_office_panel_server(
     contact_profile_repo: ContactProfileRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
+    commercial_snapshot_repo: OrderCommercialSnapshotRepository | None = None,
     ui_version: str = "legacy",
 ) -> HTTPServer:
     """Compatibility wrapper; server construction lives in office_panel_http."""
@@ -3320,6 +3339,7 @@ def create_office_panel_server(
         contact_profile_repo=contact_profile_repo,
         offer_repo=offer_repo,
         catalog_repo=catalog_repo,
+        commercial_snapshot_repo=commercial_snapshot_repo,
         ui_version=ui_version,
     )
 
@@ -3467,6 +3487,9 @@ def main() -> None:
         from catering_system.repositories.sqlite_catalog_repository import (
             SQLiteCatalogRepository,
         )
+        from catering_system.repositories.sqlite_order_commercial_snapshot_repository import (
+            SQLiteOrderCommercialSnapshotRepository,
+        )
         from catering_system.repositories.bootstrap_customer_identity_schema import (
             bootstrap_customer_identity_schema,
         )
@@ -3477,6 +3500,9 @@ def main() -> None:
         order_repo = SQLiteOrderRepository.from_connection(connection)
         offer_repo = SQLiteOfferRepository.from_connection(connection)
         catalog_repo = SQLiteCatalogRepository.from_connection(connection)
+        commercial_snapshot_repo = (
+            SQLiteOrderCommercialSnapshotRepository.from_connection(connection)
+        )
         payment_reminder_repo = SQLitePaymentReminderRepository.from_connection(
             connection
         )
@@ -3516,6 +3542,7 @@ def main() -> None:
             contact_profile_repo=contact_profile_repo,
             offer_repo=offer_repo,
             catalog_repo=catalog_repo,
+            commercial_snapshot_repo=commercial_snapshot_repo,
             ui_version=args.ui_version,
         )
         print(f"Office panel on http://{args.host}:{args.port}/ (user: office)")

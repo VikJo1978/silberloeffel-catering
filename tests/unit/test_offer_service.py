@@ -1079,6 +1079,107 @@ def test_convert_accepted_offer_happy_path() -> None:
         derive_offer_state(updated, version_id, today=date(2026, 7, 15)) == "Converted"
     )
     assert len(orders.list_orders()) == 1
+    snapshot = service._commercial_snapshots.get_by_order_id(order.order_id)
+    assert snapshot is not None
+    assert snapshot.source_offer_id == offer.offer_id
+    assert snapshot.source_offer_version_id == version_id
+    assert snapshot.source_variant_id == variant_id
+    assert snapshot.acceptance_id == acceptance_id
+    assert snapshot.variant_label == "Variante A"
+    assert snapshot.positions[0].name == "Fingerfood Paket"
+    assert snapshot.positions[0].unit_net_cents == 290
+    assert snapshot.positions[0].description == "Frozen description"
+    assert snapshot.positions[0].composition == "Frozen composition"
+
+
+def test_convert_accepted_offer_snapshot_immune_to_later_offer_mutation() -> None:
+    offer, version_id, variant_id, acceptance_id, offers, _orders, _inq, service = (
+        _accepted_offer_state()
+    )
+    _updated, order, _ov = service.convert_accepted_offer(
+        offer.offer_id, version_id, variant_id, acceptance_id
+    )
+    frozen = service._commercial_snapshots.get_by_order_id(order.order_id)
+    assert frozen is not None
+    original_name = frozen.positions[0].name
+
+    stored = offers.get(offer.offer_id)
+    assert stored is not None
+    version = stored.versions[0]
+    variant = version.variants[0]
+    mutated_position = replace(variant.positions[0], name="MUTATED LIVE OFFER")
+    mutated_variant = replace(variant, positions=(mutated_position,))
+    mutated_version = replace(version, variants=(mutated_variant,))
+    # Offer versions are append-only in production; force a live mutation to prove
+    # the commercial snapshot is decoupled from later Offer storage changes.
+    offers._offers[stored.offer_id] = replace(stored, versions=(mutated_version,))
+
+    reloaded = service._commercial_snapshots.get_by_order_id(order.order_id)
+    assert reloaded is not None
+    assert reloaded.positions[0].name == original_name
+    assert reloaded.positions[0].name == "Fingerfood Paket"
+
+
+def test_convert_accepted_offer_replay_does_not_create_second_snapshot() -> None:
+    offer, version_id, variant_id, acceptance_id, offers, orders, _inq, service = (
+        _accepted_offer_state()
+    )
+    first = service.convert_accepted_offer(
+        offer.offer_id, version_id, variant_id, acceptance_id
+    )
+    first_snapshot = service._commercial_snapshots.get_by_order_id(first[1].order_id)
+    assert first_snapshot is not None
+    second = service.convert_accepted_offer(
+        offer.offer_id, version_id, variant_id, acceptance_id
+    )
+    assert second[1].order_id == first[1].order_id
+    assert len(orders.list_orders()) == 1
+    assert offers.get(offer.offer_id) == second[0]
+    again = service._commercial_snapshots.get_by_order_id(first[1].order_id)
+    assert again is not None
+    assert again.snapshot_id == first_snapshot.snapshot_id
+
+
+def test_order_and_snapshot_remain_when_offer_repo_later_unavailable() -> None:
+    """Boundary prep for PR B/C: Order + Snapshot stay readable without Offer."""
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        _offers,
+        orders,
+        inquiries,
+        service,
+    ) = _accepted_offer_state()
+    _updated, order, _ov = service.convert_accepted_offer(
+        offer.offer_id, version_id, variant_id, acceptance_id
+    )
+    snapshot = service._commercial_snapshots.get_by_order_id(order.order_id)
+    assert snapshot is not None
+
+    class _UnavailableOfferRepository:
+        def get(self, offer_id: str) -> Offer | None:
+            raise RuntimeError("offer repository unavailable")
+
+        def save(self, offer: Offer) -> None:
+            raise RuntimeError("offer repository unavailable")
+
+        def append_conversion_link(self, link: ConversionLink) -> Offer:
+            raise RuntimeError("offer repository unavailable")
+
+    broken = OfferService(
+        _UnavailableOfferRepository(),  # type: ignore[arg-type]
+        inquiries,
+        orders,
+        service._commercial_snapshots,
+    )
+    with pytest.raises(RuntimeError, match="unavailable"):
+        broken.convert_accepted_offer(
+            offer.offer_id, version_id, variant_id, acceptance_id
+        )
+    assert orders.get_order(order.order_id) is not None
+    assert service._commercial_snapshots.get_by_order_id(order.order_id) == snapshot
 
 
 def test_convert_accepted_offer_order_version_from_offer_not_inquiry() -> None:

@@ -86,6 +86,9 @@ from catering_system.repositories.sqlite_payment_reminder_repository import (
 from catering_system.repositories.sqlite_order_confirmation_document_repository import (
     SQLiteOrderConfirmationDocumentRepository,
 )
+from catering_system.repositories.sqlite_order_commercial_snapshot_repository import (
+    SQLiteOrderCommercialSnapshotRepository,
+)
 from catering_system.repositories.sqlite_order_confirmation_outbound_repository import (
     SQLiteOrderConfirmationOutboundRepository,
 )
@@ -386,6 +389,9 @@ class OfficeApi:
         self.confirmation_documents = (
             SQLiteOrderConfirmationDocumentRepository.from_connection(connection)
         )
+        self.commercial_snapshots = (
+            SQLiteOrderCommercialSnapshotRepository.from_connection(connection)
+        )
         self.confirmation_outbound = (
             SQLiteOrderConfirmationOutboundRepository.from_connection(connection)
         )
@@ -402,6 +408,7 @@ class OfficeApi:
             self.offers,
             self.inquiries,
             self.orders,
+            self.commercial_snapshots,
             today=views.berlin_today,
         )
         self.payment_reminder_service = PaymentReminderService(

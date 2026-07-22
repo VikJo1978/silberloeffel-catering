@@ -32,6 +32,9 @@ from catering_system.repositories.order_confirmation_document_repository import 
 from catering_system.repositories.order_confirmation_outbound_repository import (
     OrderConfirmationOutboundRepository,
 )
+from catering_system.repositories.order_commercial_snapshot_repository import (
+    OrderCommercialSnapshotRepository,
+)
 from catering_system.repositories.order_operational_pause_repository import (
     OrderOperationalPauseRepository,
 )
@@ -226,6 +229,7 @@ def make_office_panel_handler(
     contact_profile_repo: ContactProfileRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
+    commercial_snapshot_repo: OrderCommercialSnapshotRepository | None = None,
     ui_version: str = "legacy",
 ) -> type[BaseHTTPRequestHandler]:
     panel = OfficePanel(
@@ -243,6 +247,7 @@ def make_office_panel_handler(
         contact_profile_repo=contact_profile_repo,
         offer_repo=offer_repo,
         catalog_repo=catalog_repo,
+        commercial_snapshot_repo=commercial_snapshot_repo,
         ui_version=ui_version,
     )
     expected = "Basic " + base64.b64encode(f"office:{password}".encode()).decode()
@@ -769,6 +774,7 @@ def create_office_panel_server(
     contact_profile_repo: ContactProfileRepository | None = None,
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
+    commercial_snapshot_repo: OrderCommercialSnapshotRepository | None = None,
     ui_version: str = "legacy",
 ) -> HTTPServer:
     """Create the intentionally single-threaded office HTTP server."""
@@ -793,6 +799,7 @@ def create_office_panel_server(
             contact_profile_repo=contact_profile_repo,
             offer_repo=offer_repo,
             catalog_repo=catalog_repo,
+            commercial_snapshot_repo=commercial_snapshot_repo,
             ui_version=ui_version,
         ),
     )

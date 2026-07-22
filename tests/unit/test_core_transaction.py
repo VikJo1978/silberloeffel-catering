@@ -36,6 +36,9 @@ from catering_system.repositories.sqlite_inquiry_repository import (
 from catering_system.repositories.sqlite_offer_repository import (
     SQLiteOfferRepository,
 )
+from catering_system.repositories.sqlite_order_commercial_snapshot_repository import (
+    SQLiteOrderCommercialSnapshotRepository,
+)
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
@@ -622,11 +625,12 @@ def test_record_acceptance_evidence_append_failure_leaves_no_ledger(shared) -> N
 def test_convert_accepted_offer_and_ledger_commit_atomically(shared) -> None:
     connection, inquiries, orders, ledger = shared
     offers = SQLiteOfferRepository.from_connection(connection)
+    snapshots = SQLiteOrderCommercialSnapshotRepository.from_connection(connection)
     reminders = SQLitePaymentReminderRepository.from_connection(connection)
     executor = CoreCommandExecutor(connection)
     inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
-    service = OfferService(offers, inquiries, orders)
+    service = OfferService(offers, inquiries, orders, snapshots)
     offer = executor.run(
         lambda: service.prepare_offer_version(
             inquiry.inquiry_id,
@@ -695,15 +699,20 @@ def test_convert_accepted_offer_and_ledger_commit_atomically(shared) -> None:
     assert ledger.get(convert_cmd) is not None
     assert reminders.get(stored.conversion_link.order_id) is not None
     assert inquiries.get_by_id(inquiry.inquiry_id).crm_stage == ACTIVE_ORDER_CRM_STAGE
+    snapshot = snapshots.get_by_order_id(stored.conversion_link.order_id)
+    assert snapshot is not None
+    assert snapshot.source_offer_version_id == version_id
+    assert snapshot.positions[0].name == "Fingerfood Paket"
 
 
 def test_convert_accepted_offer_append_failure_leaves_no_ledger(shared) -> None:
     connection, inquiries, orders, ledger = shared
     offers = SQLiteOfferRepository.from_connection(connection)
+    snapshots = SQLiteOrderCommercialSnapshotRepository.from_connection(connection)
     executor = CoreCommandExecutor(connection)
     inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
-    service = OfferService(offers, inquiries, orders)
+    service = OfferService(offers, inquiries, orders, snapshots)
     offer = executor.run(
         lambda: service.prepare_offer_version(
             inquiry.inquiry_id,
@@ -759,15 +768,21 @@ def test_convert_accepted_offer_append_failure_leaves_no_ledger(shared) -> None:
     assert stored is not None
     assert stored.conversion_link is None
     assert len(orders.list_orders()) == 0
+    assert snapshots.get_by_order_id("any") is None
+    rows = connection.execute(
+        "SELECT COUNT(*) FROM order_commercial_snapshots"
+    ).fetchone()
+    assert rows is not None and rows[0] == 0
 
 
 def test_convert_accepted_offer_crm_failure_rolls_back(shared) -> None:
     connection, inquiries, orders, ledger = shared
     offers = SQLiteOfferRepository.from_connection(connection)
+    snapshots = SQLiteOrderCommercialSnapshotRepository.from_connection(connection)
     executor = CoreCommandExecutor(connection)
     inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
-    service = OfferService(offers, inquiries, orders)
+    service = OfferService(offers, inquiries, orders, snapshots)
     offer = executor.run(
         lambda: service.prepare_offer_version(
             inquiry.inquiry_id,
@@ -836,3 +851,7 @@ def test_convert_accepted_offer_crm_failure_rolls_back(shared) -> None:
     assert stored is not None
     assert stored.conversion_link is None
     assert len(orders.list_orders()) == 0
+    rows = connection.execute(
+        "SELECT COUNT(*) FROM order_commercial_snapshots"
+    ).fetchone()
+    assert rows is not None and rows[0] == 0
