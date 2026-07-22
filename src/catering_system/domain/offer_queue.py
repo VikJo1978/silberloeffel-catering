@@ -26,6 +26,7 @@ OfferQueueNextAction = Literal[
     "await_customer",
     "convert_accepted",
     "complete_contact",
+    "prepare_next_version",
     "none",
 ]
 ValidityHint = Literal["expires_today"]

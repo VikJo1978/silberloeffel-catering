@@ -111,6 +111,11 @@ def _state_copy(
             "Angebot vorbereiten",
             "Ein Auftrag entsteht nur aus einem angenommenen Angebot.",
         )
+    if state.next_action == "prepare-next-version":
+        return (
+            "Neue Angebotsversion vorbereiten",
+            "Für diese Anfrage kann eine neue Angebotsversion erstellt werden.",
+        )
     if state.next_action == "offer-pending":
         return (
             "Angebot ausstehend",
@@ -163,6 +168,15 @@ def _primary_action(
             "<h2>Angebot vorbereiten</h2>"
             "<p>Ein Auftrag wird nur aus einem angenommenen Angebot erstellt. "
             "Bereiten Sie zuerst ein Angebot vor.</p>"
+            "</section>"
+        )
+    elif state.next_action == "prepare-next-version":
+        return (
+            '<section class="inquiry-next-step">'
+            '<div class="inquiry-eyebrow">Nächster Schritt</div>'
+            "<h2>Neue Angebotsversion vorbereiten</h2>"
+            "<p>Die bisherige Angebotsversion ist abgeschlossen. "
+            "Bereiten Sie eine neue Version vor.</p>"
             "</section>"
         )
     elif inquiry_shows_convert_accepted_button(state):

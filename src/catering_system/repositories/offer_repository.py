@@ -8,6 +8,7 @@ from catering_system.domain.offer import (
     AcceptanceEvidence,
     ConversionLink,
     Offer,
+    OfferVersion,
     RejectionEvidence,
     SentEvidence,
     WithdrawalEvidence,
@@ -29,6 +30,9 @@ class OfferRepository(Protocol):
 
     def list_all(self) -> list[Offer]:
         """Load every stored Offer aggregate in repository order."""
+
+    def append_offer_version(self, offer_id: str, version: OfferVersion) -> Offer:
+        """Append one OfferVersion row and return the updated Offer aggregate."""
 
     def append_sent_evidence(self, evidence: SentEvidence) -> Offer:
         """Append one SentEvidence row and return the updated Offer aggregate."""

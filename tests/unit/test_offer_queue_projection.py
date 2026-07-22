@@ -266,8 +266,8 @@ def test_expired_in_overdue_without_action_button() -> None:
         _service(offers=offers, inquiries=inquiries).snapshot(), "overdue"
     ).items[0]
     assert item.state == "Expired"
-    assert item.next_action == "none"
-    assert item.next_action_label == "Frist abgelaufen"
+    assert item.next_action == "prepare_next_version"
+    assert item.next_action_label == "Neue Version vorbereiten"
     assert item.days_overdue == 5
 
 
@@ -417,7 +417,7 @@ def test_rejected_offer_in_history() -> None:
         _service(offers=offers, inquiries=inquiries).snapshot(), "history"
     ).items[0]
     assert item.queue_subkind == "rejected"
-    assert item.next_action == "none"
+    assert item.next_action == "prepare_next_version"
 
 
 def test_withdrawn_offer_in_history() -> None:

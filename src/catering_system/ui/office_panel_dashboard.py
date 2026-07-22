@@ -41,6 +41,7 @@ _WEEKDAYS = ("Mo", "Di", "Mi", "Do", "Fr", "Sa", "So")
 _TASK_ICONS = {
     "verify": "phone",
     "prepare_offer": "doc",
+    "prepare_next_version": "doc",
     "convert_accepted": "doc",
     "order_print": "printer",
     "order_effective": "check",

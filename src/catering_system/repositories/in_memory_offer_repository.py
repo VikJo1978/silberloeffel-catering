@@ -6,6 +6,7 @@ from catering_system.domain.offer import (
     AcceptanceEvidence,
     ConversionLink,
     Offer,
+    OfferVersion,
     RejectionEvidence,
     SentEvidence,
     WithdrawalEvidence,
@@ -37,6 +38,36 @@ class InMemoryOfferRepository:
         return sorted(
             self._offers.values(), key=lambda offer: (offer.created_at, offer.offer_id)
         )
+
+    def append_offer_version(self, offer_id: str, version: OfferVersion) -> Offer:
+        offer = self.get(offer_id)
+        if offer is None:
+            raise KeyError(offer_id)
+        if version.offer_id != offer_id:
+            raise ValueError("OfferVersion belongs to a different Offer")
+        latest = max(item.version_number for item in offer.versions)
+        if version.version_number != latest + 1:
+            raise ValueError(
+                f"version_number must be {latest + 1}, got {version.version_number}"
+            )
+        if any(item.snapshot_id == version.snapshot_id for item in offer.versions):
+            raise ValueError(
+                f"snapshot_id already exists for offer_id={offer_id!r}: "
+                f"{version.snapshot_id!r}"
+            )
+        updated = Offer(
+            offer_id=offer.offer_id,
+            source_inquiry_id=offer.source_inquiry_id,
+            created_at=offer.created_at,
+            versions=(*offer.versions, version),
+            sent_evidence=offer.sent_evidence,
+            acceptance_evidence=offer.acceptance_evidence,
+            rejection_evidence=offer.rejection_evidence,
+            withdrawal_evidence=offer.withdrawal_evidence,
+            conversion_link=offer.conversion_link,
+        )
+        self._offers[offer.offer_id] = updated
+        return updated
 
     def append_sent_evidence(self, evidence: SentEvidence) -> Offer:
         offer = self.get(evidence.offer_id)

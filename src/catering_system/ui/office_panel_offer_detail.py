@@ -216,16 +216,37 @@ def _record_withdrawal_form(offer_id: str, *, forms: OfferDetailFormFields) -> s
     )
 
 
+def _prepare_next_version_cta(*, revision_prefill_url: str | None) -> str:
+    if not revision_prefill_url:
+        return (
+            '<section class="offer-detail-section offer-action-section">'
+            "<h2>Neue Version vorbereiten</h2>"
+            "<p>Eine neue Angebotsversion wird im Angebots-Editor vorbereitet.</p>"
+            "</section>"
+        )
+    return (
+        '<section class="offer-detail-section offer-action-section">'
+        "<h2>Neue Version vorbereiten</h2>"
+        "<p>Eine neue Angebotsversion wird im Angebots-Editor vorbereitet und "
+        "anschließend als nächste Version übernommen.</p>"
+        f'<p><a class="offer-revision-link" href="{_e(revision_prefill_url)}">'
+        "Neue Version vorbereiten</a></p>"
+        "</section>"
+    )
+
+
 def _sent_offer_actions(
     offer_id: str,
     variants: list[dict[str, object]],
     *,
     forms: OfferDetailFormFields,
+    revision_prefill_url: str | None = None,
 ) -> str:
     return (
         _record_acceptance_form(offer_id, variants, forms=forms)
         + _record_rejection_form(offer_id, forms=forms)
         + _record_withdrawal_form(offer_id, forms=forms)
+        + _prepare_next_version_cta(revision_prefill_url=revision_prefill_url)
     )
 
 
@@ -257,6 +278,7 @@ def render_offer_detail(
     *,
     context: OfficePageContext,
     forms: OfferDetailFormFields,
+    revision_prefill_url: str | None = None,
 ) -> str:
     offer_id = str(detail["offer_id"])
     inquiry_id = str(detail["inquiry_id"])
@@ -290,7 +312,16 @@ def render_offer_detail(
     if state == "Prepared":
         action_section = _mark_sent_form(offer_id, forms=forms)
     elif state == "Sent":
-        action_section = _sent_offer_actions(offer_id, variants, forms=forms)
+        action_section = _sent_offer_actions(
+            offer_id,
+            variants,
+            forms=forms,
+            revision_prefill_url=revision_prefill_url,
+        )
+    elif state in ("Expired", "Rejected", "Withdrawn"):
+        action_section = _prepare_next_version_cta(
+            revision_prefill_url=revision_prefill_url
+        )
     elif state == "Accepted":
         acceptance_id = detail.get("acceptance_id")
         acceptance = cast(dict[str, object] | None, detail.get("acceptance"))

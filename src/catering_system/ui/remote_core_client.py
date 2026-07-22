@@ -118,7 +118,13 @@ _CONTACT_FIELD_VALUES = frozenset({"email", "phone"})
 _INQUIRY_OFFER_KEYS = frozenset({"offer_id", "offer_version_id", "commercial_state"})
 _INQUIRY_OFFER_OPTIONAL_KEYS = frozenset({"accepted_variant_id", "acceptance_id"})
 _INQUIRY_NEXT_ACTIONS = frozenset(
-    {"verify", "prepare-offer", "convert-accepted", "offer-pending"}
+    {
+        "verify",
+        "prepare-offer",
+        "prepare-next-version",
+        "convert-accepted",
+        "offer-pending",
+    }
 )
 _OFFER_COMMERCIAL_STATES = frozenset(
     {
@@ -1050,6 +1056,36 @@ class RemoteCoreClient:
             _bad_response()
         return _uuid4(result["order_id"]), _uuid4(result["order_version_id"])
 
+    def prepare_next_offer_version(
+        self,
+        offer_id: str,
+        snapshot: Mapping[str, object],
+        *,
+        latest_version_number: int,
+        command_id: str | None = None,
+    ) -> dict[str, object]:
+        """Append OfferVersion N+1; configurator/clients choose this when Offer exists."""
+        result = self.command(
+            f"/office/v1/offers/{quote(offer_id, safe='')}/prepare-next-version",
+            {"snapshot": dict(snapshot)},
+            {"latest_version_number": latest_version_number},
+            expected={201},
+            result_keys={
+                "offer_id",
+                "offer_version_id",
+                "version_number",
+                "snapshot_id",
+            },
+            command_id=command_id,
+        )
+        if _uuid4(result["offer_id"]) != offer_id:
+            _bad_response()
+        _uuid4(result["offer_version_id"])
+        if _int(result["version_number"]) != latest_version_number + 1:
+            _bad_response()
+        _str(result["snapshot_id"])
+        return result
+
     def mark_offer_sent(
         self,
         offer_id: str,
@@ -1344,6 +1380,7 @@ class RemoteCoreClient:
             "await_customer",
             "convert_accepted",
             "complete_contact",
+            "prepare_next_version",
             "none",
         }
         allowed_states = {
@@ -1888,6 +1925,7 @@ class RemoteCoreClient:
         allowed_categories = {
             "verify",
             "prepare_offer",
+            "prepare_next_version",
             "convert_accepted",
             "order_print",
             "order_effective",

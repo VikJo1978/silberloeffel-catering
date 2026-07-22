@@ -251,6 +251,37 @@ def test_sent_offer_projects_offer_pending_not_legacy_convert() -> None:
     assert state.offer.commercial_state == "Sent"
 
 
+def test_expired_offer_projects_prepare_next_version() -> None:
+    expired = Offer(
+        offer_id=_OFFER_ID,
+        source_inquiry_id=_INQUIRY_ID,
+        created_at=_NOW,
+        versions=(replace(_version(sent=True), valid_until=date(2026, 7, 1)),),
+        sent_evidence=(
+            SentEvidence(
+                offer_id=_OFFER_ID,
+                offer_version_id=_V1_ID,
+                sent_at=_NOW,
+                recorded_at=_NOW + timedelta(minutes=1),
+                channel="email",
+                recipient_reference="kunde@example.invalid",
+                evidence_reference="mail-1",
+                recorded_by="office",
+            ),
+        ),
+    )
+    state = derive_inquiry_office_state(
+        _inquiry(),
+        has_order=False,
+        has_active_order=False,
+        offer=expired,
+        today=_TODAY,
+    )
+    assert state.next_action == "prepare-next-version"
+    assert state.offer is not None
+    assert state.offer.commercial_state == "Expired"
+
+
 def test_accepted_offer_projects_convert_accepted() -> None:
     state = derive_inquiry_office_state(
         _inquiry(),

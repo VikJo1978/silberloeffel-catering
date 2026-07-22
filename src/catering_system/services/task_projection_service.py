@@ -85,6 +85,30 @@ class TaskProjectionService:
                         inquiry.event_date,
                     )
                 )
+            elif state.next_action == "prepare-next-version":
+                offer_id = (
+                    state.offer.offer_id
+                    if state.offer is not None
+                    else inquiry.inquiry_id
+                )
+                tasks.append(
+                    (
+                        TaskProjection(
+                            task_id=f"offer:{offer_id}:prepare-next-version",
+                            category="prepare_next_version",
+                            title="Neue Angebotsversion vorbereiten",
+                            subtitle=subtitle,
+                            entity_type="offer",
+                            entity_id=offer_id,
+                            action_label="Angebot öffnen",
+                            action_href=f"/offer/{offer_id}",
+                            due_at=None,
+                            urgency="normal",
+                            opened_at=inquiry.created_at,
+                        ),
+                        inquiry.event_date,
+                    )
+                )
             elif state.next_action == "convert-accepted":
                 if state.offer is None:
                     continue

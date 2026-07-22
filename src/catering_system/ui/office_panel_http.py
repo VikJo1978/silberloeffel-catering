@@ -112,6 +112,9 @@ _OFFER_COMMAND_ERROR_LABELS: dict[str, str] = {
     "acceptance_already_exists": "Für dieses Angebot ist bereits eine Annahme erfasst.",
     "invalid_variant": "Die gewählte Variante gehört nicht zu dieser Angebotsversion.",
     "acceptance_blocked": "Die Annahme kann in diesem Angebotsstatus nicht erfasst werden.",
+    "acceptance_blocked_newer_version_exists": (
+        "Annahme nicht möglich: Eine neuere Angebotsversion ist bereits vorbereitet."
+    ),
     "sent_recording_blocked": (
         "Der Versand kann in diesem Angebotsstatus nicht vermerkt werden."
     ),
@@ -146,6 +149,8 @@ def office_command_error_message(code_or_text: str) -> str:
         return _OFFER_COMMAND_ERROR_LABELS["acceptance_already_exists"]
     if "accepted variant does not belong" in lowered:
         return _OFFER_COMMAND_ERROR_LABELS["invalid_variant"]
+    if "acceptance_blocked_newer_version_exists" in lowered:
+        return _OFFER_COMMAND_ERROR_LABELS["acceptance_blocked_newer_version_exists"]
     if "acceptance blocked" in lowered or "acceptance blocks sent" in lowered:
         return _OFFER_COMMAND_ERROR_LABELS["acceptance_blocked"]
     if "sent recording blocked" in lowered:
