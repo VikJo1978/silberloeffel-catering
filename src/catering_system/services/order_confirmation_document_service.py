@@ -10,15 +10,15 @@ from decimal import Decimal
 
 from catering_system.domain.inquiry import Inquiry
 from catering_system.domain.offer import (
-    Offer,
-    OfferVariant,
-    OfferVersion,
     PositionKind,
     PositionQuantityMode,
     VatRatePercent,
 )
 from catering_system.domain.order import Order, OrderVersion
-from catering_system.domain.order_commercial_snapshot import OrderCommercialSnapshot
+from catering_system.domain.order_commercial_snapshot import (
+    MissingCommercialSnapshotError,
+    OrderCommercialSnapshot,
+)
 from catering_system.domain.order_confirmation_document import (
     OrderConfirmationDocumentPosition,
     OrderConfirmationDocumentSnapshot,
@@ -34,11 +34,7 @@ from catering_system.intake.intake_contact import (
     labelled_intake_context,
     parse_intake_contact,
 )
-from catering_system.repositories.in_memory_order_commercial_snapshot_repository import (
-    InMemoryOrderCommercialSnapshotRepository,
-)
 from catering_system.repositories.inquiry_repository import InquiryRepository
-from catering_system.repositories.offer_repository import OfferRepository
 from catering_system.repositories.order_commercial_snapshot_repository import (
     OrderCommercialSnapshotRepository,
 )
@@ -153,21 +149,16 @@ class OrderConfirmationDocumentService:
     def __init__(
         self,
         order_repository: OrderRepository,
-        offer_repository: OfferRepository,
         inquiry_repository: InquiryRepository,
         document_repository: OrderConfirmationDocumentRepository,
-        commercial_snapshot_repository: OrderCommercialSnapshotRepository | None = None,
+        commercial_snapshot_repository: OrderCommercialSnapshotRepository,
         *,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self._orders = order_repository
-        self._offers = offer_repository
         self._inquiries = inquiry_repository
         self._documents = document_repository
-        self._commercial_snapshots = (
-            commercial_snapshot_repository
-            or InMemoryOrderCommercialSnapshotRepository()
-        )
+        self._commercial_snapshots = commercial_snapshot_repository
         self._now = now or (lambda: datetime.now(UTC))
 
     def eligibility(self, order_id: str) -> OrderConfirmationDocumentEligibility:
@@ -355,13 +346,7 @@ class OrderConfirmationDocumentService:
             return "aenderung_wartet"
         if version.kitchen_print_confirmed_at is None:
             return "aenderung_wartet"
-        if self._commercial_snapshots.get_by_order_id(order.order_id) is not None:
-            return None
-        # TODO: remove legacy fallback after snapshot migration window
-        offer = self._offers.get_by_source_inquiry_id(order.source_inquiry_id)
-        if offer is None or offer.conversion_link is None:
-            return "nicht_verfuegbar"
-        if offer.conversion_link.order_id != order.order_id:
+        if self._commercial_snapshots.get_by_order_id(order.order_id) is None:
             return "nicht_verfuegbar"
         return None
 
@@ -375,51 +360,9 @@ class OrderConfirmationDocumentService:
 
     def _resolve_commercial(self, order: Order) -> _CommercialFacts:
         snapshot = self._commercial_snapshots.get_by_order_id(order.order_id)
-        if snapshot is not None:
-            return _commercial_from_snapshot(snapshot)
-        # TODO: remove legacy fallback after snapshot migration window
-        return self._legacy_offer_commercial(order)
-
-    def _legacy_offer_commercial(self, order: Order) -> _CommercialFacts:
-        offer, variant, offer_version = self._legacy_commercial_bundle(order)
-        return _CommercialFacts(
-            offer_id=offer.offer_id,
-            offer_version_id=offer_version.offer_version_id,
-            payment_method=offer_version.payment_method,
-            payment_customer_visible_text=offer_version.payment_customer_visible_text,
-            positions=variant.positions,
-        )
-
-    def _legacy_commercial_bundle(
-        self, order: Order
-    ) -> tuple[Offer, OfferVariant, OfferVersion]:
-        offer = self._offers.get_by_source_inquiry_id(order.source_inquiry_id)
-        if offer is None or offer.conversion_link is None:
-            raise OrderConfirmationDocumentBlockedError("nicht_verfuegbar")
-        link = offer.conversion_link
-        if link.order_id != order.order_id:
-            raise OrderConfirmationDocumentBlockedError("nicht_verfuegbar")
-        offer_version = next(
-            (
-                item
-                for item in offer.versions
-                if item.offer_version_id == link.offer_version_id
-            ),
-            None,
-        )
-        if offer_version is None:
-            raise OrderConfirmationDocumentBlockedError("nicht_verfuegbar")
-        variant = next(
-            (
-                item
-                for item in offer_version.variants
-                if item.variant_id == link.variant_id
-            ),
-            None,
-        )
-        if variant is None:
-            raise OrderConfirmationDocumentBlockedError("nicht_verfuegbar")
-        return offer, variant, offer_version
+        if snapshot is None:
+            raise MissingCommercialSnapshotError(order.order_id)
+        return _commercial_from_snapshot(snapshot)
 
 
 def _commercial_from_snapshot(snapshot: OrderCommercialSnapshot) -> _CommercialFacts:

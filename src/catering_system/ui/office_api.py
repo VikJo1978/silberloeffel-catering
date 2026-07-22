@@ -45,6 +45,9 @@ from catering_system.domain.offer import (
     SentChannel,
 )
 from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.order_commercial_snapshot import (
+    MissingCommercialSnapshotError,
+)
 from catering_system.domain.order_payment_reminder import (
     OrderPaymentReminder,
     validate_payment_method,
@@ -418,7 +421,6 @@ class OfficeApi:
         )
         self.confirmation_document_service = OrderConfirmationDocumentService(
             self.orders,
-            self.offers,
             self.inquiries,
             self.confirmation_documents,
             self.commercial_snapshots,
@@ -474,7 +476,6 @@ class OfficeApi:
         )
         self.print_projection_service = OrderPrintProjectionService(
             self.orders,
-            self.offers,
             self.commercial_snapshots,
         )
         self.buffet_cards_service = BuffetCardsService(
@@ -868,7 +869,7 @@ class OfficeApi:
             )
         except PrintFinalRequiresEffectiveError:
             raise ApiError(400, "invalid_request") from None
-        except PrintProjectionNotFoundError:
+        except (PrintProjectionNotFoundError, MissingCommercialSnapshotError):
             raise ApiError(404, "not_found") from None
         return {
             "order": views.order_summary(order),
@@ -879,7 +880,7 @@ class OfficeApi:
     def buffet_cards_data(self, order_id: str, version_id: str) -> dict[str, object]:
         try:
             view = self.buffet_cards_service.resolve(order_id, version_id)
-        except PrintProjectionNotFoundError:
+        except (PrintProjectionNotFoundError, MissingCommercialSnapshotError):
             raise ApiError(404, "not_found") from None
         return views.buffet_cards_data_shape(view)
 

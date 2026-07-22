@@ -8,15 +8,15 @@ from datetime import date
 
 import pytest
 
+from catering_system.domain.order_commercial_snapshot import (
+    MissingCommercialSnapshotError,
+)
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjectionService,
     PrintFinalRequiresEffectiveError,
     PrintProjectionNotFoundError,
 )
 from catering_system.services.operational_core_service import OperationalCoreService
-from catering_system.repositories.in_memory_offer_repository import (
-    InMemoryOfferRepository,
-)
 from catering_system.repositories.in_memory_order_commercial_snapshot_repository import (
     InMemoryOrderCommercialSnapshotRepository,
 )
@@ -34,11 +34,10 @@ from tests.unit.test_offer_service import (
 
 
 def _projection_service(
-    offers,
     orders,
-    snapshots: InMemoryOrderCommercialSnapshotRepository | None = None,
+    snapshots: InMemoryOrderCommercialSnapshotRepository,
 ) -> OrderPrintProjectionService:
-    return OrderPrintProjectionService(orders, offers, snapshots)
+    return OrderPrintProjectionService(orders, snapshots)
 
 
 def test_order_with_offer_conversion_has_menu_positions() -> None:
@@ -53,9 +52,7 @@ def test_order_with_offer_conversion_has_menu_positions() -> None:
     )
     assert converted.conversion_link is not None
 
-    projection = _projection_service(
-        offers, orders, service._commercial_snapshots
-    ).resolve(
+    projection = _projection_service(orders, service._commercial_snapshots).resolve(
         order.order_id,
         order_version.order_version_id,
     )
@@ -73,23 +70,19 @@ def test_order_with_offer_conversion_has_menu_positions() -> None:
     assert "Menge: 80 Stück" in sheet
 
 
-def test_order_without_offer_has_empty_menu() -> None:
-    inquiries, orders, offers, _service = _world(inquiry=_sample_inquiry())
+def test_print_fails_when_commercial_snapshot_missing_for_seeded_order() -> None:
+    inquiries, orders, _offers, _service = _world(inquiry=_sample_inquiry())
     OrderService(orders)
     inquiry = inquiries.get_by_id(_INQUIRY_ID)
     assert inquiry is not None
     order, version = seed_order(orders, inquiry)
+    snapshots = InMemoryOrderCommercialSnapshotRepository()
 
-    projection = _projection_service(offers, orders).resolve(
-        order.order_id,
-        version.order_version_id,
-    )
-
-    assert projection.commercial.source == "none"
-    assert projection.commercial.positions == ()
-
-    sheet = render_print_sheet(projection)
-    assert "Kein Menü hinterlegt" in sheet
+    with pytest.raises(MissingCommercialSnapshotError):
+        _projection_service(orders, snapshots).resolve(
+            order.order_id,
+            version.order_version_id,
+        )
 
 
 def test_new_order_version_uses_version_facts_and_accepted_offer_menu() -> None:
@@ -119,7 +112,9 @@ def test_new_order_version_uses_version_facts_and_accepted_offer_menu() -> None:
         planning_mode="caterer_suggestion",
     )
 
-    projection = _projection_service(offers, orders).resolve(
+    projection = _projection_service(
+        orders, offer_service._commercial_snapshots
+    ).resolve(
         order.order_id,
         v2.order_version_id,
     )
@@ -159,7 +154,7 @@ def test_preview_watermark_candidate_entwurf_effective_clear() -> None:
         order.order_id, order_version.order_version_id
     )
 
-    service = _projection_service(offers, orders)
+    service = _projection_service(orders, offer_service._commercial_snapshots)
     candidate_projection = service.resolve(
         order.order_id,
         order_version.order_version_id,
@@ -221,7 +216,7 @@ def test_candidate_change_preview_contains_reason_diff_and_frozen_offer_menu() -
         actor_reference="office-panel",
         change_reason="Beginn verschoben",
     )
-    service = _projection_service(offers, orders)
+    service = _projection_service(orders, offer_service._commercial_snapshots)
     effective = service.resolve(order.order_id, v1.order_version_id)
     candidate = service.resolve(order.order_id, v2.order_version_id)
 
@@ -266,7 +261,9 @@ def test_stale_stand_shows_veraltet_watermark() -> None:
     core.confirm_kitchen_print(order.order_id, v2.order_version_id)
     core.make_order_version_effective(order.order_id, v2.order_version_id)
 
-    projection = _projection_service(offers, orders).resolve(
+    projection = _projection_service(
+        orders, offer_service._commercial_snapshots
+    ).resolve(
         order.order_id,
         v1.order_version_id,
         intent="preview",
@@ -292,7 +289,7 @@ def test_final_intent_requires_effective_version() -> None:
         variant_id,
         acceptance_id,
     )
-    service = _projection_service(offers, orders)
+    service = _projection_service(orders, offer_service._commercial_snapshots)
     with pytest.raises(PrintFinalRequiresEffectiveError):
         service.resolve(
             order.order_id,
@@ -320,7 +317,9 @@ def test_cancelled_order_shows_storniert_banner_but_remains_readable() -> None:
     )
     OperationalCoreService(orders).cancel_order(order.order_id)
 
-    projection = _projection_service(offers, orders).resolve(
+    projection = _projection_service(
+        orders, offer_service._commercial_snapshots
+    ).resolve(
         order.order_id,
         order_version.order_version_id,
     )
@@ -383,9 +382,9 @@ def test_format_quantity_display_per_person_with_guest_count() -> None:
 
 
 def test_resolve_unknown_order_raises_not_found() -> None:
-    offers = InMemoryOfferRepository()
     orders = InMemoryOrderRepository()
-    service = _projection_service(offers, orders)
+    snapshots = InMemoryOrderCommercialSnapshotRepository()
+    service = _projection_service(orders, snapshots)
     with pytest.raises(PrintProjectionNotFoundError):
         service.resolve(
             "00000000-0000-4000-8000-000000000000",
@@ -433,29 +432,12 @@ def test_resolve_foreign_version_raises_not_found() -> None:
         variant_id,
         acceptance_id,
     )
-    service = _projection_service(offers, orders)
+    service = _projection_service(orders, offer_service._commercial_snapshots)
     with pytest.raises(PrintProjectionNotFoundError):
         service.resolve(order.order_id, "00000000-0000-4000-8000-000000000099")
 
 
-def test_commercial_block_is_none_without_conversion_link() -> None:
-    offers = InMemoryOfferRepository()
-    orders = InMemoryOrderRepository()
-    inquiry = _sample_inquiry()
-    from catering_system.repositories.in_memory_inquiry_repository import (
-        InMemoryInquiryRepository,
-    )
-
-    inquiries = InMemoryInquiryRepository()
-    inquiries.save(inquiry)
-    order, version = seed_order(orders, inquiry)
-    projection = _projection_service(offers, orders).resolve(
-        order.order_id, version.order_version_id
-    )
-    assert projection.commercial.source == "none"
-
-
-def test_commercial_none_when_conversion_link_targets_other_order() -> None:
+def test_preview_entwurf_when_effective_version_record_is_missing() -> None:
     from dataclasses import replace
 
     (
@@ -463,57 +445,17 @@ def test_commercial_none_when_conversion_link_targets_other_order() -> None:
         version_id,
         variant_id,
         acceptance_id,
-        offers,
+        _offers,
         orders,
         _inq,
         offer_service,
     ) = _accepted_offer_state()
-    _converted, order, order_version = offer_service.convert_accepted_offer(
+    _converted, order, version = offer_service.convert_accepted_offer(
         offer.offer_id,
         version_id,
         variant_id,
         acceptance_id,
     )
-    stored = offers.get(offer.offer_id)
-    assert stored is not None and stored.conversion_link is not None
-    bad_link = replace(
-        stored.conversion_link,
-        order_id="00000000-0000-4000-8000-000000000099",
-    )
-    offers._offers[offer.offer_id] = replace(stored, conversion_link=bad_link)
-
-    projection = _projection_service(offers, orders).resolve(
-        order.order_id,
-        order_version.order_version_id,
-    )
-    assert projection.commercial.source == "none"
-
-
-def test_commercial_none_when_accepted_variant_lookup_fails() -> None:
-    from catering_system.services.order_print_projection_service import (
-        _accepted_variant,
-    )
-
-    offer, version_id, variant_id, _acceptance_id, _offers, _orders, _inq, _service = (
-        _accepted_offer_state()
-    )
-    assert (
-        _accepted_variant(offer, "00000000-0000-4000-8000-000000000077", variant_id)
-        is None
-    )
-    assert (
-        _accepted_variant(offer, version_id, "00000000-0000-4000-8000-000000000088")
-        is None
-    )
-
-
-def test_preview_entwurf_when_effective_version_record_is_missing() -> None:
-    from dataclasses import replace
-
-    inquiries, orders, offers, _service = _world(inquiry=_sample_inquiry())
-    inquiry = inquiries.get_by_id(_INQUIRY_ID)
-    assert inquiry is not None
-    order, version = seed_order(orders, inquiry)
     broken = replace(
         order,
         effective_order_version_id="00000000-0000-4000-8000-000000000077",
@@ -521,7 +463,9 @@ def test_preview_entwurf_when_effective_version_record_is_missing() -> None:
     )
     orders._orders[order.order_id] = broken
 
-    projection = _projection_service(offers, orders).resolve(
+    projection = _projection_service(
+        orders, offer_service._commercial_snapshots
+    ).resolve(
         order.order_id,
         version.order_version_id,
         intent="preview",
@@ -559,7 +503,9 @@ def test_preview_entwurf_for_non_effective_version_without_candidate_parent() ->
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
 
-    projection = _projection_service(offers, orders).resolve(
+    projection = _projection_service(
+        orders, offer_service._commercial_snapshots
+    ).resolve(
         order.order_id,
         v2.order_version_id,
         intent="preview",
@@ -567,7 +513,7 @@ def test_preview_entwurf_for_non_effective_version_without_candidate_parent() ->
     assert projection.flags.watermark == "ENTWURF"
 
 
-def test_commercial_none_when_variant_resolution_returns_none(monkeypatch) -> None:
+def test_print_uses_snapshot_when_offer_repository_unavailable() -> None:
     (
         offer,
         version_id,
@@ -584,45 +530,13 @@ def test_commercial_none_when_variant_resolution_returns_none(monkeypatch) -> No
         variant_id,
         acceptance_id,
     )
-    import catering_system.services.order_print_projection_service as mod
-
-    monkeypatch.setattr(mod, "_accepted_variant", lambda *_args, **_kwargs: None)
-    projection = _projection_service(offers, orders).resolve(
-        order.order_id,
-        order_version.order_version_id,
-    )
-    assert projection.commercial.source == "none"
-
-
-def test_print_uses_snapshot_when_offer_repository_unavailable() -> None:
-    (
-        offer,
-        version_id,
-        variant_id,
-        acceptance_id,
-        _offers,
-        orders,
-        _inq,
-        offer_service,
-    ) = _accepted_offer_state()
-    _converted, order, order_version = offer_service.convert_accepted_offer(
-        offer.offer_id,
-        version_id,
-        variant_id,
-        acceptance_id,
-    )
     snapshots = offer_service._commercial_snapshots
     assert snapshots.get_by_order_id(order.order_id) is not None
+    offers._offers.clear()
 
-    class _UnavailableOfferRepository:
-        def get_by_source_inquiry_id(self, inquiry_id: str):  # noqa: ANN201
-            raise RuntimeError("offer repository unavailable")
-
-    projection = OrderPrintProjectionService(
-        orders,
-        _UnavailableOfferRepository(),  # type: ignore[arg-type]
-        snapshots,
-    ).resolve(order.order_id, order_version.order_version_id)
+    projection = _projection_service(orders, snapshots).resolve(
+        order.order_id, order_version.order_version_id
+    )
 
     assert projection.commercial.source == "offer_conversion"
     assert projection.commercial.positions[0].name == "Fingerfood Paket"
@@ -675,7 +589,7 @@ def test_print_snapshot_immune_to_later_offer_mutation() -> None:
     )
     offers._offers[stored.offer_id] = mutated
 
-    projection = _projection_service(offers, orders, snapshots).resolve(
+    projection = _projection_service(orders, snapshots).resolve(
         order.order_id,
         order_version.order_version_id,
     )
@@ -683,13 +597,13 @@ def test_print_snapshot_immune_to_later_offer_mutation() -> None:
     assert "MUTATED LIVE OFFER" not in render_print_sheet(projection)
 
 
-def test_print_legacy_offer_fallback_when_snapshot_missing() -> None:
+def test_print_fails_when_commercial_snapshot_missing_after_convert() -> None:
     (
         offer,
         version_id,
         variant_id,
         acceptance_id,
-        offers,
+        _offers,
         orders,
         _inq,
         offer_service,
@@ -705,10 +619,20 @@ def test_print_legacy_offer_fallback_when_snapshot_missing() -> None:
     snapshots._by_id.clear()
     snapshots._by_order_id.clear()
 
-    projection = _projection_service(offers, orders, snapshots).resolve(
-        order.order_id,
-        order_version.order_version_id,
-    )
-    assert projection.commercial.source == "offer_conversion"
-    assert projection.commercial.positions[0].name == "Fingerfood Paket"
-    assert "Fingerfood Paket" in render_print_sheet(projection)
+    with pytest.raises(MissingCommercialSnapshotError):
+        _projection_service(orders, snapshots).resolve(
+            order.order_id,
+            order_version.order_version_id,
+        )
+
+
+def test_print_and_confirmation_services_must_not_depend_on_offer_repository() -> None:
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "src" / "catering_system" / "services"
+    for name in (
+        "order_print_projection_service.py",
+        "order_confirmation_document_service.py",
+    ):
+        text = (root / name).read_text(encoding="utf-8")
+        assert "OfferRepository" not in text, name

@@ -8,6 +8,7 @@ never opening core.db in remote mode, and half-config startup rejection.
 
 from __future__ import annotations
 
+from tests.helpers.commercial_snapshot_seed import seed_commercial_snapshot
 from tests.helpers.order_seed import seed_order
 
 import base64
@@ -39,6 +40,9 @@ from catering_system.repositories.sqlite_catalog_repository import (
 )
 from catering_system.domain.catalog import CatalogDish
 from datetime import UTC, datetime
+from catering_system.repositories.sqlite_order_commercial_snapshot_repository import (
+    SQLiteOrderCommercialSnapshotRepository,
+)
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
@@ -111,6 +115,10 @@ def _seed(db_path: Path) -> dict[str, str]:
 
     printed_src = make_inquiry(location_text="Bremen")
     order_printed, v1 = seed_order(orders, printed_src)
+    seed_commercial_snapshot(
+        SQLiteOrderCommercialSnapshotRepository(db_path),
+        order_printed.order_id,
+    )
     core.confirm_kitchen_print(order_printed.order_id, v1.order_version_id)
     core.make_order_version_effective(order_printed.order_id, v1.order_version_id)
     ids["order_ready"] = order_printed.order_id
@@ -118,11 +126,19 @@ def _seed(db_path: Path) -> dict[str, str]:
 
     unprinted_src = make_inquiry(location_text="Lübeck")
     order_unprinted, v1u = seed_order(orders, unprinted_src)
+    seed_commercial_snapshot(
+        SQLiteOrderCommercialSnapshotRepository(db_path),
+        order_unprinted.order_id,
+    )
     ids["order_unprinted"] = order_unprinted.order_id
     ids["version_unprinted"] = v1u.order_version_id
 
     cancelled_src = make_inquiry(location_text="Flensburg")
     order_cancelled, _v1c = seed_order(orders, cancelled_src)
+    seed_commercial_snapshot(
+        SQLiteOrderCommercialSnapshotRepository(db_path),
+        order_cancelled.order_id,
+    )
     core.cancel_order(order_cancelled.order_id)
     ids["order_cancelled"] = order_cancelled.order_id
     ids["inquiry_cancelled_order"] = cancelled_src.inquiry_id
@@ -195,6 +211,7 @@ def _start_direct_panel(
             port=0,
             offer_repo=SQLiteOfferRepository(db),
             catalog_repo=SQLiteCatalogRepository(db),
+            commercial_snapshot_repo=SQLiteOrderCommercialSnapshotRepository(db),
             ui_version=ui_version,
         )
     )

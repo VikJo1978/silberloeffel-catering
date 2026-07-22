@@ -34,6 +34,14 @@ _MAX_TEXT = 20_000
 _MAX_LABEL = 500
 
 
+class MissingCommercialSnapshotError(LookupError):
+    """Order has no OrderCommercialSnapshot; operational consumers must not proceed."""
+
+    def __init__(self, order_id: str) -> None:
+        self.order_id = order_id
+        super().__init__(f"order commercial snapshot missing (order_id={order_id!r})")
+
+
 def _require_text(value: str, field: str) -> None:
     if not value.strip():
         raise ValueError(f"{field} is required")
