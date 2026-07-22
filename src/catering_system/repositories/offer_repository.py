@@ -8,7 +8,9 @@ from catering_system.domain.offer import (
     AcceptanceEvidence,
     ConversionLink,
     Offer,
+    RejectionEvidence,
     SentEvidence,
+    WithdrawalEvidence,
 )
 
 
@@ -33,6 +35,12 @@ class OfferRepository(Protocol):
 
     def append_acceptance_evidence(self, evidence: AcceptanceEvidence) -> Offer:
         """Append one AcceptanceEvidence row and return the updated Offer aggregate."""
+
+    def append_rejection_evidence(self, evidence: RejectionEvidence) -> Offer:
+        """Append one RejectionEvidence row and return the updated Offer aggregate."""
+
+    def append_withdrawal_evidence(self, evidence: WithdrawalEvidence) -> Offer:
+        """Append one WithdrawalEvidence row and return the updated Offer aggregate."""
 
     def append_conversion_link(self, link: ConversionLink) -> Offer:
         """Append one ConversionLink row and return the updated Offer aggregate."""

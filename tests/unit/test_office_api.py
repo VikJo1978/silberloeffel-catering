@@ -2382,6 +2382,102 @@ def test_record_acceptance_failure_leaves_no_acceptance_or_ledger(api) -> None:
     assert ledger_count == 0
 
 
+_RECORD_REJECTION_ARGS = {
+    "rejected_at": "2026-07-15T12:00:00+00:00",
+    "evidence_reference": "phone-decline",
+}
+
+
+def _record_rejection_url(base: str, offer_id: str, version_id: str) -> str:
+    return f"{base}/office/v1/offers/{offer_id}/versions/{version_id}/record-rejection"
+
+
+def _record_withdrawal_url(base: str, offer_id: str, version_id: str) -> str:
+    return f"{base}/office/v1/offers/{offer_id}/versions/{version_id}/record-withdrawal"
+
+
+def test_record_rejection_sent_to_rejected_and_replay(api) -> None:
+    base, _ids, db = api
+    offer_id, version_id = _prepare_and_send(api)
+    url = _record_rejection_url(base, offer_id, version_id)
+    command_id = str(uuid.uuid4())
+
+    status, body, _h = _post(url, args=_RECORD_REJECTION_ARGS, command_id=command_id)
+    assert status == 200
+    assert set(body) == {
+        "command_id",
+        "offer_id",
+        "offer_version_id",
+        "rejected_at",
+    }
+    assert body["offer_id"] == offer_id
+    assert body["offer_version_id"] == version_id
+
+    status2, body2, _h = _post(url, args=_RECORD_REJECTION_ARGS, command_id=command_id)
+    assert (status2, body2) == (status, body)
+
+    offers = SQLiteOfferRepository(db)
+    stored = offers.get(offer_id)
+    assert stored is not None
+    assert len(stored.rejection_evidence) == 1
+    offers.close()
+
+
+def test_record_rejection_rejects_prepared(api) -> None:
+    base, _ids, _db = api
+    offer_id, version_id = _prepare_offer(api)
+    status, body, _h = _post(
+        _record_rejection_url(base, offer_id, version_id),
+        args=_RECORD_REJECTION_ARGS,
+    )
+    assert (status, body["error"]) == (422, "rejection_blocked")
+
+
+def test_record_rejection_rejects_second_rejection(api) -> None:
+    base, _ids, _db = api
+    offer_id, version_id = _prepare_and_send(api)
+    url = _record_rejection_url(base, offer_id, version_id)
+    assert _post(url, args=_RECORD_REJECTION_ARGS)[0] == 200
+    status, body, _h = _post(url, args=_RECORD_REJECTION_ARGS)
+    assert (status, body["error"]) == (409, "rejection_evidence_exists")
+
+
+def test_record_withdrawal_sent_to_withdrawn_and_replay(api) -> None:
+    base, _ids, db = api
+    offer_id, version_id = _prepare_and_send(api)
+    url = _record_withdrawal_url(base, offer_id, version_id)
+    command_id = str(uuid.uuid4())
+    args = {"reason": "Angebot zurückgezogen"}
+
+    status, body, _h = _post(url, args=args, command_id=command_id)
+    assert status == 200
+    assert set(body) == {
+        "command_id",
+        "offer_id",
+        "offer_version_id",
+        "withdrawn_at",
+    }
+
+    status2, body2, _h = _post(url, args=args, command_id=command_id)
+    assert (status2, body2) == (status, body)
+
+    offers = SQLiteOfferRepository(db)
+    stored = offers.get(offer_id)
+    assert stored is not None
+    assert len(stored.withdrawal_evidence) == 1
+    assert stored.withdrawal_evidence[0].reason == "Angebot zurückgezogen"
+    offers.close()
+
+
+def test_record_withdrawal_rejects_second_withdrawal(api) -> None:
+    base, _ids, _db = api
+    offer_id, version_id = _prepare_and_send(api)
+    url = _record_withdrawal_url(base, offer_id, version_id)
+    assert _post(url, args={})[0] == 200
+    status, body, _h = _post(url, args={})
+    assert (status, body["error"]) == (409, "withdrawal_evidence_exists")
+
+
 def _prepare_send_accept(
     api: tuple[str, dict[str, str], Path],
 ) -> tuple[str, str, str, str]:

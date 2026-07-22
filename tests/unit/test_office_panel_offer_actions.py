@@ -358,13 +358,17 @@ def test_prepared_shows_mark_sent_form_only(direct_world) -> None:
     assert "In Auftrag umwandeln" not in html
 
 
-def test_sent_shows_acceptance_form_only(direct_world) -> None:
+def test_sent_shows_sent_lifecycle_actions(direct_world) -> None:
     panel_url, api_url, ids, _db = direct_world
     offer_id, version_id = _prepare_offer(api_url, ids["inquiry_convertible"])
     _mark_sent_api(api_url, offer_id, version_id)
     _status, html = _get(f"{panel_url}/offer/{offer_id}")
     assert "Annahme erfassen" in html
     assert "/record-acceptance" in html
+    assert "Kunde lehnt ab" in html
+    assert "/record-rejection" in html
+    assert "Angebot zurückziehen" in html
+    assert "/record-withdrawal" in html
     assert "Als gesendet markieren" not in html
     assert "In Auftrag umwandeln" not in html
 
@@ -656,3 +660,75 @@ def test_remote_offer_mark_sent_parity(tmp_path: Path) -> None:
         panel_server.server_close()
         api_server.shutdown()
         api_server.server_close()
+
+
+def test_sent_offer_shows_rejection_and_withdrawal_actions(direct_world) -> None:
+    panel_url, api_url, ids, _db = direct_world
+    offer_id, version_id = _prepare_offer(api_url, ids["inquiry_convertible"])
+    _mark_sent_api(api_url, offer_id, version_id)
+    _status, html = _get(f"{panel_url}/offer/{offer_id}")
+    assert "Annahme erfassen" in html
+    assert "Kunde lehnt ab" in html
+    assert "Angebot zurückziehen" in html
+    assert f'action="/offer/{offer_id}/record-rejection"' in html
+    assert f'action="/offer/{offer_id}/record-withdrawal"' in html
+
+
+def test_record_rejection_through_panel(direct_world) -> None:
+    panel_url, api_url, ids, _db = direct_world
+    offer_id, version_id = _prepare_offer(api_url, ids["inquiry_convertible"])
+    _mark_sent_api(api_url, offer_id, version_id)
+    _status, html = _get(f"{panel_url}/offer/{offer_id}")
+    fields = _offer_form_fields(html, "/record-rejection")
+    fields.update(
+        {
+            "rejected_at": _past_datetime_local(),
+            "evidence_reference": "Telefonische Absage",
+        }
+    )
+    status, final_url, _body = _post(
+        f"{panel_url}/offer/{offer_id}/record-rejection",
+        fields,
+    )
+    assert status == 200
+    assert final_url.endswith(f"/offer/{offer_id}")
+    _status, detail = _get(f"{panel_url}/offer/{offer_id}")
+    assert "Abgelehnt" in detail
+    assert "Kunde lehnt ab" not in detail
+    assert "Annahme erfassen" not in detail
+
+
+def test_record_withdrawal_through_panel(direct_world) -> None:
+    panel_url, api_url, ids, _db = direct_world
+    offer_id, version_id = _prepare_offer(api_url, ids["inquiry_convertible"])
+    _mark_sent_api(api_url, offer_id, version_id)
+    _status, html = _get(f"{panel_url}/offer/{offer_id}")
+    fields = _offer_form_fields(html, "/record-withdrawal")
+    fields["reason"] = "Angebot zurückgezogen"
+    status, final_url, _body = _post(
+        f"{panel_url}/offer/{offer_id}/record-withdrawal",
+        fields,
+    )
+    assert status == 200
+    assert final_url.endswith(f"/offer/{offer_id}")
+    _status, detail = _get(f"{panel_url}/offer/{offer_id}")
+    assert "Zurückgezogen" in detail
+    assert "Angebot zurückziehen" not in detail
+
+
+def test_rejected_offer_has_no_lifecycle_actions(direct_world) -> None:
+    panel_url, api_url, ids, _db = direct_world
+    offer_id, version_id = _prepare_offer(api_url, ids["inquiry_convertible"])
+    _mark_sent_api(api_url, offer_id, version_id)
+    assert (
+        _api_post(
+            f"{api_url}/office/v1/offers/{offer_id}/versions/{version_id}/record-rejection",
+            args={"rejected_at": "2026-07-15T12:00:00+00:00"},
+        )[0]
+        == 200
+    )
+    _status, html = _get(f"{panel_url}/offer/{offer_id}")
+    assert "Annahme erfassen" not in html
+    assert "Kunde lehnt ab" not in html
+    assert "Angebot zurückziehen" not in html
+    assert "Abgelehnt" in html

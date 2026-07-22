@@ -791,6 +791,81 @@ class OfficePanel:
             return
         work()
 
+    def record_offer_rejection(self, offer_id: str, form: dict[str, str]) -> None:
+        detail = self._offer_detail_dict(offer_id)
+        if str(detail["commercial_state"]) != "Sent":
+            raise ValueError("rejection blocked")
+        offer_version_id = str(detail["offer_version_id"])
+        rejected_at = parse_datetime_local_berlin(form.get("rejected_at", ""))
+        evidence_raw = form.get("evidence_reference", "").strip()
+        evidence_reference = evidence_raw or None
+        if evidence_reference is not None and len(evidence_reference) > 1000:
+            raise ValueError("evidence_reference exceeds length limit")
+
+        def work() -> None:
+            offer_service = OfferService(
+                self._offers,
+                self._inquiries,
+                self._orders,
+                today=api_views.berlin_today,
+            )
+            offer_service.record_rejection_evidence(
+                offer_id,
+                offer_version_id,
+                rejected_at=rejected_at,
+                recorded_by="office-panel",
+                evidence_reference=evidence_reference,
+            )
+
+        if self._remote is not None:
+            self._remote.record_offer_rejection(
+                offer_id,
+                offer_version_id,
+                rejected_at=format_datetime_utc_iso(rejected_at),
+                evidence_reference=evidence_reference,
+            )
+            return
+        if self._command_executor is not None:
+            self._command_executor.run(work)
+            return
+        work()
+
+    def record_offer_withdrawal(self, offer_id: str, form: dict[str, str]) -> None:
+        detail = self._offer_detail_dict(offer_id)
+        if str(detail["commercial_state"]) != "Sent":
+            raise ValueError("withdrawal blocked")
+        offer_version_id = str(detail["offer_version_id"])
+        reason_raw = form.get("reason", "").strip()
+        reason = reason_raw or None
+        if reason is not None and len(reason) > 20000:
+            raise ValueError("reason exceeds length limit")
+
+        def work() -> None:
+            offer_service = OfferService(
+                self._offers,
+                self._inquiries,
+                self._orders,
+                today=api_views.berlin_today,
+            )
+            offer_service.record_withdrawal_evidence(
+                offer_id,
+                offer_version_id,
+                recorded_by="office-panel",
+                reason=reason,
+            )
+
+        if self._remote is not None:
+            self._remote.record_offer_withdrawal(
+                offer_id,
+                offer_version_id,
+                reason=reason,
+            )
+            return
+        if self._command_executor is not None:
+            self._command_executor.run(work)
+            return
+        work()
+
     def convert_accepted_offer(
         self, offer_id: str, form: dict[str, str]
     ) -> tuple[Order, OrderVersion]:
