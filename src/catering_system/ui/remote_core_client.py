@@ -2304,7 +2304,7 @@ class _RemoteOrderService:
             f"/office/v1/inquiries/{quote(inquiry.inquiry_id, safe='')}/convert",
             {},
             {},
-            expected={201},
+            expected={200, 201},
             result_keys={"order_id", "order_version_id"},
         )
         order_id = _uuid4(result["order_id"])

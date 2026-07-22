@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from datetime import date, datetime, timezone
 
 import pytest
@@ -98,7 +98,12 @@ def test_confirm_kitchen_print_is_idempotent() -> None:
 def test_confirm_kitchen_print_rejects_foreign_or_unknown_version() -> None:
     _repo, osvc, core, _events = _setup()
     order_a, _va = osvc.convert_inquiry_to_order(_sample_inquiry())
-    order_b, vb = osvc.convert_inquiry_to_order(_sample_inquiry())
+    order_b, vb = osvc.convert_inquiry_to_order(
+        replace(
+            _sample_inquiry(),
+            inquiry_id="22222222-2222-4222-8222-222222222222",
+        )
+    )
     with pytest.raises(ValueError):
         core.confirm_kitchen_print(order_a.order_id, vb.order_version_id)
     with pytest.raises(ValueError):

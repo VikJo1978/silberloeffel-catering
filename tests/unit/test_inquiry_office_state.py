@@ -213,7 +213,7 @@ def test_converted_inquiry_is_closed_and_active_order_blocks_action() -> None:
     assert state.next_action is None
 
 
-def test_cancelled_order_stays_out_of_queue_but_allows_existing_reconversion() -> None:
+def test_cancelled_order_stays_out_of_queue_and_blocks_reconversion() -> None:
     state = derive_inquiry_office_state(
         _inquiry(crm_stage="Bestätigt / Auftrag"),
         has_order=True,
@@ -221,7 +221,7 @@ def test_cancelled_order_stays_out_of_queue_but_allows_existing_reconversion() -
         today=_TODAY,
     )
     assert state.is_open is False
-    assert state.next_action == "convert"
+    assert state.next_action is None
 
 
 def test_prepared_offer_projects_offer_pending_not_legacy_convert() -> None:
@@ -264,7 +264,7 @@ def test_accepted_offer_projects_convert_accepted() -> None:
     assert state.offer.acceptance_id == _ACCEPTANCE_ID
 
 
-def test_converted_offer_after_storno_projects_convert_accepted_replay() -> None:
+def test_converted_offer_after_storno_has_no_new_conversion_action() -> None:
     state = derive_inquiry_office_state(
         _inquiry(crm_stage="Bestätigt / Auftrag"),
         has_order=True,
@@ -277,7 +277,7 @@ def test_converted_offer_after_storno_projects_convert_accepted_replay() -> None
         today=_TODAY,
     )
     assert state.is_open is False
-    assert state.next_action == "convert-accepted"
+    assert state.next_action is None
 
 
 def test_convert_accepted_button_only_for_accepted_not_converted() -> None:
@@ -301,7 +301,8 @@ def test_convert_accepted_button_only_for_accepted_not_converted() -> None:
     )
     assert inquiry_shows_convert_accepted_button(accepted) is True
     assert inquiry_shows_convert_accepted_button(converted) is False
-    assert inquiry_allows_convert_accepted_command(converted) is True
+    assert inquiry_allows_convert_accepted_command(converted) is False
+    assert converted.next_action is None
 
 
 def test_verify_still_wins_over_offer_pending() -> None:

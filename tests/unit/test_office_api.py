@@ -99,6 +99,9 @@ def _seed(db_path: Path) -> dict[str, str]:
     ids["version_cancelled"] = v1c.order_version_id
     ids["inquiry_cancelled_order"] = cancelled_src.inquiry_id
 
+    offer_ready = make_inquiry(location_text="Angebot-Stadt")
+    ids["inquiry_offer_ready"] = offer_ready.inquiry_id
+
     website = make_inquiry(
         inquiry_source="website_form",
         intake_external_ref="web-ref-001",
@@ -280,11 +283,11 @@ def test_queue_view_attention_counts_and_tops(api) -> None:
         "auftraege_top",
         "pausiert_top",
     }
-    # seed world: 3 open inquiries plus 1 rejected inquiry without an order;
+    # seed world: 4 open inquiries plus 1 rejected inquiry without an order;
     # 1 order without print;
     # 2 not effective (unprinted + none), 2 blocked, 1 cancelled
     assert body["attention"] == {
-        "neue_anfragen": 3,
+        "neue_anfragen": 4,
         "druck_fehlt": 1,
         "nicht_wirksam": 1,
         "versand_blockiert": 1,
@@ -297,6 +300,7 @@ def test_queue_view_attention_counts_and_tops(api) -> None:
     }
     assert top_actions[ids["inquiry_verify"]] == "verify"
     assert top_actions[ids["inquiry_convertible"]] == "convert"
+    assert top_actions[ids["inquiry_offer_ready"]] == "convert"
     assert top_actions[ids["inquiry_website"]] == "verify"
     assert ids["inquiry_rejected"] not in top_actions
     (blocked_row,) = body["auftraege_top"]
@@ -585,10 +589,11 @@ def test_list_calendar_schema(api) -> None:
     status, body, _h = _get(f"{base}/office/v1/calendar?from=2026-10-01&to=2026-10-31")
     assert status == 200
     assert isinstance(body["entries"], list)
-    assert len(body["entries"]) == 5
+    assert len(body["entries"]) == 6
     by_inquiry = {row["source_inquiry_id"]: row for row in body["entries"]}
     assert ids["inquiry_rejected"] not in by_inquiry
     assert ids["inquiry_cancelled_order"] not in by_inquiry
+    assert ids["inquiry_offer_ready"] in by_inquiry
     assert by_inquiry[ids["inquiry_printed"]]["entry_kind"] == "event_confirmed"
     assert by_inquiry[ids["inquiry_unprinted"]]["entry_kind"] == "event_planned"
     row = next(row for row in body["entries"] if row["entry_kind"] == "event_confirmed")
@@ -653,7 +658,7 @@ def test_inquiry_list_rows_and_search(api) -> None:
     status, body, _h = _get(f"{base}/office/v1/inquiries")
     assert status == 200
     assert set(body) == {"inquiries", "total_count", "limit", "offset"}
-    assert body["total_count"] == 7
+    assert body["total_count"] == 8
     by_id = {row["inquiry_id"]: row for row in body["inquiries"]}
     row = by_id[ids["inquiry_printed"]]
     assert row["linked_order_id"] == ids["order_ready"]
@@ -661,6 +666,8 @@ def test_inquiry_list_rows_and_search(api) -> None:
     cancelled_row = by_id[ids["inquiry_cancelled_order"]]
     assert cancelled_row["linked_order_id"] is None  # only ACTIVE orders link
     assert cancelled_row["orders_total_count"] == 1
+    assert by_id[ids["inquiry_offer_ready"]]["linked_order_id"] is None
+    assert by_id[ids["inquiry_offer_ready"]]["orders_total_count"] == 0
 
     status, body, _h = _get(f"{base}/office/v1/inquiries?q=Sommerfest")
     assert body["total_count"] == 1
@@ -689,7 +696,7 @@ def test_pagination_slices_with_honest_total(api) -> None:
     base, _ids, _db = api
     status, body, _h = _get(f"{base}/office/v1/inquiries?limit=2&offset=4")
     assert status == 200
-    assert body["total_count"] == 7
+    assert body["total_count"] == 8
     assert len(body["inquiries"]) == 2
     assert (body["limit"], body["offset"]) == (2, 4)
 
@@ -1052,9 +1059,10 @@ def test_verify_then_convert_flow_with_gates(api) -> None:
     )
     assert status == 200
     assert detail_after_rejection["crm_stage"] == "Bestätigt / Auftrag"
-    # second convert while active: 409
+    # second convert while active: idempotent success (same order)
     status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
-    assert (status, body["error"]) == (409, "already_converted")
+    assert status == 200
+    assert set(body) >= {"order_id", "order_version_id"}
 
 
 def test_rejected_inquiry_cannot_convert(api) -> None:
@@ -1065,17 +1073,21 @@ def test_rejected_inquiry_cannot_convert(api) -> None:
     assert (status, body["error"]) == (422, "inquiry_rejected")
 
 
-def test_reconvert_after_storno_via_api(api) -> None:
+def test_convert_after_storno_returns_existing_order_via_api(api) -> None:
     base, ids, _db = api
     inquiry_id = ids["inquiry_cancelled_order"]  # its only order is cancelled
+    status, first, _h = _get(f"{base}/office/v1/inquiries/{inquiry_id}")
+    assert status == 200
+    existing_order_id = first["orders"][0]["order_id"]
     status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
-    assert status == 201
+    assert status == 200
+    assert body["order_id"] == existing_order_id
 
 
 def test_legacy_convert_blocked_with_prepared_offer(api) -> None:
     base, ids, db = api
     offer_id, _version_id = _prepare_offer(api)
-    inquiry_id = ids["inquiry_cancelled_order"]
+    inquiry_id = ids["inquiry_offer_ready"]
     status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
     assert (status, body["error"]) == (422, "offer_blocks_conversion")
     conn = sqlite3.connect(db)
@@ -1098,7 +1110,7 @@ def test_legacy_convert_blocked_with_prepared_offer(api) -> None:
 def test_legacy_convert_blocked_with_accepted_offer(api) -> None:
     base, ids, db = api
     offer_id, _version_id, _acceptance_id, _variant_id = _prepare_send_accept(api)
-    inquiry_id = ids["inquiry_cancelled_order"]
+    inquiry_id = ids["inquiry_offer_ready"]
     status, body, _h = _post(f"{base}/office/v1/inquiries/{inquiry_id}/convert")
     assert (status, body["error"]) == (422, "offer_blocks_conversion")
     conn = sqlite3.connect(db)
@@ -1128,7 +1140,7 @@ def test_legacy_convert_without_offer_still_works(api) -> None:
 
 def test_legacy_convert_allowed_with_expired_offer(api) -> None:
     base, ids, db = api
-    inquiry_id = ids["inquiry_cancelled_order"]
+    inquiry_id = ids["inquiry_offer_ready"]
     snapshot = _valid_offer_snapshot(inquiry_id=inquiry_id)
     snapshot["valid_until"] = "2020-01-01"
     snapshot["snapshot_hash"] = compute_snapshot_hash(snapshot)
@@ -2198,7 +2210,7 @@ _MARK_SENT_ARGS = {
 
 def _prepare_offer(api: tuple[str, dict[str, str], Path]) -> tuple[str, str]:
     base, ids, _db = api
-    inquiry_id = ids["inquiry_cancelled_order"]
+    inquiry_id = ids["inquiry_offer_ready"]
     status, body, _h = _post(
         f"{base}/office/v1/inquiries/{inquiry_id}/prepare-offer",
         args={"snapshot": _valid_offer_snapshot(inquiry_id=inquiry_id)},
@@ -2509,22 +2521,47 @@ def test_convert_accepted_rejects_wrong_variant_or_acceptance(api) -> None:
     assert (status, body["error"]) == (422, "conversion_blocked")
 
 
-def test_convert_accepted_active_order_without_link_blocks(api) -> None:
+def test_convert_accepted_linked_order_without_link_blocks(api) -> None:
     base, ids, db = api
-    offer_id, version_id, acceptance_id, variant_id = _prepare_send_accept(api)
     inquiry_id = ids["inquiry_cancelled_order"]
-    inquiries = SQLiteInquiryRepository(db)
-    orders = SQLiteOrderRepository(db)
-    inquiry = inquiries.get_by_id(inquiry_id)
-    assert inquiry is not None
-    OrderService(orders).convert_inquiry_to_order(inquiry)
-    inquiries.close()
-    orders.close()
+    # Prepare/accept on the cancelled inquiry so a linked Order exists without
+    # conversion_link; convert-accepted must not create another Order.
+    status, prepared, _h = _post(
+        f"{base}/office/v1/inquiries/{inquiry_id}/prepare-offer",
+        args={"snapshot": _valid_offer_snapshot(inquiry_id=inquiry_id)},
+    )
+    assert status == 201
+    offer_id = prepared["offer_id"]
+    version_id = prepared["offer_version_id"]
+    assert (
+        _post(_mark_sent_url(base, offer_id, version_id), args=_MARK_SENT_ARGS)[0]
+        == 200
+    )
+    status, accepted, _h = _post(
+        _record_acceptance_url(base, offer_id, version_id),
+        args=_RECORD_ACCEPTANCE_ARGS,
+    )
+    assert status == 200
     status, body, _h = _post(
         _convert_accepted_url(base, offer_id, version_id),
-        args={"accepted_variant_id": variant_id, "acceptance_id": acceptance_id},
+        args={
+            "accepted_variant_id": accepted["accepted_variant_id"],
+            "acceptance_id": accepted["acceptance_id"],
+        },
     )
     assert (status, body["error"]) == (409, "already_converted")
+    orders = SQLiteOrderRepository(db)
+    assert (
+        len(
+            [
+                order
+                for order in orders.list_orders()
+                if order.source_inquiry_id == inquiry_id
+            ]
+        )
+        == 1
+    )
+    orders.close()
 
 
 def test_convert_accepted_storno_replay_same_order(api) -> None:
@@ -2872,7 +2909,7 @@ def _make_effective_offer_order(
     ensure_recipient_email: bool = True,
 ) -> tuple[str, str]:
     base, ids, _db = api
-    resolved_inquiry = inquiry_id or ids["inquiry_cancelled_order"]
+    resolved_inquiry = inquiry_id or ids["inquiry_offer_ready"]
     if ensure_recipient_email:
         _ensure_inquiry_recipient_email(base, resolved_inquiry)
     resolved_snapshot = snapshot or _unique_offer_snapshot(inquiry_id=resolved_inquiry)
@@ -3060,7 +3097,7 @@ def test_confirmation_document_preview_escapes_html_but_preserves_json_text(
     malicious = "<script>alert(1)</script>"
     rich = "<b>Test</b>"
     amp = "A&B"
-    inquiry_id = ids["inquiry_cancelled_order"]
+    inquiry_id = ids["inquiry_offer_ready"]
     detail = _get(f"{base}/office/v1/inquiries/{inquiry_id}")[1]
     _post(
         f"{base}/office/v1/inquiries/{inquiry_id}/update",
@@ -3178,7 +3215,7 @@ def test_confirmation_document_stale_expect_and_blocked_states(api) -> None:
 
 def test_confirmation_document_missing_recipient_is_allowed(api) -> None:
     base, ids, db = api
-    inquiry_id = ids["inquiry_cancelled_order"]
+    inquiry_id = ids["inquiry_offer_ready"]
     detail = _get(f"{base}/office/v1/inquiries/{inquiry_id}")[1]
     _post(
         f"{base}/office/v1/inquiries/{inquiry_id}/update",

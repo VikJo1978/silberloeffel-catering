@@ -104,11 +104,26 @@ def _seed(db_path: Path) -> dict[str, str]:
     )
     cancelled_order, _version = order_service.convert_inquiry_to_order(cancelled_src)
     core.cancel_order(cancelled_order.order_id)
+    offer_ready = inquiry_service.create_inquiry(
+        event_date=date(2026, 10, 3),
+        inquiry_source="manual",
+        crm_stage="Neue Anfrage",
+        customer_linkage={},
+        time_window_text="abends",
+        location_text="Angebot-Stadt",
+        guest_count_estimate=40,
+        planning_mode="caterer_suggestion",
+        call_verification_required=False,
+        call_verification_status="not_required",
+        contact_email="kunde@example.com",
+        contact_phone="+49301234567",
+    )
     inquiries.close()
     orders.close()
     return {
         "inquiry_convertible": inquiry.inquiry_id,
         "inquiry_cancelled_order": cancelled_src.inquiry_id,
+        "inquiry_offer_ready": offer_ready.inquiry_id,
     }
 
 
@@ -370,7 +385,7 @@ def test_accepted_offer_button_creates_order_and_disappears(direct_world) -> Non
 
 def test_converted_storno_shows_open_link_not_create_button(direct_world) -> None:
     panel_url, api_url, ids, db = direct_world
-    inquiry_id = ids["inquiry_cancelled_order"]
+    inquiry_id = ids["inquiry_offer_ready"]
     _accept_offer_via_api(api_url, inquiry_id)
 
     offers = SQLiteOfferRepository(db)
@@ -400,8 +415,8 @@ def test_converted_storno_shows_open_link_not_create_button(direct_world) -> Non
 
     _status, detail = _get(f"{panel_url}/inquiry/{inquiry_id}")
     assert "Angenommenes Angebot in Auftrag überführen" not in detail
-    assert "Auftrag bereits erstellt" in detail
-    assert "Stornierten Auftrag öffnen" in detail
+    assert "Auftrag öffnen" in detail
+    assert "Auftrag erstellen" not in detail
 
 
 def test_convert_accepted_replay_does_not_create_second_order(direct_world) -> None:

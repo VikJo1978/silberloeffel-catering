@@ -22,6 +22,14 @@ class InMemoryOrderRepository:
             raise KeyError(order.order_id)
         if version.order_version_id in self._versions:
             raise KeyError(version.order_version_id)
+        if any(
+            existing.source_inquiry_id == order.source_inquiry_id
+            for existing in self._orders.values()
+        ):
+            raise ValueError(
+                "inquiry already has a linked order "
+                f"(source_inquiry_id={order.source_inquiry_id!r})"
+            )
         next_orders = dict(self._orders)
         next_versions = dict(self._versions)
         next_versions[version.order_version_id] = version
