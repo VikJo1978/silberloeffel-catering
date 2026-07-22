@@ -42,10 +42,19 @@ from catering_system.domain.offer_snapshot import (
     OfferSnapshotVariant,
 )
 from catering_system.repositories.inquiry_repository import InquiryRepository
+from catering_system.repositories.in_memory_order_commercial_snapshot_repository import (
+    InMemoryOrderCommercialSnapshotRepository,
+)
 from catering_system.repositories.offer_repository import OfferRepository
+from catering_system.repositories.order_commercial_snapshot_repository import (
+    OrderCommercialSnapshotRepository,
+)
 from catering_system.repositories.order_repository import OrderRepository
 from catering_system.services.order_service import OrderService
 from catering_system.services.offer_snapshot_validation import validate_offer_snapshot
+from catering_system.domain.order_commercial_snapshot import (
+    build_order_commercial_snapshot,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -58,6 +67,7 @@ class OfferService:
         offer_repository: OfferRepository,
         inquiry_repository: InquiryRepository,
         order_repository: OrderRepository,
+        commercial_snapshot_repository: OrderCommercialSnapshotRepository | None = None,
         *,
         now: Callable[[], datetime] | None = None,
         today: Callable[[], date] | None = None,
@@ -65,6 +75,10 @@ class OfferService:
         self._offer_repository = offer_repository
         self._inquiry_repository = inquiry_repository
         self._order_repository = order_repository
+        self._commercial_snapshots = (
+            commercial_snapshot_repository
+            or InMemoryOrderCommercialSnapshotRepository()
+        )
         self._order_service = OrderService(order_repository)
         self._now = now or (lambda: datetime.now(UTC))
         self._today = today or date.today
@@ -538,20 +552,40 @@ class OfferService:
             offer.source_inquiry_id,
             version,
         )
+        acceptance = offer.acceptance_evidence
+        if acceptance is None or acceptance.acceptance_id != acceptance_id:
+            raise ValueError(
+                f"acceptance_id {acceptance_id!r} does not match offer acceptance"
+            )
+        variant = next(
+            item for item in version.variants if item.variant_id == accepted_variant_id
+        )
+        created_at = self._now()
+        snapshot = build_order_commercial_snapshot(
+            order_id=order.order_id,
+            offer=offer,
+            offer_version=version,
+            variant=variant,
+            acceptance=acceptance,
+            created_at=created_at,
+        )
+        self._commercial_snapshots.create(snapshot)
         conversion_link = ConversionLink(
             offer_id=offer_id,
             offer_version_id=offer_version_id,
             variant_id=accepted_variant_id,
             acceptance_id=acceptance_id,
             order_id=order.order_id,
-            created_at=self._now(),
+            created_at=created_at,
         )
         updated = self._offer_repository.append_conversion_link(conversion_link)
         _log.info(
-            "convert_accepted_offer offer_id=%s offer_version_id=%s order_id=%s",
+            "convert_accepted_offer offer_id=%s offer_version_id=%s order_id=%s "
+            "commercial_snapshot_id=%s",
             offer_id,
             offer_version_id,
             order.order_id,
+            snapshot.snapshot_id,
         )
         return updated, order, order_version
 
