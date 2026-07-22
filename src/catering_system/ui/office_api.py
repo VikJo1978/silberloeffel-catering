@@ -1113,8 +1113,7 @@ class OfficeApi:
                 raise ApiError(409, "version_conflict") from exc
             raise ApiError(422, "invalid_snapshot") from exc
         except sqlite3.IntegrityError:
-            if self.offers.get(offer_id) is None:
-                raise ApiError(404, "not_found") from None
+            # Do not re-read the Offer in the aborted write transaction.
             raise ApiError(409, "version_conflict") from None
         version = max(offer.versions, key=lambda item: item.version_number)
         return 201, {

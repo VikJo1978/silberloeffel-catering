@@ -1379,3 +1379,60 @@ def test_prepare_next_inquiry_mismatch() -> None:
             expected_latest_version_number=1,
         )
     assert offers.append_version_calls == 0
+
+
+def test_prepare_next_missing_inquiry() -> None:
+    offers = _CountingOfferRepository()
+    _inquiries, orders, _offers, service = _world(
+        inquiry=_sample_inquiry(), offers=offers
+    )
+    offer = service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
+    service.record_sent_evidence(
+        offer.offer_id, offer.versions[0].offer_version_id, **_record_args()
+    )
+    orphan = OfferService(offers, InMemoryInquiryRepository(), orders)
+    with pytest.raises(KeyError, match=_INQUIRY_ID):
+        orphan.prepare_next_offer_version(
+            offer.offer_id,
+            _revision_snapshot(),
+            expected_latest_version_number=1,
+        )
+    assert offers.append_version_calls == 0
+
+
+def test_prepare_next_incomplete_contact() -> None:
+    offers = _CountingOfferRepository()
+    inquiries, _orders, _offers, service = _world(
+        inquiry=_sample_inquiry(), offers=offers
+    )
+    offer = service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
+    service.record_sent_evidence(
+        offer.offer_id, offer.versions[0].offer_version_id, **_record_args()
+    )
+    inquiries.update(replace(_sample_inquiry(), customer_snapshot=None))
+    with pytest.raises(ValueError, match="inquiry contact information incomplete"):
+        service.prepare_next_offer_version(
+            offer.offer_id,
+            _revision_snapshot(),
+            expected_latest_version_number=1,
+        )
+    assert offers.append_version_calls == 0
+
+
+def test_prepare_next_active_order_blocks() -> None:
+    offers = _CountingOfferRepository()
+    inquiries, orders, _offers, service = _world(
+        inquiry=_sample_inquiry(), offers=offers
+    )
+    offer = service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
+    service.record_sent_evidence(
+        offer.offer_id, offer.versions[0].offer_version_id, **_record_args()
+    )
+    seed_order(orders, inquiries.get_by_id(_INQUIRY_ID))
+    with pytest.raises(ValueError, match="active order blocks offer preparation"):
+        service.prepare_next_offer_version(
+            offer.offer_id,
+            _revision_snapshot(),
+            expected_latest_version_number=1,
+        )
+    assert offers.append_version_calls == 0

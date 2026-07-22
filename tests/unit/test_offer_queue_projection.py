@@ -230,6 +230,21 @@ def test_prepared_in_action_required() -> None:
     assert item.next_action_label == "Als gesendet markieren"
 
 
+def test_sent_awaits_customer_without_prepare_next_cta() -> None:
+    inquiry = _inquiry()
+    offers = InMemoryOfferRepository()
+    offers.save(_offer(inquiry.inquiry_id, sent=True, valid_until=date(2026, 7, 31)))
+    inquiries = InMemoryInquiryRepository()
+    inquiries.save(inquiry)
+    item = _section(
+        _service(offers=offers, inquiries=inquiries).snapshot(), "action_required"
+    ).items[0]
+    assert item.state == "Sent"
+    assert item.next_action == "await_customer"
+    assert item.next_action_label == "Kundenantwort ausstehend"
+    assert item.next_action != "prepare_next_version"
+
+
 def test_sent_expires_today_stays_sent_with_hint() -> None:
     inquiry = _inquiry()
     offers = InMemoryOfferRepository()
@@ -247,6 +262,7 @@ def test_sent_expires_today_stays_sent_with_hint() -> None:
     ).items[0]
     assert item.state == "Sent"
     assert item.validity_hint == "expires_today"
+    assert item.next_action == "await_customer"
     assert item.next_action_label == "Läuft heute ab"
 
 
@@ -418,6 +434,7 @@ def test_rejected_offer_in_history() -> None:
     ).items[0]
     assert item.queue_subkind == "rejected"
     assert item.next_action == "prepare_next_version"
+    assert item.next_action_label == "Neue Version vorbereiten"
 
 
 def test_withdrawn_offer_in_history() -> None:
@@ -450,3 +467,5 @@ def test_withdrawn_offer_in_history() -> None:
         _service(offers=offers, inquiries=inquiries).snapshot(), "history"
     ).items[0]
     assert item.queue_subkind == "withdrawn"
+    assert item.next_action == "prepare_next_version"
+    assert item.next_action_label == "Neue Version vorbereiten"

@@ -226,6 +226,59 @@ def test_offer_pending_not_emitted() -> None:
     assert _service(inquiries=inquiries, offers=offers).list_tasks() == []
 
 
+def test_prepare_next_version_task_emitted_for_expired() -> None:
+    inquiries = InMemoryInquiryRepository()
+    offers = InMemoryOfferRepository()
+    inquiry = _save_inquiry(inquiries, intake_subject="Revision nötig")
+    expired = Offer(
+        offer_id=_OFFER_ID,
+        source_inquiry_id=inquiry.inquiry_id,
+        created_at=_NOW,
+        versions=(
+            OfferVersion(
+                offer_version_id=_V1_ID,
+                offer_id=_OFFER_ID,
+                version_number=1,
+                created_at=_NOW,
+                valid_until=date(2026, 7, 1),
+                snapshot_id="77777777-7777-4777-8777-777777777771",
+                snapshot_hash=_HASH,
+                event_date=date(2026, 8, 20),
+                time_window_text="18:00–22:00",
+                location_text="Hamburg",
+                guest_count=80,
+                planning_mode="caterer_suggestion",
+                payment_method="RECHNUNG",
+                payment_customer_visible_text="Zahlung per Rechnung",
+                variants=_offer_version().variants,
+            ),
+        ),
+        sent_evidence=(
+            SentEvidence(
+                offer_id=_OFFER_ID,
+                offer_version_id=_V1_ID,
+                sent_at=_NOW,
+                recorded_at=_NOW + timedelta(minutes=1),
+                channel="email",
+                recipient_reference="kunde@example.invalid",
+                evidence_reference="mail-1",
+                recorded_by="office",
+            ),
+        ),
+        acceptance_evidence=None,
+        rejection_evidence=(),
+        withdrawal_evidence=(),
+        conversion_link=None,
+    )
+    offers.save(expired)
+    rows = _service(inquiries=inquiries, offers=offers).list_tasks()
+    assert len(rows) == 1
+    assert rows[0].task_id == f"offer:{_OFFER_ID}:prepare-next-version"
+    assert rows[0].category == "prepare_next_version"
+    assert rows[0].title == "Neue Angebotsversion vorbereiten"
+    assert rows[0].action_href == f"/offer/{_OFFER_ID}"
+
+
 def test_print_confirm_task_emitted() -> None:
     inquiries = InMemoryInquiryRepository()
     orders = InMemoryOrderRepository()
