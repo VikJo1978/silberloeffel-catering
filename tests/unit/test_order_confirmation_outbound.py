@@ -95,7 +95,6 @@ def _world() -> tuple[
     outbound = InMemoryOrderConfirmationOutboundRepository()
     doc_service = OrderConfirmationDocumentService(
         orders,
-        offers,
         inquiries,
         documents,
         offer_service._commercial_snapshots,

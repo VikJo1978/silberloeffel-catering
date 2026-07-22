@@ -11,6 +11,9 @@ from pathlib import Path
 
 import pytest
 
+from catering_system.domain.order_commercial_snapshot import (
+    MissingCommercialSnapshotError,
+)
 from catering_system.domain.offer import OfferPosition
 from catering_system.repositories.in_memory_inquiry_repository import (
     InMemoryInquiryRepository,
@@ -95,7 +98,6 @@ def _services() -> tuple[
     documents = InMemoryOrderConfirmationDocumentRepository()
     service = OrderConfirmationDocumentService(
         orders,
-        offers,
         inquiries,
         documents,
         offer_service._commercial_snapshots,
@@ -183,7 +185,6 @@ def test_kitchen_print_not_confirmed_blocked() -> None:
     )
     service = OrderConfirmationDocumentService(
         orders,
-        offers,
         inquiries,
         InMemoryOrderConfirmationDocumentRepository(),
         offer_service._commercial_snapshots,
@@ -376,7 +377,6 @@ def test_recipient_snapshot_and_missing_email() -> None:
     core.make_order_version_effective(order.order_id, order_version.order_version_id)
     service = OrderConfirmationDocumentService(
         orders,
-        offers,
         inquiries,
         InMemoryOrderConfirmationDocumentRepository(),
         offer_service._commercial_snapshots,
@@ -646,20 +646,9 @@ def test_office_panel_confirmation_block_renders() -> None:
 def test_confirmation_uses_snapshot_when_offer_repository_unavailable() -> None:
     services = _services()
     order, version = _effective_order(services)
-    orders, _offers, inquiries, documents, _service, _core, offer_service = services
+    orders, offers, _inquiries, _documents, service, _core, offer_service = services
+    offers._offers.clear()
 
-    class _UnavailableOfferRepository:
-        def get_by_source_inquiry_id(self, inquiry_id: str):  # noqa: ANN201
-            raise RuntimeError("offer repository unavailable")
-
-    service = OrderConfirmationDocumentService(
-        orders,
-        _UnavailableOfferRepository(),  # type: ignore[arg-type]
-        inquiries,
-        documents,
-        offer_service._commercial_snapshots,
-        now=lambda: datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
-    )
     snapshot = service.prepare_snapshot(
         order.order_id,
         version.order_version_id,
@@ -668,12 +657,9 @@ def test_confirmation_uses_snapshot_when_offer_repository_unavailable() -> None:
     assert snapshot.gross_total_cents == 24824
     assert snapshot.payment_method == "RECHNUNG"
     assert snapshot.positions[0].name == "Fingerfood Paket"
-    assert (
-        snapshot.offer_id
-        == offer_service._commercial_snapshots.get_by_order_id(
-            order.order_id
-        ).source_offer_id
-    )  # type: ignore[union-attr]
+    commercial = offer_service._commercial_snapshots.get_by_order_id(order.order_id)
+    assert commercial is not None
+    assert snapshot.offer_id == commercial.source_offer_id
 
 
 def test_confirmation_snapshot_immune_to_later_offer_mutation() -> None:
@@ -704,7 +690,6 @@ def test_confirmation_snapshot_immune_to_later_offer_mutation() -> None:
     )
     service = OrderConfirmationDocumentService(
         orders,
-        offers,
         inquiries,
         documents,
         offer_service._commercial_snapshots,
@@ -718,26 +703,28 @@ def test_confirmation_snapshot_immune_to_later_offer_mutation() -> None:
     assert snapshot.positions[0].name == "Fingerfood Paket"
 
 
-def test_confirmation_legacy_offer_fallback_when_commercial_snapshot_missing() -> None:
+def test_confirmation_fails_when_commercial_snapshot_missing() -> None:
     services = _services()
     order, version = _effective_order(services)
     orders, offers, inquiries, documents, _service, _core, offer_service = services
     snapshots = offer_service._commercial_snapshots
-    assert snapshots.get_by_order_id(order.order_id) is not None
+    commercial = snapshots.get_by_order_id(order.order_id)
+    assert commercial is not None
+    assert offers.get(commercial.source_offer_id) is not None
     snapshots._by_id.clear()
     snapshots._by_order_id.clear()
+    # Offer remains available — must not hide the invariant violation.
+    assert offers.get(commercial.source_offer_id) is not None
     service = OrderConfirmationDocumentService(
         orders,
-        offers,
         inquiries,
         documents,
         snapshots,
         now=lambda: datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
     )
-    snapshot = service.prepare_snapshot(
-        order.order_id,
-        version.order_version_id,
-        "office-panel",
-    )
-    assert snapshot.positions[0].name == "Fingerfood Paket"
-    assert snapshot.gross_total_cents == 24824
+    with pytest.raises(MissingCommercialSnapshotError):
+        service.prepare_snapshot(
+            order.order_id,
+            version.order_version_id,
+            "office-panel",
+        )
