@@ -11,7 +11,9 @@ from catering_system.domain.offer import (
     OfferPosition,
     OfferVariant,
     OfferVersion,
+    RejectionEvidence,
     SentEvidence,
+    WithdrawalEvidence,
 )
 from catering_system.repositories.in_memory_inquiry_repository import (
     InMemoryInquiryRepository,
@@ -363,3 +365,65 @@ def test_skips_offer_without_matching_inquiry() -> None:
     offers.save(_offer("missing-inquiry-id"))
     snapshot = _service(offers=offers).snapshot()
     assert snapshot.total_count == 0
+
+
+def test_rejected_offer_in_history() -> None:
+    inquiry = _inquiry()
+    offers = InMemoryOfferRepository()
+    offer = _offer(inquiry.inquiry_id, sent=True)
+    rejected = Offer(
+        offer_id=offer.offer_id,
+        source_inquiry_id=offer.source_inquiry_id,
+        created_at=offer.created_at,
+        versions=offer.versions,
+        sent_evidence=offer.sent_evidence,
+        acceptance_evidence=None,
+        rejection_evidence=(
+            RejectionEvidence(
+                offer_id=offer.offer_id,
+                offer_version_id=_V1_ID,
+                rejected_at=_NOW + timedelta(days=2),
+                recorded_at=_NOW + timedelta(days=2, minutes=1),
+                recorded_by="office",
+                evidence_reference="reject-1",
+            ),
+        ),
+        withdrawal_evidence=(),
+        conversion_link=None,
+    )
+    offers.save(rejected)
+    inquiries = InMemoryInquiryRepository()
+    inquiries.save(inquiry)
+    item = _section(_service(offers=offers, inquiries=inquiries).snapshot(), "history").items[0]
+    assert item.queue_subkind == "rejected"
+    assert item.next_action == "none"
+
+
+def test_withdrawn_offer_in_history() -> None:
+    inquiry = _inquiry()
+    offers = InMemoryOfferRepository()
+    offer = _offer(inquiry.inquiry_id, sent=True)
+    withdrawn = Offer(
+        offer_id=offer.offer_id,
+        source_inquiry_id=offer.source_inquiry_id,
+        created_at=offer.created_at,
+        versions=offer.versions,
+        sent_evidence=offer.sent_evidence,
+        acceptance_evidence=None,
+        rejection_evidence=(),
+        withdrawal_evidence=(
+            WithdrawalEvidence(
+                offer_id=offer.offer_id,
+                offer_version_id=_V1_ID,
+                withdrawn_at=_NOW + timedelta(days=2),
+                recorded_by="office",
+                reason="Kunde nicht erreichbar",
+            ),
+        ),
+        conversion_link=None,
+    )
+    offers.save(withdrawn)
+    inquiries = InMemoryInquiryRepository()
+    inquiries.save(inquiry)
+    item = _section(_service(offers=offers, inquiries=inquiries).snapshot(), "history").items[0]
+    assert item.queue_subkind == "withdrawn"
