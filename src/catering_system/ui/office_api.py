@@ -103,14 +103,18 @@ from catering_system.services.offer_service import OfferService
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
 from catering_system.services.payment_reminder_service import PaymentReminderService
+from catering_system.domain.customer_document_eligibility import (
+    CustomerDocumentCreationBlocked,
+)
+from catering_system.services.customer_document_preview import (
+    CustomerDocumentPreviewNotFoundError,
+    CustomerDocumentPreviewService,
+)
 from catering_system.services.order_confirmation_document_service import (
     OrderConfirmationDocumentBlockedError,
     OrderConfirmationDocumentNotFoundError,
     OrderConfirmationDocumentService,
     OrderConfirmationDocumentStaleVersionError,
-)
-from catering_system.domain.customer_document_eligibility import (
-    CustomerDocumentCreationBlocked,
 )
 from catering_system.services.order_confirmation_outbound_service import (
     OrderConfirmationOutboundAlreadySentError,
@@ -426,6 +430,11 @@ class OfficeApi:
             self.orders,
             self.inquiries,
             self.confirmation_documents,
+            self.commercial_snapshots,
+        )
+        self.customer_document_preview_service = CustomerDocumentPreviewService(
+            self.orders,
+            self.inquiries,
             self.commercial_snapshots,
         )
         self.core = OperationalCoreService(
@@ -820,6 +829,16 @@ class OfficeApi:
             "snapshot": views.confirmation_document_summary_shape(summary),
             "document_snapshot_id": snapshot.document_snapshot_id,
         }
+
+    def confirmation_preview(self, order_id: str) -> dict[str, object]:
+        """Live CDP preview before document create — V1-D (no persistence)."""
+        try:
+            preview = self.customer_document_preview_service.preview_order_confirmation(
+                order_id
+            )
+        except CustomerDocumentPreviewNotFoundError as exc:
+            raise ApiError(404, "not_found") from exc
+        return views.customer_document_preview_shape(preview)
 
     def confirmation_document_preview(
         self,
@@ -2267,6 +2286,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         {"POST": "confirmation-document-send"},
     ),
     (
+        re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/confirmation-preview$"),
+        "/office/v1/orders/{id}/confirmation-preview",
+        {"GET": "confirmation_preview"},
+    ),
+    (
         re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/confirmation-document/preview$"),
         "/office/v1/orders/{id}/confirmation-document/preview",
         {"GET": "confirmation_document_preview"},
@@ -2623,6 +2647,9 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
                 self._respond(
                     200, api.confirmation_document(path_ids["id"], snapshot_id)
                 )
+            elif kind == "confirmation_preview":
+                self._query(set())
+                self._respond(200, api.confirmation_preview(path_ids["id"]))
             elif kind == "confirmation_document_preview":
                 params = self._query({"document_snapshot_id", "format"})
                 snapshot_id = (
