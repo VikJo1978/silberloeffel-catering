@@ -128,6 +128,7 @@ def _map_position(
 ) -> CustomerDocumentPosition:
     return CustomerDocumentPosition(
         position_id=position.position_id,
+        kind=position.kind,
         name=position.name,
         description=position.description,
         composition=position.composition,
@@ -138,4 +139,35 @@ def _map_position(
         vat_rate_percent=position.vat_rate_percent,
         vat_amount_cents=position.vat_amount_cents,
         gross_total_cents=position.gross_total_cents,
+        related_position_id=position.related_position_id,
     )
+
+
+class CustomerDocumentProjectionService:
+    """Factory over pure CDP builders for document consumers (Confirmation, …)."""
+
+    def build(
+        self,
+        *,
+        document_type: DocumentType,
+        document_id: str,
+        created_at: datetime,
+        order_version: OrderVersion,
+        commercial_snapshot: OrderCommercialSnapshot,
+        inquiry: Inquiry | None,
+        invoice_address: CustomerAddress | None = None,
+        delivery_address: CustomerAddress | None = None,
+    ) -> CustomerDocumentProjection:
+        recipient = build_customer_document_recipient(
+            inquiry,
+            invoice_address=invoice_address,
+            delivery_address=delivery_address,
+        )
+        return build_customer_document_projection(
+            document_type=document_type,
+            document_id=document_id,
+            created_at=created_at,
+            order_version=order_version,
+            commercial_snapshot=commercial_snapshot,
+            recipient=recipient,
+        )

@@ -21,6 +21,7 @@ from catering_system.domain.order_commercial_snapshot import (
     OrderCommercialSnapshot,
 )
 from catering_system.services.customer_document_projection import (
+    CustomerDocumentProjectionService,
     build_customer_document_projection,
     build_customer_document_recipient,
 )
@@ -203,6 +204,7 @@ def test_commercial_reference_copied_from_snapshot() -> None:
     assert projection.vat_total_cents == 1624
     assert projection.gross_total_cents == 24824
     assert projection.positions[0].name == "Fingerfood Paket"
+    assert projection.positions[0].kind == "catalog"
     assert projection.positions[0].quantity == "80 Stück"
 
 
@@ -256,6 +258,28 @@ def test_order_id_mismatch_raises() -> None:
                 _inquiry(snapshot=InquiryCustomerSnapshot(contact_name="Anna"))
             ),
         )
+
+
+def test_customer_document_projection_service_build() -> None:
+    service = CustomerDocumentProjectionService()
+    projection = service.build(
+        document_type="ORDER_CONFIRMATION",
+        document_id="doc-1",
+        created_at=_NOW,
+        order_version=_order_version(),
+        commercial_snapshot=_commercial_snapshot(),
+        inquiry=_inquiry(
+            snapshot=InquiryCustomerSnapshot(
+                contact_name="Anna",
+                email="anna@example.invalid",
+            )
+        ),
+        invoice_address=_INVOICE,
+        delivery_address=_DELIVERY,
+    )
+    assert WARNING_DELIVERY_ADDRESS_DIFFERS in projection.recipient.warnings
+    assert projection.recipient.name == "Anna"
+    assert projection.positions[0].kind == "catalog"
 
 
 def test_foundation_modules_must_not_depend_on_offer_repository() -> None:

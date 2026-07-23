@@ -59,6 +59,7 @@ def snapshot_hash_payload(
         "gross_total_cents": snapshot.gross_total_cents,
         "payment_method": snapshot.payment_method,
         "payment_customer_visible_text": snapshot.payment_customer_visible_text,
+        "document_warnings": list(snapshot.document_warnings),
     }
 
 

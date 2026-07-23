@@ -11,10 +11,16 @@ from pathlib import Path
 
 import pytest
 
+from catering_system.domain.customer_document_projection import (
+    WARNING_DELIVERY_ADDRESS_DIFFERS,
+    CustomerAddress,
+)
+from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot
 from catering_system.domain.order_commercial_snapshot import (
     MissingCommercialSnapshotError,
+    OrderCommercialPosition,
+    OrderCommercialSnapshot,
 )
-from catering_system.domain.offer import OfferPosition
 from catering_system.repositories.in_memory_inquiry_repository import (
     InMemoryInquiryRepository,
 )
@@ -30,6 +36,9 @@ from catering_system.repositories.in_memory_order_repository import (
 from catering_system.repositories.sqlite_order_confirmation_document_repository import (
     SQLiteOrderConfirmationDocumentRepository,
 )
+from catering_system.services.customer_document_projection import (
+    CustomerDocumentProjectionService,
+)
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_confirmation_document_hash import (
     compute_document_hash,
@@ -38,7 +47,7 @@ from catering_system.services.order_confirmation_document_service import (
     OrderConfirmationDocumentBlockedError,
     OrderConfirmationDocumentService,
     OrderConfirmationDocumentStaleVersionError,
-    _commercial_positions,
+    _persist_snapshot_from_projection,
 )
 from catering_system.services.order_service import OrderService
 from catering_system.services.offer_service import OfferService
@@ -287,67 +296,151 @@ def test_totals_and_vat_match_positions() -> None:
 def test_surcharge_linkage_preserved() -> None:
     base_id = "88888888-8888-4888-8888-888888888881"
     surcharge_id = "99999999-9999-4999-8999-999999999991"
-    base = OfferPosition(
-        position_id=base_id,
-        kind="catalog",
-        name="Basis",
-        unit_net_cents=1000,
-        net_total_cents=1000,
-        vat_rate_percent=7,
-        vat_amount_cents=70,
-        gross_total_cents=1070,
+    now = datetime(2026, 7, 18, 10, 0, tzinfo=UTC)
+    commercial = OrderCommercialSnapshot(
+        snapshot_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        order_id="22222222-2222-4222-8222-222222222222",
+        source_offer_id="11111111-1111-4111-8111-111111111111",
+        source_offer_version_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        source_variant_id="44444444-4444-4444-8444-444444444441",
+        acceptance_id="66666666-6666-4666-8666-666666666661",
+        accepted_at=now,
+        recorded_by="office-panel",
+        variant_label="Variante A",
+        payment_method="RECHNUNG",
+        payment_customer_visible_text="Zahlung per Rechnung",
+        created_at=now,
+        positions=(
+            OrderCommercialPosition(
+                position_id=base_id,
+                kind="catalog",
+                name="Basis",
+                unit_net_cents=1000,
+                net_total_cents=1000,
+                vat_rate_percent=7,
+                vat_amount_cents=70,
+                gross_total_cents=1070,
+            ),
+            OrderCommercialPosition(
+                position_id=surcharge_id,
+                kind="surcharge",
+                name="Aufschlag",
+                unit_net_cents=200,
+                net_total_cents=200,
+                vat_rate_percent=7,
+                vat_amount_cents=14,
+                gross_total_cents=214,
+                related_position_id=base_id,
+            ),
+        ),
     )
-    surcharge = OfferPosition(
-        position_id=surcharge_id,
-        kind="surcharge",
-        name="Aufschlag",
-        unit_net_cents=200,
-        net_total_cents=200,
-        vat_rate_percent=7,
-        vat_amount_cents=14,
-        gross_total_cents=214,
-        related_position_id=base_id,
+    from catering_system.domain.order import OrderVersion
+
+    version = OrderVersion(
+        order_version_id="33333333-3333-4333-8333-333333333331",
+        order_id=commercial.order_id,
+        version_number=1,
+        created_at=now,
+        event_date=date(2026, 8, 20),
+        time_window_text="18:00–22:00",
+        location_text="Hamburg",
+        guest_count_estimate=10,
+        planning_mode="caterer_suggestion",
     )
-    positions, _buckets, totals = _commercial_positions(
-        (base, surcharge), guest_count_estimate=10
+    projection = CustomerDocumentProjectionService().build(
+        document_type="ORDER_CONFIRMATION",
+        document_id="doc-1",
+        created_at=now,
+        order_version=version,
+        commercial_snapshot=commercial,
+        inquiry=None,
     )
-    surcharge_position = next(item for item in positions if item.kind == "surcharge")
+    document = _persist_snapshot_from_projection(
+        projection,
+        inquiry=None,
+        created_by="test",
+        document_hash="sha256:" + ("0" * 64),
+    )
+    surcharge_position = next(
+        item for item in document.positions if item.kind == "surcharge"
+    )
     assert surcharge_position.related_position_id == base_id
-    assert totals["gross_total_cents"] == 1284
+    assert document.gross_total_cents == 1284
 
 
 def test_fee_position_preserved() -> None:
-    fee = OfferPosition(
-        position_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-        kind="fee",
-        name="Servicepauschale",
-        unit_net_cents=500,
-        net_total_cents=500,
-        vat_rate_percent=19,
-        vat_amount_cents=95,
-        gross_total_cents=595,
+    now = datetime(2026, 7, 18, 10, 0, tzinfo=UTC)
+    commercial = OrderCommercialSnapshot(
+        snapshot_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        order_id="22222222-2222-4222-8222-222222222222",
+        source_offer_id="11111111-1111-4111-8111-111111111111",
+        source_offer_version_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        source_variant_id="44444444-4444-4444-8444-444444444441",
+        acceptance_id="66666666-6666-4666-8666-666666666661",
+        accepted_at=now,
+        recorded_by="office-panel",
+        variant_label="Variante A",
+        payment_method="RECHNUNG",
+        payment_customer_visible_text="Zahlung per Rechnung",
+        created_at=now,
+        positions=(
+            OrderCommercialPosition(
+                position_id=_POSITION_ID,
+                kind="catalog",
+                name="Fingerfood Paket",
+                unit_net_cents=290,
+                net_total_cents=23200,
+                vat_rate_percent=7,
+                vat_amount_cents=1624,
+                gross_total_cents=24824,
+                quantity=Decimal("80"),
+                quantity_mode="total",
+                unit_label="Stück",
+            ),
+            OrderCommercialPosition(
+                position_id="cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+                kind="fee",
+                name="Servicepauschale",
+                unit_net_cents=500,
+                net_total_cents=500,
+                vat_rate_percent=19,
+                vat_amount_cents=95,
+                gross_total_cents=595,
+            ),
+        ),
     )
-    catalog = OfferPosition(
-        position_id=_POSITION_ID,
-        kind="catalog",
-        name="Fingerfood Paket",
-        unit_net_cents=290,
-        net_total_cents=23200,
-        vat_rate_percent=7,
-        vat_amount_cents=1624,
-        gross_total_cents=24824,
-        quantity=Decimal("80"),
-        quantity_mode="total",
-        unit_label="Stück",
+    from catering_system.domain.order import OrderVersion
+
+    version = OrderVersion(
+        order_version_id="33333333-3333-4333-8333-333333333331",
+        order_id=commercial.order_id,
+        version_number=1,
+        created_at=now,
+        event_date=date(2026, 8, 20),
+        time_window_text="18:00–22:00",
+        location_text="Hamburg",
+        guest_count_estimate=80,
+        planning_mode="caterer_suggestion",
     )
-    positions, _buckets, totals = _commercial_positions(
-        (catalog, fee), guest_count_estimate=80
+    projection = CustomerDocumentProjectionService().build(
+        document_type="ORDER_CONFIRMATION",
+        document_id="doc-1",
+        created_at=now,
+        order_version=version,
+        commercial_snapshot=commercial,
+        inquiry=None,
     )
-    assert any(position.kind == "fee" for position in positions)
-    assert totals["gross_total_cents"] == 25419
+    document = _persist_snapshot_from_projection(
+        projection,
+        inquiry=None,
+        created_by="test",
+        document_hash="sha256:" + ("0" * 64),
+    )
+    assert any(position.kind == "fee" for position in document.positions)
+    assert document.gross_total_cents == 25419
 
 
-def test_recipient_snapshot_and_missing_email() -> None:
+def test_recipient_from_customer_snapshot_missing_email() -> None:
     (
         offer,
         version_id,
@@ -358,19 +451,25 @@ def test_recipient_snapshot_and_missing_email() -> None:
         inquiries,
         offer_service,
     ) = _accepted_offer_state()
-    inquiry = inquiries.get_by_id(_INQUIRY_ID)
-    assert inquiry is not None
-    inquiries.update(
-        replace(
-            inquiry,
-            intake_message="Firma: ACME GmbH\nName: Anna\nTelefon: +491701234567\n",
-        )
-    )
     _converted, order, order_version = offer_service.convert_accepted_offer(
         offer.offer_id,
         version_id,
         variant_id,
         acceptance_id,
+    )
+    inquiry = inquiries.get_by_id(_INQUIRY_ID)
+    assert inquiry is not None
+    inquiries.update(
+        replace(
+            inquiry,
+            customer_snapshot=InquiryCustomerSnapshot(
+                company_name="ACME GmbH",
+                contact_name="Anna",
+                phone="+491701234567",
+                email=None,
+            ),
+            intake_message="Firma: SHOULD-NOT-USE\nE-Mail: intake@example.invalid\n",
+        )
     )
     core = OperationalCoreService(orders)
     core.confirm_kitchen_print(order.order_id, order_version.order_version_id)
@@ -391,6 +490,54 @@ def test_recipient_snapshot_and_missing_email() -> None:
     assert snapshot.recipient_company == "ACME GmbH"
     assert snapshot.recipient_name == "Anna"
     assert snapshot.recipient_email is None
+    assert snapshot.recipient_phone == "+491701234567"
+
+
+def test_address_warning_flows_into_confirmation_document() -> None:
+    services = _services()
+    order, version = _effective_order(services)
+    service = services[4]
+    invoice = CustomerAddress(
+        street="Bürostraße 1",
+        postal_code="20095",
+        city="Hamburg",
+        country="DE",
+    )
+    delivery = CustomerAddress(
+        street="Eventplatz 9",
+        postal_code="20457",
+        city="Hamburg",
+        country="DE",
+    )
+    snapshot = service.prepare_snapshot(
+        order.order_id,
+        version.order_version_id,
+        "office-panel",
+        invoice_address=invoice,
+        delivery_address=delivery,
+    )
+    assert WARNING_DELIVERY_ADDRESS_DIFFERS in snapshot.document_warnings
+
+
+def test_confirmation_builds_via_customer_document_projection() -> None:
+    services = _services()
+    order, version = _effective_order(services)
+    orders, _offers, inquiries, _documents, service, _core, offer_service = services
+    commercial = offer_service._commercial_snapshots.get_by_order_id(order.order_id)
+    assert commercial is not None
+    inquiry = inquiries.get_by_id(order.source_inquiry_id)
+    assert inquiry is not None
+    assert inquiry.customer_snapshot is not None
+    snapshot = service.prepare_snapshot(
+        order.order_id,
+        version.order_version_id,
+        "office-panel",
+    )
+    assert snapshot.offer_id == commercial.source_offer_id
+    assert snapshot.offer_version_id == commercial.source_offer_version_id
+    assert snapshot.recipient_email == inquiry.customer_snapshot.email
+    assert snapshot.gross_total_cents == commercial.positions[0].gross_total_cents
+    assert snapshot.positions[0].kind == commercial.positions[0].kind
 
 
 def test_document_hash_stable() -> None:
@@ -701,6 +848,18 @@ def test_confirmation_snapshot_immune_to_later_offer_mutation() -> None:
         "office-panel",
     )
     assert snapshot.positions[0].name == "Fingerfood Paket"
+
+
+def test_confirmation_document_service_has_no_offer_repository() -> None:
+    root = Path(__file__).resolve().parents[2]
+    text = (
+        root
+        / "src/catering_system/services/order_confirmation_document_service.py"
+    ).read_text(encoding="utf-8")
+    assert "OfferRepository" not in text
+    assert "conversion_link" not in text
+    assert "parse_intake_contact" not in text
+    assert "labelled_intake_context" not in text
 
 
 def test_confirmation_fails_when_commercial_snapshot_missing() -> None:

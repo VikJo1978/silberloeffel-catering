@@ -150,12 +150,14 @@ class CustomerDocumentPosition:
     """Customer-visible commercial line derived from OrderCommercialPosition."""
 
     position_id: str
+    kind: str
     name: str
     unit_net_cents: int
     net_total_cents: int
     vat_rate_percent: int
     vat_amount_cents: int
     gross_total_cents: int
+    related_position_id: str | None = None
     description: str | None = None
     composition: str | None = None
     quantity: str | None = None
@@ -163,6 +165,7 @@ class CustomerDocumentPosition:
 
     def __post_init__(self) -> None:
         _require_text(self.position_id, "position_id")
+        _require_text(self.kind, "kind")
         _require_text(self.name, "name")
         if self.vat_rate_percent not in (7, 19):
             raise ValueError("vat_rate_percent must be 7 or 19")
@@ -173,6 +176,9 @@ class CustomerDocumentPosition:
             ("gross_total_cents", self.gross_total_cents),
         ):
             _require_non_negative_cents(value, field)
+        _optional_bounded_text(
+            self.related_position_id, "related_position_id", max_len=_MAX_LABEL
+        )
         _optional_bounded_text(self.description, "description", max_len=_MAX_TEXT)
         _optional_bounded_text(self.composition, "composition", max_len=_MAX_TEXT)
         _optional_bounded_text(self.quantity, "quantity", max_len=_MAX_LABEL)

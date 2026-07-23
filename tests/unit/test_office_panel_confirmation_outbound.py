@@ -231,7 +231,7 @@ def test_panel_test_send_persists_evidence_and_shows_protokolliert(
 def test_missing_recipient_blocks_testversand_button(tmp_path: Path) -> None:
     db, doc_service, _core, _orders, order_id, order_version_id = _sqlite_world(
         tmp_path,
-        intake_message="Firma: Ohne E-Mail GmbH\nName: Anna\n",
+        clear_recipient_email_after_convert=True,
     )
     doc_service.prepare_snapshot(order_id, order_version_id, "office-panel")
     panel = _panel_with_outbound(db)

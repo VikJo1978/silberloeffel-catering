@@ -16,6 +16,7 @@ from http.server import HTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
+from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot
 from catering_system.repositories.core_transaction import (
     CoreCommandExecutor,
     open_core_connection,
@@ -136,6 +137,8 @@ def _sqlite_world(
     tmp_path: Path,
     *,
     intake_message: str = ("Firma: Example GmbH\nE-Mail: customer@example.invalid\n"),
+    customer_snapshot: object | None = ...,
+    clear_recipient_email_after_convert: bool = False,
 ) -> tuple[
     Path,
     OrderConfirmationDocumentService,
@@ -154,7 +157,19 @@ def _sqlite_world(
         connection
     )
 
-    inquiry = replace(_sample_inquiry(), intake_message=intake_message)
+    if customer_snapshot is ...:
+        snapshot = InquiryCustomerSnapshot(
+            company_name="Example GmbH",
+            email="customer@example.invalid",
+            phone="+49301234567",
+        )
+    else:
+        snapshot = customer_snapshot  # type: ignore[assignment]
+    inquiry = replace(
+        _sample_inquiry(),
+        intake_message=intake_message,
+        customer_snapshot=snapshot,
+    )
     inquiries.save(inquiry)
     offer_service = OfferService(offers, inquiries, orders, commercial_snapshots)
     offer = offer_service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
@@ -174,6 +189,21 @@ def _sqlite_world(
         updated.acceptance_evidence.acceptance_id,
     )
     assert converted.conversion_link is not None
+    if clear_recipient_email_after_convert:
+        current = inquiries.get_by_id(_INQUIRY_ID)
+        assert current is not None
+        contact = current.customer_snapshot
+        inquiries.update(
+            replace(
+                current,
+                customer_snapshot=InquiryCustomerSnapshot(
+                    company_name=contact.company_name if contact else None,
+                    contact_name=contact.contact_name if contact else None,
+                    phone=contact.phone if contact else None,
+                    email=None,
+                ),
+            )
+        )
     core = OperationalCoreService(orders)
     core.confirm_kitchen_print(order.order_id, order_version.order_version_id)
     core.make_order_version_effective(order.order_id, order_version.order_version_id)
@@ -383,7 +413,7 @@ def test_panel_prepare_action_persists_single_snapshot(tmp_path: Path) -> None:
 def test_missing_email_shows_state_and_allows_preview(tmp_path: Path) -> None:
     db, doc_service, _core, _orders, order_id, order_version_id = _sqlite_world(
         tmp_path,
-        intake_message="Firma: Ohne E-Mail GmbH\nName: Anna\n",
+        clear_recipient_email_after_convert=True,
     )
     connection = open_core_connection(db)
     panel = OfficePanel(
@@ -536,6 +566,11 @@ def test_confirmation_card_escapes_hostile_user_data() -> None:
         replace(
             inquiry,
             intake_message='Firma: <script>alert("x")</script>\nE-Mail: safe@example.invalid\n',
+            customer_snapshot=InquiryCustomerSnapshot(
+                company_name='<script>alert("x")</script>',
+                email="safe@example.invalid",
+                phone="+49301234567",
+            ),
         )
     )
     updated, order, order_version = offer_service.convert_accepted_offer(
