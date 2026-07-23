@@ -109,6 +109,9 @@ from catering_system.services.order_confirmation_document_service import (
     OrderConfirmationDocumentService,
     OrderConfirmationDocumentStaleVersionError,
 )
+from catering_system.domain.customer_document_eligibility import (
+    CustomerDocumentCreationBlocked,
+)
 from catering_system.services.order_confirmation_outbound_service import (
     OrderConfirmationOutboundAlreadySentError,
     OrderConfirmationOutboundBlockedError,
@@ -1707,12 +1710,14 @@ class OfficeApi:
             )
         except OrderConfirmationDocumentStaleVersionError as exc:
             raise ApiError(409, "stale_state") from exc
-        except MissingCommercialSnapshotError as exc:
-            raise ApiError(422, "confirmation_document_blocked") from exc
+        except CustomerDocumentCreationBlocked as exc:
+            raise ApiError(
+                422,
+                "confirmation_document_blocked",
+                reasons=exc.codes,
+            ) from exc
         except OrderConfirmationDocumentBlockedError as exc:
             message = str(exc)
-            if message == "aenderung_wartet":
-                raise ApiError(422, "pending_order_version_change") from exc
             if message == "commercial_totals_invalid":
                 raise ApiError(422, "commercial_totals_invalid") from exc
             raise ApiError(422, "confirmation_document_blocked") from exc

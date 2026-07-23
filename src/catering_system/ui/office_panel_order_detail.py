@@ -35,6 +35,10 @@ _CONFIRMATION_STATE_LABELS = {
     "empfaenger_fehlt": "Empfänger-E-Mail fehlt",
     "bereit_zur_vorschau": "Bereit zur Vorschau",
     "dokument_erstellt": "Dokument erstellt",
+    "MISSING_COMMERCIAL_SNAPSHOT": "Kommerzieller Snapshot fehlt",
+    "MISSING_CUSTOMER_NAME": "Kundenname fehlt",
+    "MISSING_CUSTOMER_CONTACT": "Kundenkontakt fehlt",
+    "INVALID_ORDER_STATE": "Auftrag nicht bereit für Kundendokument",
 }
 
 _OUTBOUND_STATE_LABELS = {

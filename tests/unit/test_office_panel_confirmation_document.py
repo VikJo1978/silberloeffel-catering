@@ -16,6 +16,8 @@ from http.server import HTTPServer
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot
 from catering_system.repositories.core_transaction import (
     CoreCommandExecutor,
@@ -290,11 +292,10 @@ def test_legacy_order_detail_before_snapshot_shows_prepare_action(
     page = panel.render_order(order_id)
     assert page is not None
     assert "Auftragsbestätigung" in page
-    assert views.confirmation_document_shape(eligibility)["state"] in {
-        "bereit_zur_vorschau",
-        "empfaenger_fehlt",
-    }
-    assert "Bereit zur Vorschau" in page or "Empfänger-E-Mail fehlt" in page
+    assert (
+        views.confirmation_document_shape(eligibility)["state"] == "bereit_zur_vorschau"
+    )
+    assert "Bereit zur Vorschau" in page
     assert "Vorschau erstellen" in page
     assert "Senden" not in page
 
@@ -410,12 +411,28 @@ def test_panel_prepare_action_persists_single_snapshot(tmp_path: Path) -> None:
         server.server_close()
 
 
-def test_missing_email_shows_state_and_allows_preview(tmp_path: Path) -> None:
+def test_missing_contact_blocks_prepare_action(tmp_path: Path) -> None:
     db, doc_service, _core, _orders, order_id, order_version_id = _sqlite_world(
         tmp_path,
         clear_recipient_email_after_convert=True,
     )
+    # Clear phone too — contact requires email or phone.
     connection = open_core_connection(db)
+    inquiries = SQLiteInquiryRepository.from_connection(connection)
+    inquiry = inquiries.get_by_id(_INQUIRY_ID)
+    assert inquiry is not None
+    contact = inquiry.customer_snapshot
+    inquiries.update(
+        replace(
+            inquiry,
+            customer_snapshot=InquiryCustomerSnapshot(
+                company_name=contact.company_name if contact else None,
+                contact_name=contact.contact_name if contact else None,
+                phone=None,
+                email=None,
+            ),
+        )
+    )
     panel = OfficePanel(
         SQLiteInquiryRepository.from_connection(connection),
         SQLiteOrderRepository.from_connection(connection),
@@ -430,27 +447,20 @@ def test_missing_email_shows_state_and_allows_preview(tmp_path: Path) -> None:
     )
     before = panel.render_order(order_id)
     assert before is not None
-    assert "Empfänger-E-Mail fehlt" in before
+    assert "Kundenkontakt fehlt" in before
+    assert "Vorschau erstellen" not in before
 
-    snapshot = doc_service.prepare_snapshot(
-        order_id,
-        order_version_id,
-        "office-panel",
+    from catering_system.domain.customer_document_eligibility import (
+        CustomerDocumentCreationBlocked,
     )
-    assert snapshot.recipient_status == "missing"
-    assert snapshot.recipient_email is None
 
-    panel_url, server = _start_panel_server(db)
-    try:
-        status, preview, _headers = _get(
-            f"{panel_url}/order/{order_id}/confirmation-document/preview"
+    with pytest.raises(CustomerDocumentCreationBlocked):
+        doc_service.prepare_snapshot(
+            order_id,
+            order_version_id,
+            "office-panel",
         )
-        assert status == 200
-        assert "customer@example.invalid" not in preview
-        assert "@example.invalid" not in preview
-    finally:
-        server.shutdown()
-        server.server_close()
+    assert _snapshot_count(db) == 0
 
 
 def test_pending_candidate_shows_blocked_state_without_prepare(tmp_path: Path) -> None:
@@ -486,9 +496,10 @@ def test_pending_candidate_shows_blocked_state_without_prepare(tmp_path: Path) -
     )
     page = panel.render_order(order_id)
     assert page is not None
-    assert "Änderung wartet auf Küchendruck" in page
+    assert "Auftrag nicht bereit für Kundendokument" in page
     assert "Vorschau erstellen" not in page
     assert doc_service.eligibility(order_id).can_prepare is False
+    assert doc_service.eligibility(order_id).state == "INVALID_ORDER_STATE"
 
 
 def test_legacy_and_v2_share_confirmation_projection(tmp_path: Path) -> None:

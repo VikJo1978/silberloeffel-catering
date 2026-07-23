@@ -47,7 +47,9 @@ from catering_system.domain.inquiry_customer_snapshot import (
 )
 
 _CONTACT_COMPLETE_SNAPSHOT = _CCSnapshot(
-    email="kunde@example.com", phone="+49301234567"
+    email="kunde@example.com",
+    phone="+49301234567",
+    company_name="Example GmbH",
 )
 
 _INQUIRY_ID = "22222222-2222-4222-8222-222222222222"
