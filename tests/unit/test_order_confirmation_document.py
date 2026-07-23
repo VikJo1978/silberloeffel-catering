@@ -55,7 +55,11 @@ from catering_system.services.offer_service import OfferService
 from catering_system.domain.order_payment_reminder import PaymentReminderView
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
 from catering_system.ui import office_api_views as views
+from catering_system.services.customer_document_preview import (
+    CustomerDocumentPreviewService,
+)
 from catering_system.ui.office_panel_order_detail import (
+    ConfirmationLivePreviewView,
     OrderDetailFormFields,
     render_order_detail,
 )
@@ -752,6 +756,14 @@ def test_office_panel_confirmation_block_renders() -> None:
     eligibility = service.eligibility(order.order_id)
     assert eligibility.state == "bereit_zur_vorschau"
     outbound = OutboundSendEligibility(state="dokument_fehlt", can_send=False)
+    live = ConfirmationLivePreviewView(
+        state="ready",
+        preview=CustomerDocumentPreviewService(
+            services[0],
+            services[2],
+            services[6]._commercial_snapshots,
+        ).preview_order_confirmation(order.order_id),
+    )
     page = render_order_detail(
         order,
         services[0].list_order_versions(order.order_id),
@@ -785,11 +797,12 @@ def test_office_panel_confirmation_block_renders() -> None:
             confirmation_command_fields="",
             send_command_fields="",
         ),
+        live_preview=live,
         versions_total_count=1,
         versions_truncated=False,
     )
     assert "Auftragsbestätigung" in page.body
-    assert "Vorschau erstellen" in page.body
+    assert "Auftragsbestätigung erstellen" in page.body
     snapshot = service.prepare_snapshot(
         order.order_id,
         version.order_version_id,
@@ -833,11 +846,13 @@ def test_office_panel_confirmation_block_renders() -> None:
             confirmation_command_fields="",
             send_command_fields="",
         ),
+        live_preview=live,
         versions_total_count=1,
         versions_truncated=False,
     )
     assert snapshot.document_reference in page_created.body
     assert "Vorschau öffnen" in page_created.body
+    assert "Auftragsbestätigung erstellen" not in page_created.body
     assert "Testversand erzeugen" in page_created.body
     assert views.confirmation_document_shape(created)["state"] == "dokument_erstellt"
 

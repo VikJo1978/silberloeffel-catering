@@ -5,7 +5,9 @@ from __future__ import annotations
 import html
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Literal
 
+from catering_system.domain.customer_document_preview import CustomerDocumentPreview
 from catering_system.domain.inquiry import PLANNING_MODES
 from catering_system.domain.order import (
     Order,
@@ -35,11 +37,21 @@ _CONFIRMATION_STATE_LABELS = {
     "empfaenger_fehlt": "Empfänger-E-Mail fehlt",
     "bereit_zur_vorschau": "Bereit zur Vorschau",
     "dokument_erstellt": "Dokument erstellt",
+}
+
+_DOCUMENT_BLOCKER_LABELS = {
     "MISSING_COMMERCIAL_SNAPSHOT": "Kommerzieller Snapshot fehlt",
     "MISSING_CUSTOMER_NAME": "Kundenname fehlt",
     "MISSING_CUSTOMER_CONTACT": "Kundenkontakt fehlt",
     "INVALID_ORDER_STATE": "Auftrag nicht bereit für Kundendokument",
 }
+
+_DOCUMENT_WARNING_LABELS = {
+    "DELIVERY_ADDRESS_DIFFERS_FROM_INVOICE": (
+        "Lieferadresse weicht von Rechnungsadresse ab"
+    ),
+}
+
 
 _OUTBOUND_STATE_LABELS = {
     "dokument_fehlt": "Dokument fehlt",
@@ -99,6 +111,28 @@ class OrderVersionChangePrefill:
     guest_count_estimate: str
     planning_mode: str
     latest_version_number: int
+
+
+ConfirmationLivePreviewState = Literal[
+    "ready",
+    "unavailable",
+    "parse_error",
+    "not_found",
+]
+
+
+@dataclass(frozen=True)
+class ConfirmationLivePreviewView:
+    """Live CDP preview load result for Order Detail (V1-E)."""
+
+    state: ConfirmationLivePreviewState
+    preview: CustomerDocumentPreview | None = None
+
+    def __post_init__(self) -> None:
+        if self.state == "ready" and self.preview is None:
+            raise ValueError("ready live preview requires preview payload")
+        if self.state != "ready" and self.preview is not None:
+            raise ValueError("non-ready live preview must not carry payload")
 
 
 @dataclass(frozen=True)
@@ -572,12 +606,27 @@ def _payment_card(
     )
 
 
+def _document_blocker_label(code: str) -> str:
+    return _DOCUMENT_BLOCKER_LABELS.get(code, code)
+
+
+def _document_warning_label(code: str) -> str:
+    return _DOCUMENT_WARNING_LABELS.get(code, code)
+
+
+def _confirmation_state_label(state: str) -> str:
+    if state in _CONFIRMATION_STATE_LABELS:
+        return _CONFIRMATION_STATE_LABELS[state]
+    return _document_blocker_label(state)
+
+
 def _confirmation_card(
     order: Order,
     confirmation: OrderConfirmationDocumentEligibility,
     forms: OrderDetailFormFields,
+    live_preview: ConfirmationLivePreviewView,
 ) -> str:
-    state_label = _CONFIRMATION_STATE_LABELS.get(confirmation.state, confirmation.state)
+    state_label = _confirmation_state_label(confirmation.state)
     facts: list[tuple[str, str]] = [("Status", state_label)]
     snapshot = confirmation.snapshot
     if snapshot is not None:
@@ -597,12 +646,19 @@ def _confirmation_card(
                 ("Erstellt", snapshot.created_at.strftime("%d.%m.%Y · %H:%M")),
             ]
         )
+    live_html = _live_preview_diagnostics(live_preview)
     actions: list[str] = []
-    if confirmation.can_prepare:
+    can_create = (
+        snapshot is None
+        and live_preview.state == "ready"
+        and live_preview.preview is not None
+        and live_preview.preview.eligible
+    )
+    if can_create:
         actions.append(
             f'<form method="post" action="/order/{_e(order.order_id)}/confirmation-document">'
             f"{forms.csrf_input}{forms.confirmation_command_fields}"
-            '<button type="submit">Vorschau erstellen</button></form>'
+            '<button type="submit">Auftragsbestätigung erstellen</button></form>'
         )
     if snapshot is not None:
         actions.append(
@@ -620,18 +676,74 @@ def _confirmation_card(
             for label, value in facts
         )
         + "</dl>"
+        + live_html
         + "".join(actions)
         + "</section>"
     )
+
+
+def _live_preview_diagnostics(live_preview: ConfirmationLivePreviewView) -> str:
+    if live_preview.state == "unavailable":
+        return (
+            '<p class="order-context-note blocked">'
+            "Live-Vorschau derzeit nicht verfügbar.</p>"
+        )
+    if live_preview.state == "parse_error":
+        return (
+            '<p class="order-context-note blocked">'
+            "Live-Vorschau konnte nicht gelesen werden.</p>"
+        )
+    if live_preview.state == "not_found":
+        return (
+            '<p class="order-context-note blocked">'
+            "Auftrag für Live-Vorschau nicht gefunden.</p>"
+        )
+    preview = live_preview.preview
+    assert preview is not None
+    parts: list[str] = []
+    if preview.blockers:
+        items = "".join(
+            f"<li>{_e(_document_blocker_label(blocker.code))}</li>"
+            for blocker in preview.blockers
+        )
+        parts.append(
+            '<div class="order-blockers"><strong>Erstellung blockiert</strong>'
+            f"<ul>{items}</ul></div>"
+        )
+    if preview.warnings:
+        items = "".join(
+            f"<li>{_e(_document_warning_label(code))}</li>" for code in preview.warnings
+        )
+        parts.append(
+            '<div class="order-context-note"><strong>Hinweise</strong>'
+            f"<ul>{items}</ul></div>"
+        )
+    if (
+        preview.commercial_reference is not None
+        and preview.gross_total_cents is not None
+    ):
+        parts.append(
+            '<p class="order-context-note">'
+            f"Vorschau brutto: "
+            f"{_e(f'{preview.gross_total_cents / 100:.2f} €'.replace('.', ','))}"
+            f" · {_e(preview.commercial_reference.variant_label)}</p>"
+        )
+    elif preview.recipient.name:
+        parts.append(
+            '<p class="order-context-note">'
+            f"Empfänger (Vorschau): {_e(preview.recipient.name)}</p>"
+        )
+    return "".join(parts)
 
 
 def render_confirmation_card(
     order: Order,
     confirmation: OrderConfirmationDocumentEligibility,
     forms: OrderDetailFormFields,
+    live_preview: ConfirmationLivePreviewView,
 ) -> str:
     """Shared Auftragsbestätigung card for v2 and legacy Order Detail."""
-    return _confirmation_card(order, confirmation, forms)
+    return _confirmation_card(order, confirmation, forms, live_preview)
 
 
 def render_confirmation_outbound_card(
@@ -866,6 +978,7 @@ def render_order_detail(
     confirmation: OrderConfirmationDocumentEligibility,
     outbound: OutboundSendEligibility,
     forms: OrderDetailFormFields,
+    live_preview: ConfirmationLivePreviewView,
     *,
     operational_pause: Mapping[str, object] | None = None,
     versions_total_count: int,
@@ -946,7 +1059,7 @@ def render_order_detail(
         + "</div>"
         '<aside class="order-detail-side">'
         + _primary_action(order, target, next_action, forms)
-        + _confirmation_card(order, confirmation, forms)
+        + _confirmation_card(order, confirmation, forms, live_preview)
         + render_confirmation_outbound_card(
             order, confirmation, outbound, forms, operational_pause=pause_view
         )
