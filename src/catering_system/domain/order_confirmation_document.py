@@ -67,6 +67,7 @@ class OrderConfirmationDocumentSnapshot:
     payment_customer_visible_text: str
     document_hash: str
     schema_version: int = SCHEMA_VERSION
+    document_warnings: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.schema_version != SCHEMA_VERSION:

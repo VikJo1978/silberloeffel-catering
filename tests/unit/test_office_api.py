@@ -13,11 +13,13 @@ import threading
 import urllib.error
 import urllib.request
 import uuid
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot
 from catering_system.repositories.sqlite_inquiry_repository import (
     SQLiteInquiryRepository,
 )
@@ -3276,6 +3278,37 @@ def _ensure_inquiry_recipient_email(base: str, inquiry_id: str) -> None:
     )
 
 
+def _set_inquiry_customer_snapshot(
+    db: Path,
+    inquiry_id: str,
+    snapshot: InquiryCustomerSnapshot,
+) -> None:
+    inquiries = SQLiteInquiryRepository(db)
+    inquiry = inquiries.get_by_id(inquiry_id)
+    assert inquiry is not None
+    inquiries.update(replace(inquiry, customer_snapshot=snapshot))
+    inquiries.close()
+
+
+def _clear_inquiry_recipient_email(db: Path, inquiry_id: str) -> None:
+    inquiries = SQLiteInquiryRepository(db)
+    inquiry = inquiries.get_by_id(inquiry_id)
+    assert inquiry is not None
+    contact = inquiry.customer_snapshot
+    inquiries.update(
+        replace(
+            inquiry,
+            customer_snapshot=InquiryCustomerSnapshot(
+                company_name=contact.company_name if contact else None,
+                contact_name=contact.contact_name if contact else None,
+                phone=contact.phone if contact else None,
+                email=None,
+            ),
+        )
+    )
+    inquiries.close()
+
+
 def _make_effective_offer_order(
     api: tuple[str, dict[str, str], Path],
     *,
@@ -3468,7 +3501,7 @@ def test_confirmation_document_preview_json_and_html(api) -> None:
 def test_confirmation_document_preview_escapes_html_but_preserves_json_text(
     api,
 ) -> None:
-    base, ids, _db = api
+    base, ids, db = api
     malicious = "<script>alert(1)</script>"
     rich = "<b>Test</b>"
     amp = "A&B"
@@ -3499,6 +3532,16 @@ def test_confirmation_document_preview_escapes_html_but_preserves_json_text(
         inquiry_id=inquiry_id,
         snapshot=snapshot_payload,
         ensure_recipient_email=False,
+    )
+    _set_inquiry_customer_snapshot(
+        db,
+        inquiry_id,
+        InquiryCustomerSnapshot(
+            company_name=malicious,
+            contact_name=rich,
+            email="customer@example.invalid",
+            phone="+49301234567",
+        ),
     )
     _post(
         _confirmation_document_url(base, order_id),
@@ -3615,23 +3658,10 @@ def test_confirmation_document_stale_expect_and_blocked_states(api) -> None:
 def test_confirmation_document_missing_recipient_is_allowed(api) -> None:
     base, ids, db = api
     inquiry_id = ids["inquiry_offer_ready"]
-    detail = _get(f"{base}/office/v1/inquiries/{inquiry_id}")[1]
-    _post(
-        f"{base}/office/v1/inquiries/{inquiry_id}/update",
-        args={
-            "event_date": detail["event_date"],
-            "crm_stage": detail["crm_stage"],
-            "time_window_text": detail["time_window_text"],
-            "location_text": detail["location_text"],
-            "guest_count_estimate": detail["guest_count_estimate"],
-            "planning_mode": detail["planning_mode"],
-            "intake_message": "Firma: Ohne E-Mail GmbH\nName: Anna\n",
-        },
-        expect={"updated_at": detail["updated_at"]},
-    )
     order_id, order_version_id = _make_effective_offer_order(
         api, inquiry_id=inquiry_id, ensure_recipient_email=False
     )
+    _clear_inquiry_recipient_email(db, inquiry_id)
     status, created, _h = _post(
         _confirmation_document_url(base, order_id),
         args={"created_by": "office-api-test"},
@@ -3981,10 +4011,12 @@ def test_confirmation_send_succeeds_after_pause_is_resumed(api) -> None:
 
 
 def test_confirmation_outbound_missing_recipient_returns_422(api) -> None:
-    base, _ids, _db = api
+    base, ids, db = api
+    inquiry_id = ids["inquiry_offer_ready"]
     order_id, order_version_id = _make_effective_offer_order(
-        api, ensure_recipient_email=False
+        api, inquiry_id=inquiry_id, ensure_recipient_email=False
     )
+    _clear_inquiry_recipient_email(db, inquiry_id)
     status, body, _h = _post(
         _confirmation_document_url(base, order_id),
         args={"created_by": "office-api-test"},

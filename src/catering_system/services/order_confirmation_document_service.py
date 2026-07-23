@@ -1,23 +1,24 @@
-"""Build and read frozen Auftragsbestätigung document snapshots — EMAIL_MVP_1 B1."""
+"""Build and read frozen Auftragsbestätigung document snapshots — EMAIL_MVP_1 B1.
+
+Facts come from CustomerDocumentProjection (Inquiry + OrderVersion +
+OrderCommercialSnapshot). Persistence remains OrderConfirmationDocumentSnapshot.
+"""
 
 from __future__ import annotations
 
 import uuid
-from typing import Callable, Protocol, cast
+from typing import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from decimal import Decimal
 
-from catering_system.domain.inquiry import Inquiry
-from catering_system.domain.offer import (
-    PositionKind,
-    PositionQuantityMode,
-    VatRatePercent,
+from catering_system.domain.customer_document_projection import (
+    CustomerAddress,
+    CustomerDocumentProjection,
 )
+from catering_system.domain.inquiry import Inquiry
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_commercial_snapshot import (
     MissingCommercialSnapshotError,
-    OrderCommercialSnapshot,
 )
 from catering_system.domain.order_confirmation_document import (
     OrderConfirmationDocumentPosition,
@@ -27,12 +28,7 @@ from catering_system.domain.order_confirmation_document import (
 )
 from catering_system.domain.order_payment_reminder import (
     PAYMENT_METHOD_LABELS,
-    PaymentMethod,
     validate_payment_method,
-)
-from catering_system.intake.intake_contact import (
-    labelled_intake_context,
-    parse_intake_contact,
 )
 from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.repositories.order_commercial_snapshot_repository import (
@@ -42,11 +38,11 @@ from catering_system.repositories.order_confirmation_document_repository import 
     OrderConfirmationDocumentRepository,
 )
 from catering_system.repositories.order_repository import OrderRepository
+from catering_system.services.customer_document_projection import (
+    CustomerDocumentProjectionService,
+)
 from catering_system.services.order_confirmation_document_hash import (
     compute_document_hash,
-)
-from catering_system.services.order_print_projection_service import (
-    format_quantity_display,
 )
 
 
@@ -88,59 +84,6 @@ class OrderConfirmationDocumentEligibility:
     snapshot: OrderConfirmationDocumentSummary | None = None
 
 
-@dataclass(frozen=True)
-class _CommercialFacts:
-    offer_id: str
-    offer_version_id: str
-    payment_method: PaymentMethod
-    payment_customer_visible_text: str
-    positions: tuple[_PricedCommercialPosition, ...]
-
-
-class _PricedCommercialPosition(Protocol):
-    @property
-    def position_id(self) -> str: ...
-
-    @property
-    def kind(self) -> PositionKind: ...
-
-    @property
-    def name(self) -> str: ...
-
-    @property
-    def description(self) -> str | None: ...
-
-    @property
-    def composition(self) -> str | None: ...
-
-    @property
-    def quantity(self) -> Decimal | None: ...
-
-    @property
-    def quantity_mode(self) -> PositionQuantityMode | None: ...
-
-    @property
-    def unit_label(self) -> str | None: ...
-
-    @property
-    def unit_net_cents(self) -> int: ...
-
-    @property
-    def net_total_cents(self) -> int: ...
-
-    @property
-    def vat_rate_percent(self) -> VatRatePercent: ...
-
-    @property
-    def vat_amount_cents(self) -> int: ...
-
-    @property
-    def gross_total_cents(self) -> int: ...
-
-    @property
-    def related_position_id(self) -> str | None: ...
-
-
 def document_reference(order_id: str, version_number: int) -> str:
     return f"AB-{order_id.split('-', maxsplit=1)[0].upper()}-V{version_number}"
 
@@ -153,12 +96,14 @@ class OrderConfirmationDocumentService:
         document_repository: OrderConfirmationDocumentRepository,
         commercial_snapshot_repository: OrderCommercialSnapshotRepository,
         *,
+        projection_service: CustomerDocumentProjectionService | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self._orders = order_repository
         self._inquiries = inquiry_repository
         self._documents = document_repository
         self._commercial_snapshots = commercial_snapshot_repository
+        self._projection = projection_service or CustomerDocumentProjectionService()
         self._now = now or (lambda: datetime.now(UTC))
 
     def eligibility(self, order_id: str) -> OrderConfirmationDocumentEligibility:
@@ -201,6 +146,9 @@ class OrderConfirmationDocumentService:
         order_id: str,
         expected_effective_order_version_id: str,
         created_by: str,
+        *,
+        invoice_address: CustomerAddress | None = None,
+        delivery_address: CustomerAddress | None = None,
     ) -> OrderConfirmationDocumentSnapshot:
         order = self._orders.get_order(order_id)
         if order is None:
@@ -219,68 +167,32 @@ class OrderConfirmationDocumentService:
             return existing
         assert order.effective_order_version_id is not None
         version = self._require_effective_version(order)
-        commercial = self._resolve_commercial(order)
+        commercial = self._commercial_snapshots.get_by_order_id(order.order_id)
+        if commercial is None:
+            raise MissingCommercialSnapshotError(order.order_id)
         inquiry = self._inquiries.get_by_id(order.source_inquiry_id)
-        recipient = _recipient_snapshot(inquiry)
-        positions, buckets, totals = _commercial_positions(
-            commercial.positions,
-            guest_count_estimate=version.guest_count_estimate,
+        document_id = str(uuid.uuid4())
+        created_at = self._now()
+        projection = self._projection.build(
+            document_type="ORDER_CONFIRMATION",
+            document_id=document_id,
+            created_at=created_at,
+            order_version=version,
+            commercial_snapshot=commercial,
+            inquiry=inquiry,
+            invoice_address=invoice_address,
+            delivery_address=delivery_address,
         )
-        reference = document_reference(order.order_id, version.version_number)
-        draft = OrderConfirmationDocumentSnapshot(
-            document_snapshot_id=str(uuid.uuid4()),
-            order_id=order.order_id,
-            order_version_id=version.order_version_id,
-            offer_id=commercial.offer_id,
-            offer_version_id=commercial.offer_version_id,
-            document_reference=reference,
-            created_at=self._now(),
+        draft = _persist_snapshot_from_projection(
+            projection,
+            inquiry=inquiry,
             created_by=created_by,
-            recipient_name=recipient["recipient_name"],
-            recipient_email=recipient["recipient_email"],
-            recipient_company=recipient["recipient_company"],
-            recipient_phone=recipient["recipient_phone"],
-            recipient_status=cast(RecipientStatus, recipient["recipient_status"]),
-            event_date=version.event_date,
-            time_window_text=version.time_window_text,
-            location_text=version.location_text,
-            guest_count_estimate=version.guest_count_estimate,
-            planning_mode=version.planning_mode,
-            positions=positions,
-            vat_buckets=buckets,
-            net_total_cents=totals["net_total_cents"],
-            vat_total_cents=totals["vat_total_cents"],
-            gross_total_cents=totals["gross_total_cents"],
-            payment_method=commercial.payment_method,
-            payment_customer_visible_text=commercial.payment_customer_visible_text,
             document_hash="sha256:" + ("0" * 64),
         )
-        snapshot = OrderConfirmationDocumentSnapshot(
-            document_snapshot_id=draft.document_snapshot_id,
-            order_id=draft.order_id,
-            order_version_id=draft.order_version_id,
-            offer_id=draft.offer_id,
-            offer_version_id=draft.offer_version_id,
-            document_reference=draft.document_reference,
-            created_at=draft.created_at,
-            created_by=draft.created_by,
-            recipient_name=draft.recipient_name,
-            recipient_email=draft.recipient_email,
-            recipient_company=draft.recipient_company,
-            recipient_phone=draft.recipient_phone,
-            recipient_status=draft.recipient_status,
-            event_date=draft.event_date,
-            time_window_text=draft.time_window_text,
-            location_text=draft.location_text,
-            guest_count_estimate=draft.guest_count_estimate,
-            planning_mode=draft.planning_mode,
-            positions=draft.positions,
-            vat_buckets=draft.vat_buckets,
-            net_total_cents=draft.net_total_cents,
-            vat_total_cents=draft.vat_total_cents,
-            gross_total_cents=draft.gross_total_cents,
-            payment_method=draft.payment_method,
-            payment_customer_visible_text=draft.payment_customer_visible_text,
+        snapshot = _persist_snapshot_from_projection(
+            projection,
+            inquiry=inquiry,
+            created_by=created_by,
             document_hash=compute_document_hash(draft),
         )
         self._documents.insert(snapshot)
@@ -364,72 +276,69 @@ class OrderConfirmationDocumentService:
             raise OrderConfirmationDocumentBlockedError("nicht_verfuegbar")
         return version
 
-    def _resolve_commercial(self, order: Order) -> _CommercialFacts:
-        snapshot = self._commercial_snapshots.get_by_order_id(order.order_id)
-        if snapshot is None:
-            raise MissingCommercialSnapshotError(order.order_id)
-        return _commercial_from_snapshot(snapshot)
+
+def _recipient_status_from_inquiry(inquiry: Inquiry | None) -> RecipientStatus:
+    if inquiry is None or inquiry.customer_snapshot is None:
+        return "missing"
+    return "ready" if inquiry.customer_snapshot.email else "missing"
 
 
-def _commercial_from_snapshot(snapshot: OrderCommercialSnapshot) -> _CommercialFacts:
-    return _CommercialFacts(
-        offer_id=snapshot.source_offer_id,
-        offer_version_id=snapshot.source_offer_version_id,
-        payment_method=snapshot.payment_method,
-        payment_customer_visible_text=snapshot.payment_customer_visible_text,
-        positions=snapshot.positions,
+def _persist_snapshot_from_projection(
+    projection: CustomerDocumentProjection,
+    *,
+    inquiry: Inquiry | None,
+    created_by: str,
+    document_hash: str,
+) -> OrderConfirmationDocumentSnapshot:
+    positions, buckets = _positions_and_buckets(projection)
+    if (
+        projection.net_total_cents + projection.vat_total_cents
+        != projection.gross_total_cents
+    ):
+        raise OrderConfirmationDocumentBlockedError("commercial_totals_invalid")
+    contact = inquiry.customer_snapshot if inquiry is not None else None
+    return OrderConfirmationDocumentSnapshot(
+        document_snapshot_id=projection.document_id,
+        order_id=projection.event.order_id,
+        order_version_id=projection.event.order_version_id,
+        offer_id=projection.commercial_reference.source_offer_id,
+        offer_version_id=projection.commercial_reference.source_offer_version_id,
+        document_reference=document_reference(
+            projection.event.order_id, projection.event.version_number
+        ),
+        created_at=projection.created_at,
+        created_by=created_by,
+        recipient_name=projection.recipient.name,
+        recipient_email=projection.recipient.email,
+        recipient_company=contact.company_name if contact is not None else None,
+        recipient_phone=contact.phone if contact is not None else None,
+        recipient_status=("ready" if projection.recipient.email else "missing"),
+        event_date=projection.event.event_date,
+        time_window_text=projection.event.time_window_text,
+        location_text=projection.event.location_text,
+        guest_count_estimate=projection.event.guest_count_estimate,
+        planning_mode=projection.event.planning_mode,
+        positions=positions,
+        vat_buckets=buckets,
+        net_total_cents=projection.net_total_cents,
+        vat_total_cents=projection.vat_total_cents,
+        gross_total_cents=projection.gross_total_cents,
+        payment_method=projection.payment_method,
+        payment_customer_visible_text=projection.payment_customer_visible_text,
+        document_hash=document_hash,
+        document_warnings=tuple(projection.recipient.warnings),
     )
 
 
-def _recipient_status_from_inquiry(inquiry: Inquiry | None) -> RecipientStatus:
-    if inquiry is None:
-        return "missing"
-    parsed = parse_intake_contact(inquiry)
-    return "ready" if parsed["email"] else "missing"
-
-
-def _recipient_snapshot(
-    inquiry: Inquiry | None,
-) -> dict[str, RecipientStatus | str | None]:
-    if inquiry is None:
-        return {
-            "recipient_name": None,
-            "recipient_email": None,
-            "recipient_company": None,
-            "recipient_phone": None,
-            "recipient_status": "missing",
-        }
-    labelled, _remaining = labelled_intake_context(inquiry.intake_message)
-    parsed = parse_intake_contact(inquiry)
-    company = labelled.get("Firma", "").strip() or None
-    person = labelled.get("Name", "").strip() or None
-    recipient_name = person or parsed["display_name"]
-    email = parsed["email"]
-    return {
-        "recipient_name": recipient_name,
-        "recipient_email": email,
-        "recipient_company": company,
-        "recipient_phone": parsed["phone"],
-        "recipient_status": "ready" if email else "missing",
-    }
-
-
-def _commercial_positions(
-    positions: tuple[_PricedCommercialPosition, ...],
-    *,
-    guest_count_estimate: int | None,
+def _positions_and_buckets(
+    projection: CustomerDocumentProjection,
 ) -> tuple[
     tuple[OrderConfirmationDocumentPosition, ...],
     tuple[OrderConfirmationVatBucket, ...],
-    dict[str, int],
 ]:
     mapped: list[OrderConfirmationDocumentPosition] = []
     bucket_totals: dict[int, dict[str, int]] = {}
-    net_total = 0
-    vat_total = 0
-    gross_total = 0
-    for position in positions:
-        quantity = format_quantity_display(position, guest_count_estimate)
+    for position in projection.positions:
         mapped.append(
             OrderConfirmationDocumentPosition(
                 position_id=position.position_id,
@@ -437,7 +346,7 @@ def _commercial_positions(
                 name=position.name,
                 description=position.description,
                 composition=position.composition,
-                quantity=quantity,
+                quantity=position.quantity,
                 unit_label=position.unit_label,
                 unit_net_cents=position.unit_net_cents,
                 net_total_cents=position.net_total_cents,
@@ -447,26 +356,12 @@ def _commercial_positions(
                 related_position_id=position.related_position_id,
             )
         )
-        net_total += position.net_total_cents
-        vat_total += position.vat_amount_cents
-        gross_total += position.gross_total_cents
         bucket = bucket_totals.setdefault(
             position.vat_rate_percent,
             {"base_net_cents": 0, "vat_cents": 0},
         )
         bucket["base_net_cents"] += position.net_total_cents
         bucket["vat_cents"] += position.vat_amount_cents
-    if net_total + vat_total != gross_total:
-        raise OrderConfirmationDocumentBlockedError("commercial_totals_invalid")
-    position_net = sum(item.net_total_cents for item in mapped)
-    position_vat = sum(item.vat_cents for item in mapped)
-    position_gross = sum(item.gross_cents for item in mapped)
-    if (position_net, position_vat, position_gross) != (
-        net_total,
-        vat_total,
-        gross_total,
-    ):
-        raise OrderConfirmationDocumentBlockedError("commercial_totals_invalid")
     buckets = tuple(
         OrderConfirmationVatBucket(
             rate_percent=rate,
@@ -475,15 +370,7 @@ def _commercial_positions(
         )
         for rate, values in sorted(bucket_totals.items())
     )
-    return (
-        tuple(mapped),
-        buckets,
-        {
-            "net_total_cents": net_total,
-            "vat_total_cents": vat_total,
-            "gross_total_cents": gross_total,
-        },
-    )
+    return tuple(mapped), buckets
 
 
 def payment_method_label(method: str) -> str:

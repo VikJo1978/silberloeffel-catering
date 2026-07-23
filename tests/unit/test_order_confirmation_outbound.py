@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
+from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot
 from catering_system.domain.order_confirmation_outbound import (
     OUTCOME_ACCEPTED,
     TRANSPORT_KIND,
@@ -80,6 +81,11 @@ def _world() -> tuple[
         replace(
             inquiry,
             intake_message="Firma: Example GmbH\nE-Mail: customer@example.invalid\n",
+            customer_snapshot=InquiryCustomerSnapshot(
+                company_name="Example GmbH",
+                email="customer@example.invalid",
+                phone="+49301234567",
+            ),
         )
     )
     _converted, order, order_version = offer_service.convert_accepted_offer(
@@ -203,9 +209,6 @@ def test_missing_email_blocks_send() -> None:
         outbound_service,
         core,
     ) = world
-    inquiry = inquiries.get_by_id(_INQUIRY_ID)
-    assert inquiry is not None
-    inquiries.update(replace(inquiry, intake_message="Firma: Example GmbH\n"))
     order, version, snapshot = _prepared_snapshot(
         (
             orders,
@@ -217,6 +220,27 @@ def test_missing_email_blocks_send() -> None:
             outbound_service,
             core,
         )
+    )
+    inquiry = inquiries.get_by_id(_INQUIRY_ID)
+    assert inquiry is not None
+    # Rebuild document after clearing email — outbound reads frozen snapshot email.
+    documents._by_id.clear()
+    documents._by_version.clear()
+    inquiries.update(
+        replace(
+            inquiry,
+            intake_message="Firma: Example GmbH\n",
+            customer_snapshot=InquiryCustomerSnapshot(
+                company_name="Example GmbH",
+                phone="+49301234567",
+                email=None,
+            ),
+        )
+    )
+    snapshot = doc_service.prepare_snapshot(
+        order.order_id,
+        version.order_version_id,
+        "office-panel",
     )
     with pytest.raises(OrderConfirmationOutboundRecipientMissingError):
         outbound_service.send_to_fake_outbox(

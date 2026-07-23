@@ -59,6 +59,7 @@ def snapshot_from_canonical_json(raw: str) -> OrderConfirmationDocumentSnapshot:
         payment_customer_visible_text=str(payload["payment_customer_visible_text"]),
         document_hash=str(payload["document_hash"]),
         schema_version=int(payload.get("schema_version", SCHEMA_VERSION)),
+        document_warnings=_document_warnings(payload.get("document_warnings")),
     )
 
 
@@ -115,6 +116,7 @@ def _snapshot_payload(snapshot: OrderConfirmationDocumentSnapshot) -> dict[str, 
         "payment_customer_visible_text": snapshot.payment_customer_visible_text,
         "document_hash": snapshot.document_hash,
         "schema_version": snapshot.schema_version,
+        "document_warnings": list(snapshot.document_warnings),
     }
 
 
@@ -169,3 +171,11 @@ def _recipient_status(value: object) -> RecipientStatus:
     if value == "missing":
         return "missing"
     raise ValueError("invalid recipient_status")
+
+
+def _document_warnings(value: object) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise ValueError("document_warnings must be a list")
+    return tuple(str(item) for item in value)
