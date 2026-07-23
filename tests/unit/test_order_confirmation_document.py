@@ -46,7 +46,6 @@ from catering_system.services.order_confirmation_document_hash import (
     compute_document_hash,
 )
 from catering_system.services.order_confirmation_document_service import (
-    OrderConfirmationDocumentBlockedError,
     OrderConfirmationDocumentService,
     OrderConfirmationDocumentStaleVersionError,
     _persist_snapshot_from_projection,
