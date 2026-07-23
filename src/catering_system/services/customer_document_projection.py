@@ -17,6 +17,7 @@ from catering_system.domain.customer_document_projection import (
     CustomerDocumentRecipient,
     CustomerDocumentWarning,
     DocumentType,
+    customer_addresses_equal,
 )
 from catering_system.domain.inquiry import Inquiry
 from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot
@@ -36,19 +37,19 @@ def build_customer_document_recipient(
     invoice_address: CustomerAddress | None = None,
     delivery_address: CustomerAddress | None = None,
 ) -> CustomerDocumentRecipient:
-    """Map Inquiry.customer_snapshot (+ optional address facts) to recipient.
+    """Map Inquiry.customer_snapshot to recipient (CUSTOMER_ADDRESS_SOURCE_V1-A).
 
-    Address kwargs exist so tests and future Inquiry address slots can supply
-    invoice/delivery without reading Offer or commercial snapshot. V1 runtime
-    from Inquiry alone leaves both addresses as None.
+    Optional address kwargs override snapshot addresses for tests only. When
+    kwargs are omitted, delivery_address_mode on the snapshot controls effective
+    delivery and the soft differ warning.
     """
     snapshot = inquiry.customer_snapshot if inquiry is not None else None
     name, email = _name_and_email(snapshot)
     company_name, phone = _company_and_phone(snapshot)
-    differs = (
-        invoice_address is not None
-        and delivery_address is not None
-        and invoice_address != delivery_address
+    invoice, delivery, differs = _resolve_addresses(
+        snapshot,
+        invoice_override=invoice_address,
+        delivery_override=delivery_address,
     )
     warnings: tuple[CustomerDocumentWarning, ...] = (
         (WARNING_DELIVERY_ADDRESS_DIFFERS,) if differs else ()
@@ -58,11 +59,49 @@ def build_customer_document_recipient(
         email=email,
         company_name=company_name,
         phone=phone,
-        invoice_address=invoice_address,
-        delivery_address=delivery_address,
+        invoice_address=invoice,
+        delivery_address=delivery,
         delivery_address_differs=differs,
         warnings=warnings,
     )
+
+
+def _resolve_addresses(
+    snapshot: InquiryCustomerSnapshot | None,
+    *,
+    invoice_override: CustomerAddress | None,
+    delivery_override: CustomerAddress | None,
+) -> tuple[CustomerAddress | None, CustomerAddress | None, bool]:
+    """Resolve invoice/delivery/differs from snapshot mode (or test overrides)."""
+    # Explicit kwargs (both provided as non-default path): legacy test override
+    # when caller passes addresses without putting them on the snapshot.
+    if invoice_override is not None or delivery_override is not None:
+        # If either override is passed, use overrides exclusively for address
+        # slots (tests). Mode is ignored in that case.
+        invoice = invoice_override
+        delivery = delivery_override
+        differs = (
+            invoice is not None
+            and delivery is not None
+            and not customer_addresses_equal(invoice, delivery)
+        )
+        return invoice, delivery, differs
+
+    if snapshot is None:
+        return None, None, False
+    invoice = snapshot.invoice_address
+    mode = snapshot.delivery_address_mode
+    if mode == "UNKNOWN":
+        return invoice, None, False
+    if mode == "SAME_AS_INVOICE":
+        return invoice, invoice, False
+    delivery = snapshot.delivery_address
+    differs = (
+        invoice is not None
+        and delivery is not None
+        and not customer_addresses_equal(invoice, delivery)
+    )
+    return invoice, delivery, differs
 
 
 def build_customer_document_projection(

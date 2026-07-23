@@ -483,6 +483,9 @@ def test_office_api_detail_exposes_optional_customer_reference_fields() -> None:
         "contact_name": "Alex",
         "email": None,
         "phone": None,
+        "invoice_address": None,
+        "delivery_address": None,
+        "delivery_address_mode": "UNKNOWN",
     }
 
 

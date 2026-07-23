@@ -8,6 +8,7 @@ or intake_message re-parse in builders.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Literal
@@ -28,6 +29,7 @@ WARNING_DELIVERY_ADDRESS_DIFFERS: CustomerDocumentWarning = (
 
 _MAX_TEXT = 20_000
 _MAX_LABEL = 500
+_WHITESPACE = re.compile(r"\s+")
 
 
 def _require_text(value: str, field: str) -> None:
@@ -72,6 +74,53 @@ class CustomerAddress:
             _optional_bounded_text(value, field, max_len=_MAX_LABEL)
 
 
+def canonicalize_customer_address(
+    address: CustomerAddress | None,
+) -> CustomerAddress | None:
+    """Return None when all fields blank; otherwise the address unchanged."""
+    if address is None:
+        return None
+    if not any(
+        (value or "").strip()
+        for value in (
+            address.street,
+            address.postal_code,
+            address.city,
+            address.country,
+        )
+    ):
+        return None
+    return address
+
+
+def normalize_customer_address_fields(
+    address: CustomerAddress,
+) -> tuple[str, str, str, str]:
+    """Comparable form: trim, collapse whitespace, casefold. No geocoding."""
+
+    def one(value: str | None) -> str:
+        if value is None:
+            return ""
+        return _WHITESPACE.sub(" ", value.strip()).casefold()
+
+    return (
+        one(address.street),
+        one(address.postal_code),
+        one(address.city),
+        one(address.country),
+    )
+
+
+def customer_addresses_equal(
+    left: CustomerAddress | None, right: CustomerAddress | None
+) -> bool:
+    if left is None or right is None:
+        return left is right
+    return normalize_customer_address_fields(left) == normalize_customer_address_fields(
+        right
+    )
+
+
 @dataclass(frozen=True)
 class CustomerDocumentRecipient:
     """Customer/contact block for a document — includes dual address slots."""
@@ -93,7 +142,9 @@ class CustomerDocumentRecipient:
         expected_differs = (
             self.invoice_address is not None
             and self.delivery_address is not None
-            and self.invoice_address != self.delivery_address
+            and not customer_addresses_equal(
+                self.invoice_address, self.delivery_address
+            )
         )
         if self.delivery_address_differs != expected_differs:
             raise ValueError("delivery_address_differs does not match addresses")
