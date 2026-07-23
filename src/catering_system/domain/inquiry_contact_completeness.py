@@ -126,6 +126,8 @@ def complete_inquiry_contact_information(
     - a stored non-empty value is never replaced (conflicting input raises);
     - an identical resubmission is idempotent (returns the inquiry unchanged);
     - contact_name/company_name are preserved untouched;
+    - invoice_address/delivery_address/delivery_address_mode are preserved
+      untouched (CUSTOMER_ADDRESS_SOURCE_V1-B);
     - the result is a new frozen snapshot value object.
     """
     from dataclasses import replace as dataclass_replace
@@ -164,6 +166,11 @@ def complete_inquiry_contact_information(
         contact_name=snapshot.contact_name if snapshot is not None else None,
         email=next_email,
         phone=next_phone,
+        invoice_address=snapshot.invoice_address if snapshot is not None else None,
+        delivery_address=snapshot.delivery_address if snapshot is not None else None,
+        delivery_address_mode=(
+            snapshot.delivery_address_mode if snapshot is not None else "UNKNOWN"
+        ),
     )
     if snapshot is not None and next_snapshot == snapshot:
         return inquiry

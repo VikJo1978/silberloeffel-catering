@@ -32,9 +32,12 @@ from catering_system.domain.inquiry_contact_completeness import (
     derive_contact_completeness,
 )
 from catering_system.domain.inquiry_customer_snapshot import (
+    DeliveryAddressMode,
     InquiryCustomerSnapshot,
+    set_inquiry_customer_addresses,
     snapshot_from_structured_contact,
 )
+from catering_system.domain.customer_document_projection import CustomerAddress
 from catering_system.repositories.inquiry_repository import InquiryRepository
 
 _ALLOWED_SOURCES: frozenset[str] = frozenset(
@@ -318,6 +321,33 @@ class InquiryService:
         updated = replace(updated, updated_at=_utc_now())
         self._repository.update(updated)
         _log.info("inquiry contact information completed inquiry_id=%s", inquiry_id)
+        self._emit(InquiryUpdated(inquiry_id=inquiry_id))
+        return updated
+
+    def set_inquiry_customer_addresses(
+        self,
+        inquiry_id: str,
+        *,
+        invoice_address: CustomerAddress | None,
+        delivery_address: CustomerAddress | None,
+        delivery_address_mode: DeliveryAddressMode | str,
+    ) -> Inquiry:
+        """Replace Rechnungs-/Lieferadresse on the inquiry snapshot (V1-B)."""
+        _log.info("set_inquiry_customer_addresses called inquiry_id=%s", inquiry_id)
+        current = self._repository.get_by_id(inquiry_id)
+        if current is None:
+            raise KeyError(inquiry_id)
+        updated = set_inquiry_customer_addresses(
+            current,
+            invoice_address=invoice_address,
+            delivery_address=delivery_address,
+            delivery_address_mode=delivery_address_mode,
+        )
+        if updated.customer_snapshot == current.customer_snapshot:
+            return current
+        updated = replace(updated, updated_at=_utc_now())
+        self._repository.update(updated)
+        _log.info("inquiry customer addresses updated inquiry_id=%s", inquiry_id)
         self._emit(InquiryUpdated(inquiry_id=inquiry_id))
         return updated
 
