@@ -150,17 +150,23 @@ def _address_facts(
 ) -> tuple[CustomerAddress | None, CustomerAddress | None, bool | None]:
     if schema_version == SCHEMA_VERSION_V1:
         # Explicit NOT_STORED — do not invent delivery_address_differs=False.
+        # Extra address keys on legacy payloads are ignored (tolerant reader).
         return None, None, None
     if schema_version != SCHEMA_VERSION_V2:
         raise ValueError("unsupported order confirmation document schema version")
-    if "delivery_address_differs" not in payload:
-        raise ValueError("schema 2 snapshot requires delivery_address_differs")
+    required = ("invoice_address", "delivery_address", "delivery_address_differs")
+    missing = [key for key in required if key not in payload]
+    if missing:
+        raise ValueError(
+            "schema 2 snapshot requires invoice_address, delivery_address, "
+            "and delivery_address_differs"
+        )
     differs_raw = payload["delivery_address_differs"]
     if not isinstance(differs_raw, bool):
         raise ValueError("delivery_address_differs must be a bool for schema 2")
     return (
-        customer_address_from_mapping(payload.get("invoice_address")),
-        customer_address_from_mapping(payload.get("delivery_address")),
+        customer_address_from_mapping(payload["invoice_address"]),
+        customer_address_from_mapping(payload["delivery_address"]),
         differs_raw,
     )
 

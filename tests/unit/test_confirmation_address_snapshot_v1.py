@@ -6,6 +6,8 @@ import inspect
 import json
 from pathlib import Path
 
+import pytest
+
 from catering_system.domain.customer_document_projection import (
     WARNING_DELIVERY_ADDRESS_DIFFERS,
     CustomerAddress,
@@ -24,6 +26,7 @@ from catering_system.services.order_confirmation_document_hash import (
 from catering_system.services.order_confirmation_document_preview import (
     build_preview,
     preview_to_json,
+    render_preview_html,
 )
 from catering_system.services.order_confirmation_document_serialization import (
     snapshot_from_canonical_json,
@@ -311,3 +314,89 @@ def test_unknown_mode_persists_nullable_projection_values() -> None:
     assert snapshot.invoice_address == _INVOICE
     assert snapshot.delivery_address is None
     assert snapshot.delivery_address_differs is False
+    # JSON contract unchanged: null delivery + differs=false from CDP.
+    preview = build_preview(snapshot)
+    assert preview.delivery_address is None
+    assert preview.delivery_address_differs is False
+    html = render_preview_html(preview)
+    assert "Lieferadresse nicht festgelegt" in html
+    assert "weicht ab: nein" not in html
+    assert "weicht ab: ja" not in html
+
+
+def _schema2_payload_from_legacy(**overrides: object) -> dict[str, object]:
+    payload = json.loads(_LEGACY_V1_CANONICAL_JSON)
+    payload["schema_version"] = SCHEMA_VERSION_V2
+    payload["document_warnings"] = []
+    payload["invoice_address"] = {
+        "street": "Bürostraße 1",
+        "postal_code": "20095",
+        "city": "Hamburg",
+        "country": "DE",
+    }
+    payload["delivery_address"] = None
+    payload["delivery_address_differs"] = False
+    payload.update(overrides)
+    return payload
+
+
+def _dumps(payload: dict[str, object]) -> str:
+    return json.dumps(
+        payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True
+    )
+
+
+def test_schema2_rejects_missing_invoice_address_key() -> None:
+    payload = _schema2_payload_from_legacy()
+    del payload["invoice_address"]
+    with pytest.raises(ValueError, match="schema 2 snapshot requires"):
+        snapshot_from_canonical_json(_dumps(payload))
+
+
+def test_schema2_rejects_missing_delivery_address_key() -> None:
+    payload = _schema2_payload_from_legacy()
+    del payload["delivery_address"]
+    with pytest.raises(ValueError, match="schema 2 snapshot requires"):
+        snapshot_from_canonical_json(_dumps(payload))
+
+
+def test_schema2_rejects_missing_delivery_address_differs_key() -> None:
+    payload = _schema2_payload_from_legacy()
+    del payload["delivery_address_differs"]
+    with pytest.raises(ValueError, match="schema 2 snapshot requires"):
+        snapshot_from_canonical_json(_dumps(payload))
+
+
+def test_schema2_rejects_null_delivery_address_differs() -> None:
+    payload = _schema2_payload_from_legacy(delivery_address_differs=None)
+    with pytest.raises(ValueError, match="delivery_address_differs must be a bool"):
+        snapshot_from_canonical_json(_dumps(payload))
+
+
+def test_schema2_rejects_malformed_address_object() -> None:
+    payload = _schema2_payload_from_legacy(invoice_address={"street": "only"})
+    with pytest.raises(ValueError, match="address object keys must be exactly"):
+        snapshot_from_canonical_json(_dumps(payload))
+
+
+def test_schema2_rejects_unsupported_schema_version() -> None:
+    payload = _schema2_payload_from_legacy(schema_version=3)
+    with pytest.raises(ValueError, match="unsupported order confirmation document"):
+        snapshot_from_canonical_json(_dumps(payload))
+
+
+def test_same_as_invoice_html_may_show_differs_nein() -> None:
+    orders, _offers, inquiries, documents, service, _core, _offer = _services()
+    order, version = _effective_order(
+        (orders, _offers, inquiries, documents, service, _core, _offer)
+    )
+    _set_inquiry_addresses(
+        inquiries, order, invoice=_INVOICE, delivery=None, mode="SAME_AS_INVOICE"
+    )
+    snapshot = service.prepare_snapshot(
+        order.order_id, version.order_version_id, "office-panel"
+    )
+    html = render_preview_html(build_preview(snapshot))
+    assert "Lieferadresse nicht festgelegt" not in html
+    assert "weicht ab: nein" in html
+    assert "Bürostraße 1" in html

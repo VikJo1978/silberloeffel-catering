@@ -259,17 +259,24 @@ def _address_section_html(preview: OrderConfirmationDocumentPreview) -> str:
             "<p>Adressdaten sind in diesem Dokumentstand nicht gespeichert.</p>"
             "</section>"
         )
-    differs_text = (
-        "ja"
-        if preview.delivery_address_differs is True
-        else "nein"
-        if preview.delivery_address_differs is False
-        else "–"
+    invoice_html = (
+        f"<p><strong>Rechnungsadresse</strong><br>"
+        f"{_format_address_html(preview.invoice_address)}</p>"
     )
+    # UNKNOWN / unset delivery: do not map differs=false to proven equality.
+    if preview.delivery_address is None:
+        return (
+            '<section class="section"><h2>Adressen</h2>'
+            f"{invoice_html}"
+            "<p><strong>Lieferadresse</strong><br>Lieferadresse nicht festgelegt</p>"
+            "</section>"
+        )
+    differs_text = "ja" if preview.delivery_address_differs is True else "nein"
     return (
         '<section class="section"><h2>Adressen</h2>'
-        f"<p><strong>Rechnungsadresse</strong><br>{_format_address_html(preview.invoice_address)}</p>"
-        f"<p><strong>Lieferadresse</strong><br>{_format_address_html(preview.delivery_address)}</p>"
+        f"{invoice_html}"
+        f"<p><strong>Lieferadresse</strong><br>"
+        f"{_format_address_html(preview.delivery_address)}</p>"
         f"<p>Lieferadresse weicht ab: {_e(differs_text)}</p>"
         "</section>"
     )
