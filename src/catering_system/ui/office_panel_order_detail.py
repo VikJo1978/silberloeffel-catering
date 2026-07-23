@@ -8,7 +8,9 @@ from dataclasses import dataclass
 from typing import Literal
 
 from catering_system.domain.customer_document_preview import CustomerDocumentPreview
-from catering_system.domain.inquiry import PLANNING_MODES
+from catering_system.domain.customer_document_projection import CustomerAddress
+from catering_system.domain.inquiry import PLANNING_MODES, Inquiry
+from catering_system.domain.inquiry_customer_snapshot import DELIVERY_ADDRESS_MODES
 from catering_system.domain.order import (
     Order,
     OrderVersion,
@@ -20,6 +22,9 @@ from catering_system.domain.order_payment_reminder import (
     PaymentReminderView,
 )
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
+from catering_system.services.customer_document_projection import (
+    build_customer_document_recipient,
+)
 from catering_system.services.order_confirmation_document_service import (
     OrderConfirmationDocumentEligibility,
 )
@@ -51,6 +56,15 @@ _DOCUMENT_WARNING_LABELS = {
         "Lieferadresse weicht von Rechnungsadresse ab"
     ),
 }
+
+_DELIVERY_MODE_LABELS = {
+    "UNKNOWN": "Unbekannt",
+    "SAME_AS_INVOICE": "Wie Rechnungsadresse",
+    "SEPARATE": "Abweichende Lieferadresse",
+}
+
+_NO_SEPARATE_DELIVERY = "keine separate Adresse"
+_NO_EFFECTIVE_DELIVERY = "nicht festgelegt"
 
 
 _OUTBOUND_STATE_LABELS = {
@@ -150,6 +164,7 @@ class OrderDetailFormFields:
     send_command_fields: str = ""
     pause_command_fields: str = ""
     resume_command_fields: str = ""
+    customer_addresses_command_fields: str = ""
     version_change_prefill: OrderVersionChangePrefill | None = None
 
 
@@ -736,6 +751,140 @@ def _live_preview_diagnostics(live_preview: ConfirmationLivePreviewView) -> str:
     return "".join(parts)
 
 
+def _format_customer_address(address: CustomerAddress | None) -> str:
+    if address is None:
+        return "–"
+    lines = [
+        value
+        for value in (
+            (address.street or "").strip(),
+            " ".join(
+                part
+                for part in (
+                    (address.postal_code or "").strip(),
+                    (address.city or "").strip(),
+                )
+                if part
+            ),
+            (address.country or "").strip(),
+        )
+        if value
+    ]
+    return "\n".join(lines) if lines else "–"
+
+
+def _address_input_block(prefix: str, address: CustomerAddress | None) -> str:
+    street = address.street if address is not None else ""
+    postal = address.postal_code if address is not None else ""
+    city = address.city if address is not None else ""
+    country = address.country if address is not None else ""
+    return (
+        f'<p><label>Straße</label><input name="{prefix}_street" '
+        f'value="{_e(street or "")}"></p>'
+        f'<p><label>PLZ</label><input name="{prefix}_postal_code" '
+        f'value="{_e(postal or "")}"></p>'
+        f'<p><label>Ort</label><input name="{prefix}_city" '
+        f'value="{_e(city or "")}"></p>'
+        f'<p><label>Land</label><input name="{prefix}_country" '
+        f'value="{_e(country or "")}"></p>'
+    )
+
+
+def _customer_addresses_form(
+    inquiry: Inquiry,
+    order: Order,
+    forms: OrderDetailFormFields,
+) -> str:
+    snapshot = inquiry.customer_snapshot
+    mode = snapshot.delivery_address_mode if snapshot is not None else "UNKNOWN"
+    invoice = snapshot.invoice_address if snapshot is not None else None
+    delivery = snapshot.delivery_address if snapshot is not None else None
+    options = "".join(
+        f'<option value="{_e(value)}"{" selected" if value == mode else ""}>'
+        f"{_e(_DELIVERY_MODE_LABELS[value])}</option>"
+        for value in DELIVERY_ADDRESS_MODES
+    )
+    delivery_display = "block" if mode == "SEPARATE" else "none"
+    delivery_fields_id = f"delivery-address-fields-{order.order_id}"
+    return (
+        '<details class="order-edit"><summary>Adressen bearbeiten</summary>'
+        '<div class="order-edit-body">'
+        f'<form method="post" action="/inquiry/{_e(inquiry.inquiry_id)}/customer-addresses" '
+        'onsubmit="return confirm('
+        "'Kundenadressen für die Auftragsbestätigung werden gespeichert.'"
+        ');">'
+        f"{forms.csrf_input}{forms.customer_addresses_command_fields}"
+        f'<input type="hidden" name="return_order_id" value="{_e(order.order_id)}">'
+        "<fieldset>"
+        "<p><strong>Rechnungsadresse</strong></p>"
+        + _address_input_block("invoice", invoice)
+        + "<p><label>Liefermodus</label>"
+        + (
+            f'<select name="delivery_address_mode" '
+            f"onchange=\"var box=document.getElementById('{_e(delivery_fields_id)}');"
+            "if(box){box.style.display=this.value==='SEPARATE'?'block':'none';}\">"
+        )
+        + f"{options}</select></p>"
+        f'<div id="{_e(delivery_fields_id)}" '
+        f'style="display:{delivery_display}">'
+        "<p><strong>Abweichende Lieferadresse</strong></p>"
+        + _address_input_block("delivery", delivery)
+        + "</div>"
+        '<p><button type="submit">Adressen speichern</button></p>'
+        "</fieldset></form></div></details>"
+    )
+
+
+def render_customer_addresses_card(
+    inquiry: Inquiry | None,
+    order: Order,
+    forms: OrderDetailFormFields,
+    *,
+    editable: bool = True,
+) -> str:
+    """Show stored vs effective delivery addresses for confirmation context."""
+    if inquiry is None:
+        return (
+            '<section class="order-card order-content-card order-addresses-card">'
+            "<h2>Kundenadressen</h2>"
+            '<p class="order-section-note">Keine Anfrage verknüpft.</p>'
+            "</section>"
+        )
+    snapshot = inquiry.customer_snapshot
+    mode = snapshot.delivery_address_mode if snapshot is not None else "UNKNOWN"
+    invoice = snapshot.invoice_address if snapshot is not None else None
+    stored_delivery = snapshot.delivery_address if snapshot is not None else None
+    recipient = build_customer_document_recipient(inquiry)
+    effective_delivery = recipient.delivery_address
+    if mode == "SEPARATE":
+        stored_label = _format_customer_address(stored_delivery)
+    else:
+        stored_label = _NO_SEPARATE_DELIVERY
+    if mode == "UNKNOWN":
+        effective_label = _NO_EFFECTIVE_DELIVERY
+    else:
+        effective_label = _format_customer_address(effective_delivery)
+    facts = (
+        f"<div><dt>Rechnungsadresse</dt>"
+        f'<dd style="white-space:pre-line">{_e(_format_customer_address(invoice))}</dd></div>'
+        f"<div><dt>Liefermodus</dt><dd>{_e(_DELIVERY_MODE_LABELS.get(mode, mode))}</dd></div>"
+        f"<div><dt>Gespeicherte Lieferadresse</dt>"
+        f'<dd style="white-space:pre-line">{_e(stored_label)}</dd></div>'
+        f"<div><dt>Effektive Lieferadresse</dt>"
+        f'<dd style="white-space:pre-line">{_e(effective_label)}</dd></div>'
+    )
+    form = (
+        _customer_addresses_form(inquiry, order, forms)
+        if editable and order.cancelled_at is None
+        else ""
+    )
+    return (
+        '<section class="order-card order-content-card order-addresses-card">'
+        "<h2>Kundenadressen</h2>"
+        f'<dl class="order-payment-facts">{facts}</dl>' + form + "</section>"
+    )
+
+
 def render_confirmation_card(
     order: Order,
     confirmation: OrderConfirmationDocumentEligibility,
@@ -980,6 +1129,7 @@ def render_order_detail(
     forms: OrderDetailFormFields,
     live_preview: ConfirmationLivePreviewView,
     *,
+    source_inquiry: Inquiry | None = None,
     operational_pause: Mapping[str, object] | None = None,
     versions_total_count: int,
     versions_truncated: bool,
@@ -1059,6 +1209,7 @@ def render_order_detail(
         + "</div>"
         '<aside class="order-detail-side">'
         + _primary_action(order, target, next_action, forms)
+        + render_customer_addresses_card(source_inquiry, order, forms)
         + _confirmation_card(order, confirmation, forms, live_preview)
         + render_confirmation_outbound_card(
             order, confirmation, outbound, forms, operational_pause=pause_view

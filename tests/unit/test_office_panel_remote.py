@@ -1265,13 +1265,11 @@ def test_full_write_flow_through_remote_panel(remote_world) -> None:
     assert "wirksam" in order_html
     assert "READY_TO_SEND: bereit." in order_html
 
-    cancel_command_id = _extract_hidden(
-        re.search(
-            r'(<form[^>]*action="/order/[^"]*/cancel"[^>]*>.*?</form>)', order_html
-        ).group(0),
-        "_command_id",
-    )
-    cancel_expect = _extract_hidden(order_html, "_expect_updated_at")
+    cancel_form = re.search(
+        r'(<form[^>]*action="/order/[^"]*/cancel"[^>]*>.*?</form>)', order_html
+    ).group(0)
+    cancel_command_id = _extract_hidden(cancel_form, "_command_id")
+    cancel_expect = _extract_hidden(cancel_form, "_expect_updated_at")
     status, _body = _post_form(
         f"{base}/order/{order_id}/cancel",
         {
