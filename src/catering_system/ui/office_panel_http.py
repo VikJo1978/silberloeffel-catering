@@ -190,6 +190,14 @@ def office_command_error_message(code_or_text: str) -> str:
         return _INQUIRY_COMMAND_ERROR_LABELS["invalid_contact_value"]
     if "contact completion requires email or phone" in lowered:
         return _INQUIRY_COMMAND_ERROR_LABELS["invalid_contact_value"]
+    if "unsupported delivery_address_mode" in lowered:
+        return "Liefermodus ist ungültig."
+    if "SEPARATE mode requires delivery_address" in lowered:
+        return (
+            "Bei abweichender Lieferadresse muss eine Lieferadresse angegeben werden."
+        )
+    if "delivery_address must be None" in lowered:
+        return "Lieferadresse und Liefermodus passen nicht zusammen."
     if "intake requires email and phone" in lowered:
         return _INQUIRY_COMMAND_ERROR_LABELS["contact_information_incomplete"]
     if "inquiry conversion gate" in lowered or "verification" in lowered:
@@ -693,6 +701,14 @@ def make_office_panel_handler(
             elif action == "contact-completion":
                 panel.complete_inquiry_contacts(inquiry_id, self._form())
                 self._redirect(f"/inquiry/{inquiry_id}")
+            elif action == "customer-addresses":
+                form = self._form()
+                panel.set_inquiry_customer_addresses(inquiry_id, form)
+                return_order_id = form.get("return_order_id", "").strip()
+                if return_order_id:
+                    self._redirect(f"/order/{return_order_id}")
+                else:
+                    self._redirect(f"/inquiry/{inquiry_id}")
             elif action == "verify":
                 panel.inquiry_service.verify_customer_by_call(inquiry_id)
                 self._redirect(f"/inquiry/{inquiry_id}")

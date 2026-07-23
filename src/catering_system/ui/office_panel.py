@@ -33,6 +33,10 @@ from catering_system.domain.inquiry_contact_completeness import (
     derive_inquiry_contact_completeness,
     missing_contact_fields,
 )
+from catering_system.domain.customer_document_projection import (
+    CustomerAddress,
+    canonicalize_customer_address,
+)
 from catering_system.services.offer_service import OfferService
 from catering_system.domain.offer import (
     ACCEPTANCE_CHANNELS,
@@ -172,6 +176,7 @@ from catering_system.ui.office_panel_order_detail import (
     _DOCUMENT_BLOCKER_LABELS,
     render_confirmation_card,
     render_confirmation_outbound_card,
+    render_customer_addresses_card,
     render_operational_pause_card,
     render_order_detail,
     version_change_prefill,
@@ -2315,6 +2320,34 @@ class OfficePanel:
             phone=phone,
         )
 
+    def set_inquiry_customer_addresses(
+        self, inquiry_id: str, form: dict[str, str]
+    ) -> Inquiry:
+        """Persist Rechnungs-/Lieferadresse via customer-addresses write path."""
+        mode = form.get("delivery_address_mode", "").strip()
+        invoice = canonicalize_customer_address(
+            CustomerAddress(
+                street=_opt_contact(form, "invoice_street"),
+                postal_code=_opt_contact(form, "invoice_postal_code"),
+                city=_opt_contact(form, "invoice_city"),
+                country=_opt_contact(form, "invoice_country"),
+            )
+        )
+        delivery = canonicalize_customer_address(
+            CustomerAddress(
+                street=_opt_contact(form, "delivery_street"),
+                postal_code=_opt_contact(form, "delivery_postal_code"),
+                city=_opt_contact(form, "delivery_city"),
+                country=_opt_contact(form, "delivery_country"),
+            )
+        )
+        return self.inquiry_service.set_inquiry_customer_addresses(
+            inquiry_id,
+            invoice_address=invoice,
+            delivery_address=delivery,
+            delivery_address_mode=mode,
+        )
+
     def render_inquiry(
         self,
         inquiry_id: str,
@@ -2706,6 +2739,7 @@ class OfficePanel:
         payment = self.payment_reminder_service.view(order_id)
         confirmation = self.confirmation_document_service.eligibility(order_id)
         live_preview = self._live_confirmation_preview(order_id)
+        source_inquiry = self._inquiries.get_by_id(order.source_inquiry_id)
         snapshot_id = (
             confirmation.snapshot.document_snapshot_id
             if confirmation.snapshot is not None
@@ -2846,11 +2880,21 @@ class OfficePanel:
                         if not cancelled and pause_view.get("active")
                         else ""
                     ),
+                    customer_addresses_command_fields=(
+                        self._command_fields(
+                            {
+                                "updated_at": source_inquiry.updated_at.isoformat(),
+                            }
+                        )
+                        if not cancelled and source_inquiry is not None
+                        else ""
+                    ),
                     version_change_prefill=change_prefill if not cancelled else None,
                 ),
                 confirmation=confirmation,
                 live_preview=live_preview,
                 outbound=outbound,
+                source_inquiry=source_inquiry,
                 operational_pause=pause_view,
                 versions_total_count=versions_total_count,
                 versions_truncated=versions_truncated,
@@ -3058,6 +3102,20 @@ class OfficePanel:
                 if not cancelled and pause_view.get("active")
                 else ""
             ),
+            customer_addresses_command_fields=(
+                self._command_fields(
+                    {
+                        "updated_at": source_inquiry.updated_at.isoformat(),
+                    }
+                )
+                if not cancelled and source_inquiry is not None
+                else ""
+            ),
+        )
+        addresses_card = render_customer_addresses_card(
+            source_inquiry,
+            order,
+            detail_forms,
         )
         confirmation_card = render_confirmation_card(
             order,
@@ -3084,6 +3142,7 @@ class OfficePanel:
 <table><tr><th>Nr</th><th>Datum</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th>
 <th>Druck bestätigt</th><th>Status</th><th>Aktionen</th></tr>{"".join(rows)}</table>
 <h2>Zahlung</h2>{"".join(payment_rows)}{payment_form}
+{addresses_card}
 {confirmation_card}
 {outbound_card}
 {pause_card}
