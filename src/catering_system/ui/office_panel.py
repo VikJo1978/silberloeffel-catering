@@ -3144,6 +3144,13 @@ class OfficePanel:
     def prepare_confirmation_document(
         self, order_id: str, form: dict[str, str]
     ) -> None:
+        from catering_system.domain.customer_document_eligibility import (
+            CustomerDocumentCreationBlocked,
+        )
+        from catering_system.ui.office_panel_order_detail import (
+            _CONFIRMATION_STATE_LABELS,
+        )
+
         order = self._orders.get_order(order_id)
         if order is None or order.cancelled_at is not None:
             raise ValueError(f"no active order with id {order_id!r}")
@@ -3160,11 +3167,17 @@ class OfficePanel:
         assert effective_version_id is not None
 
         def work() -> None:
-            self.confirmation_document_service.prepare_snapshot(
-                order_id,
-                effective_version_id,
-                "office-panel",
-            )
+            try:
+                self.confirmation_document_service.prepare_snapshot(
+                    order_id,
+                    effective_version_id,
+                    "office-panel",
+                )
+            except CustomerDocumentCreationBlocked as exc:
+                labels = [
+                    _CONFIRMATION_STATE_LABELS.get(code, code) for code in exc.codes
+                ]
+                raise ValueError("; ".join(labels)) from exc
 
         if self._remote is not None:
             work()

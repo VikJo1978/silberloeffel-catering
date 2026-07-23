@@ -64,3 +64,29 @@ def sort_document_blockers(
             key=lambda item: (_BLOCKER_SORT_ORDER[item.code], item.detail or ""),
         )
     )
+
+
+class CustomerDocumentCreationBlocked(Exception):
+    """Controlled refusal to create a customer document.
+
+    Carries the full eligibility decision so UI/API can show structured
+    blocker codes without parsing exception text.
+    """
+
+    def __init__(self, eligibility: CustomerDocumentEligibility) -> None:
+        if eligibility.allowed or not eligibility.blockers:
+            raise ValueError(
+                "CustomerDocumentCreationBlocked requires a blocked eligibility"
+            )
+        self.eligibility = eligibility
+        self.blockers = eligibility.blockers
+        codes = ", ".join(blocker.code for blocker in eligibility.blockers)
+        super().__init__(f"customer document creation blocked: {codes}")
+
+    @property
+    def primary_code(self) -> DocumentBlockerCode:
+        return self.blockers[0].code
+
+    @property
+    def codes(self) -> tuple[DocumentBlockerCode, ...]:
+        return tuple(blocker.code for blocker in self.blockers)

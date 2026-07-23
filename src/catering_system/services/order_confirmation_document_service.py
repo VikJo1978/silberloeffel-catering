@@ -1,7 +1,7 @@
 """Build and read frozen Auftragsbestätigung document snapshots — EMAIL_MVP_1 B1.
 
-Facts come from CustomerDocumentProjection (Inquiry + OrderVersion +
-OrderCommercialSnapshot). Persistence remains OrderConfirmationDocumentSnapshot.
+Lifecycle: build CustomerDocumentProjection → evaluate eligibility → persist.
+Create policy lives in evaluate_customer_document_eligibility only.
 """
 
 from __future__ import annotations
@@ -11,15 +11,17 @@ from typing import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from catering_system.domain.customer_document_eligibility import (
+    CustomerDocumentCreationBlocked,
+    CustomerDocumentEligibility as DocumentCreateEligibility,
+)
 from catering_system.domain.customer_document_projection import (
     CustomerAddress,
     CustomerDocumentProjection,
+    CustomerDocumentRecipient,
 )
-from catering_system.domain.inquiry import Inquiry
 from catering_system.domain.order import Order, OrderVersion
-from catering_system.domain.order_commercial_snapshot import (
-    MissingCommercialSnapshotError,
-)
+from catering_system.domain.order_commercial_snapshot import OrderCommercialSnapshot
 from catering_system.domain.order_confirmation_document import (
     OrderConfirmationDocumentPosition,
     OrderConfirmationDocumentSnapshot,
@@ -38,8 +40,12 @@ from catering_system.repositories.order_confirmation_document_repository import 
     OrderConfirmationDocumentRepository,
 )
 from catering_system.repositories.order_repository import OrderRepository
+from catering_system.services.customer_document_eligibility import (
+    evaluate_customer_document_eligibility,
+)
 from catering_system.services.customer_document_projection import (
     CustomerDocumentProjectionService,
+    build_customer_document_recipient,
 )
 from catering_system.services.order_confirmation_document_hash import (
     compute_document_hash,
@@ -51,7 +57,10 @@ class OrderConfirmationDocumentNotFoundError(LookupError):
 
 
 class OrderConfirmationDocumentBlockedError(ValueError):
-    """Preconditions for snapshot creation are not satisfied."""
+    """Legacy/internal refusal (e.g. invalid commercial totals).
+
+    Create-policy refusals use CustomerDocumentCreationBlocked instead.
+    """
 
 
 class OrderConfirmationDocumentStaleVersionError(ValueError):
@@ -120,24 +129,18 @@ class OrderConfirmationDocumentService:
                 can_prepare=False,
                 snapshot=self._summary(existing, version_number),
             )
-        blocked = self._prepare_blocker(order)
-        if blocked is not None:
+        decision = self._evaluate_create(order)
+        if not decision.allowed:
+            primary = decision.blockers[0].code
             return OrderConfirmationDocumentEligibility(
                 available=False,
-                state=blocked,
-                blocker_code=blocked,
+                state=primary,
+                blocker_code=primary,
                 can_prepare=False,
             )
-        inquiry = self._inquiries.get_by_id(order.source_inquiry_id)
-        recipient_status = _recipient_status_from_inquiry(inquiry)
-        state = (
-            "empfaenger_fehlt"
-            if recipient_status == "missing"
-            else "bereit_zur_vorschau"
-        )
         return OrderConfirmationDocumentEligibility(
             available=True,
-            state=state,
+            state="bereit_zur_vorschau",
             can_prepare=True,
         )
 
@@ -153,24 +156,32 @@ class OrderConfirmationDocumentService:
         order = self._orders.get_order(order_id)
         if order is None:
             raise OrderConfirmationDocumentNotFoundError(order_id)
-        blocker = self._operational_blocker(order)
-        if blocker is not None:
-            raise OrderConfirmationDocumentBlockedError(blocker)
-        if order.effective_order_version_id != expected_effective_order_version_id:
-            raise OrderConfirmationDocumentStaleVersionError(
-                "expected effective order version is stale"
-            )
         existing = self._documents.get_by_order_version_id(
             expected_effective_order_version_id
         )
         if existing is not None:
             return existing
-        assert order.effective_order_version_id is not None
-        version = self._require_effective_version(order)
-        commercial = self._commercial_snapshots.get_by_order_id(order.order_id)
-        if commercial is None:
-            raise MissingCommercialSnapshotError(order.order_id)
-        inquiry = self._inquiries.get_by_id(order.source_inquiry_id)
+
+        version, commercial, recipient = self._create_inputs(
+            order,
+            invoice_address=invoice_address,
+            delivery_address=delivery_address,
+        )
+        decision = evaluate_customer_document_eligibility(
+            order=order,
+            order_version=version,
+            commercial_snapshot=commercial,
+            recipient=recipient,
+        )
+        if not decision.allowed:
+            raise CustomerDocumentCreationBlocked(decision)
+        if order.effective_order_version_id != expected_effective_order_version_id:
+            raise OrderConfirmationDocumentStaleVersionError(
+                "expected effective order version is stale"
+            )
+        assert commercial is not None
+        assert version is not None
+
         document_id = str(uuid.uuid4())
         created_at = self._now()
         projection = self._projection.build(
@@ -179,19 +190,17 @@ class OrderConfirmationDocumentService:
             created_at=created_at,
             order_version=version,
             commercial_snapshot=commercial,
-            inquiry=inquiry,
+            inquiry=self._inquiries.get_by_id(order.source_inquiry_id),
             invoice_address=invoice_address,
             delivery_address=delivery_address,
         )
         draft = _persist_snapshot_from_projection(
             projection,
-            inquiry=inquiry,
             created_by=created_by,
             document_hash="sha256:" + ("0" * 64),
         )
         snapshot = _persist_snapshot_from_projection(
             projection,
-            inquiry=inquiry,
             created_by=created_by,
             document_hash=compute_document_hash(draft),
         )
@@ -246,47 +255,52 @@ class OrderConfirmationDocumentService:
             effective_version_number=version_number,
         )
 
-    def _operational_blocker(self, order: Order) -> str | None:
-        if order.cancelled_at is not None:
-            return "nicht_verfuegbar"
-        if order.effective_order_version_id is None:
-            return "nicht_verfuegbar"
-        version = self._orders.get_order_version(order.effective_order_version_id)
-        if version is None:
-            return "nicht_verfuegbar"
-        if order.candidate_order_version_id is not None:
-            return "aenderung_wartet"
-        if version.kitchen_print_confirmed_at is None:
-            return "aenderung_wartet"
-        return None
+    def _evaluate_create(
+        self,
+        order: Order,
+        *,
+        invoice_address: CustomerAddress | None = None,
+        delivery_address: CustomerAddress | None = None,
+    ) -> DocumentCreateEligibility:
+        version, commercial, recipient = self._create_inputs(
+            order,
+            invoice_address=invoice_address,
+            delivery_address=delivery_address,
+        )
+        return evaluate_customer_document_eligibility(
+            order=order,
+            order_version=version,
+            commercial_snapshot=commercial,
+            recipient=recipient,
+        )
 
-    def _prepare_blocker(self, order: Order) -> str | None:
-        blocked = self._operational_blocker(order)
-        if blocked is not None:
-            return blocked
-        if self._commercial_snapshots.get_by_order_id(order.order_id) is None:
-            return "nicht_verfuegbar"
-        return None
-
-    def _require_effective_version(self, order: Order) -> OrderVersion:
-        version_id = order.effective_order_version_id
-        assert version_id is not None
-        version = self._orders.get_order_version(version_id)
-        if version is None:
-            raise OrderConfirmationDocumentBlockedError("nicht_verfuegbar")
-        return version
-
-
-def _recipient_status_from_inquiry(inquiry: Inquiry | None) -> RecipientStatus:
-    if inquiry is None or inquiry.customer_snapshot is None:
-        return "missing"
-    return "ready" if inquiry.customer_snapshot.email else "missing"
+    def _create_inputs(
+        self,
+        order: Order,
+        *,
+        invoice_address: CustomerAddress | None = None,
+        delivery_address: CustomerAddress | None = None,
+    ) -> tuple[
+        OrderVersion | None,
+        OrderCommercialSnapshot | None,
+        CustomerDocumentRecipient,
+    ]:
+        version: OrderVersion | None = None
+        if order.effective_order_version_id is not None:
+            version = self._orders.get_order_version(order.effective_order_version_id)
+        commercial = self._commercial_snapshots.get_by_order_id(order.order_id)
+        inquiry = self._inquiries.get_by_id(order.source_inquiry_id)
+        recipient = build_customer_document_recipient(
+            inquiry,
+            invoice_address=invoice_address,
+            delivery_address=delivery_address,
+        )
+        return version, commercial, recipient
 
 
 def _persist_snapshot_from_projection(
     projection: CustomerDocumentProjection,
     *,
-    inquiry: Inquiry | None,
     created_by: str,
     document_hash: str,
 ) -> OrderConfirmationDocumentSnapshot:
@@ -296,7 +310,6 @@ def _persist_snapshot_from_projection(
         != projection.gross_total_cents
     ):
         raise OrderConfirmationDocumentBlockedError("commercial_totals_invalid")
-    contact = inquiry.customer_snapshot if inquiry is not None else None
     return OrderConfirmationDocumentSnapshot(
         document_snapshot_id=projection.document_id,
         order_id=projection.event.order_id,
@@ -310,8 +323,8 @@ def _persist_snapshot_from_projection(
         created_by=created_by,
         recipient_name=projection.recipient.name,
         recipient_email=projection.recipient.email,
-        recipient_company=contact.company_name if contact is not None else None,
-        recipient_phone=contact.phone if contact is not None else None,
+        recipient_company=projection.recipient.company_name,
+        recipient_phone=projection.recipient.phone,
         recipient_status=("ready" if projection.recipient.email else "missing"),
         event_date=projection.event.event_date,
         time_window_text=projection.event.time_window_text,

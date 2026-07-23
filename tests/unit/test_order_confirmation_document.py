@@ -11,13 +11,15 @@ from pathlib import Path
 
 import pytest
 
+from catering_system.domain.customer_document_eligibility import (
+    CustomerDocumentCreationBlocked,
+)
 from catering_system.domain.customer_document_projection import (
     WARNING_DELIVERY_ADDRESS_DIFFERS,
     CustomerAddress,
 )
 from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot
 from catering_system.domain.order_commercial_snapshot import (
-    MissingCommercialSnapshotError,
     OrderCommercialPosition,
     OrderCommercialSnapshot,
 )
@@ -145,8 +147,9 @@ def test_no_effective_version_blocked() -> None:
     orders, _offers, _inquiries, _documents, service, _core, _offer_service = services
     order = orders.list_orders()[0]
     orders.update_order(replace(order, effective_order_version_id=None))
-    with pytest.raises(OrderConfirmationDocumentBlockedError, match="nicht_verfuegbar"):
+    with pytest.raises(CustomerDocumentCreationBlocked) as exc_info:
         service.prepare_snapshot(order.order_id, str(uuid.uuid4()), "office-panel")
+    assert "INVALID_ORDER_STATE" in exc_info.value.codes
 
 
 def test_pending_candidate_blocked() -> None:
@@ -164,12 +167,13 @@ def test_pending_candidate_blocked() -> None:
         actor_reference="office-panel",
         change_reason="Test",
     )
-    with pytest.raises(OrderConfirmationDocumentBlockedError, match="aenderung_wartet"):
+    with pytest.raises(CustomerDocumentCreationBlocked) as exc_info:
         service.prepare_snapshot(
             order.order_id,
             order.effective_order_version_id,
             "office-panel",
         )
+    assert "INVALID_ORDER_STATE" in exc_info.value.codes
 
 
 def test_kitchen_print_not_confirmed_blocked() -> None:
@@ -198,12 +202,13 @@ def test_kitchen_print_not_confirmed_blocked() -> None:
         InMemoryOrderConfirmationDocumentRepository(),
         offer_service._commercial_snapshots,
     )
-    with pytest.raises(OrderConfirmationDocumentBlockedError, match="aenderung_wartet"):
+    with pytest.raises(CustomerDocumentCreationBlocked) as exc_info:
         service.prepare_snapshot(
             order.order_id,
             order_version.order_version_id,
             "office-panel",
         )
+    assert "INVALID_ORDER_STATE" in exc_info.value.codes
 
 
 def test_snapshot_uses_effective_order_version_facts() -> None:
@@ -357,7 +362,6 @@ def test_surcharge_linkage_preserved() -> None:
     )
     document = _persist_snapshot_from_projection(
         projection,
-        inquiry=None,
         created_by="test",
         document_hash="sha256:" + ("0" * 64),
     )
@@ -432,7 +436,6 @@ def test_fee_position_preserved() -> None:
     )
     document = _persist_snapshot_from_projection(
         projection,
-        inquiry=None,
         created_by="test",
         document_hash="sha256:" + ("0" * 64),
     )
@@ -440,7 +443,7 @@ def test_fee_position_preserved() -> None:
     assert document.gross_total_cents == 25419
 
 
-def test_recipient_from_customer_snapshot_missing_email() -> None:
+def test_phone_without_email_still_allows_prepare() -> None:
     (
         offer,
         version_id,
@@ -491,6 +494,56 @@ def test_recipient_from_customer_snapshot_missing_email() -> None:
     assert snapshot.recipient_name == "Anna"
     assert snapshot.recipient_email is None
     assert snapshot.recipient_phone == "+491701234567"
+
+
+def test_missing_customer_contact_blocks_prepare() -> None:
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        inquiries,
+        offer_service,
+    ) = _accepted_offer_state()
+    _converted, order, order_version = offer_service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
+    )
+    inquiry = inquiries.get_by_id(_INQUIRY_ID)
+    assert inquiry is not None
+    inquiries.update(
+        replace(
+            inquiry,
+            customer_snapshot=InquiryCustomerSnapshot(
+                company_name="ACME GmbH",
+                contact_name="Anna",
+                phone=None,
+                email=None,
+            ),
+        )
+    )
+    core = OperationalCoreService(orders)
+    core.confirm_kitchen_print(order.order_id, order_version.order_version_id)
+    core.make_order_version_effective(order.order_id, order_version.order_version_id)
+    service = OrderConfirmationDocumentService(
+        orders,
+        inquiries,
+        InMemoryOrderConfirmationDocumentRepository(),
+        offer_service._commercial_snapshots,
+        now=lambda: datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
+    )
+    with pytest.raises(CustomerDocumentCreationBlocked) as exc_info:
+        service.prepare_snapshot(
+            order.order_id,
+            order_version.order_version_id,
+            "office-panel",
+        )
+    assert "MISSING_CUSTOMER_CONTACT" in exc_info.value.codes
+    assert order_version.order_version_id not in service._documents._by_version
 
 
 def test_address_warning_flows_into_confirmation_document() -> None:
@@ -698,7 +751,7 @@ def test_office_panel_confirmation_block_renders() -> None:
     order, version = _effective_order(services)
     service = services[4]
     eligibility = service.eligibility(order.order_id)
-    assert eligibility.state in {"bereit_zur_vorschau", "empfaenger_fehlt"}
+    assert eligibility.state == "bereit_zur_vorschau"
     outbound = OutboundSendEligibility(state="dokument_fehlt", can_send=False)
     page = render_order_detail(
         order,
@@ -880,9 +933,11 @@ def test_confirmation_fails_when_commercial_snapshot_missing() -> None:
         snapshots,
         now=lambda: datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
     )
-    with pytest.raises(MissingCommercialSnapshotError):
+    with pytest.raises(CustomerDocumentCreationBlocked) as exc_info:
         service.prepare_snapshot(
             order.order_id,
             version.order_version_id,
             "office-panel",
         )
+    assert "MISSING_COMMERCIAL_SNAPSHOT" in exc_info.value.codes
+    assert exc_info.value.primary_code == "MISSING_COMMERCIAL_SNAPSHOT"

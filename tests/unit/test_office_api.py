@@ -72,6 +72,8 @@ def _seed(db_path: Path) -> dict[str, str]:
             call_verification_status="not_required",
             contact_email="kunde@example.com",
             contact_phone="+49301234567",
+            company_name="Example GmbH",
+            contact_name="Example Contact",
         )
         base.update(overrides)
         return inquiry_service.create_inquiry(**base)
@@ -796,8 +798,8 @@ def test_inquiry_detail_shape(api) -> None:
     assert body["customer_linkage"] == {}
     assert body["customer_id"] is None
     assert body["customer_snapshot"] == {
-        "company_name": None,
-        "contact_name": None,
+        "company_name": "Example GmbH",
+        "contact_name": "Example Contact",
         "email": "kunde@example.com",
         "phone": "+49301234567",
     }
@@ -3621,7 +3623,8 @@ def test_confirmation_document_stale_expect_and_blocked_states(api) -> None:
         args={"created_by": "office-api-test"},
         expect={"current_effective_order_version_id": order_version_id},
     )
-    assert (status, body["error"]) == (422, "pending_order_version_change")
+    assert (status, body["error"]) == (422, "confirmation_document_blocked")
+    assert "INVALID_ORDER_STATE" in body.get("reasons", [])
 
     # Order without commercial snapshot: confirmation is blocked (invariant).
     inquiries = SQLiteInquiryRepository(db)
@@ -3655,28 +3658,38 @@ def test_confirmation_document_stale_expect_and_blocked_states(api) -> None:
     assert (status, body["error"]) == (422, "confirmation_document_blocked")
 
 
-def test_confirmation_document_missing_recipient_is_allowed(api) -> None:
+def test_confirmation_document_missing_recipient_is_blocked(api) -> None:
     base, ids, db = api
     inquiry_id = ids["inquiry_offer_ready"]
     order_id, order_version_id = _make_effective_offer_order(
         api, inquiry_id=inquiry_id, ensure_recipient_email=False
     )
     _clear_inquiry_recipient_email(db, inquiry_id)
+    inquiries = SQLiteInquiryRepository(db)
+    inquiry = inquiries.get_by_id(inquiry_id)
+    assert inquiry is not None
+    contact = inquiry.customer_snapshot
+    inquiries.update(
+        replace(
+            inquiry,
+            customer_snapshot=InquiryCustomerSnapshot(
+                company_name=contact.company_name if contact else None,
+                contact_name=contact.contact_name if contact else None,
+                phone=None,
+                email=None,
+            ),
+        )
+    )
+    inquiries.close()
     status, created, _h = _post(
         _confirmation_document_url(base, order_id),
         args={"created_by": "office-api-test"},
         expect={"current_effective_order_version_id": order_version_id},
     )
-    assert status == 201
-    assert created["snapshot"]["recipient_status"] == "missing"
-    assert created["snapshot"]["recipient_email_masked"] is None
-
-    preview = _get(_confirmation_preview_url(base, order_id, format="json"))[1][
-        "preview"
-    ]
-    assert preview["recipient_status"] == "missing"
-    assert preview["recipient_email_masked"] is None
-    assert _confirmation_snapshot_count(db) == 1
+    assert status == 422
+    assert created["error"] == "confirmation_document_blocked"
+    assert "MISSING_CUSTOMER_CONTACT" in created.get("reasons", [])
+    assert _confirmation_snapshot_count(db) == 0
 
 
 def test_confirmation_document_preview_rejects_unknown_format(api) -> None:
