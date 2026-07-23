@@ -381,9 +381,9 @@ class OfficePanel:
             )
             self.confirmation_document_service = OrderConfirmationDocumentService(
                 order_repo,
-                self._offers,
                 inquiry_repo,
                 document_repo,
+                self._commercial_snapshots,
             )
             self.confirmation_outbound_service = OrderConfirmationOutboundService(
                 order_repo,

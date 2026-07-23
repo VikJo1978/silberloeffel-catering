@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from tests.helpers.commercial_snapshot_seed import seed_commercial_snapshot
 from tests.helpers.order_seed import seed_order
 
 import json
@@ -22,6 +23,9 @@ from catering_system.repositories.sqlite_inquiry_repository import (
 )
 from catering_system.repositories.sqlite_offer_repository import (
     SQLiteOfferRepository,
+)
+from catering_system.repositories.sqlite_order_commercial_snapshot_repository import (
+    SQLiteOrderCommercialSnapshotRepository,
 )
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
@@ -82,6 +86,10 @@ def _seed(db_path: Path) -> dict[str, str]:
 
     printed_src = make_inquiry(location_text="Bremen")
     order_printed, v1 = seed_order(orders, printed_src)
+    seed_commercial_snapshot(
+        SQLiteOrderCommercialSnapshotRepository(db_path),
+        order_printed.order_id,
+    )
     core.confirm_kitchen_print(order_printed.order_id, v1.order_version_id)
     core.make_order_version_effective(order_printed.order_id, v1.order_version_id)
     ids["inquiry_printed"] = printed_src.inquiry_id
@@ -90,12 +98,20 @@ def _seed(db_path: Path) -> dict[str, str]:
 
     unprinted_src = make_inquiry(location_text="Lübeck")
     order_unprinted, v1u = seed_order(orders, unprinted_src)
+    seed_commercial_snapshot(
+        SQLiteOrderCommercialSnapshotRepository(db_path),
+        order_unprinted.order_id,
+    )
     ids["order_unprinted"] = order_unprinted.order_id
     ids["version_unprinted"] = v1u.order_version_id
     ids["inquiry_unprinted"] = unprinted_src.inquiry_id
 
     cancelled_src = make_inquiry(location_text="Flensburg")
     order_cancelled, v1c = seed_order(orders, cancelled_src)
+    seed_commercial_snapshot(
+        SQLiteOrderCommercialSnapshotRepository(db_path),
+        order_cancelled.order_id,
+    )
     core.cancel_order(order_cancelled.order_id)
     ids["order_cancelled"] = order_cancelled.order_id
     ids["version_cancelled"] = v1c.order_version_id
@@ -831,7 +847,8 @@ def test_order_detail_and_print_data(api) -> None:
     )
     assert status == 200
     assert set(body) == {"order", "version", "projection"}
-    assert body["projection"]["commercial"]["source"] == "none"
+    assert body["projection"]["commercial"]["source"] == "offer_conversion"
+    assert body["projection"]["commercial"]["positions"]
 
     status, body, _h = _get(
         f"{base}/office/v1/orders/{ids['order_ready']}/buffet-cards-data"
@@ -839,7 +856,7 @@ def test_order_detail_and_print_data(api) -> None:
     )
     assert status == 200
     assert set(body) == {"projection", "cards", "effective_version_number"}
-    assert body["cards"] == []
+    assert len(body["cards"]) == 1
     assert body["effective_version_number"] == 1
 
     # unknown and unowned are the same 404 (no distinction leaked)
@@ -3530,7 +3547,7 @@ def test_confirmation_document_snapshot_isolated_by_order(api) -> None:
 
 
 def test_confirmation_document_stale_expect_and_blocked_states(api) -> None:
-    base, ids, _db = api
+    base, ids, db = api
     order_id, order_version_id = _make_effective_offer_order(api)
 
     status, body, _h = _post(
@@ -3563,10 +3580,34 @@ def test_confirmation_document_stale_expect_and_blocked_states(api) -> None:
     )
     assert (status, body["error"]) == (422, "pending_order_version_change")
 
+    # Order without commercial snapshot: confirmation is blocked (invariant).
+    inquiries = SQLiteInquiryRepository(db)
+    orders = SQLiteOrderRepository(db)
+    core = OperationalCoreService(orders)
+    inquiry = InquiryService(inquiries).create_inquiry(
+        event_date=date(2026, 10, 1),
+        inquiry_source="manual",
+        crm_stage="Neue Anfrage",
+        customer_linkage={},
+        time_window_text="mittags",
+        location_text="Ohne Snapshot",
+        guest_count_estimate=10,
+        planning_mode="caterer_suggestion",
+        call_verification_required=False,
+        call_verification_status="not_required",
+        contact_email="kunde@example.com",
+        contact_phone="+49301234567",
+    )
+    order, version = seed_order(orders, inquiry)
+    core.confirm_kitchen_print(order.order_id, version.order_version_id)
+    core.make_order_version_effective(order.order_id, version.order_version_id)
+    inquiries.close()
+    orders.close()
+
     status, body, _h = _post(
-        _confirmation_document_url(base, ids["order_ready"]),
+        _confirmation_document_url(base, order.order_id),
         args={"created_by": "office-api-test"},
-        expect={"current_effective_order_version_id": ids["version_ready"]},
+        expect={"current_effective_order_version_id": version.order_version_id},
     )
     assert (status, body["error"]) == (422, "confirmation_document_blocked")
 

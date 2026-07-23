@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tests.helpers.commercial_snapshot_seed import seed_commercial_snapshot
 from tests.helpers.order_seed import seed_order
 
 import base64
@@ -21,6 +22,9 @@ from catering_system.intake.website_form_adapter import intake_from_website_form
 from catering_system.repositories.in_memory_inquiry_repository import (
     InMemoryInquiryRepository,
 )
+from catering_system.repositories.in_memory_order_commercial_snapshot_repository import (
+    InMemoryOrderCommercialSnapshotRepository,
+)
 from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
 )
@@ -39,21 +43,34 @@ from catering_system.ui.office_panel_views import _page
 _PASSWORD = "test-pw"
 _AUTH = "Basic " + base64.b64encode(f"office:{_PASSWORD}".encode()).decode()
 _CSRF_TOKEN = csrf_token_for_password(_PASSWORD)
-_PANEL_REPOS: dict[str, tuple[InMemoryInquiryRepository, InMemoryOrderRepository]] = {}
+_PANEL_REPOS: dict[
+    str,
+    tuple[
+        InMemoryInquiryRepository,
+        InMemoryOrderRepository,
+        InMemoryOrderCommercialSnapshotRepository,
+    ],
+] = {}
 
 
 @pytest.fixture()
 def panel():
     inquiry_repo = InMemoryInquiryRepository()
     order_repo = InMemoryOrderRepository()
+    snapshots = InMemoryOrderCommercialSnapshotRepository()
     server = create_office_panel_server(
-        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0
+        inquiry_repo,
+        order_repo,
+        _PASSWORD,
+        host="127.0.0.1",
+        port=0,
+        commercial_snapshot_repo=snapshots,
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     host, port = server.server_address[:2]
     base = f"http://{host}:{port}"
-    _PANEL_REPOS[base] = (inquiry_repo, order_repo)
+    _PANEL_REPOS[base] = (inquiry_repo, order_repo, snapshots)
     yield base
     _PANEL_REPOS.pop(base, None)
     server.shutdown()
@@ -64,19 +81,21 @@ def panel():
 def premium_panel():
     inquiry_repo = InMemoryInquiryRepository()
     order_repo = InMemoryOrderRepository()
+    snapshots = InMemoryOrderCommercialSnapshotRepository()
     server = create_office_panel_server(
         inquiry_repo,
         order_repo,
         _PASSWORD,
         host="127.0.0.1",
         port=0,
+        commercial_snapshot_repo=snapshots,
         ui_version="v2",
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     host, port = server.server_address[:2]
     base = f"http://{host}:{port}"
-    _PANEL_REPOS[base] = (inquiry_repo, order_repo)
+    _PANEL_REPOS[base] = (inquiry_repo, order_repo, snapshots)
     yield base
     _PANEL_REPOS.pop(base, None)
     server.shutdown()
@@ -133,10 +152,11 @@ def _convert(base: str, inquiry_id: str) -> str:
     """Seed an Order for panel tests (no production Inquiry→Order create)."""
     from dataclasses import replace
 
-    inquiries, orders = _PANEL_REPOS[base]
+    inquiries, orders, snapshots = _PANEL_REPOS[base]
     inquiry = inquiries.get_by_id(inquiry_id)
     assert inquiry is not None
     order, _version = seed_order(orders, inquiry)
+    seed_commercial_snapshot(snapshots, order.order_id)
     inquiries.update(
         replace(inquiry, crm_stage="Bestätigt / Auftrag")  # type: ignore[arg-type]
     )

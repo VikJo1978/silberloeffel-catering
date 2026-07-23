@@ -3,18 +3,22 @@
 from __future__ import annotations
 
 import uuid
-from typing import Callable, cast
+from typing import Callable, Protocol, cast
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 
 from catering_system.domain.inquiry import Inquiry
 from catering_system.domain.offer import (
-    Offer,
-    OfferPosition,
-    OfferVariant,
-    OfferVersion,
+    PositionKind,
+    PositionQuantityMode,
+    VatRatePercent,
 )
 from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.order_commercial_snapshot import (
+    MissingCommercialSnapshotError,
+    OrderCommercialSnapshot,
+)
 from catering_system.domain.order_confirmation_document import (
     OrderConfirmationDocumentPosition,
     OrderConfirmationDocumentSnapshot,
@@ -23,6 +27,7 @@ from catering_system.domain.order_confirmation_document import (
 )
 from catering_system.domain.order_payment_reminder import (
     PAYMENT_METHOD_LABELS,
+    PaymentMethod,
     validate_payment_method,
 )
 from catering_system.intake.intake_contact import (
@@ -30,7 +35,9 @@ from catering_system.intake.intake_contact import (
     parse_intake_contact,
 )
 from catering_system.repositories.inquiry_repository import InquiryRepository
-from catering_system.repositories.offer_repository import OfferRepository
+from catering_system.repositories.order_commercial_snapshot_repository import (
+    OrderCommercialSnapshotRepository,
+)
 from catering_system.repositories.order_confirmation_document_repository import (
     OrderConfirmationDocumentRepository,
 )
@@ -81,6 +88,59 @@ class OrderConfirmationDocumentEligibility:
     snapshot: OrderConfirmationDocumentSummary | None = None
 
 
+@dataclass(frozen=True)
+class _CommercialFacts:
+    offer_id: str
+    offer_version_id: str
+    payment_method: PaymentMethod
+    payment_customer_visible_text: str
+    positions: tuple[_PricedCommercialPosition, ...]
+
+
+class _PricedCommercialPosition(Protocol):
+    @property
+    def position_id(self) -> str: ...
+
+    @property
+    def kind(self) -> PositionKind: ...
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def description(self) -> str | None: ...
+
+    @property
+    def composition(self) -> str | None: ...
+
+    @property
+    def quantity(self) -> Decimal | None: ...
+
+    @property
+    def quantity_mode(self) -> PositionQuantityMode | None: ...
+
+    @property
+    def unit_label(self) -> str | None: ...
+
+    @property
+    def unit_net_cents(self) -> int: ...
+
+    @property
+    def net_total_cents(self) -> int: ...
+
+    @property
+    def vat_rate_percent(self) -> VatRatePercent: ...
+
+    @property
+    def vat_amount_cents(self) -> int: ...
+
+    @property
+    def gross_total_cents(self) -> int: ...
+
+    @property
+    def related_position_id(self) -> str | None: ...
+
+
 def document_reference(order_id: str, version_number: int) -> str:
     return f"AB-{order_id.split('-', maxsplit=1)[0].upper()}-V{version_number}"
 
@@ -89,16 +149,16 @@ class OrderConfirmationDocumentService:
     def __init__(
         self,
         order_repository: OrderRepository,
-        offer_repository: OfferRepository,
         inquiry_repository: InquiryRepository,
         document_repository: OrderConfirmationDocumentRepository,
+        commercial_snapshot_repository: OrderCommercialSnapshotRepository,
         *,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self._orders = order_repository
-        self._offers = offer_repository
         self._inquiries = inquiry_repository
         self._documents = document_repository
+        self._commercial_snapshots = commercial_snapshot_repository
         self._now = now or (lambda: datetime.now(UTC))
 
     def eligibility(self, order_id: str) -> OrderConfirmationDocumentEligibility:
@@ -145,7 +205,7 @@ class OrderConfirmationDocumentService:
         order = self._orders.get_order(order_id)
         if order is None:
             raise OrderConfirmationDocumentNotFoundError(order_id)
-        blocker = self._prepare_blocker(order)
+        blocker = self._operational_blocker(order)
         if blocker is not None:
             raise OrderConfirmationDocumentBlockedError(blocker)
         if order.effective_order_version_id != expected_effective_order_version_id:
@@ -159,11 +219,11 @@ class OrderConfirmationDocumentService:
             return existing
         assert order.effective_order_version_id is not None
         version = self._require_effective_version(order)
-        offer, variant, offer_version = self._commercial_bundle(order)
+        commercial = self._resolve_commercial(order)
         inquiry = self._inquiries.get_by_id(order.source_inquiry_id)
         recipient = _recipient_snapshot(inquiry)
         positions, buckets, totals = _commercial_positions(
-            variant.positions,
+            commercial.positions,
             guest_count_estimate=version.guest_count_estimate,
         )
         reference = document_reference(order.order_id, version.version_number)
@@ -171,8 +231,8 @@ class OrderConfirmationDocumentService:
             document_snapshot_id=str(uuid.uuid4()),
             order_id=order.order_id,
             order_version_id=version.order_version_id,
-            offer_id=offer.offer_id,
-            offer_version_id=offer_version.offer_version_id,
+            offer_id=commercial.offer_id,
+            offer_version_id=commercial.offer_version_id,
             document_reference=reference,
             created_at=self._now(),
             created_by=created_by,
@@ -191,8 +251,8 @@ class OrderConfirmationDocumentService:
             net_total_cents=totals["net_total_cents"],
             vat_total_cents=totals["vat_total_cents"],
             gross_total_cents=totals["gross_total_cents"],
-            payment_method=offer_version.payment_method,
-            payment_customer_visible_text=offer_version.payment_customer_visible_text,
+            payment_method=commercial.payment_method,
+            payment_customer_visible_text=commercial.payment_customer_visible_text,
             document_hash="sha256:" + ("0" * 64),
         )
         snapshot = OrderConfirmationDocumentSnapshot(
@@ -274,7 +334,7 @@ class OrderConfirmationDocumentService:
             effective_version_number=version_number,
         )
 
-    def _prepare_blocker(self, order: Order) -> str | None:
+    def _operational_blocker(self, order: Order) -> str | None:
         if order.cancelled_at is not None:
             return "nicht_verfuegbar"
         if order.effective_order_version_id is None:
@@ -286,10 +346,13 @@ class OrderConfirmationDocumentService:
             return "aenderung_wartet"
         if version.kitchen_print_confirmed_at is None:
             return "aenderung_wartet"
-        offer = self._offers.get_by_source_inquiry_id(order.source_inquiry_id)
-        if offer is None or offer.conversion_link is None:
-            return "nicht_verfuegbar"
-        if offer.conversion_link.order_id != order.order_id:
+        return None
+
+    def _prepare_blocker(self, order: Order) -> str | None:
+        blocked = self._operational_blocker(order)
+        if blocked is not None:
+            return blocked
+        if self._commercial_snapshots.get_by_order_id(order.order_id) is None:
             return "nicht_verfuegbar"
         return None
 
@@ -301,36 +364,21 @@ class OrderConfirmationDocumentService:
             raise OrderConfirmationDocumentBlockedError("nicht_verfuegbar")
         return version
 
-    def _commercial_bundle(
-        self, order: Order
-    ) -> tuple[Offer, OfferVariant, OfferVersion]:
-        offer = self._offers.get_by_source_inquiry_id(order.source_inquiry_id)
-        if offer is None or offer.conversion_link is None:
-            raise OrderConfirmationDocumentBlockedError("nicht_verfuegbar")
-        link = offer.conversion_link
-        if link.order_id != order.order_id:
-            raise OrderConfirmationDocumentBlockedError("nicht_verfuegbar")
-        offer_version = next(
-            (
-                item
-                for item in offer.versions
-                if item.offer_version_id == link.offer_version_id
-            ),
-            None,
-        )
-        if offer_version is None:
-            raise OrderConfirmationDocumentBlockedError("nicht_verfuegbar")
-        variant = next(
-            (
-                item
-                for item in offer_version.variants
-                if item.variant_id == link.variant_id
-            ),
-            None,
-        )
-        if variant is None:
-            raise OrderConfirmationDocumentBlockedError("nicht_verfuegbar")
-        return offer, variant, offer_version
+    def _resolve_commercial(self, order: Order) -> _CommercialFacts:
+        snapshot = self._commercial_snapshots.get_by_order_id(order.order_id)
+        if snapshot is None:
+            raise MissingCommercialSnapshotError(order.order_id)
+        return _commercial_from_snapshot(snapshot)
+
+
+def _commercial_from_snapshot(snapshot: OrderCommercialSnapshot) -> _CommercialFacts:
+    return _CommercialFacts(
+        offer_id=snapshot.source_offer_id,
+        offer_version_id=snapshot.source_offer_version_id,
+        payment_method=snapshot.payment_method,
+        payment_customer_visible_text=snapshot.payment_customer_visible_text,
+        positions=snapshot.positions,
+    )
 
 
 def _recipient_status_from_inquiry(inquiry: Inquiry | None) -> RecipientStatus:
@@ -367,7 +415,7 @@ def _recipient_snapshot(
 
 
 def _commercial_positions(
-    positions: tuple[OfferPosition, ...],
+    positions: tuple[_PricedCommercialPosition, ...],
     *,
     guest_count_estimate: int | None,
 ) -> tuple[

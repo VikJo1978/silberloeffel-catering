@@ -30,6 +30,9 @@ from catering_system.repositories.sqlite_inquiry_repository import (
     SQLiteInquiryRepository,
 )
 from catering_system.repositories.sqlite_offer_repository import SQLiteOfferRepository
+from catering_system.repositories.sqlite_order_commercial_snapshot_repository import (
+    SQLiteOrderCommercialSnapshotRepository,
+)
 from catering_system.repositories.sqlite_order_confirmation_document_repository import (
     SQLiteOrderConfirmationDocumentRepository,
 )
@@ -115,6 +118,9 @@ def _start_panel_server(
             confirmation_document_repo=confirmation_document_repo,
             offer_repo=offer_repo,
             catalog_repo=catalog_repo,
+            commercial_snapshot_repo=SQLiteOrderCommercialSnapshotRepository.from_connection(
+                connection
+            ),
             ui_version=ui_version,
         )
         ready.put(server)
@@ -144,10 +150,13 @@ def _sqlite_world(
     orders = SQLiteOrderRepository.from_connection(connection)
     offers = SQLiteOfferRepository.from_connection(connection)
     documents = SQLiteOrderConfirmationDocumentRepository.from_connection(connection)
+    commercial_snapshots = SQLiteOrderCommercialSnapshotRepository.from_connection(
+        connection
+    )
 
     inquiry = replace(_sample_inquiry(), intake_message=intake_message)
     inquiries.save(inquiry)
-    offer_service = OfferService(offers, inquiries, orders)
+    offer_service = OfferService(offers, inquiries, orders, commercial_snapshots)
     offer = offer_service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
     version_id = offer.versions[0].offer_version_id
     offer_service.record_sent_evidence(offer.offer_id, version_id, **_record_args())
@@ -170,9 +179,9 @@ def _sqlite_world(
     core.make_order_version_effective(order.order_id, order_version.order_version_id)
     doc_service = OrderConfirmationDocumentService(
         orders,
-        offers,
         inquiries,
         documents,
+        commercial_snapshots,
         now=lambda: datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
     )
     return db, doc_service, core, orders, order.order_id, order_version.order_version_id
@@ -242,6 +251,9 @@ def test_legacy_order_detail_before_snapshot_shows_prepare_action(
             connection
         ),
         offer_repo=SQLiteOfferRepository.from_connection(connection),
+        commercial_snapshot_repo=SQLiteOrderCommercialSnapshotRepository.from_connection(
+            connection
+        ),
         ui_version="legacy",
     )
     eligibility = doc_service.eligibility(order_id)
@@ -276,6 +288,9 @@ def test_legacy_order_detail_after_snapshot_shows_created_facts(
             connection
         ),
         offer_repo=SQLiteOfferRepository.from_connection(connection),
+        commercial_snapshot_repo=SQLiteOrderCommercialSnapshotRepository.from_connection(
+            connection
+        ),
         ui_version="legacy",
     )
     page = panel.render_order(order_id)
@@ -378,6 +393,9 @@ def test_missing_email_shows_state_and_allows_preview(tmp_path: Path) -> None:
             connection
         ),
         offer_repo=SQLiteOfferRepository.from_connection(connection),
+        commercial_snapshot_repo=SQLiteOrderCommercialSnapshotRepository.from_connection(
+            connection
+        ),
         ui_version="legacy",
     )
     before = panel.render_order(order_id)
@@ -431,6 +449,9 @@ def test_pending_candidate_shows_blocked_state_without_prepare(tmp_path: Path) -
             connection
         ),
         offer_repo=SQLiteOfferRepository.from_connection(connection),
+        commercial_snapshot_repo=SQLiteOrderCommercialSnapshotRepository.from_connection(
+            connection
+        ),
         ui_version="legacy",
     )
     page = panel.render_order(order_id)
@@ -456,6 +477,9 @@ def test_legacy_and_v2_share_confirmation_projection(tmp_path: Path) -> None:
             connection
         ),
         offer_repo=SQLiteOfferRepository.from_connection(connection),
+        commercial_snapshot_repo=SQLiteOrderCommercialSnapshotRepository.from_connection(
+            connection
+        ),
         ui_version="legacy",
     )
     v2 = OfficePanel(
@@ -465,6 +489,9 @@ def test_legacy_and_v2_share_confirmation_projection(tmp_path: Path) -> None:
             connection
         ),
         offer_repo=SQLiteOfferRepository.from_connection(connection),
+        commercial_snapshot_repo=SQLiteOrderCommercialSnapshotRepository.from_connection(
+            connection
+        ),
         ui_version="v2",
     )
     legacy_page = legacy.render_order(order_id)
@@ -524,9 +551,9 @@ def test_confirmation_card_escapes_hostile_user_data() -> None:
     documents = InMemoryOrderConfirmationDocumentRepository()
     doc_service = OrderConfirmationDocumentService(
         orders,
-        offers,
         inquiries,
         documents,
+        offer_service._commercial_snapshots,
         now=lambda: datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
     )
     snapshot = doc_service.prepare_snapshot(

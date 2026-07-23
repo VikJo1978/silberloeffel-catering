@@ -6,6 +6,8 @@ from tests.helpers.order_seed import seed_order
 
 from datetime import UTC, date, datetime
 
+import pytest
+
 from catering_system.domain.offer_snapshot import compute_snapshot_hash
 from catering_system.services.buffet_cards_service import BuffetCardsService
 from catering_system.services.operational_core_service import OperationalCoreService
@@ -128,13 +130,12 @@ def _three_position_snapshot() -> dict[str, object]:
 
 
 def _buffet_service(
-    offers,
     orders,
-    snapshots=None,
+    snapshots,
 ) -> BuffetCardsService:
     return BuffetCardsService(
         orders,
-        OrderPrintProjectionService(orders, offers, snapshots),
+        OrderPrintProjectionService(orders, snapshots),
     )
 
 
@@ -237,7 +238,7 @@ def test_buffet_cards_effective_is_final() -> None:
     core.confirm_kitchen_print(order.order_id, order_version.order_version_id)
     core.make_order_version_effective(order.order_id, order_version.order_version_id)
 
-    view = _buffet_service(offers, orders).resolve(
+    view = _buffet_service(orders, offer_service._commercial_snapshots).resolve(
         order.order_id,
         order_version.order_version_id,
     )
@@ -284,7 +285,9 @@ def test_buffet_cards_old_version_is_veraltet() -> None:
     core.confirm_kitchen_print(order.order_id, v2.order_version_id)
     core.make_order_version_effective(order.order_id, v2.order_version_id)
 
-    view = _buffet_service(offers, orders).resolve(order.order_id, v1.order_version_id)
+    view = _buffet_service(orders, offer_service._commercial_snapshots).resolve(
+        order.order_id, v1.order_version_id
+    )
     html = render_buffet_cards(
         view.projection,
         view.cards,
@@ -316,7 +319,7 @@ def test_buffet_cards_from_conversion_link() -> None:
         acceptance_id,
     )
 
-    view = _buffet_service(offers, orders, offer_service._commercial_snapshots).resolve(
+    view = _buffet_service(orders, offer_service._commercial_snapshots).resolve(
         order.order_id,
         order_version.order_version_id,
     )
@@ -346,7 +349,7 @@ def test_buffet_cards_three_positions_from_offer_snapshot() -> None:
         updated.acceptance_evidence.acceptance_id,
     )
 
-    view = _buffet_service(offers, orders, service._commercial_snapshots).resolve(
+    view = _buffet_service(orders, service._commercial_snapshots).resolve(
         order.order_id,
         order_version.order_version_id,
     )
@@ -356,20 +359,25 @@ def test_buffet_cards_three_positions_from_offer_snapshot() -> None:
     assert names == {"Fingerfood Paket", "Kartoffelsalat", "Obstsalat"}
 
 
-def test_buffet_cards_without_offer_integration() -> None:
-    inquiries, orders, offers, _service = _world(inquiry=_sample_inquiry())
+def test_buffet_cards_fail_when_commercial_snapshot_missing() -> None:
+    from catering_system.domain.order_commercial_snapshot import (
+        MissingCommercialSnapshotError,
+    )
+    from catering_system.repositories.in_memory_order_commercial_snapshot_repository import (
+        InMemoryOrderCommercialSnapshotRepository,
+    )
+
+    inquiries, orders, _offers, _service = _world(inquiry=_sample_inquiry())
     OrderService(orders)
     inquiry = inquiries.get_by_id(_INQUIRY_ID)
     assert inquiry is not None
     order, version = seed_order(orders, inquiry)
 
-    view = _buffet_service(offers, orders).resolve(
-        order.order_id,
-        version.order_version_id,
-    )
-
-    assert view.cards == ()
-    assert "Kein Menü hinterlegt" in render_buffet_cards(view.projection, view.cards)
+    with pytest.raises(MissingCommercialSnapshotError):
+        _buffet_service(orders, InMemoryOrderCommercialSnapshotRepository()).resolve(
+            order.order_id,
+            version.order_version_id,
+        )
 
 
 def _record_args() -> dict[str, object]:

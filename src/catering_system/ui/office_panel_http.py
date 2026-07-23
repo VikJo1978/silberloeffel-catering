@@ -55,6 +55,9 @@ from catering_system.ui.office_panel import (
     render_proposal_preview_form,
     render_rueckruf,
 )
+from catering_system.domain.order_commercial_snapshot import (
+    MissingCommercialSnapshotError,
+)
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjectionService,
     PrintProjectionNotFoundError,
@@ -507,7 +510,6 @@ def make_office_panel_handler(
                 return remote.print_data(order_id, version_id)
             return OrderPrintProjectionService(
                 order_repo,
-                panel._offers,
                 panel._commercial_snapshots,
             ).resolve(order_id, version_id, intent="preview")
 
@@ -518,7 +520,6 @@ def make_office_panel_handler(
                 order_repo,
                 OrderPrintProjectionService(
                     order_repo,
-                    panel._offers,
                     panel._commercial_snapshots,
                 ),
             ).resolve(order_id, version_id)
@@ -530,7 +531,7 @@ def make_office_panel_handler(
                 return
             try:
                 projection = self._resolve_print_projection(order_id, version_id)
-            except PrintProjectionNotFoundError:
+            except (PrintProjectionNotFoundError, MissingCommercialSnapshotError):
                 self.send_error(404)
                 return
             if projection is None:
@@ -545,7 +546,7 @@ def make_office_panel_handler(
                 return
             try:
                 view = self._resolve_buffet_cards_view(order_id, version_id)
-            except PrintProjectionNotFoundError:
+            except (PrintProjectionNotFoundError, MissingCommercialSnapshotError):
                 self.send_error(404)
                 return
             if view is None:
