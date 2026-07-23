@@ -26,6 +26,7 @@ from catering_system.repositories.inquiry_repository import (
 )
 from catering_system.domain.inquiry_customer_snapshot import (
     InquiryCustomerSnapshot,
+    customer_address_to_mapping,
     customer_snapshot_from_mapping,
 )
 from catering_system.repositories.sqlite_migrations import apply_migrations
@@ -58,6 +59,12 @@ _CUSTOMER_REFERENCE_COLUMNS = (
     "snapshot_contact_name",
     "snapshot_email",
     "snapshot_phone",
+)
+
+_CUSTOMER_ADDRESS_COLUMNS = (
+    "snapshot_delivery_address_mode",
+    "snapshot_invoice_address_json",
+    "snapshot_delivery_address_json",
 )
 
 _INTAKE_COLUMNS = (
@@ -115,11 +122,21 @@ def _migration_4_add_customer_reference(connection: sqlite3.Connection) -> None:
             connection.execute(f"ALTER TABLE inquiries ADD COLUMN {column} TEXT")
 
 
+def _migration_5_add_customer_addresses(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(inquiries)").fetchall()
+    }
+    for column in _CUSTOMER_ADDRESS_COLUMNS:
+        if column not in columns:
+            connection.execute(f"ALTER TABLE inquiries ADD COLUMN {column} TEXT")
+
+
 _MIGRATIONS = (
     (1, "create_inquiries", _migration_1_create_table),
     (2, "add_intake_context", _migration_2_add_intake_context),
     (3, "unique_website_external_ref", _migration_3_unique_website_external_ref),
     (4, "add_customer_reference", _migration_4_add_customer_reference),
+    (5, "add_customer_addresses", _migration_5_add_customer_addresses),
 )
 
 
@@ -156,8 +173,15 @@ class SQLiteInquiryRepository:
         try:
             with self._write_scope():
                 self._conn.execute(
-                    "INSERT INTO inquiries (inquiry_id, event_date, created_at, updated_at, inquiry_source, crm_stage, customer_linkage, time_window_text, location_text, guest_count_estimate, planning_mode, call_verification_required, call_verification_status, intake_subject, intake_message, intake_summary, intake_external_ref, customer_id, snapshot_company_name, snapshot_contact_name, snapshot_email, snapshot_phone) VALUES "
-                    "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO inquiries (inquiry_id, event_date, created_at, updated_at, "
+                    "inquiry_source, crm_stage, customer_linkage, time_window_text, "
+                    "location_text, guest_count_estimate, planning_mode, "
+                    "call_verification_required, call_verification_status, intake_subject, "
+                    "intake_message, intake_summary, intake_external_ref, customer_id, "
+                    "snapshot_company_name, snapshot_contact_name, snapshot_email, "
+                    "snapshot_phone, snapshot_delivery_address_mode, "
+                    "snapshot_invoice_address_json, snapshot_delivery_address_json) VALUES "
+                    "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     self._values(inquiry),
                 )
         except sqlite3.IntegrityError as exc:
@@ -179,7 +203,7 @@ class SQLiteInquiryRepository:
         return [self._row_to_inquiry(r) for r in rows]
 
     def _row_to_inquiry(self, row: tuple) -> Inquiry:
-        snapshot = self._snapshot_from_row(row[18:22])
+        snapshot = self._snapshot_from_row(row)
         return Inquiry(
             inquiry_id=row[0],
             event_date=date.fromisoformat(row[1]),
@@ -203,15 +227,39 @@ class SQLiteInquiryRepository:
         )
 
     @staticmethod
-    def _snapshot_from_row(values: tuple) -> InquiryCustomerSnapshot | None:
-        if all(value is None for value in values):
+    def _snapshot_from_row(row: tuple) -> InquiryCustomerSnapshot | None:
+        company_name = row[18]
+        contact_name = row[19]
+        email = row[20]
+        phone = row[21]
+        mode = row[22] if len(row) > 22 else None
+        invoice_json = row[23] if len(row) > 23 else None
+        delivery_json = row[24] if len(row) > 24 else None
+        if (
+            company_name is None
+            and contact_name is None
+            and email is None
+            and phone is None
+            and mode is None
+            and invoice_json is None
+            and delivery_json is None
+        ):
             return None
+        invoice_address = None
+        delivery_address = None
+        if invoice_json is not None:
+            invoice_address = json.loads(invoice_json)
+        if delivery_json is not None:
+            delivery_address = json.loads(delivery_json)
         return customer_snapshot_from_mapping(
             {
-                "company_name": values[0],
-                "contact_name": values[1],
-                "email": values[2],
-                "phone": values[3],
+                "company_name": company_name,
+                "contact_name": contact_name,
+                "email": email,
+                "phone": phone,
+                "invoice_address": invoice_address,
+                "delivery_address": delivery_address,
+                "delivery_address_mode": mode,
             }
         )
 
@@ -229,7 +277,10 @@ class SQLiteInquiryRepository:
                         intake_subject = ?, intake_message = ?, intake_summary = ?,
                         intake_external_ref = ?, customer_id = ?,
                         snapshot_company_name = ?, snapshot_contact_name = ?,
-                        snapshot_email = ?, snapshot_phone = ?
+                        snapshot_email = ?, snapshot_phone = ?,
+                        snapshot_delivery_address_mode = ?,
+                        snapshot_invoice_address_json = ?,
+                        snapshot_delivery_address_json = ?
                     WHERE inquiry_id = ?
                     """,
                     self._values(inquiry)[1:] + (inquiry.inquiry_id,),
@@ -256,6 +307,42 @@ class SQLiteInquiryRepository:
     @staticmethod
     def _values(inquiry: Inquiry) -> tuple:
         snapshot = inquiry.customer_snapshot
+        if snapshot is None:
+            return (
+                inquiry.inquiry_id,
+                inquiry.event_date.isoformat(),
+                inquiry.created_at.isoformat(),
+                inquiry.updated_at.isoformat(),
+                inquiry.inquiry_source,
+                inquiry.crm_stage,
+                json.dumps(inquiry.customer_linkage, sort_keys=True),
+                inquiry.time_window_text,
+                inquiry.location_text,
+                inquiry.guest_count_estimate,
+                inquiry.planning_mode,
+                1 if inquiry.call_verification_required else 0,
+                inquiry.call_verification_status,
+                inquiry.intake_subject,
+                inquiry.intake_message,
+                inquiry.intake_summary,
+                inquiry.intake_external_ref,
+                inquiry.customer_id,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        invoice_json = None
+        delivery_json = None
+        invoice_map = customer_address_to_mapping(snapshot.invoice_address)
+        delivery_map = customer_address_to_mapping(snapshot.delivery_address)
+        if invoice_map is not None:
+            invoice_json = json.dumps(invoice_map, sort_keys=True, ensure_ascii=False)
+        if delivery_map is not None:
+            delivery_json = json.dumps(delivery_map, sort_keys=True, ensure_ascii=False)
         return (
             inquiry.inquiry_id,
             inquiry.event_date.isoformat(),
@@ -275,10 +362,13 @@ class SQLiteInquiryRepository:
             inquiry.intake_summary,
             inquiry.intake_external_ref,
             inquiry.customer_id,
-            None if snapshot is None else snapshot.company_name,
-            None if snapshot is None else snapshot.contact_name,
-            None if snapshot is None else snapshot.email,
-            None if snapshot is None else snapshot.phone,
+            snapshot.company_name,
+            snapshot.contact_name,
+            snapshot.email,
+            snapshot.phone,
+            snapshot.delivery_address_mode,
+            invoice_json,
+            delivery_json,
         )
 
     def find_by_source_and_external_ref(

@@ -802,6 +802,9 @@ def test_inquiry_detail_shape(api) -> None:
         "contact_name": "Example Contact",
         "email": "kunde@example.com",
         "phone": "+49301234567",
+        "invoice_address": None,
+        "delivery_address": None,
+        "delivery_address_mode": "UNKNOWN",
     }
     assert body["contact_completeness"] == "complete"
     assert body["missing_contact_fields"] == []

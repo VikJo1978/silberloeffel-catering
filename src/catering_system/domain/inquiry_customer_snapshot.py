@@ -1,14 +1,30 @@
-"""Immutable inquiry customer snapshot — historical contact fact at link/create time."""
+"""Immutable inquiry customer snapshot — historical contact fact at link/create time.
+
+CUSTOMER_ADDRESS_SOURCE_V1-A: invoice/delivery addresses + delivery_address_mode.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal, cast
 
+from catering_system.domain.customer_document_projection import (
+    CustomerAddress,
+    canonicalize_customer_address,
+)
 from catering_system.intake.intake_contact import (
     labelled_intake_context,
     normalize_email,
 )
 from catering_system.domain.phone_normalization import normalize_phone
+
+DeliveryAddressMode = Literal["UNKNOWN", "SAME_AS_INVOICE", "SEPARATE"]
+DELIVERY_ADDRESS_MODES: tuple[DeliveryAddressMode, ...] = (
+    "UNKNOWN",
+    "SAME_AS_INVOICE",
+    "SEPARATE",
+)
+_DELIVERY_ADDRESS_MODE_SET: frozenset[str] = frozenset(DELIVERY_ADDRESS_MODES)
 
 
 @dataclass(frozen=True)
@@ -19,8 +35,32 @@ class InquiryCustomerSnapshot:
     contact_name: str | None = None
     email: str | None = None
     phone: str | None = None
+    invoice_address: CustomerAddress | None = None
+    delivery_address: CustomerAddress | None = None
+    delivery_address_mode: DeliveryAddressMode = "UNKNOWN"
+
+    def __post_init__(self) -> None:
+        if self.delivery_address_mode not in _DELIVERY_ADDRESS_MODE_SET:
+            raise ValueError(
+                f"unsupported delivery_address_mode: {self.delivery_address_mode!r}"
+            )
+        invoice = canonicalize_customer_address(self.invoice_address)
+        delivery = canonicalize_customer_address(self.delivery_address)
+        if invoice is not self.invoice_address:
+            object.__setattr__(self, "invoice_address", invoice)
+        if delivery is not self.delivery_address:
+            object.__setattr__(self, "delivery_address", delivery)
+        if self.delivery_address_mode in {"UNKNOWN", "SAME_AS_INVOICE"}:
+            if self.delivery_address is not None:
+                raise ValueError(
+                    "delivery_address must be None when mode is "
+                    f"{self.delivery_address_mode}"
+                )
+        elif self.delivery_address is None:
+            raise ValueError("SEPARATE mode requires delivery_address")
 
     def is_empty(self) -> bool:
+        """Contact-only emptiness for completeness gates (addresses ignored)."""
         return not any(
             value
             for value in (
@@ -30,6 +70,20 @@ class InquiryCustomerSnapshot:
                 self.phone,
             )
         )
+
+    def has_persisted_facts(self) -> bool:
+        """True when snapshot should be stored (contact and/or address facts)."""
+        return (
+            not self.is_empty()
+            or self.invoice_address is not None
+            or self.delivery_address_mode != "UNKNOWN"
+        )
+
+
+def validate_delivery_address_mode(value: str) -> DeliveryAddressMode:
+    if value not in _DELIVERY_ADDRESS_MODE_SET:
+        raise ValueError(f"unsupported delivery_address_mode: {value!r}")
+    return cast(DeliveryAddressMode, value)
 
 
 def validate_customer_id_reference(value: str) -> str:
@@ -58,7 +112,7 @@ def snapshot_from_intake_message(
         email=email,
         phone=phone,
     )
-    if snapshot.is_empty():
+    if not snapshot.has_persisted_facts():
         return None
     return snapshot
 
@@ -109,14 +163,49 @@ def snapshot_from_structured_contact(
         email=email,
         phone=phone,
     )
-    if snapshot.is_empty():
+    if not snapshot.has_persisted_facts():
         return None
     return snapshot
 
 
+def customer_address_to_mapping(
+    address: CustomerAddress | None,
+) -> dict[str, str | None] | None:
+    if address is None:
+        return None
+    return {
+        "street": address.street,
+        "postal_code": address.postal_code,
+        "city": address.city,
+        "country": address.country,
+    }
+
+
+def customer_address_from_mapping(
+    data: object | None,
+) -> CustomerAddress | None:
+    if data is None:
+        return None
+    if not isinstance(data, dict) or not all(isinstance(k, str) for k in data):
+        raise TypeError("address must be an object or null")
+    allowed = {"street", "postal_code", "city", "country"}
+    if set(data) != allowed:
+        raise ValueError(
+            "address object keys must be exactly street/postal_code/city/country"
+        )
+    return canonicalize_customer_address(
+        CustomerAddress(
+            street=_optional_str(data.get("street")),
+            postal_code=_optional_str(data.get("postal_code")),
+            city=_optional_str(data.get("city")),
+            country=_optional_str(data.get("country")),
+        )
+    )
+
+
 def customer_snapshot_to_mapping(
     snapshot: InquiryCustomerSnapshot | None,
-) -> dict[str, str | None] | None:
+) -> dict[str, object] | None:
     if snapshot is None:
         return None
     return {
@@ -124,6 +213,9 @@ def customer_snapshot_to_mapping(
         "contact_name": snapshot.contact_name,
         "email": snapshot.email,
         "phone": snapshot.phone,
+        "invoice_address": customer_address_to_mapping(snapshot.invoice_address),
+        "delivery_address": customer_address_to_mapping(snapshot.delivery_address),
+        "delivery_address_mode": snapshot.delivery_address_mode,
     }
 
 
@@ -132,13 +224,23 @@ def customer_snapshot_from_mapping(
 ) -> InquiryCustomerSnapshot | None:
     if data is None:
         return None
+    mode_raw = data.get("delivery_address_mode")
+    if mode_raw is None:
+        mode: DeliveryAddressMode = "UNKNOWN"
+    else:
+        if not isinstance(mode_raw, str):
+            raise TypeError("delivery_address_mode must be a str or null")
+        mode = validate_delivery_address_mode(mode_raw)
     snapshot = InquiryCustomerSnapshot(
         company_name=_optional_str(data.get("company_name")),
         contact_name=_optional_str(data.get("contact_name")),
         email=_optional_str(data.get("email")),
         phone=_optional_str(data.get("phone")),
+        invoice_address=customer_address_from_mapping(data.get("invoice_address")),
+        delivery_address=customer_address_from_mapping(data.get("delivery_address")),
+        delivery_address_mode=mode,
     )
-    if snapshot.is_empty():
+    if not snapshot.has_persisted_facts():
         return None
     return snapshot
 

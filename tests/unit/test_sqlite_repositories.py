@@ -397,6 +397,7 @@ def test_component_migrations_are_recorded_once(tmp_path: Path) -> None:
         ("inquiries", 2),
         ("inquiries", 3),
         ("inquiries", 4),
+        ("inquiries", 5),  # CUSTOMER_ADDRESS_SOURCE_V1-A
         ("orders", 1),
         ("orders", 2),
         ("orders", 3),
