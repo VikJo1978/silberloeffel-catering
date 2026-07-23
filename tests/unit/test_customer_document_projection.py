@@ -282,6 +282,23 @@ def test_customer_document_projection_service_build() -> None:
     assert projection.positions[0].kind == "catalog"
 
 
+def test_recipient_maps_company_and_phone_from_customer_snapshot() -> None:
+    recipient = build_customer_document_recipient(
+        _inquiry(
+            snapshot=InquiryCustomerSnapshot(
+                contact_name="Anna",
+                company_name="ACME GmbH",
+                email="anna@example.invalid",
+                phone="+49301234567",
+            )
+        )
+    )
+    assert recipient.name == "Anna"
+    assert recipient.company_name == "ACME GmbH"
+    assert recipient.phone == "+49301234567"
+    assert recipient.email == "anna@example.invalid"
+
+
 def test_foundation_modules_must_not_depend_on_offer_repository() -> None:
     root = Path(__file__).resolve().parents[2] / "src" / "catering_system"
     for relative in (
