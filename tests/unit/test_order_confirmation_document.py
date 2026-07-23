@@ -853,8 +853,7 @@ def test_confirmation_snapshot_immune_to_later_offer_mutation() -> None:
 def test_confirmation_document_service_has_no_offer_repository() -> None:
     root = Path(__file__).resolve().parents[2]
     text = (
-        root
-        / "src/catering_system/services/order_confirmation_document_service.py"
+        root / "src/catering_system/services/order_confirmation_document_service.py"
     ).read_text(encoding="utf-8")
     assert "OfferRepository" not in text
     assert "conversion_link" not in text
