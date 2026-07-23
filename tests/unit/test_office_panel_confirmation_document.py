@@ -61,6 +61,7 @@ from tests.unit.test_offer_service import (
     _valid_snapshot,
 )
 from catering_system.ui.office_panel_order_detail import (
+    ConfirmationLivePreviewView,
     OrderDetailFormFields,
     render_confirmation_card,
 )
@@ -296,7 +297,7 @@ def test_legacy_order_detail_before_snapshot_shows_prepare_action(
         views.confirmation_document_shape(eligibility)["state"] == "bereit_zur_vorschau"
     )
     assert "Bereit zur Vorschau" in page
-    assert "Vorschau erstellen" in page
+    assert "Auftragsbestätigung erstellen" in page
     assert "Senden" not in page
 
 
@@ -385,7 +386,7 @@ def test_panel_prepare_action_persists_single_snapshot(tmp_path: Path) -> None:
     try:
         status, detail, _ = _get(f"{panel_url}/order/{order_id}")
         assert status == 200
-        assert "Vorschau erstellen" in detail
+        assert "Auftragsbestätigung erstellen" in detail
         assert _snapshot_count(db) == 0
 
         status, _redirect = _post(
@@ -398,7 +399,7 @@ def test_panel_prepare_action_persists_single_snapshot(tmp_path: Path) -> None:
         status, created, _ = _get(f"{panel_url}/order/{order_id}")
         assert status == 200
         assert "Dokument erstellt" in created
-        assert "Vorschau erstellen" not in created
+        assert "Auftragsbestätigung erstellen" not in created
 
         status, _again = _post(
             f"{panel_url}/order/{order_id}/confirmation-document",
@@ -448,7 +449,7 @@ def test_missing_contact_blocks_prepare_action(tmp_path: Path) -> None:
     before = panel.render_order(order_id)
     assert before is not None
     assert "Kundenkontakt fehlt" in before
-    assert "Vorschau erstellen" not in before
+    assert "Auftragsbestätigung erstellen" not in before
 
     from catering_system.domain.customer_document_eligibility import (
         CustomerDocumentCreationBlocked,
@@ -497,7 +498,7 @@ def test_pending_candidate_shows_blocked_state_without_prepare(tmp_path: Path) -
     page = panel.render_order(order_id)
     assert page is not None
     assert "Auftrag nicht bereit für Kundendokument" in page
-    assert "Vorschau erstellen" not in page
+    assert "Auftragsbestätigung erstellen" not in page
     assert doc_service.eligibility(order_id).can_prepare is False
     assert doc_service.eligibility(order_id).state == "INVALID_ORDER_STATE"
 
@@ -621,7 +622,51 @@ def test_confirmation_card_escapes_hostile_user_data() -> None:
             payment_command_fields="",
             confirmation_command_fields="",
         ),
+        live_preview=ConfirmationLivePreviewView(state="unavailable"),
     )
     assert snapshot.document_reference in card
     assert "<script>" not in card
     assert "alert(" not in card
+    assert "Auftragsbestätigung erstellen" not in card
+    assert "Vorschau öffnen" in card
+
+
+def test_create_cta_fail_closed_when_live_preview_unavailable() -> None:
+    """Create gate must not use embed can_prepare when live preview failed."""
+    from catering_system.domain.order import Order
+    from catering_system.services.order_confirmation_document_service import (
+        OrderConfirmationDocumentEligibility,
+    )
+
+    order = Order(
+        order_id="22222222-2222-4222-8222-222222222222",
+        source_inquiry_id="99999999-9999-4999-8999-999999999999",
+        created_at=datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
+        updated_at=datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
+        effective_order_version_id="33333333-3333-4333-8333-333333333331",
+    )
+    eligibility = OrderConfirmationDocumentEligibility(
+        available=True,
+        state="bereit_zur_vorschau",
+        can_prepare=True,
+        snapshot=None,
+    )
+    forms = OrderDetailFormFields(
+        csrf_input="",
+        print_confirm_command_fields={},
+        effective_command_fields={},
+        ready_command_fields="",
+        cancel_command_fields="",
+        version_command_fields="",
+        payment_command_fields="",
+        confirmation_command_fields='<input type="hidden" name="x" value="1">',
+    )
+    for state in ("unavailable", "parse_error", "not_found"):
+        card = render_confirmation_card(
+            order,
+            eligibility,
+            forms,
+            live_preview=ConfirmationLivePreviewView(state=state),  # type: ignore[arg-type]
+        )
+        assert "Auftragsbestätigung erstellen" not in card
+        assert "Live-Vorschau" in card or "nicht gefunden" in card

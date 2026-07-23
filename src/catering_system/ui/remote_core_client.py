@@ -18,9 +18,27 @@ from datetime import date, datetime
 from typing import Any, NoReturn, cast
 from urllib.parse import quote, urlencode, urlparse
 
+from catering_system.domain.customer_document_eligibility import (
+    DOCUMENT_BLOCKER_CODES,
+    DocumentBlocker,
+    DocumentBlockerCode,
+)
+from catering_system.domain.customer_document_preview import CustomerDocumentPreview
+from catering_system.domain.customer_document_projection import (
+    WARNING_DELIVERY_ADDRESS_DIFFERS,
+    CustomerAddress,
+    CustomerDocumentCommercialReference,
+    CustomerDocumentEvent,
+    CustomerDocumentPosition,
+    CustomerDocumentRecipient,
+    CustomerDocumentWarning,
+    DocumentType,
+)
 from catering_system.domain.inquiry import (
     Inquiry,
     InquiryOfficeNextAction,
+    PLANNING_MODE_SET,
+    PlanningMode,
     validate_call_verification_status,
     validate_crm_stage,
     validate_customer_linkage,
@@ -35,7 +53,9 @@ from catering_system.domain.inquiry_customer_snapshot import (
     snapshot_from_structured_contact,
 )
 from catering_system.domain.order_payment_reminder import (
+    PAYMENT_METHODS,
     OrderPaymentReminder,
+    PaymentMethod,
     PaymentReminderView,
     validate_payment_method,
 )
@@ -2912,6 +2932,76 @@ _CONFIRMATION_SUMMARY_KEYS = frozenset(
         "effective_version_number",
     }
 )
+_CUSTOMER_DOCUMENT_PREVIEW_KEYS = frozenset(
+    {
+        "document_type",
+        "eligible",
+        "blockers",
+        "warnings",
+        "recipient",
+        "event",
+        "commercial",
+        "positions",
+        "payment_method",
+        "payment_customer_visible_text",
+        "net_total_cents",
+        "vat_total_cents",
+        "gross_total_cents",
+    }
+)
+_PREVIEW_RECIPIENT_KEYS = frozenset(
+    {
+        "name",
+        "email",
+        "company_name",
+        "phone",
+        "invoice_address",
+        "delivery_address",
+        "delivery_address_differs",
+    }
+)
+_PREVIEW_ADDRESS_KEYS = frozenset({"street", "postal_code", "city", "country"})
+_PREVIEW_BLOCKER_KEYS = frozenset({"code", "detail"})
+_PREVIEW_COMMERCIAL_KEYS = frozenset(
+    {
+        "snapshot_id",
+        "source_offer_id",
+        "source_offer_version_id",
+        "variant_label",
+    }
+)
+_PREVIEW_EVENT_KEYS = frozenset(
+    {
+        "order_id",
+        "order_version_id",
+        "version_number",
+        "event_date",
+        "time_window_text",
+        "location_text",
+        "guest_count_estimate",
+        "planning_mode",
+    }
+)
+_PREVIEW_POSITION_KEYS = frozenset(
+    {
+        "position_id",
+        "kind",
+        "name",
+        "description",
+        "composition",
+        "quantity",
+        "unit_label",
+        "unit_net_cents",
+        "net_total_cents",
+        "vat_rate_percent",
+        "vat_amount_cents",
+        "gross_total_cents",
+        "related_position_id",
+    }
+)
+_DOCUMENT_BLOCKER_CODE_SET: frozenset[str] = frozenset(DOCUMENT_BLOCKER_CODES)
+_DOCUMENT_WARNING_SET: frozenset[str] = frozenset({WARNING_DELIVERY_ADDRESS_DIFFERS})
+_PAYMENT_METHOD_SET: frozenset[str] = frozenset(PAYMENT_METHODS)
 
 
 def _confirmation_document_summary(raw: object) -> OrderConfirmationDocumentSummary:
@@ -2957,6 +3047,184 @@ def _confirmation_document_eligibility(
     )
 
 
+def _preview_address(raw: object) -> CustomerAddress | None:
+    if raw is None:
+        return None
+    data = _dict(raw)
+    _exact(data, _PREVIEW_ADDRESS_KEYS)
+    try:
+        return CustomerAddress(
+            street=_optional_str(data["street"]),
+            postal_code=_optional_str(data["postal_code"]),
+            city=_optional_str(data["city"]),
+            country=_optional_str(data["country"]),
+        )
+    except ValueError:
+        _bad_response()
+
+
+def _preview_blocker(raw: object) -> DocumentBlocker:
+    data = _dict(raw)
+    _exact(data, _PREVIEW_BLOCKER_KEYS)
+    code = _str(data["code"])
+    if code not in _DOCUMENT_BLOCKER_CODE_SET:
+        _bad_response()
+    try:
+        return DocumentBlocker(
+            code=cast(DocumentBlockerCode, code),
+            detail=_optional_str(data["detail"]),
+        )
+    except ValueError:
+        _bad_response()
+
+
+def _preview_warnings(raw: object) -> tuple[CustomerDocumentWarning, ...]:
+    items = _list(raw)
+    warnings: list[CustomerDocumentWarning] = []
+    for item in items:
+        code = _str(item)
+        if code not in _DOCUMENT_WARNING_SET:
+            _bad_response()
+        warnings.append(cast(CustomerDocumentWarning, code))
+    return tuple(warnings)
+
+
+def _preview_recipient(raw: object) -> CustomerDocumentRecipient:
+    data = _dict(raw)
+    _exact(data, _PREVIEW_RECIPIENT_KEYS)
+    differs = _bool(data["delivery_address_differs"])
+    invoice = _preview_address(data["invoice_address"])
+    delivery = _preview_address(data["delivery_address"])
+    recipient_warnings: tuple[CustomerDocumentWarning, ...] = (
+        (WARNING_DELIVERY_ADDRESS_DIFFERS,) if differs else ()
+    )
+    try:
+        return CustomerDocumentRecipient(
+            name=_str(data["name"]),
+            email=_optional_str(data["email"]),
+            company_name=_optional_str(data["company_name"]),
+            phone=_optional_str(data["phone"]),
+            invoice_address=invoice,
+            delivery_address=delivery,
+            delivery_address_differs=differs,
+            warnings=recipient_warnings,
+        )
+    except ValueError:
+        _bad_response()
+
+
+def _preview_commercial(
+    raw: object,
+) -> CustomerDocumentCommercialReference | None:
+    if raw is None:
+        return None
+    data = _dict(raw)
+    _exact(data, _PREVIEW_COMMERCIAL_KEYS)
+    try:
+        return CustomerDocumentCommercialReference(
+            snapshot_id=_str(data["snapshot_id"]),
+            source_offer_id=_str(data["source_offer_id"]),
+            source_offer_version_id=_str(data["source_offer_version_id"]),
+            variant_label=_str(data["variant_label"]),
+        )
+    except ValueError:
+        _bad_response()
+
+
+def _preview_event(raw: object) -> CustomerDocumentEvent | None:
+    if raw is None:
+        return None
+    data = _dict(raw)
+    _exact(data, _PREVIEW_EVENT_KEYS)
+    planning = _str(data["planning_mode"])
+    if planning not in PLANNING_MODE_SET:
+        _bad_response()
+    try:
+        return CustomerDocumentEvent(
+            order_id=_str(data["order_id"]),
+            order_version_id=_str(data["order_version_id"]),
+            version_number=_nonnegative_int(data["version_number"]),
+            event_date=_date(data["event_date"]),
+            time_window_text=_str(data["time_window_text"]),
+            location_text=_str(data["location_text"]),
+            guest_count_estimate=_optional_int(data["guest_count_estimate"]),
+            planning_mode=cast(PlanningMode, planning),
+        )
+    except ValueError:
+        _bad_response()
+
+
+def _preview_position(raw: object) -> CustomerDocumentPosition:
+    data = _dict(raw)
+    _exact(data, _PREVIEW_POSITION_KEYS)
+    try:
+        return CustomerDocumentPosition(
+            position_id=_str(data["position_id"]),
+            kind=_str(data["kind"]),
+            name=_str(data["name"]),
+            description=_optional_str(data["description"]),
+            composition=_optional_str(data["composition"]),
+            quantity=_optional_str(data["quantity"]),
+            unit_label=_optional_str(data["unit_label"]),
+            unit_net_cents=_nonnegative_int(data["unit_net_cents"]),
+            net_total_cents=_nonnegative_int(data["net_total_cents"]),
+            vat_rate_percent=_int(data["vat_rate_percent"]),
+            vat_amount_cents=_nonnegative_int(data["vat_amount_cents"]),
+            gross_total_cents=_nonnegative_int(data["gross_total_cents"]),
+            related_position_id=_optional_str(data["related_position_id"]),
+        )
+    except ValueError:
+        _bad_response()
+
+
+def _customer_document_preview(raw: object) -> CustomerDocumentPreview:
+    data = _dict(raw)
+    _exact(data, _CUSTOMER_DOCUMENT_PREVIEW_KEYS)
+    document_type_raw = _str(data["document_type"])
+    if document_type_raw != "ORDER_CONFIRMATION":
+        _bad_response()
+    document_type: DocumentType = "ORDER_CONFIRMATION"
+    eligible = _bool(data["eligible"])
+    blockers = tuple(_preview_blocker(item) for item in _list(data["blockers"]))
+    warnings = _preview_warnings(data["warnings"])
+    recipient = _preview_recipient(data["recipient"])
+    if (WARNING_DELIVERY_ADDRESS_DIFFERS in warnings) != (
+        recipient.delivery_address_differs
+    ):
+        _bad_response()
+    payment_raw = data["payment_method"]
+    payment: PaymentMethod | None
+    if payment_raw is None:
+        payment = None
+    else:
+        method = _str(payment_raw)
+        if method not in _PAYMENT_METHOD_SET:
+            _bad_response()
+        payment = cast(PaymentMethod, method)
+    try:
+        return CustomerDocumentPreview(
+            document_type=document_type,
+            eligible=eligible,
+            warnings=warnings,
+            blockers=blockers,
+            recipient=recipient,
+            event=_preview_event(data["event"]),
+            commercial_reference=_preview_commercial(data["commercial"]),
+            positions=tuple(
+                _preview_position(item) for item in _list(data["positions"])
+            ),
+            payment_method=payment,
+            payment_customer_visible_text=_optional_str(
+                data["payment_customer_visible_text"]
+            ),
+            net_total_cents=_optional_int(data["net_total_cents"]),
+            vat_total_cents=_optional_int(data["vat_total_cents"]),
+            gross_total_cents=_optional_int(data["gross_total_cents"]),
+        )
+    except ValueError:
+        _bad_response()
+
+
 class _RemoteConfirmationDocumentService:
     def __init__(self, client: RemoteCoreClient) -> None:
         self._client = client
@@ -3000,6 +3268,13 @@ class _RemoteConfirmationDocumentService:
             f"/office/v1/orders/{quote(order_id, safe='')}/confirmation-document/preview",
             {"format": "html"},
         )
+
+    def preview_order_confirmation(self, order_id: str) -> CustomerDocumentPreview:
+        """Live CDP preview before create — V1-E (exact-key, fail-closed)."""
+        payload = self._client.get(
+            f"/office/v1/orders/{quote(order_id, safe='')}/confirmation-preview"
+        )
+        return _customer_document_preview(payload)
 
 
 class _RemoteConfirmationOutboundService:

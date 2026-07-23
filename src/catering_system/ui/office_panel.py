@@ -112,6 +112,10 @@ from catering_system.services.payment_reminder_service import PaymentReminderSer
 from catering_system.services.order_confirmation_document_service import (
     OrderConfirmationDocumentService,
 )
+from catering_system.services.customer_document_preview import (
+    CustomerDocumentPreviewNotFoundError,
+    CustomerDocumentPreviewService,
+)
 from catering_system.services.order_confirmation_outbound_service import (
     OrderConfirmationOutboundAlreadySentError,
     OrderConfirmationOutboundService,
@@ -163,7 +167,9 @@ from catering_system.ui.office_panel_inquiry_detail import (
     render_inquiry_detail,
 )
 from catering_system.ui.office_panel_order_detail import (
+    ConfirmationLivePreviewView,
     OrderDetailFormFields,
+    _DOCUMENT_BLOCKER_LABELS,
     render_confirmation_card,
     render_confirmation_outbound_card,
     render_operational_pause_card,
@@ -385,6 +391,11 @@ class OfficePanel:
                 document_repo,
                 self._commercial_snapshots,
             )
+            self.customer_document_preview_service = CustomerDocumentPreviewService(
+                order_repo,
+                inquiry_repo,
+                self._commercial_snapshots,
+            )
             self.confirmation_outbound_service = OrderConfirmationOutboundService(
                 order_repo,
                 document_repo,
@@ -405,6 +416,10 @@ class OfficePanel:
             self.core = remote.core  # type: ignore[assignment]
             self.payment_reminder_service = remote.payment_reminder_service  # type: ignore[assignment]
             self.confirmation_document_service = remote.confirmation_document_service  # type: ignore[assignment]
+            self.customer_document_preview_service = cast(
+                CustomerDocumentPreviewService,
+                remote.confirmation_document_service,
+            )
             self.confirmation_outbound_service = remote.confirmation_outbound_service  # type: ignore[assignment]
             self.catalog_dish_write_service = remote.catalog_dish_write_service  # type: ignore[assignment]
             self._pause_repository = None
@@ -2690,6 +2705,7 @@ class OfficePanel:
         ev = self.core.evaluate_ready_to_send(order_id)
         payment = self.payment_reminder_service.view(order_id)
         confirmation = self.confirmation_document_service.eligibility(order_id)
+        live_preview = self._live_confirmation_preview(order_id)
         snapshot_id = (
             confirmation.snapshot.document_snapshot_id
             if confirmation.snapshot is not None
@@ -2833,6 +2849,7 @@ class OfficePanel:
                     version_change_prefill=change_prefill if not cancelled else None,
                 ),
                 confirmation=confirmation,
+                live_preview=live_preview,
                 outbound=outbound,
                 operational_pause=pause_view,
                 versions_total_count=versions_total_count,
@@ -3046,6 +3063,7 @@ class OfficePanel:
             order,
             confirmation,
             detail_forms,
+            live_preview,
         )
         outbound_card = render_confirmation_outbound_card(
             order,
@@ -3141,14 +3159,29 @@ class OfficePanel:
         else:
             work()
 
+    def _live_confirmation_preview(self, order_id: str) -> ConfirmationLivePreviewView:
+        """Load live CDP preview for create-gate diagnostics (V1-E)."""
+        from catering_system.ui.remote_core_client import RemoteCoreError
+
+        try:
+            preview = self.customer_document_preview_service.preview_order_confirmation(
+                order_id
+            )
+        except CustomerDocumentPreviewNotFoundError:
+            return ConfirmationLivePreviewView(state="not_found")
+        except RemoteCoreError as exc:
+            if exc.status == 404:
+                return ConfirmationLivePreviewView(state="not_found")
+            if exc.code == "invalid_response":
+                return ConfirmationLivePreviewView(state="parse_error")
+            return ConfirmationLivePreviewView(state="unavailable")
+        return ConfirmationLivePreviewView(state="ready", preview=preview)
+
     def prepare_confirmation_document(
         self, order_id: str, form: dict[str, str]
     ) -> None:
         from catering_system.domain.customer_document_eligibility import (
             CustomerDocumentCreationBlocked,
-        )
-        from catering_system.ui.office_panel_order_detail import (
-            _CONFIRMATION_STATE_LABELS,
         )
 
         order = self._orders.get_order(order_id)
@@ -3175,7 +3208,7 @@ class OfficePanel:
                 )
             except CustomerDocumentCreationBlocked as exc:
                 labels = [
-                    _CONFIRMATION_STATE_LABELS.get(code, code) for code in exc.codes
+                    _DOCUMENT_BLOCKER_LABELS.get(code, code) for code in exc.codes
                 ]
                 raise ValueError("; ".join(labels)) from exc
 
