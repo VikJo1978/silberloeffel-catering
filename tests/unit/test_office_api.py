@@ -3204,6 +3204,11 @@ def _confirmation_document_url(base: str, order_id: str) -> str:
     return f"{base}/office/v1/orders/{order_id}/confirmation-document"
 
 
+def _live_confirmation_preview_url(base: str, order_id: str) -> str:
+    """Live CDP preview before create (V1-D) — not the persisted-document renderer."""
+    return f"{base}/office/v1/orders/{order_id}/confirmation-preview"
+
+
 def _confirmation_preview_url(
     base: str,
     order_id: str,
@@ -3741,6 +3746,7 @@ def test_confirmation_document_routes_require_bearer_auth(api) -> None:
     for url in (
         _confirmation_document_url(base, order_id),
         _confirmation_preview_url(base, order_id, format="json"),
+        _live_confirmation_preview_url(base, order_id),
     ):
         status, body, _h = _get(url, headers=no_auth)
         assert (status, body["error"]) == (401, "unauthorized")
@@ -3751,6 +3757,104 @@ def test_confirmation_document_routes_require_bearer_auth(api) -> None:
         headers=no_auth,
     )
     assert (status, body["error"]) == (401, "unauthorized")
+
+
+# --- live confirmation preview (CUSTOMER_DOCUMENT_PROJECTION_V1-D) ------------
+
+
+def test_live_confirmation_preview_eligible_does_not_persist(api) -> None:
+    base, _ids, db = api
+    order_id, _version_id = _make_effective_offer_order(api)
+    count_before = _confirmation_snapshot_count(db)
+
+    status, body, _h = _get(_live_confirmation_preview_url(base, order_id))
+    assert status == 200
+    assert body["document_type"] == "ORDER_CONFIRMATION"
+    assert body["eligible"] is True
+    assert body["blockers"] == []
+    assert body["commercial"] is not None
+    assert body["positions"]
+    assert body["recipient"]["email"] == "kunde@example.com"
+    assert body["recipient"]["name"] == "Example Contact"
+    assert "document_id" not in body
+    assert "document_snapshot_id" not in body
+    assert _confirmation_snapshot_count(db) == count_before
+
+
+def test_live_confirmation_preview_missing_commercial_returns_200_with_blocker(
+    api,
+) -> None:
+    base, ids, db = api
+    inquiries = SQLiteInquiryRepository(db)
+    orders = SQLiteOrderRepository(db)
+    inquiry = inquiries.get_by_id(ids["inquiry_convertible"])
+    assert inquiry is not None
+    order, version = seed_order(orders, inquiry)
+    core = OperationalCoreService(orders)
+    core.confirm_kitchen_print(order.order_id, version.order_version_id)
+    core.make_order_version_effective(order.order_id, version.order_version_id)
+    inquiries.close()
+    orders.close()
+
+    status, body, _h = _get(_live_confirmation_preview_url(base, order.order_id))
+    assert status == 200
+    assert body["eligible"] is False
+    assert [row["code"] for row in body["blockers"]] == ["MISSING_COMMERCIAL_SNAPSHOT"]
+    assert body["commercial"] is None
+    assert body["positions"] == []
+    assert body["event"] is not None
+    assert body["recipient"]["name"] == "Example Contact"
+    assert "document_id" not in body
+    assert _confirmation_snapshot_count(db) == 0
+
+
+def test_live_confirmation_preview_shows_blockers_while_prepare_still_enforces(
+    api,
+) -> None:
+    base, ids, db = api
+    inquiry_id = ids["inquiry_offer_ready"]
+    order_id, order_version_id = _make_effective_offer_order(
+        api, inquiry_id=inquiry_id, ensure_recipient_email=False
+    )
+    _clear_inquiry_recipient_email(db, inquiry_id)
+    inquiries = SQLiteInquiryRepository(db)
+    inquiry = inquiries.get_by_id(inquiry_id)
+    assert inquiry is not None
+    contact = inquiry.customer_snapshot
+    inquiries.update(
+        replace(
+            inquiry,
+            customer_snapshot=InquiryCustomerSnapshot(
+                company_name=contact.company_name if contact else None,
+                contact_name=contact.contact_name if contact else None,
+                phone=None,
+                email=None,
+            ),
+        )
+    )
+    inquiries.close()
+
+    status, preview, _h = _get(_live_confirmation_preview_url(base, order_id))
+    assert status == 200
+    assert preview["eligible"] is False
+    assert "MISSING_CUSTOMER_CONTACT" in [row["code"] for row in preview["blockers"]]
+    assert _confirmation_snapshot_count(db) == 0
+
+    status, created, _h = _post(
+        _confirmation_document_url(base, order_id),
+        args={"created_by": "office-api-test"},
+        expect={"current_effective_order_version_id": order_version_id},
+    )
+    assert status == 422
+    assert created["error"] == "confirmation_document_blocked"
+    assert "MISSING_CUSTOMER_CONTACT" in created.get("reasons", [])
+    assert _confirmation_snapshot_count(db) == 0
+
+
+def test_live_confirmation_preview_unknown_order_is_404(api) -> None:
+    base, _ids, _db = api
+    status, body, _h = _get(_live_confirmation_preview_url(base, str(uuid.uuid4())))
+    assert (status, body["error"]) == (404, "not_found")
 
 
 # --- confirmation outbound fake outbox (EMAIL_MVP_2 / outbound pack B2) ------

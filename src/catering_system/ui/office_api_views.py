@@ -676,6 +676,93 @@ def confirmation_document_preview_shape(
     return preview_to_json(preview)
 
 
+def customer_document_preview_shape(preview: object) -> dict[str, object]:
+    """JSON shape for live CustomerDocumentPreview (V1-D)."""
+    from catering_system.domain.customer_document_preview import CustomerDocumentPreview
+    from catering_system.domain.customer_document_projection import CustomerAddress
+
+    assert isinstance(preview, CustomerDocumentPreview)
+
+    def address(value: CustomerAddress | None) -> dict[str, object] | None:
+        if value is None:
+            return None
+        return {
+            "street": value.street,
+            "postal_code": value.postal_code,
+            "city": value.city,
+            "country": value.country,
+        }
+
+    recipient = preview.recipient
+    event = preview.event
+    commercial = preview.commercial_reference
+    return {
+        "document_type": preview.document_type,
+        "eligible": preview.eligible,
+        "warnings": list(preview.warnings),
+        "blockers": [
+            {"code": blocker.code, "detail": blocker.detail}
+            for blocker in preview.blockers
+        ],
+        "recipient": {
+            "name": recipient.name,
+            "email": recipient.email,
+            "company_name": recipient.company_name,
+            "phone": recipient.phone,
+            "invoice_address": address(recipient.invoice_address),
+            "delivery_address": address(recipient.delivery_address),
+            "delivery_address_differs": recipient.delivery_address_differs,
+        },
+        "commercial": (
+            None
+            if commercial is None
+            else {
+                "snapshot_id": commercial.snapshot_id,
+                "source_offer_id": commercial.source_offer_id,
+                "source_offer_version_id": commercial.source_offer_version_id,
+                "variant_label": commercial.variant_label,
+            }
+        ),
+        "event": (
+            None
+            if event is None
+            else {
+                "order_id": event.order_id,
+                "order_version_id": event.order_version_id,
+                "version_number": event.version_number,
+                "event_date": event.event_date.isoformat(),
+                "time_window_text": event.time_window_text,
+                "location_text": event.location_text,
+                "guest_count_estimate": event.guest_count_estimate,
+                "planning_mode": event.planning_mode,
+            }
+        ),
+        "positions": [
+            {
+                "position_id": position.position_id,
+                "kind": position.kind,
+                "name": position.name,
+                "description": position.description,
+                "composition": position.composition,
+                "quantity": position.quantity,
+                "unit_label": position.unit_label,
+                "unit_net_cents": position.unit_net_cents,
+                "net_total_cents": position.net_total_cents,
+                "vat_rate_percent": position.vat_rate_percent,
+                "vat_amount_cents": position.vat_amount_cents,
+                "gross_total_cents": position.gross_total_cents,
+                "related_position_id": position.related_position_id,
+            }
+            for position in preview.positions
+        ],
+        "payment_method": preview.payment_method,
+        "payment_customer_visible_text": preview.payment_customer_visible_text,
+        "net_total_cents": preview.net_total_cents,
+        "vat_total_cents": preview.vat_total_cents,
+        "gross_total_cents": preview.gross_total_cents,
+    }
+
+
 def payment_reminder_shape(view: PaymentReminderView) -> dict[str, object]:
     return {
         "order_id": view.order_id,
