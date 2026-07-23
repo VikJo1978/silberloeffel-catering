@@ -5,13 +5,19 @@ from __future__ import annotations
 import json
 from datetime import date, datetime
 
+from catering_system.domain.customer_document_projection import CustomerAddress
 from catering_system.domain.inquiry import validate_planning_mode
+from catering_system.domain.inquiry_customer_snapshot import (
+    customer_address_from_mapping,
+    customer_address_to_mapping,
+)
 from catering_system.domain.order_confirmation_document import (
     OrderConfirmationDocumentPosition,
     OrderConfirmationDocumentSnapshot,
     OrderConfirmationVatBucket,
     RecipientStatus,
-    SCHEMA_VERSION,
+    SCHEMA_VERSION_V1,
+    SCHEMA_VERSION_V2,
 )
 from catering_system.domain.order_payment_reminder import validate_payment_method
 
@@ -31,6 +37,10 @@ def snapshot_from_canonical_json(raw: str) -> OrderConfirmationDocumentSnapshot:
     buckets_raw = payload.get("vat_buckets")
     if not isinstance(positions_raw, list) or not isinstance(buckets_raw, list):
         raise ValueError("confirmation document snapshot JSON is incomplete")
+    schema_version = int(payload.get("schema_version", SCHEMA_VERSION_V1))
+    invoice_address, delivery_address, delivery_address_differs = _address_facts(
+        payload, schema_version=schema_version
+    )
     return OrderConfirmationDocumentSnapshot(
         document_snapshot_id=str(payload["document_snapshot_id"]),
         order_id=str(payload["order_id"]),
@@ -58,13 +68,16 @@ def snapshot_from_canonical_json(raw: str) -> OrderConfirmationDocumentSnapshot:
         payment_method=validate_payment_method(str(payload["payment_method"])),
         payment_customer_visible_text=str(payload["payment_customer_visible_text"]),
         document_hash=str(payload["document_hash"]),
-        schema_version=int(payload.get("schema_version", SCHEMA_VERSION)),
+        schema_version=schema_version,
         document_warnings=_document_warnings(payload.get("document_warnings")),
+        invoice_address=invoice_address,
+        delivery_address=delivery_address,
+        delivery_address_differs=delivery_address_differs,
     )
 
 
 def _snapshot_payload(snapshot: OrderConfirmationDocumentSnapshot) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "document_snapshot_id": snapshot.document_snapshot_id,
         "order_id": snapshot.order_id,
         "order_version_id": snapshot.order_version_id,
@@ -118,6 +131,44 @@ def _snapshot_payload(snapshot: OrderConfirmationDocumentSnapshot) -> dict[str, 
         "schema_version": snapshot.schema_version,
         "document_warnings": list(snapshot.document_warnings),
     }
+    # Schema 1 canonical payload must omit address keys (legacy hash/shape).
+    if snapshot.schema_version == SCHEMA_VERSION_V2:
+        payload["invoice_address"] = customer_address_to_mapping(
+            snapshot.invoice_address
+        )
+        payload["delivery_address"] = customer_address_to_mapping(
+            snapshot.delivery_address
+        )
+        payload["delivery_address_differs"] = snapshot.delivery_address_differs
+    return payload
+
+
+def _address_facts(
+    payload: dict[str, object],
+    *,
+    schema_version: int,
+) -> tuple[CustomerAddress | None, CustomerAddress | None, bool | None]:
+    if schema_version == SCHEMA_VERSION_V1:
+        # Explicit NOT_STORED — do not invent delivery_address_differs=False.
+        # Extra address keys on legacy payloads are ignored (tolerant reader).
+        return None, None, None
+    if schema_version != SCHEMA_VERSION_V2:
+        raise ValueError("unsupported order confirmation document schema version")
+    required = ("invoice_address", "delivery_address", "delivery_address_differs")
+    missing = [key for key in required if key not in payload]
+    if missing:
+        raise ValueError(
+            "schema 2 snapshot requires invoice_address, delivery_address, "
+            "and delivery_address_differs"
+        )
+    differs_raw = payload["delivery_address_differs"]
+    if not isinstance(differs_raw, bool):
+        raise ValueError("delivery_address_differs must be a bool for schema 2")
+    return (
+        customer_address_from_mapping(payload["invoice_address"]),
+        customer_address_from_mapping(payload["delivery_address"]),
+        differs_raw,
+    )
 
 
 def _position(raw: object) -> OrderConfirmationDocumentPosition:

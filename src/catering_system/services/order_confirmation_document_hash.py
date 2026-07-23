@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+from catering_system.domain.inquiry_customer_snapshot import customer_address_to_mapping
 from catering_system.domain.offer_snapshot import compute_snapshot_hash
 from catering_system.domain.order_confirmation_document import (
     OrderConfirmationDocumentSnapshot,
+    SCHEMA_VERSION_V2,
 )
 
 
 def snapshot_hash_payload(
     snapshot: OrderConfirmationDocumentSnapshot,
 ) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "schema_version": snapshot.schema_version,
         "order_id": snapshot.order_id,
         "order_version_id": snapshot.order_version_id,
@@ -61,6 +63,16 @@ def snapshot_hash_payload(
         "payment_customer_visible_text": snapshot.payment_customer_visible_text,
         "document_warnings": list(snapshot.document_warnings),
     }
+    # Schema 1 hash payload must stay byte-identical to pre-V1 address work.
+    if snapshot.schema_version == SCHEMA_VERSION_V2:
+        payload["invoice_address"] = customer_address_to_mapping(
+            snapshot.invoice_address
+        )
+        payload["delivery_address"] = customer_address_to_mapping(
+            snapshot.delivery_address
+        )
+        payload["delivery_address_differs"] = snapshot.delivery_address_differs
+    return payload
 
 
 def compute_document_hash(snapshot: OrderConfirmationDocumentSnapshot) -> str:

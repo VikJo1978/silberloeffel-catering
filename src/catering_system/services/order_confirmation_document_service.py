@@ -27,6 +27,7 @@ from catering_system.domain.order_confirmation_document import (
     OrderConfirmationDocumentSnapshot,
     OrderConfirmationVatBucket,
     RecipientStatus,
+    SCHEMA_VERSION_V2,
 )
 from catering_system.domain.order_payment_reminder import (
     PAYMENT_METHOD_LABELS,
@@ -339,7 +340,11 @@ def _persist_snapshot_from_projection(
         payment_method=projection.payment_method,
         payment_customer_visible_text=projection.payment_customer_visible_text,
         document_hash=document_hash,
+        schema_version=SCHEMA_VERSION_V2,
         document_warnings=tuple(projection.recipient.warnings),
+        invoice_address=projection.recipient.invoice_address,
+        delivery_address=projection.recipient.delivery_address,
+        delivery_address_differs=projection.recipient.delivery_address_differs,
     )
 
 
