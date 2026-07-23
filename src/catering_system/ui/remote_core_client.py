@@ -49,7 +49,11 @@ from catering_system.domain.inquiry_contact_completeness import (
     complete_inquiry_contact_information,
 )
 from catering_system.domain.inquiry_customer_snapshot import (
+    DeliveryAddressMode,
+    customer_address_to_mapping,
     customer_snapshot_from_mapping,
+    customer_snapshot_to_mapping,
+    set_inquiry_customer_addresses,
     snapshot_from_structured_contact,
 )
 from catering_system.domain.order_payment_reminder import (
@@ -2505,6 +2509,50 @@ class _RemoteInquiryService:
         updated = complete_inquiry_contact_information(
             current, email=email, phone=phone
         )
+        return replace(updated, updated_at=_datetime(result["updated_at"]))
+
+    def set_inquiry_customer_addresses(
+        self,
+        inquiry_id: str,
+        *,
+        invoice_address: CustomerAddress | None,
+        delivery_address: CustomerAddress | None,
+        delivery_address_mode: DeliveryAddressMode | str,
+    ) -> Inquiry:
+        current = self._client.get_by_id(inquiry_id)
+        if current is None:
+            raise RemoteCoreError(404, "not_found")
+        args: dict[str, object] = {
+            "invoice_address": customer_address_to_mapping(invoice_address),
+            "delivery_address": customer_address_to_mapping(delivery_address),
+            "delivery_address_mode": delivery_address_mode,
+        }
+        expected_at = self._client.form_value("_expect_updated_at")
+        result = self._client.command(
+            f"/office/v1/inquiries/{quote(inquiry_id, safe='')}/customer-addresses",
+            args,
+            {"updated_at": expected_at or current.updated_at.isoformat()},
+            expected={200},
+            result_keys={
+                "inquiry_id",
+                "updated_at",
+                "customer_snapshot",
+            },
+        )
+        if _uuid4(result["inquiry_id"]) != inquiry_id:
+            _bad_response()
+        mapped = result["customer_snapshot"]
+        if not isinstance(mapped, dict):
+            _bad_response()
+        # Reapply domain locally for redirect render parity (no silent defaults).
+        updated = set_inquiry_customer_addresses(
+            current,
+            invoice_address=invoice_address,
+            delivery_address=delivery_address,
+            delivery_address_mode=delivery_address_mode,
+        )
+        if customer_snapshot_to_mapping(updated.customer_snapshot) != mapped:
+            _bad_response()
         return replace(updated, updated_at=_datetime(result["updated_at"]))
 
     def verify_customer_by_call(self, inquiry_id: str) -> Inquiry:

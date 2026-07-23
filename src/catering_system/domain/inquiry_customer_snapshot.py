@@ -6,7 +6,7 @@ CUSTOMER_ADDRESS_SOURCE_V1-A: invoice/delivery addresses + delivery_address_mode
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Literal, cast
 
 from catering_system.domain.customer_document_projection import (
     CustomerAddress,
@@ -17,6 +17,9 @@ from catering_system.intake.intake_contact import (
     normalize_email,
 )
 from catering_system.domain.phone_normalization import normalize_phone
+
+if TYPE_CHECKING:
+    from catering_system.domain.inquiry import Inquiry
 
 DeliveryAddressMode = Literal["UNKNOWN", "SAME_AS_INVOICE", "SEPARATE"]
 DELIVERY_ADDRESS_MODES: tuple[DeliveryAddressMode, ...] = (
@@ -84,6 +87,46 @@ def validate_delivery_address_mode(value: str) -> DeliveryAddressMode:
     if value not in _DELIVERY_ADDRESS_MODE_SET:
         raise ValueError(f"unsupported delivery_address_mode: {value!r}")
     return cast(DeliveryAddressMode, value)
+
+
+def set_inquiry_customer_addresses(
+    inquiry: "Inquiry",
+    *,
+    invoice_address: CustomerAddress | None,
+    delivery_address: CustomerAddress | None,
+    delivery_address_mode: DeliveryAddressMode | str,
+) -> "Inquiry":
+    """Replace snapshot address facts; preserve contact fields untouched.
+
+    UNKNOWN / SAME_AS_INVOICE store delivery_address as None (any provided
+    delivery is ignored). SEPARATE requires a non-null delivery_address —
+    validated by InquiryCustomerSnapshot invariants.
+    """
+    from dataclasses import replace as dataclass_replace
+
+    from catering_system.domain.inquiry import Inquiry as _Inquiry
+
+    if not isinstance(inquiry, _Inquiry):
+        raise TypeError("inquiry must be an Inquiry")
+    if not isinstance(delivery_address_mode, str):
+        raise TypeError("delivery_address_mode must be a str")
+    mode = validate_delivery_address_mode(delivery_address_mode)
+    stored_delivery = (
+        None if mode in {"UNKNOWN", "SAME_AS_INVOICE"} else delivery_address
+    )
+    snapshot = inquiry.customer_snapshot
+    next_snapshot = InquiryCustomerSnapshot(
+        company_name=snapshot.company_name if snapshot is not None else None,
+        contact_name=snapshot.contact_name if snapshot is not None else None,
+        email=snapshot.email if snapshot is not None else None,
+        phone=snapshot.phone if snapshot is not None else None,
+        invoice_address=invoice_address,
+        delivery_address=stored_delivery,
+        delivery_address_mode=mode,
+    )
+    if snapshot is not None and next_snapshot == snapshot:
+        return inquiry
+    return dataclass_replace(inquiry, customer_snapshot=next_snapshot)
 
 
 def validate_customer_id_reference(value: str) -> str:

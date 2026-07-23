@@ -38,6 +38,11 @@ from catering_system.domain.inquiry_contact_completeness import (
     derive_inquiry_contact_completeness,
     missing_contact_fields,
 )
+from catering_system.domain.inquiry_customer_snapshot import (
+    customer_address_from_mapping,
+    customer_snapshot_to_mapping,
+    validate_delivery_address_mode,
+)
 from catering_system.domain.offer import (
     ACCEPTANCE_CHANNELS,
     SENT_CHANNELS,
@@ -1011,6 +1016,35 @@ class OfficeApi:
             "missing_contact_fields": list(missing_contact_fields(completeness)),
         }
 
+    def cmd_customer_addresses(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        current = self._require_inquiry(path_ids["id"])
+        if _v_datetime(expect["updated_at"]) != current.updated_at:
+            raise ApiError(409, "stale_state")
+        mode_raw = args["delivery_address_mode"]
+        try:
+            if not isinstance(mode_raw, str):
+                raise TypeError("delivery_address_mode must be a str")
+            mode = validate_delivery_address_mode(mode_raw)
+            invoice_address = customer_address_from_mapping(args["invoice_address"])
+            delivery_address = customer_address_from_mapping(args["delivery_address"])
+            updated = self.inquiry_service.set_inquiry_customer_addresses(
+                current.inquiry_id,
+                invoice_address=invoice_address,
+                delivery_address=delivery_address,
+                delivery_address_mode=mode,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ApiError(422, "invalid_customer_addresses") from exc
+        return 200, {
+            "inquiry_id": updated.inquiry_id,
+            "updated_at": updated.updated_at.isoformat(),
+            "customer_snapshot": customer_snapshot_to_mapping(
+                updated.customer_snapshot
+            ),
+        }
+
     def cmd_update_inquiry(
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict
     ) -> tuple[int, dict[str, object]]:
@@ -1877,6 +1911,15 @@ _CONTACT_COMPLETION_ARGS = _ArgKeys(
     required=frozenset(),
     optional=frozenset({"email", "phone"}),
 )
+_CUSTOMER_ADDRESSES_ARGS = _ArgKeys(
+    required=frozenset(
+        {
+            "invoice_address",
+            "delivery_address_mode",
+            "delivery_address",
+        }
+    ),
+)
 _UPDATE_ARGS = _ArgKeys(
     required=frozenset(
         {
@@ -1980,6 +2023,9 @@ _COMMANDS: dict[str, _CommandSpec] = {
     "contact-completion": _CommandSpec(
         "cmd_contact_completion", _CONTACT_COMPLETION_ARGS, {"updated_at"}
     ),
+    "customer-addresses": _CommandSpec(
+        "cmd_customer_addresses", _CUSTOMER_ADDRESSES_ARGS, {"updated_at"}
+    ),
     "verify": _CommandSpec("cmd_verify", _NO_ARGS, set()),
     "convert": _CommandSpec("cmd_convert", _NO_ARGS, set()),
     "prepare-offer": _CommandSpec("cmd_prepare_offer", _SNAPSHOT_ARGS, set()),
@@ -2080,6 +2126,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/inquiries/(?P<id>[^/]+)/contact-completion$"),
         "/office/v1/inquiries/{id}/contact-completion",
         {"POST": "contact-completion"},
+    ),
+    (
+        re.compile(r"^/office/v1/inquiries/(?P<id>[^/]+)/customer-addresses$"),
+        "/office/v1/inquiries/{id}/customer-addresses",
+        {"POST": "customer-addresses"},
     ),
     (
         re.compile(r"^/office/v1/inquiries/(?P<id>[^/]+)/verify$"),
