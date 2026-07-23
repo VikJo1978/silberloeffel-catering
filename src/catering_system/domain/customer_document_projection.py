@@ -78,6 +78,8 @@ class CustomerDocumentRecipient:
 
     name: str
     email: str | None = None
+    company_name: str | None = None
+    phone: str | None = None
     invoice_address: CustomerAddress | None = None
     delivery_address: CustomerAddress | None = None
     delivery_address_differs: bool = False
@@ -86,6 +88,8 @@ class CustomerDocumentRecipient:
     def __post_init__(self) -> None:
         _require_text(self.name, "name")
         _optional_bounded_text(self.email, "email", max_len=_MAX_LABEL)
+        _optional_bounded_text(self.company_name, "company_name", max_len=_MAX_LABEL)
+        _optional_bounded_text(self.phone, "phone", max_len=_MAX_LABEL)
         expected_differs = (
             self.invoice_address is not None
             and self.delivery_address is not None

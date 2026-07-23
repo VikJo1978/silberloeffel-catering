@@ -44,6 +44,7 @@ def build_customer_document_recipient(
     """
     snapshot = inquiry.customer_snapshot if inquiry is not None else None
     name, email = _name_and_email(snapshot)
+    company_name, phone = _company_and_phone(snapshot)
     differs = (
         invoice_address is not None
         and delivery_address is not None
@@ -55,6 +56,8 @@ def build_customer_document_recipient(
     return CustomerDocumentRecipient(
         name=name,
         email=email,
+        company_name=company_name,
+        phone=phone,
         invoice_address=invoice_address,
         delivery_address=delivery_address,
         delivery_address_differs=differs,
@@ -120,6 +123,16 @@ def _name_and_email(
     if not name:
         name = "Kunde"
     return name, snapshot.email
+
+
+def _company_and_phone(
+    snapshot: InquiryCustomerSnapshot | None,
+) -> tuple[str | None, str | None]:
+    if snapshot is None or snapshot.is_empty():
+        return None, None
+    company = (snapshot.company_name or "").strip() or None
+    phone = (snapshot.phone or "").strip() or None
+    return company, phone
 
 
 def _map_position(
