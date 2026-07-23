@@ -1,10 +1,15 @@
-"""Customer-facing Auftragsbestätigung preview projection and HTML renderer."""
+"""Customer-facing Auftragsbestätigung preview projection and HTML renderer.
+
+Persisted preview reads only from OrderConfirmationDocumentSnapshot.
+No Inquiry repository and no CustomerDocumentProjection live rebuild.
+"""
 
 from __future__ import annotations
 
 import html
 from dataclasses import dataclass
 
+from catering_system.domain.inquiry_customer_snapshot import customer_address_to_mapping
 from catering_system.domain.order_confirmation_document import (
     OrderConfirmationDocumentSnapshot,
 )
@@ -41,6 +46,12 @@ class OrderConfirmationDocumentPreview:
     payment_method_label: str
     payment_customer_visible_text: str
     footer_note: str
+    schema_version: int
+    address_facts_stored: bool
+    invoice_address: dict[str, str | None] | None
+    delivery_address: dict[str, str | None] | None
+    delivery_address_differs: bool | None
+    document_warnings: tuple[str, ...]
     watermark: str | None = None
 
 
@@ -56,6 +67,7 @@ def build_preview(
         if snapshot.guest_count_estimate is not None
         else "–"
     )
+    stored = snapshot.address_facts_stored
     return OrderConfirmationDocumentPreview(
         sender_name=_SENDER_NAME,
         sender_location=_SENDER_LOCATION,
@@ -86,6 +98,18 @@ def build_preview(
         payment_method_label=payment_method_label(snapshot.payment_method),
         payment_customer_visible_text=snapshot.payment_customer_visible_text,
         footer_note=_FOOTER_NOTE,
+        schema_version=snapshot.schema_version,
+        address_facts_stored=stored,
+        invoice_address=(
+            customer_address_to_mapping(snapshot.invoice_address) if stored else None
+        ),
+        delivery_address=(
+            customer_address_to_mapping(snapshot.delivery_address) if stored else None
+        ),
+        delivery_address_differs=(
+            snapshot.delivery_address_differs if stored else None
+        ),
+        document_warnings=snapshot.document_warnings,
         watermark=watermark,
     )
 
@@ -114,6 +138,12 @@ def preview_to_json(preview: OrderConfirmationDocumentPreview) -> dict[str, obje
         "payment_method_label": preview.payment_method_label,
         "payment_customer_visible_text": preview.payment_customer_visible_text,
         "footer_note": preview.footer_note,
+        "schema_version": preview.schema_version,
+        "address_facts_stored": preview.address_facts_stored,
+        "invoice_address": preview.invoice_address,
+        "delivery_address": preview.delivery_address,
+        "delivery_address_differs": preview.delivery_address_differs,
+        "document_warnings": list(preview.document_warnings),
         "watermark": preview.watermark,
     }
 
@@ -135,6 +165,13 @@ def render_preview_html(preview: OrderConfirmationDocumentPreview) -> str:
         recipient_lines.append('<p class="missing">Empfänger-E-Mail fehlt</p>')
     if preview.recipient_phone:
         recipient_lines.append(f"<p>{_e(preview.recipient_phone)}</p>")
+    address_section = _address_section_html(preview)
+    warnings_html = ""
+    if preview.document_warnings:
+        items = "".join(f"<li>{_e(code)}</li>" for code in preview.document_warnings)
+        warnings_html = (
+            f'<section class="section"><h2>Hinweise</h2><ul>{items}</ul></section>'
+        )
     position_rows = []
     for position in preview.positions:
         details = []
@@ -189,6 +226,8 @@ footer{{margin-top:2rem;padding-top:1rem;border-top:1px solid #ddd;font-size:0.9
 <p>Referenz: {_e(preview.document_reference)} · Erstellt am {_e(preview.created_at_text)}</p>
 </header>
 <section class="section"><h2>Kunde</h2>{"".join(recipient_lines) or "<p>–</p>"}</section>
+{address_section}
+{warnings_html}
 <section class="section"><h2>Veranstaltung</h2>
 <p>Datum: {_e(preview.event_date_text)}</p>
 <p>Zeit: {_e(preview.time_window_text)}</p>
@@ -211,6 +250,44 @@ footer{{margin-top:2rem;padding-top:1rem;border-top:1px solid #ddd;font-size:0.9
 </section>
 <footer><p>{_e(preview.footer_note)}</p></footer>
 </body></html>"""
+
+
+def _address_section_html(preview: OrderConfirmationDocumentPreview) -> str:
+    if not preview.address_facts_stored:
+        return (
+            '<section class="section"><h2>Adressen</h2>'
+            "<p>Adressdaten sind in diesem Dokumentstand nicht gespeichert.</p>"
+            "</section>"
+        )
+    differs_text = (
+        "ja"
+        if preview.delivery_address_differs is True
+        else "nein"
+        if preview.delivery_address_differs is False
+        else "–"
+    )
+    return (
+        '<section class="section"><h2>Adressen</h2>'
+        f"<p><strong>Rechnungsadresse</strong><br>{_format_address_html(preview.invoice_address)}</p>"
+        f"<p><strong>Lieferadresse</strong><br>{_format_address_html(preview.delivery_address)}</p>"
+        f"<p>Lieferadresse weicht ab: {_e(differs_text)}</p>"
+        "</section>"
+    )
+
+
+def _format_address_html(address: dict[str, str | None] | None) -> str:
+    if address is None:
+        return "–"
+    lines = [
+        address.get("street"),
+        " ".join(
+            part for part in (address.get("postal_code"), address.get("city")) if part
+        ).strip()
+        or None,
+        address.get("country"),
+    ]
+    rendered = "<br>".join(_e(line) for line in lines if line)
+    return rendered or "–"
 
 
 def _position_shape(position: object) -> dict[str, object]:

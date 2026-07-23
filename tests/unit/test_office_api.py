@@ -3493,6 +3493,12 @@ def test_confirmation_document_preview_json_and_html(api) -> None:
     assert preview["net_total_eur"]
     assert preview["vat_total_eur"]
     assert preview["gross_total_eur"]
+    assert preview["schema_version"] == 2
+    assert preview["address_facts_stored"] is True
+    assert "invoice_address" in preview
+    assert "delivery_address" in preview
+    assert "delivery_address_differs" in preview
+    assert "document_warnings" in preview
     assert "canonical_snapshot_json" not in body
     assert "unit_net_cents" not in preview["positions"][0]
 

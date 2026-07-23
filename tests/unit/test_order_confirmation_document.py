@@ -143,6 +143,9 @@ def test_snapshot_created_for_effective_order() -> None:
     assert snapshot.gross_total_cents == 24824
     assert snapshot.recipient_status == "ready"
     assert snapshot.document_hash.startswith("sha256:")
+    assert snapshot.schema_version == 2
+    assert snapshot.delivery_address_differs is False
+    assert snapshot.address_facts_stored is True
 
 
 def test_no_effective_version_blocked() -> None:
@@ -572,6 +575,10 @@ def test_address_warning_flows_into_confirmation_document() -> None:
         invoice_address=invoice,
         delivery_address=delivery,
     )
+    assert snapshot.schema_version == 2
+    assert snapshot.invoice_address == invoice
+    assert snapshot.delivery_address == delivery
+    assert snapshot.delivery_address_differs is True
     assert WARNING_DELIVERY_ADDRESS_DIFFERS in snapshot.document_warnings
 
 
@@ -922,7 +929,12 @@ def test_confirmation_document_service_has_no_offer_repository() -> None:
     text = (
         root / "src/catering_system/services/order_confirmation_document_service.py"
     ).read_text(encoding="utf-8")
+    preview = (
+        root / "src/catering_system/services/order_confirmation_document_preview.py"
+    ).read_text(encoding="utf-8")
     assert "OfferRepository" not in text
+    assert "OfferRepository" not in preview
+    assert "InquiryRepository" not in preview
     assert "conversion_link" not in text
     assert "parse_intake_contact" not in text
     assert "labelled_intake_context" not in text

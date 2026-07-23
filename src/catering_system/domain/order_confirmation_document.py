@@ -1,4 +1,9 @@
-"""Frozen customer-facing Auftragsbestätigung snapshot — EMAIL_MVP_1 slice B1."""
+"""Frozen customer-facing Auftragsbestätigung snapshot — EMAIL_MVP_1 slice B1.
+
+CONFIRMATION_ADDRESS_SNAPSHOT_V1: schema 2 persists invoice/delivery address
+facts once at create time. Schema 1 is legacy without address facts
+(delivery_address_differs is None / NOT_STORED — never false-by-default).
+"""
 
 from __future__ import annotations
 
@@ -7,9 +12,16 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Literal
 
+from catering_system.domain.customer_document_projection import (
+    CustomerAddress,
+    customer_addresses_equal,
+)
 from catering_system.domain.inquiry import PlanningMode
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION_V1 = 1
+SCHEMA_VERSION_V2 = 2
+SCHEMA_VERSION = SCHEMA_VERSION_V2
+SUPPORTED_SCHEMA_VERSIONS = frozenset({SCHEMA_VERSION_V1, SCHEMA_VERSION_V2})
 RecipientStatus = Literal["ready", "missing"]
 _DOCUMENT_HASH = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
@@ -68,12 +80,42 @@ class OrderConfirmationDocumentSnapshot:
     document_hash: str
     schema_version: int = SCHEMA_VERSION
     document_warnings: tuple[str, ...] = ()
+    invoice_address: CustomerAddress | None = None
+    delivery_address: CustomerAddress | None = None
+    # None = NOT_STORED (schema 1 legacy). Schema 2 requires bool.
+    delivery_address_differs: bool | None = None
 
     def __post_init__(self) -> None:
-        if self.schema_version != SCHEMA_VERSION:
+        if self.schema_version not in SUPPORTED_SCHEMA_VERSIONS:
             raise ValueError("unsupported order confirmation document schema version")
         if not _DOCUMENT_HASH.fullmatch(self.document_hash):
             raise ValueError("document_hash must be sha256:<hex>")
+        if self.schema_version == SCHEMA_VERSION_V1:
+            if (
+                self.invoice_address is not None
+                or self.delivery_address is not None
+                or self.delivery_address_differs is not None
+            ):
+                raise ValueError(
+                    "schema 1 confirmation snapshot must not store address facts"
+                )
+            return
+        if self.delivery_address_differs is None:
+            raise ValueError("schema 2 requires delivery_address_differs as bool")
+        expected_differs = (
+            self.invoice_address is not None
+            and self.delivery_address is not None
+            and not customer_addresses_equal(
+                self.invoice_address, self.delivery_address
+            )
+        )
+        if self.delivery_address_differs != expected_differs:
+            raise ValueError("delivery_address_differs does not match addresses")
+
+    @property
+    def address_facts_stored(self) -> bool:
+        """True when invoice/delivery facts were persisted (schema 2)."""
+        return self.schema_version == SCHEMA_VERSION_V2
 
 
 def mask_recipient_email(email: str | None) -> str | None:
