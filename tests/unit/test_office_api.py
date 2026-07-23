@@ -875,7 +875,7 @@ def test_payment_reminder_read_write_replay_and_stale_gate(api) -> None:
         "invoice_created": True,
         "invoice_number": "RE-2026-0048",
         "sent_on": "2026-07-15",
-        "due_on": "2026-07-22",
+        "due_on": (date.today() + timedelta(days=7)).isoformat(),
         "paid_on": None,
         "cash_received": False,
     }

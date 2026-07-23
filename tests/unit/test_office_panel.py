@@ -12,7 +12,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import date
+from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
@@ -449,7 +449,7 @@ def test_order_payment_reminder_is_separate_and_truthful(panel: str) -> None:
             "invoice_created": "1",
             "invoice_number": "RE-2026-0048",
             "sent_on": "2026-07-15",
-            "due_on": "2026-07-22",
+            "due_on": (office_api_views.berlin_today() + timedelta(days=7)).isoformat(),
         },
     )
     assert status == 200
