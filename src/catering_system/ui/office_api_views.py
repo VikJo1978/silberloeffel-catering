@@ -671,6 +671,34 @@ def confirmation_document_summary_shape(
     }
 
 
+def offer_document_snapshot_summary(snapshot: object) -> dict[str, object]:
+    """Inspection shape for a frozen offer document (OFFER_DOCUMENT_SNAPSHOT_V1).
+
+    Evidence only: identity, provenance, schema and hash. No storage paths
+    exist in this slice, and no PDF/send/acceptance facts are exposed.
+    """
+    from catering_system.domain.offer_document_snapshot import OfferDocumentSnapshot
+
+    assert isinstance(snapshot, OfferDocumentSnapshot)
+    return {
+        "offer_document_snapshot_id": snapshot.offer_document_snapshot_id,
+        "offer_id": snapshot.offer_id,
+        "offer_version_id": snapshot.offer_version_id,
+        "offer_variant_id": snapshot.offer_variant_id,
+        "document_reference": snapshot.document_reference,
+        "schema_version": snapshot.schema_version,
+        "document_hash": snapshot.document_hash,
+        "created_at": snapshot.created_at.isoformat(),
+        "created_by": snapshot.created_by,
+        "fulfillment_mode": snapshot.fulfillment_mode,
+        "delivery_address_differs": snapshot.delivery_address_differs,
+        "net_total_cents": snapshot.net_total_cents,
+        "vat_total_cents": snapshot.vat_total_cents,
+        "gross_total_cents": snapshot.gross_total_cents,
+        "document_warnings": list(snapshot.document_warnings),
+    }
+
+
 def confirmation_document_preview_shape(
     preview: OrderConfirmationDocumentPreview,
 ) -> dict[str, object]:

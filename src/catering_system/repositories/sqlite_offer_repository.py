@@ -280,6 +280,17 @@ def _migration_6_offer_position_catalog_snapshot_fields(
             )
 
 
+def _migration_7_offer_version_customer_narrative(
+    connection: sqlite3.Connection,
+) -> None:
+    existing = {
+        row[1] for row in connection.execute("PRAGMA table_info(offer_versions)")
+    }
+    for name in ("customer_title", "customer_introduction", "customer_notes"):
+        if name not in existing:
+            connection.execute(f"ALTER TABLE offer_versions ADD COLUMN {name} TEXT")
+
+
 _MIGRATIONS = (
     (1, "create_offer_tables", _migration_1_create_tables),
     (2, "unique_source_inquiry", _migration_2_unique_source_inquiry),
@@ -298,6 +309,11 @@ _MIGRATIONS = (
         6,
         "offer_position_catalog_snapshot_fields",
         _migration_6_offer_position_catalog_snapshot_fields,
+    ),
+    (
+        7,
+        "offer_version_customer_narrative",
+        _migration_7_offer_version_customer_narrative,
     ),
 )
 
@@ -606,8 +622,9 @@ class SQLiteOfferRepository:
                 offer_version_id, offer_id, version_number, created_at, valid_until,
                 snapshot_id, snapshot_hash, event_date, time_window_text,
                 location_text, guest_count, planning_mode, payment_method,
-                payment_customer_visible_text
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                payment_customer_visible_text, customer_title,
+                customer_introduction, customer_notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 version.offer_version_id,
@@ -624,6 +641,9 @@ class SQLiteOfferRepository:
                 version.planning_mode,
                 version.payment_method,
                 version.payment_customer_visible_text,
+                version.customer_title,
+                version.customer_introduction,
+                version.customer_notes,
             ),
         )
         for sort_order, variant in enumerate(version.variants):
@@ -755,7 +775,8 @@ class SQLiteOfferRepository:
             SELECT offer_version_id, version_number, created_at, valid_until,
                    snapshot_id, snapshot_hash, event_date, time_window_text,
                    location_text, guest_count, planning_mode, payment_method,
-                   payment_customer_visible_text
+                   payment_customer_visible_text, customer_title,
+                   customer_introduction, customer_notes
             FROM offer_versions
             WHERE offer_id = ?
             ORDER BY version_number
@@ -799,6 +820,9 @@ class SQLiteOfferRepository:
                     payment_method=validate_payment_method(row[11]),
                     payment_customer_visible_text=row[12],
                     variants=variants,
+                    customer_title=row[13],
+                    customer_introduction=row[14],
+                    customer_notes=row[15],
                 )
             )
         return tuple(versions)

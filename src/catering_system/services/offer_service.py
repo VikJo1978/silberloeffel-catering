@@ -661,7 +661,25 @@ def _build_version_from_snapshot(
         variants=tuple(
             _map_variant(variant, offer_version_id) for variant in snapshot.variants
         ),
+        customer_title=_normalize_narrative(snapshot.customer_text.title),
+        customer_introduction=_normalize_narrative(snapshot.customer_text.introduction),
+        customer_notes=_normalize_narrative(snapshot.customer_text.notes),
     )
+
+
+def _normalize_narrative(value: str | None) -> str | None:
+    """OFFER_DOCUMENT_SNAPSHOT_V1 narrative rule.
+
+    None stays None; blank/whitespace-only becomes None (never stored as an
+    empty string); non-blank keeps its inner text and line breaks with only
+    the outer whitespace trimmed. ``introduction``/``notes`` arrive unstripped
+    and may legitimately be empty (_require_long_text), so this is the single
+    place that decides absence.
+    """
+    if value is None:
+        return None
+    trimmed = value.strip()
+    return trimmed or None
 
 
 def _map_variant(variant: OfferSnapshotVariant, offer_version_id: str) -> OfferVariant:

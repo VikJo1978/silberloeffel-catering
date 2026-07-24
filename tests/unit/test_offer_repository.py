@@ -457,6 +457,214 @@ def test_sqlite_offer_roundtrip_preserves_event_and_payment_facts(
     assert loaded.versions[1].guest_count == 120
 
 
+def test_sqlite_offer_roundtrip_preserves_customer_narrative(
+    tmp_path: Path,
+) -> None:
+    v1 = _version(1, snapshot_hash=_HASH_V1)
+    v1 = OfferVersion(
+        offer_version_id=v1.offer_version_id,
+        offer_id=v1.offer_id,
+        version_number=v1.version_number,
+        created_at=v1.created_at,
+        valid_until=v1.valid_until,
+        snapshot_id=v1.snapshot_id,
+        snapshot_hash=v1.snapshot_hash,
+        **_version_facts(),
+        variants=v1.variants,
+        # Already normalized (outer-trimmed, internal newlines kept) — the
+        # normalization step itself is OfferService's job (see
+        # test_offer_service.py); this test only proves the SQLite
+        # repository round-trips the resulting value byte-for-byte.
+        customer_title="Sommerfest 2026",
+        customer_introduction="Liebe Familie Muster,\n\nvielen Dank.",
+        customer_notes="Bitte pünktlich liefern.",
+    )
+    offer = _offer(versions=(v1,))
+    repo = SQLiteOfferRepository(tmp_path / "narrative.db")
+    repo.save(offer)
+    repo.close()
+
+    reopened = SQLiteOfferRepository(tmp_path / "narrative.db")
+    loaded = reopened.get(_OFFER_ID)
+    reopened.close()
+    assert loaded is not None
+    loaded_v1 = loaded.versions[0]
+    assert loaded_v1.customer_title == "Sommerfest 2026"
+    # Internal newlines/text are preserved exactly through the round-trip.
+    assert loaded_v1.customer_introduction == "Liebe Familie Muster,\n\nvielen Dank."
+    assert loaded_v1.customer_notes == "Bitte pünktlich liefern."
+
+
+def test_sqlite_offer_roundtrip_preserves_none_customer_narrative(
+    tmp_path: Path,
+) -> None:
+    offer = _offer()  # default _version() carries no narrative fields (all None)
+    repo = SQLiteOfferRepository(tmp_path / "narrative_none.db")
+    repo.save(offer)
+    loaded = repo.get(_OFFER_ID)
+    assert loaded is not None
+    v1 = loaded.versions[0]
+    assert v1.customer_title is None
+    assert v1.customer_introduction is None
+    assert v1.customer_notes is None
+
+
+def test_pre_migration_7_rows_load_with_narrative_fields_none(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "pre_migration.db"
+    conn = sqlite3.connect(db)
+    apply_migrations(conn, "offers", _MIGRATIONS[:6])
+    conn.execute(
+        "INSERT INTO offers (offer_id, source_inquiry_id, created_at) VALUES (?, ?, ?)",
+        (_OFFER_ID, _INQUIRY_ID, _NOW.isoformat()),
+    )
+    conn.execute(
+        """
+        INSERT INTO offer_versions (
+            offer_version_id, offer_id, version_number, created_at, valid_until,
+            snapshot_id, snapshot_hash, event_date, time_window_text,
+            location_text, guest_count, planning_mode, payment_method,
+            payment_customer_visible_text
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            _V1_ID,
+            _OFFER_ID,
+            1,
+            _NOW.isoformat(),
+            date(2026, 7, 31).isoformat(),
+            "77777777-7777-7777-7777-777777777771",
+            _HASH_V1,
+            _EVENT_DATE.isoformat(),
+            "18:00–22:00",
+            "Hamburg",
+            80,
+            "caterer_suggestion",
+            "RECHNUNG",
+            "Zahlung per Rechnung",
+        ),
+    )
+    conn.execute(
+        "INSERT INTO offer_variants "
+        "(variant_id, offer_version_id, offer_id, label, sort_order) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (_A_ID, _V1_ID, _OFFER_ID, "Variante A", 0),
+    )
+    conn.execute(
+        """
+        INSERT INTO offer_positions (
+            position_id, variant_id, offer_version_id, kind, name,
+            unit_net_cents, net_total_cents, vat_rate_percent,
+            vat_amount_cents, gross_total_cents, related_position_id,
+            sort_order
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            _POS_A,
+            _A_ID,
+            _V1_ID,
+            "catalog",
+            "Fingerfood Paket",
+            290,
+            23200,
+            7,
+            1624,
+            24824,
+            None,
+            0,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    repo = SQLiteOfferRepository(db)  # migration 7 runs defensively on open
+    loaded = repo.get(_OFFER_ID)
+    repo.close()
+    assert loaded is not None
+    v1 = loaded.versions[0]
+    assert v1.customer_title is None
+    assert v1.customer_introduction is None
+    assert v1.customer_notes is None
+
+
+def test_prepare_offer_document_after_sqlite_reload_gets_frozen_narrative(
+    tmp_path: Path,
+) -> None:
+    from dataclasses import replace as _replace
+
+    from catering_system.domain.customer_document_projection import CustomerAddress
+    from catering_system.domain.inquiry_customer_snapshot import (
+        InquiryCustomerSnapshot,
+    )
+    from catering_system.repositories.in_memory_inquiry_repository import (
+        InMemoryInquiryRepository,
+    )
+    from catering_system.repositories.in_memory_order_repository import (
+        InMemoryOrderRepository,
+    )
+    from catering_system.repositories.sqlite_offer_document_snapshot_repository import (
+        SQLiteOfferDocumentSnapshotRepository,
+    )
+    from catering_system.services.offer_document_snapshot_service import (
+        OfferDocumentSnapshotService,
+    )
+    from catering_system.services.offer_service import OfferService
+    from tests.unit.test_offer_service import (
+        _INQUIRY_ID as _SVC_INQUIRY_ID,
+    )
+    from tests.unit.test_offer_service import (
+        _sample_inquiry,
+        _valid_snapshot,
+    )
+
+    db = tmp_path / "narrative_prepare.db"
+    invoice = CustomerAddress(
+        street="Bürostraße 1", postal_code="20095", city="Hamburg", country="DE"
+    )
+    inquiries = InMemoryInquiryRepository()
+    inquiry = _replace(
+        _sample_inquiry(),
+        customer_snapshot=InquiryCustomerSnapshot(
+            company_name="ACME GmbH",
+            contact_name="Anna",
+            email="anna@example.invalid",
+            phone="+49301234567",
+            invoice_address=invoice,
+            delivery_address=None,
+            delivery_address_mode="SAME_AS_INVOICE",
+        ),
+        fulfillment_mode="DELIVERY",
+    )
+    inquiries.save(inquiry)
+
+    offers = SQLiteOfferRepository(db)
+    offer_service = OfferService(offers, inquiries, InMemoryOrderRepository())
+    # _valid_snapshot()'s customer_text carries fixed narrative values
+    # ("Sommerfest" / "Customer-visible introduction" / "...notes").
+    snapshot_in = _valid_snapshot()
+    offer = offer_service.prepare_offer_version(_SVC_INQUIRY_ID, snapshot_in)
+    version = offer.versions[0]
+    offers.close()
+
+    # Reopen a fresh repository/connection to force a real SQLite round-trip.
+    offers = SQLiteOfferRepository(db)
+    documents = SQLiteOfferDocumentSnapshotRepository(db)
+    doc_service = OfferDocumentSnapshotService(offers, inquiries, documents)
+    doc = doc_service.prepare_offer_document(
+        offer.offer_id,
+        version.offer_version_id,
+        version.variants[0].variant_id,
+        "office",
+    )
+    offers.close()
+    documents.close()
+
+    assert doc.customer_title == "Sommerfest"
+    assert doc.customer_introduction == "Customer-visible introduction"
+    assert doc.customer_notes == "Customer-visible conditions and notes"
+
+
 def test_sqlite_offer_version_event_facts_are_immutable(tmp_path: Path) -> None:
     repo = SQLiteOfferRepository(tmp_path / "offer.db")
     repo.save(_offer())
@@ -493,6 +701,7 @@ def test_offer_component_migrations_are_recorded_once(tmp_path: Path) -> None:
         (4, "offer_version_event_and_payment_facts"),
         (5, "offer_variant_and_position_print_fields"),
         (6, "offer_position_catalog_snapshot_fields"),
+        (7, "offer_version_customer_narrative"),
     ]
     conn = sqlite3.connect(db)
     apply_migrations(conn, "offers", _MIGRATIONS)
@@ -500,4 +709,4 @@ def test_offer_component_migrations_are_recorded_once(tmp_path: Path) -> None:
         "SELECT COUNT(*) FROM schema_migrations WHERE component = 'offers'"
     ).fetchone()
     conn.close()
-    assert rows_after == (6,)
+    assert rows_after == (7,)

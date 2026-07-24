@@ -50,6 +50,10 @@ from catering_system.domain.offer import (
     AcceptanceChannel,
     SentChannel,
 )
+from catering_system.domain.offer_document_snapshot import (
+    OfferDocumentCreationBlocked,
+    OfferDocumentVariantConflictError,
+)
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_commercial_snapshot import (
     MissingCommercialSnapshotError,
@@ -73,6 +77,9 @@ from catering_system.repositories.office_api_ledger import (
 )
 from catering_system.repositories.sqlite_inquiry_repository import (
     SQLiteInquiryRepository,
+)
+from catering_system.repositories.sqlite_offer_document_snapshot_repository import (
+    SQLiteOfferDocumentSnapshotRepository,
 )
 from catering_system.repositories.sqlite_offer_repository import (
     SQLiteOfferRepository,
@@ -104,6 +111,10 @@ from catering_system.repositories.sqlite_order_confirmation_outbound_repository 
 from catering_system.services.inquiry_service import (
     InquiryService,
     validate_inquiry_source,
+)
+from catering_system.services.offer_document_snapshot_service import (
+    OfferDocumentNotFoundError,
+    OfferDocumentSnapshotService,
 )
 from catering_system.services.offer_service import OfferService
 from catering_system.services.operational_core_service import OperationalCoreService
@@ -414,6 +425,9 @@ class OfficeApi:
         self.operational_pauses = SQLiteOrderOperationalPauseRepository.from_connection(
             connection
         )
+        self.offer_documents = SQLiteOfferDocumentSnapshotRepository.from_connection(
+            connection
+        )
         self.ledger = OfficeCommandLedger(connection)
         self.events = DeferredEventSink()
         self.executor = CoreCommandExecutor(connection, self.events)
@@ -425,6 +439,12 @@ class OfficeApi:
             self.inquiries,
             self.orders,
             self.commercial_snapshots,
+            today=views.berlin_today,
+        )
+        self.offer_document_service = OfferDocumentSnapshotService(
+            self.offers,
+            self.inquiries,
+            self.offer_documents,
             today=views.berlin_today,
         )
         self.payment_reminder_service = PaymentReminderService(
@@ -1170,6 +1190,50 @@ class OfficeApi:
             "offer_id": offer.offer_id,
             "offer_version_id": version.offer_version_id,
             "snapshot_id": version.snapshot_id,
+        }
+
+    def cmd_offer_document(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        """Freeze the customer ANGEBOT / AUFTRAGSBESTÄTIGUNG for one version."""
+        offer_id = path_ids["offer_id"]
+        offer_version_id = _v_uuid(args["offer_version_id"])
+        offer_variant_id = _v_uuid(args["offer_variant_id"])
+        created_by = _v_str(args["created_by"], 200)
+        existing = self.offer_document_service.get_by_offer_version_id(offer_version_id)
+        try:
+            snapshot = self.offer_document_service.prepare_offer_document(
+                offer_id,
+                offer_version_id,
+                offer_variant_id,
+                created_by,
+            )
+        except OfferDocumentNotFoundError:
+            raise ApiError(404, "not_found") from None
+        except OfferDocumentVariantConflictError as exc:
+            raise ApiError(409, "offer_document_variant_conflict") from exc
+        except OfferDocumentCreationBlocked as exc:
+            raise ApiError(422, "offer_document_blocked", reasons=exc.codes) from exc
+        status = 200 if existing is not None else 201
+        return status, {
+            "offer_id": snapshot.offer_id,
+            "offer_document_snapshot_id": snapshot.offer_document_snapshot_id,
+            "snapshot": views.offer_document_snapshot_summary(snapshot),
+        }
+
+    def offer_document(
+        self, offer_id: str, offer_version_id: str | None
+    ) -> dict[str, object]:
+        """Read the frozen document for one OfferVersion (snapshot only)."""
+        if offer_version_id is None:
+            raise _invalid()
+        snapshot = self.offer_document_service.get_by_offer_version_id(offer_version_id)
+        if snapshot is None or snapshot.offer_id != offer_id:
+            raise ApiError(404, "not_found")
+        return {
+            "offer_id": snapshot.offer_id,
+            "offer_document_snapshot_id": snapshot.offer_document_snapshot_id,
+            "snapshot": views.offer_document_snapshot_summary(snapshot),
         }
 
     def cmd_prepare_next_version(
@@ -1974,6 +2038,9 @@ _VERSION_ARGS = _ArgKeys(
 )
 _NO_ARGS = _ArgKeys(required=frozenset())
 _SNAPSHOT_ARGS = _ArgKeys(required=frozenset({"snapshot"}))
+_OFFER_DOCUMENT_ARGS = _ArgKeys(
+    required=frozenset({"offer_version_id", "offer_variant_id", "created_by"})
+)
 _MARK_SENT_ARGS = _ArgKeys(
     required=frozenset(
         {
@@ -2064,6 +2131,7 @@ _COMMANDS: dict[str, _CommandSpec] = {
         _SNAPSHOT_ARGS,
         {"latest_version_number"},
     ),
+    "offer-document": _CommandSpec("cmd_offer_document", _OFFER_DOCUMENT_ARGS, set()),
     "mark-sent": _CommandSpec("cmd_mark_sent", _MARK_SENT_ARGS, set()),
     "record-acceptance": _CommandSpec(
         "cmd_record_acceptance", _RECORD_ACCEPTANCE_ARGS, set()
@@ -2186,6 +2254,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/offers/(?P<offer_id>[^/]+)/prepare-next-version$"),
         "/office/v1/offers/{offer_id}/prepare-next-version",
         {"POST": "prepare-next-version"},
+    ),
+    (
+        re.compile(r"^/office/v1/offers/(?P<offer_id>[^/]+)/offer-document$"),
+        "/office/v1/offers/{offer_id}/offer-document",
+        {"POST": "offer-document", "GET": "offer_document"},
     ),
     (
         re.compile(r"^/office/v1/tasks$"),
@@ -2702,6 +2775,14 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             elif kind == "offer_detail":
                 self._query(set())
                 self._respond(200, api.offer_detail(path_ids["offer_id"]))
+            elif kind == "offer_document":
+                params = self._query({"offer_version_id"})
+                version_id = (
+                    _v_uuid(params["offer_version_id"])
+                    if "offer_version_id" in params
+                    else None
+                )
+                self._respond(200, api.offer_document(path_ids["offer_id"], version_id))
             elif kind == "inquiry_detail":
                 self._query(set())
                 self._respond(200, api.inquiry_detail(path_ids["id"]))

@@ -18,6 +18,7 @@ from catering_system.domain.order_payment_reminder import (
 
 _MAX_EVENT_TEXT_LEN = 500
 _MAX_PAYMENT_VISIBLE_TEXT_LEN = 20_000
+_MAX_CUSTOMER_NARRATIVE_LEN = 20_000
 
 OfferState = Literal[
     "Prepared",
@@ -202,6 +203,12 @@ class OfferVersion:
     payment_method: PaymentMethod
     payment_customer_visible_text: str
     variants: tuple[OfferVariant, ...]
+    # OFFER_DOCUMENT_SNAPSHOT_V1: customer-facing narrative frozen from the
+    # source OfferSnapshot's customer_text. Blank/whitespace-only input is
+    # normalized to None before construction (never stored as "").
+    customer_title: str | None = None
+    customer_introduction: str | None = None
+    customer_notes: str | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.offer_version_id, "offer_version_id")
@@ -226,6 +233,19 @@ class OfferVersion:
             self.payment_customer_visible_text,
             "payment_customer_visible_text",
             max_len=_MAX_PAYMENT_VISIBLE_TEXT_LEN,
+        )
+        _optional_bounded_text(
+            self.customer_title, "customer_title", max_len=_MAX_EVENT_TEXT_LEN
+        )
+        _optional_bounded_text(
+            self.customer_introduction,
+            "customer_introduction",
+            max_len=_MAX_CUSTOMER_NARRATIVE_LEN,
+        )
+        _optional_bounded_text(
+            self.customer_notes,
+            "customer_notes",
+            max_len=_MAX_CUSTOMER_NARRATIVE_LEN,
         )
         if not self.variants:
             raise ValueError("an OfferVersion requires at least one variant")

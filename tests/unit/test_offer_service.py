@@ -335,6 +335,56 @@ def test_prepare_offer_version_happy_path() -> None:
     assert offers.get_by_source_inquiry_id(_INQUIRY_ID) == offer
 
 
+def test_prepare_offer_version_narrative_normalization() -> None:
+    """OFFER_DOCUMENT_SNAPSHOT_V1 narrative rule: None stays None; blank/
+    whitespace-only becomes None; non-blank keeps inner text/newlines with
+    only the outer whitespace trimmed."""
+    offers = _CountingOfferRepository()
+    _inquiries, _orders, _offers, service = _world(
+        inquiry=_sample_inquiry(), offers=offers
+    )
+    payload = _valid_snapshot()
+    payload["customer_text"] = {
+        "title": "  Sommerfest 2026  ",
+        "introduction": "  Liebe Familie Muster,\n\nvielen Dank.  ",
+        "notes": "   ",  # blank after trim
+    }
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+
+    offer = service.prepare_offer_version(_INQUIRY_ID, payload)
+
+    version = offer.versions[0]
+    assert version.customer_title == "Sommerfest 2026"
+    assert version.customer_introduction == "Liebe Familie Muster,\n\nvielen Dank."
+    assert version.customer_notes is None
+
+
+def test_prepare_offer_version_narrative_blank_introduction_and_notes_become_none() -> (
+    None
+):
+    # customer_text.title is required/non-blank at the snapshot-validation
+    # layer (_require_short_text), so it can never arrive as blank here —
+    # only introduction/notes (_require_long_text) permit an empty string.
+    offers = _CountingOfferRepository()
+    _inquiries, _orders, _offers, service = _world(
+        inquiry=_sample_inquiry(), offers=offers
+    )
+    payload = _valid_snapshot()
+    payload["customer_text"] = {
+        "title": "Sommerfest",
+        "introduction": "",
+        "notes": "",
+    }
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+
+    offer = service.prepare_offer_version(_INQUIRY_ID, payload)
+
+    version = offer.versions[0]
+    assert version.customer_title == "Sommerfest"
+    assert version.customer_introduction is None
+    assert version.customer_notes is None
+
+
 def test_prepare_offer_version_missing_inquiry() -> None:
     offers = _CountingOfferRepository()
     _inquiries, _orders, _offers, service = _world(offers=offers)
