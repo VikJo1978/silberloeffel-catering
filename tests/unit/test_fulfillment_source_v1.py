@@ -22,6 +22,9 @@ from pathlib import Path
 
 import pytest
 
+from catering_system.domain.customer_document_eligibility import (
+    CustomerDocumentCreationBlocked,
+)
 from catering_system.domain.customer_document_projection import CustomerAddress
 from catering_system.domain.inquiry import (
     FULFILLMENT_MODES,
@@ -34,13 +37,10 @@ from catering_system.domain.order_commercial_snapshot import (
     OrderCommercialSnapshot,
 )
 from catering_system.domain.order_confirmation_document import (
-    OrderConfirmationDocumentSnapshot,
     SCHEMA_VERSION_V1,
     SCHEMA_VERSION_V2,
     SCHEMA_VERSION_V3,
-)
-from catering_system.domain.customer_document_eligibility import (
-    CustomerDocumentCreationBlocked,
+    OrderConfirmationDocumentSnapshot,
 )
 from catering_system.intake.email_adapter import intake_from_email
 from catering_system.intake.manual_adapter import intake_from_manual
@@ -110,7 +110,7 @@ def _commercial(order_id: str) -> OrderCommercialSnapshot:
                 vat_rate_percent=7,
                 vat_amount_cents=1624,
                 gross_total_cents=24824,
-                quantity=Decimal("80"),
+                quantity=Decimal(80),
                 quantity_mode="total",
                 unit_label="Stück",
             ),
@@ -378,7 +378,7 @@ def test_d1_delivery_without_address_blocked_no_partial_document() -> None:
 
 
 def test_e1_pickup_never_requires_address() -> None:
-    _inquiries, _orders, documents, doc_service, order, version, _inq = _ready_world(
+    _inquiries, _orders, _documents, doc_service, order, version, _inq = _ready_world(
         fulfillment_mode="PICKUP",
     )
     snap = doc_service.prepare_snapshot(
@@ -628,6 +628,126 @@ def test_j1_persisted_preview_modules_do_not_read_offer_or_inquiry() -> None:
     assert "InquiryRepository" not in text
     assert "OfferRepository" not in text
     assert "inquiry_repository" not in text.lower()
+
+
+def test_j2_persisted_preview_delivery_shows_label_and_frozen_address() -> None:
+    """Review fix: order_confirmation_document_preview.py must read
+    fulfillment_mode from the frozen snapshot, never from live Inquiry."""
+    from catering_system.services.order_confirmation_document_preview import (
+        build_preview,
+        preview_to_json,
+        render_preview_html,
+    )
+
+    _inquiries, _orders, _documents, doc_service, order, version, _inq = _ready_world(
+        fulfillment_mode="DELIVERY",
+        invoice_address=_INVOICE,
+        delivery_address_mode="SAME_AS_INVOICE",
+    )
+    snapshot = doc_service.prepare_snapshot(
+        order.order_id, version.order_version_id, "office"
+    )
+    preview = build_preview(snapshot)
+    assert preview.fulfillment_facts_stored is True
+    assert preview.fulfillment_mode == "DELIVERY"
+    assert preview.fulfillment_label == "Lieferung"
+    payload = preview_to_json(preview)
+    assert payload["fulfillment_mode"] == "DELIVERY"
+    html = render_preview_html(preview)
+    assert "Lieferung" in html
+    assert "Abholung" not in html
+    assert "Bürostraße 1" in html
+
+
+def test_j3_persisted_preview_pickup_hides_delivery_ui() -> None:
+    from catering_system.services.order_confirmation_document_preview import (
+        build_preview,
+        preview_to_json,
+        render_preview_html,
+    )
+
+    _inquiries, _orders, _documents, doc_service, order, version, _inq = _ready_world(
+        fulfillment_mode="PICKUP",
+        invoice_address=_INVOICE,
+        delivery_address=_DELIVERY,
+        delivery_address_mode="SEPARATE",
+    )
+    snapshot = doc_service.prepare_snapshot(
+        order.order_id, version.order_version_id, "office"
+    )
+    preview = build_preview(snapshot)
+    assert preview.fulfillment_facts_stored is True
+    assert preview.fulfillment_mode == "PICKUP"
+    assert preview.fulfillment_label == "Abholung"
+    payload = preview_to_json(preview)
+    assert payload["fulfillment_mode"] == "PICKUP"
+    html = render_preview_html(preview)
+    assert "Abholung" in html
+    assert "Lieferung" not in html
+    assert "Lieferadresse nicht festgelegt" not in html
+    assert "DELIVERY_ADDRESS_DIFFERS_FROM_INVOICE" not in html
+    assert "weicht ab" not in html
+    # Rechnungsadresse continues to be shown for PICKUP.
+    assert "Bürostraße 1" in html
+    # The stored delivery address (Eventplatz 9) must not leak into a
+    # document whose fulfillment mode says it is not applicable.
+    assert "Eventplatz 9" not in html
+
+
+def test_j4_persisted_preview_legacy_schema_has_no_live_fallback() -> None:
+    from catering_system.services.order_confirmation_document_preview import (
+        build_preview,
+        preview_to_json,
+        render_preview_html,
+    )
+
+    snap = _valid_schema3_snapshot(fulfillment_mode="DELIVERY")
+    legacy = OrderConfirmationDocumentSnapshot(
+        **{
+            **snap.__dict__,
+            "schema_version": SCHEMA_VERSION_V1,
+            "invoice_address": None,
+            "delivery_address": None,
+            "delivery_address_differs": None,
+            "fulfillment_mode": None,
+        }
+    )
+    preview = build_preview(legacy)
+    assert preview.fulfillment_facts_stored is False
+    assert preview.fulfillment_mode is None
+    payload = preview_to_json(preview)
+    assert payload["fulfillment_mode"] is None
+    assert payload["fulfillment_facts_stored"] is False
+    html = render_preview_html(preview)
+    assert "Lieferung" not in html
+    assert "Abholung" not in html
+    assert "nicht gespeichert" in html
+
+
+def test_j5_persisted_preview_pickup_unaffected_by_later_inquiry_change() -> None:
+    """Replay/immutability at the persisted-preview boundary, not just the
+    snapshot object: mutating the live Inquiry after create must not change
+    what a re-rendered persisted preview shows."""
+    from catering_system.services.order_confirmation_document_preview import (
+        build_preview,
+        render_preview_html,
+    )
+
+    inquiries, _orders, _documents, doc_service, order, version, inquiry = _ready_world(
+        fulfillment_mode="PICKUP"
+    )
+    snapshot = doc_service.prepare_snapshot(
+        order.order_id, version.order_version_id, "office"
+    )
+    before = render_preview_html(build_preview(snapshot))
+    inquiries.update(replace(inquiry, fulfillment_mode="DELIVERY"))
+    replay = doc_service.prepare_snapshot(
+        order.order_id, version.order_version_id, "office"
+    )
+    after = render_preview_html(build_preview(replay))
+    assert before == after
+    assert "Abholung" in after
+    assert "Lieferung" not in after
 
 
 # --- K: input channels — structured only, never inferred --------------------

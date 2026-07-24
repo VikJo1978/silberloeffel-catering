@@ -21,6 +21,12 @@ _SENDER_NAME = "Silberlöffel Event Catering Service"
 _SENDER_LOCATION = "Hamburg"
 _FOOTER_NOTE = "Bei Rückfragen wenden Sie sich bitte an unser Büro."
 
+# FULFILLMENT_SOURCE_V1: schema 3 only (fulfillment_fact_stored). Schema 1/2
+# never had this fact — the neutral label below is shown instead, never a
+# guessed Lieferung/Abholung.
+_FULFILLMENT_LABELS = {"DELIVERY": "Lieferung", "PICKUP": "Abholung"}
+_FULFILLMENT_NOT_STORED_LABEL = "Auftragsart in diesem Dokumentstand nicht gespeichert"
+
 
 @dataclass(frozen=True)
 class OrderConfirmationDocumentPreview:
@@ -51,6 +57,9 @@ class OrderConfirmationDocumentPreview:
     invoice_address: dict[str, str | None] | None
     delivery_address: dict[str, str | None] | None
     delivery_address_differs: bool | None
+    fulfillment_facts_stored: bool
+    fulfillment_mode: str | None
+    fulfillment_label: str
     document_warnings: tuple[str, ...]
     watermark: str | None = None
 
@@ -68,6 +77,13 @@ def build_preview(
         else "–"
     )
     stored = snapshot.address_facts_stored
+    fulfillment_stored = snapshot.fulfillment_fact_stored
+    fulfillment_mode = snapshot.fulfillment_mode if fulfillment_stored else None
+    fulfillment_label = (
+        _FULFILLMENT_LABELS[fulfillment_mode]
+        if fulfillment_mode is not None
+        else _FULFILLMENT_NOT_STORED_LABEL
+    )
     return OrderConfirmationDocumentPreview(
         sender_name=_SENDER_NAME,
         sender_location=_SENDER_LOCATION,
@@ -109,6 +125,9 @@ def build_preview(
         delivery_address_differs=(
             snapshot.delivery_address_differs if stored else None
         ),
+        fulfillment_facts_stored=fulfillment_stored,
+        fulfillment_mode=fulfillment_mode,
+        fulfillment_label=fulfillment_label,
         document_warnings=snapshot.document_warnings,
         watermark=watermark,
     )
@@ -143,6 +162,9 @@ def preview_to_json(preview: OrderConfirmationDocumentPreview) -> dict[str, obje
         "invoice_address": preview.invoice_address,
         "delivery_address": preview.delivery_address,
         "delivery_address_differs": preview.delivery_address_differs,
+        "fulfillment_facts_stored": preview.fulfillment_facts_stored,
+        "fulfillment_mode": preview.fulfillment_mode,
+        "fulfillment_label": preview.fulfillment_label,
         "document_warnings": list(preview.document_warnings),
         "watermark": preview.watermark,
     }
@@ -253,9 +275,13 @@ footer{{margin-top:2rem;padding-top:1rem;border-top:1px solid #ddd;font-size:0.9
 
 
 def _address_section_html(preview: OrderConfirmationDocumentPreview) -> str:
+    auftragsart_html = (
+        f"<p><strong>Auftragsart:</strong> {_e(preview.fulfillment_label)}</p>"
+    )
     if not preview.address_facts_stored:
         return (
             '<section class="section"><h2>Adressen</h2>'
+            f"{auftragsart_html}"
             "<p>Adressdaten sind in diesem Dokumentstand nicht gespeichert.</p>"
             "</section>"
         )
@@ -263,10 +289,20 @@ def _address_section_html(preview: OrderConfirmationDocumentPreview) -> str:
         f"<p><strong>Rechnungsadresse</strong><br>"
         f"{_format_address_html(preview.invoice_address)}</p>"
     )
+    # PICKUP: no delivery address, no differs presentation — not applicable
+    # to a customer who picks up the order themselves.
+    if preview.fulfillment_mode == "PICKUP":
+        return (
+            '<section class="section"><h2>Adressen</h2>'
+            f"{auftragsart_html}"
+            f"{invoice_html}"
+            "</section>"
+        )
     # UNKNOWN / unset delivery: do not map differs=false to proven equality.
     if preview.delivery_address is None:
         return (
             '<section class="section"><h2>Adressen</h2>'
+            f"{auftragsart_html}"
             f"{invoice_html}"
             "<p><strong>Lieferadresse</strong><br>Lieferadresse nicht festgelegt</p>"
             "</section>"
@@ -274,6 +310,7 @@ def _address_section_html(preview: OrderConfirmationDocumentPreview) -> str:
     differs_text = "ja" if preview.delivery_address_differs is True else "nein"
     return (
         '<section class="section"><h2>Adressen</h2>'
+        f"{auftragsart_html}"
         f"{invoice_html}"
         f"<p><strong>Lieferadresse</strong><br>"
         f"{_format_address_html(preview.delivery_address)}</p>"
