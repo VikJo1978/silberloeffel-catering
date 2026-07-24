@@ -7,6 +7,7 @@ from catering_system.domain.offer_snapshot import compute_snapshot_hash
 from catering_system.domain.order_confirmation_document import (
     OrderConfirmationDocumentSnapshot,
     SCHEMA_VERSION_V2,
+    SCHEMA_VERSION_V3,
 )
 
 
@@ -63,8 +64,8 @@ def snapshot_hash_payload(
         "payment_customer_visible_text": snapshot.payment_customer_visible_text,
         "document_warnings": list(snapshot.document_warnings),
     }
-    # Schema 1 hash payload must stay byte-identical to pre-V1 address work.
-    if snapshot.schema_version == SCHEMA_VERSION_V2:
+    # Schema 1 hash payload must stay byte-identical to pre-address-work hash.
+    if snapshot.schema_version >= SCHEMA_VERSION_V2:
         payload["invoice_address"] = customer_address_to_mapping(
             snapshot.invoice_address
         )
@@ -72,6 +73,9 @@ def snapshot_hash_payload(
             snapshot.delivery_address
         )
         payload["delivery_address_differs"] = snapshot.delivery_address_differs
+    # Schema 2 hash payload must stay byte-identical to pre-fulfillment hash.
+    if snapshot.schema_version >= SCHEMA_VERSION_V3:
+        payload["fulfillment_mode"] = snapshot.fulfillment_mode
     return payload
 
 

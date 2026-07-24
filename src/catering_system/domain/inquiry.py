@@ -50,6 +50,13 @@ PlanningMode = Literal["caterer_suggestion", "self_select"]
 PLANNING_MODES: tuple[PlanningMode, ...] = ("caterer_suggestion", "self_select")
 PLANNING_MODE_SET: frozenset[str] = frozenset(PLANNING_MODES)
 
+# FULFILLMENT_SOURCE_V1: how the order is executed — never how/where to
+# deliver (that is delivery_address_mode on InquiryCustomerSnapshot, a
+# separate fact). Top-level Inquiry field, not part of customer_snapshot.
+FulfillmentMode = Literal["UNKNOWN", "DELIVERY", "PICKUP"]
+FULFILLMENT_MODES: tuple[FulfillmentMode, ...] = ("UNKNOWN", "DELIVERY", "PICKUP")
+FULFILLMENT_MODE_SET: frozenset[str] = frozenset(FULFILLMENT_MODES)
+
 CallVerificationStatus = Literal[
     "not_required",
     "pending",
@@ -122,6 +129,15 @@ def validate_planning_mode(value: str) -> PlanningMode:
     return cast(PlanningMode, value)
 
 
+def validate_fulfillment_mode(value: str) -> FulfillmentMode:
+    if value not in FULFILLMENT_MODE_SET:
+        raise ValueError(
+            f"fulfillment_mode must be one of {sorted(FULFILLMENT_MODE_SET)}, "
+            f"got {value!r}"
+        )
+    return cast(FulfillmentMode, value)
+
+
 def validate_call_verification_status(value: str) -> CallVerificationStatus:
     if value not in CALL_VERIFICATION_STATUS_SET:
         raise ValueError(
@@ -177,6 +193,11 @@ class Inquiry:
     intake_external_ref: str | None = None
     customer_id: str | None = None
     customer_snapshot: InquiryCustomerSnapshot | None = None
+    # FULFILLMENT_SOURCE_V1: controlled source of truth for Lieferung/
+    # Abholung. Defaults UNKNOWN for every create path (no inference from
+    # address/text/payment); Office is the only writer via a dedicated
+    # command. Not copied to Order/OrderVersion in this slice.
+    fulfillment_mode: FulfillmentMode = "UNKNOWN"
 
 
 def inquiry_shows_convert_accepted_button(state: InquiryOfficeState) -> bool:
@@ -331,6 +352,14 @@ def derive_inquiry_office_state(
             is_open=is_open, next_action="prepare-offer", offer=offer_projection
         )
     return InquiryOfficeState(is_open=is_open, next_action=None, offer=offer_projection)
+
+
+def set_inquiry_fulfillment_mode(inquiry: Inquiry, mode: str) -> Inquiry:
+    """Explicit Office write only (FULFILLMENT_SOURCE_V1) — never inferred."""
+    validated = validate_fulfillment_mode(mode)
+    if validated == inquiry.fulfillment_mode:
+        return inquiry
+    return replace(inquiry, fulfillment_mode=validated)
 
 
 def apply_inquiry_customer_reference(

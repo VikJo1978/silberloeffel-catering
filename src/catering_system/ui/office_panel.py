@@ -177,6 +177,7 @@ from catering_system.ui.office_panel_order_detail import (
     render_confirmation_card,
     render_confirmation_outbound_card,
     render_customer_addresses_card,
+    render_fulfillment_mode_card,
     render_operational_pause_card,
     render_order_detail,
     version_change_prefill,
@@ -2348,6 +2349,16 @@ class OfficePanel:
             delivery_address_mode=mode,
         )
 
+    def set_inquiry_fulfillment_mode(
+        self, inquiry_id: str, form: dict[str, str]
+    ) -> Inquiry:
+        """Persist Auftragsart (Lieferung/Abholung) — never inferred, only set."""
+        mode = form.get("fulfillment_mode", "").strip()
+        return self.inquiry_service.set_inquiry_fulfillment_mode(
+            inquiry_id,
+            fulfillment_mode=mode,
+        )
+
     def render_inquiry(
         self,
         inquiry_id: str,
@@ -2889,6 +2900,15 @@ class OfficePanel:
                         if not cancelled and source_inquiry is not None
                         else ""
                     ),
+                    fulfillment_mode_command_fields=(
+                        self._command_fields(
+                            {
+                                "updated_at": source_inquiry.updated_at.isoformat(),
+                            }
+                        )
+                        if not cancelled and source_inquiry is not None
+                        else ""
+                    ),
                     version_change_prefill=change_prefill if not cancelled else None,
                 ),
                 confirmation=confirmation,
@@ -3111,6 +3131,20 @@ class OfficePanel:
                 if not cancelled and source_inquiry is not None
                 else ""
             ),
+            fulfillment_mode_command_fields=(
+                self._command_fields(
+                    {
+                        "updated_at": source_inquiry.updated_at.isoformat(),
+                    }
+                )
+                if not cancelled and source_inquiry is not None
+                else ""
+            ),
+        )
+        fulfillment_card = render_fulfillment_mode_card(
+            source_inquiry,
+            order,
+            detail_forms,
         )
         addresses_card = render_customer_addresses_card(
             source_inquiry,
@@ -3142,6 +3176,7 @@ class OfficePanel:
 <table><tr><th>Nr</th><th>Datum</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th>
 <th>Druck bestätigt</th><th>Status</th><th>Aktionen</th></tr>{"".join(rows)}</table>
 <h2>Zahlung</h2>{"".join(payment_rows)}{payment_form}
+{fulfillment_card}
 {addresses_card}
 {confirmation_card}
 {outbound_card}

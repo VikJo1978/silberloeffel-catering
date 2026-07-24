@@ -32,6 +32,7 @@ from catering_system.domain.inquiry import (
     CRM_PIPELINE,
     inquiry_crm_stage_is_compatible_with_active_order,
     validate_crm_stage,
+    validate_fulfillment_mode,
     validate_planning_mode,
 )
 from catering_system.domain.inquiry_contact_completeness import (
@@ -1045,6 +1046,29 @@ class OfficeApi:
             ),
         }
 
+    def cmd_fulfillment_mode(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        current = self._require_inquiry(path_ids["id"])
+        if _v_datetime(expect["updated_at"]) != current.updated_at:
+            raise ApiError(409, "stale_state")
+        mode_raw = args["fulfillment_mode"]
+        try:
+            if not isinstance(mode_raw, str):
+                raise TypeError("fulfillment_mode must be a str")
+            mode = validate_fulfillment_mode(mode_raw)
+            updated = self.inquiry_service.set_inquiry_fulfillment_mode(
+                current.inquiry_id,
+                fulfillment_mode=mode,
+            )
+        except (TypeError, ValueError) as exc:
+            raise ApiError(422, "invalid_fulfillment_mode") from exc
+        return 200, {
+            "inquiry_id": updated.inquiry_id,
+            "updated_at": updated.updated_at.isoformat(),
+            "fulfillment_mode": updated.fulfillment_mode,
+        }
+
     def cmd_update_inquiry(
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict
     ) -> tuple[int, dict[str, object]]:
@@ -1920,6 +1944,9 @@ _CUSTOMER_ADDRESSES_ARGS = _ArgKeys(
         }
     ),
 )
+_FULFILLMENT_MODE_ARGS = _ArgKeys(
+    required=frozenset({"fulfillment_mode"}),
+)
 _UPDATE_ARGS = _ArgKeys(
     required=frozenset(
         {
@@ -2026,6 +2053,9 @@ _COMMANDS: dict[str, _CommandSpec] = {
     "customer-addresses": _CommandSpec(
         "cmd_customer_addresses", _CUSTOMER_ADDRESSES_ARGS, {"updated_at"}
     ),
+    "fulfillment-mode": _CommandSpec(
+        "cmd_fulfillment_mode", _FULFILLMENT_MODE_ARGS, {"updated_at"}
+    ),
     "verify": _CommandSpec("cmd_verify", _NO_ARGS, set()),
     "convert": _CommandSpec("cmd_convert", _NO_ARGS, set()),
     "prepare-offer": _CommandSpec("cmd_prepare_offer", _SNAPSHOT_ARGS, set()),
@@ -2131,6 +2161,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/inquiries/(?P<id>[^/]+)/customer-addresses$"),
         "/office/v1/inquiries/{id}/customer-addresses",
         {"POST": "customer-addresses"},
+    ),
+    (
+        re.compile(r"^/office/v1/inquiries/(?P<id>[^/]+)/fulfillment-mode$"),
+        "/office/v1/inquiries/{id}/fulfillment-mode",
+        {"POST": "fulfillment-mode"},
     ),
     (
         re.compile(r"^/office/v1/inquiries/(?P<id>[^/]+)/verify$"),

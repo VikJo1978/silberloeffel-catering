@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from catering_system.domain.inquiry_customer_snapshot import (
 from catering_system.domain.order_confirmation_document import (
     SCHEMA_VERSION_V1,
     SCHEMA_VERSION_V2,
+    SCHEMA_VERSION_V3,
 )
 from catering_system.services.order_confirmation_document_hash import (
     compute_document_hash,
@@ -67,6 +69,45 @@ _LEGACY_V1_DOCUMENT_HASH = (
     "sha256:e8a0f371e92b8cf417ddce34919cd4ab3d60174c4386d37ac379603196f5a31b"
 )
 
+# Golden schema-2 canonical JSON (address facts stored, no fulfillment key).
+# Captured once from production code on this branch and pinned as a literal
+# — the same discipline as the schema-1 fixture above — so a regression in
+# schema-2's canonical shape or hash computation breaks this test instead of
+# only a relative round-trip comparison.
+_SCHEMA_V2_CANONICAL_JSON = (
+    '{"created_at":"2026-03-01T09:00:00+00:00","created_by":"fixture",'
+    '"delivery_address":{"city":"Hamburg","country":"DE","postal_code":"20457",'
+    '"street":"Eventplatz 9"},"delivery_address_differs":true,'
+    '"document_hash":"sha256:87df0fb81840a40aeb98783c6d39d220bf49a5a5852a66cf80ee792539336926",'
+    '"document_reference":"AB-TEST-V2",'
+    '"document_snapshot_id":"66666666-6666-4666-8666-666666666666",'
+    '"document_warnings":["DELIVERY_ADDRESS_DIFFERS_FROM_INVOICE"],'
+    '"event_date":"2026-06-01","gross_total_cents":1190,"guest_count_estimate":40,'
+    '"invoice_address":{"city":"Hamburg","country":"DE","postal_code":"20095",'
+    '"street":"Bürostraße 1"},'
+    '"location_text":"Hamburg","net_total_cents":1000,'
+    '"offer_id":"44444444-4444-4444-8444-444444444444",'
+    '"offer_version_id":"55555555-5555-4555-8555-555555555555",'
+    '"order_id":"22222222-2222-4222-8222-222222222222",'
+    '"order_version_id":"33333333-3333-4333-8333-333333333333",'
+    '"payment_customer_visible_text":"Rechnung","payment_method":"RECHNUNG",'
+    '"planning_mode":"caterer_suggestion",'
+    '"positions":[{"composition":"Comp","description":"Desc","gross_cents":1190,'
+    '"kind":"MENU","name":"Buffet Classic","net_total_cents":1000,'
+    '"position_id":"pos-1","quantity":"40","related_position_id":null,'
+    '"unit_label":"Pers.","unit_net_cents":1000,"vat_cents":190,'
+    '"vat_rate_percent":19}],'
+    '"recipient_company":"Analytical Engines",'
+    '"recipient_email":"ada@example.invalid","recipient_name":"Ada Lovelace",'
+    '"recipient_phone":"+490000","recipient_status":"ready","schema_version":2,'
+    '"time_window_text":"10:00-14:00",'
+    '"vat_buckets":[{"base_net_cents":1000,"rate_percent":19,"vat_cents":190}],'
+    '"vat_total_cents":190}'
+)
+_SCHEMA_V2_DOCUMENT_HASH = (
+    "sha256:87df0fb81840a40aeb98783c6d39d220bf49a5a5852a66cf80ee792539336926"
+)
+
 _INVOICE = CustomerAddress(
     street="Bürostraße 1",
     postal_code="20095",
@@ -88,17 +129,21 @@ def _set_inquiry_addresses(
     invoice: CustomerAddress | None,
     delivery: CustomerAddress | None,
     mode: str,
+    fulfillment_mode: str = "DELIVERY",
 ) -> None:
+    """FULFILLMENT_SOURCE_V1: every test in this file is about DELIVERY
+    address resolution unless it explicitly overrides fulfillment_mode
+    (e.g. PICKUP, where delivery_address_mode stops mattering)."""
     inquiry = inquiries.get_by_id(order.source_inquiry_id)  # type: ignore[attr-defined]
     assert inquiry is not None
-    inquiries.update(  # type: ignore[attr-defined]
-        set_inquiry_customer_addresses(
-            inquiry,
-            invoice_address=invoice,
-            delivery_address=delivery,
-            delivery_address_mode=mode,
-        )
+    updated = set_inquiry_customer_addresses(
+        inquiry,
+        invoice_address=invoice,
+        delivery_address=delivery,
+        delivery_address_mode=mode,
     )
+    updated = replace(updated, fulfillment_mode=fulfillment_mode)
+    inquiries.update(updated)  # type: ignore[attr-defined]
 
 
 def test_a_same_as_invoice_persists_effective_delivery() -> None:
@@ -112,7 +157,8 @@ def test_a_same_as_invoice_persists_effective_delivery() -> None:
     snapshot = service.prepare_snapshot(
         order.order_id, version.order_version_id, "office-panel"
     )
-    assert snapshot.schema_version == SCHEMA_VERSION_V2
+    assert snapshot.schema_version == SCHEMA_VERSION_V3
+    assert snapshot.fulfillment_mode == "DELIVERY"
     assert snapshot.invoice_address == _INVOICE
     assert snapshot.delivery_address == _INVOICE
     assert snapshot.delivery_address_differs is False
@@ -144,13 +190,15 @@ def test_b_separate_persists_differs_warning() -> None:
     snapshot = service.prepare_snapshot(
         order.order_id, version.order_version_id, "office-panel"
     )
-    assert snapshot.schema_version == SCHEMA_VERSION_V2
+    assert snapshot.schema_version == SCHEMA_VERSION_V3
+    assert snapshot.fulfillment_mode == "DELIVERY"
     assert snapshot.invoice_address == _INVOICE
     assert snapshot.delivery_address == _DELIVERY
     assert snapshot.delivery_address_differs is True
     assert WARNING_DELIVERY_ADDRESS_DIFFERS in snapshot.document_warnings
     payload = json.loads(snapshot_to_canonical_json(snapshot))
     assert payload["delivery_address_differs"] is True
+    assert payload["fulfillment_mode"] == "DELIVERY"
     assert WARNING_DELIVERY_ADDRESS_DIFFERS in payload["document_warnings"]
 
 
@@ -243,9 +291,48 @@ def test_e_legacy_schema_1_explicit_not_stored_and_stable_hash() -> None:
     assert preview.invoice_address is None
     assert preview.delivery_address is None
     assert preview.delivery_address_differs is None
+    # Legacy schema 1 never had a fulfillment fact either: no live fallback,
+    # no guessed DELIVERY/PICKUP value, just the neutral not-stored label.
+    assert preview.fulfillment_facts_stored is False
+    assert preview.fulfillment_mode is None
+    assert (
+        preview.fulfillment_label
+        == "Auftragsart in diesem Dokumentstand nicht gespeichert"
+    )
+    html = render_preview_html(preview)
+    assert "Lieferung" not in html
+    assert "Abholung" not in html
     preview_json = preview_to_json(preview)
     assert preview_json["address_facts_stored"] is False
     assert preview_json["delivery_address_differs"] is None
+    assert preview_json["fulfillment_facts_stored"] is False
+    assert preview_json["fulfillment_mode"] is None
+
+
+def test_e2_schema2_golden_hash_is_pinned_independently() -> None:
+    """Golden fixture for schema 2 — canonical JSON + hash captured once from
+    production code on this branch, then frozen as a literal (same
+    discipline as test_e_legacy_schema_1 above). A regression in schema-2's
+    canonical shape, address-key inclusion, or hash payload composition must
+    break this test, not just the relative round-trip checks elsewhere."""
+    payload = json.loads(_SCHEMA_V2_CANONICAL_JSON)
+    assert "fulfillment_mode" not in payload
+    assert payload["invoice_address"] is not None
+    assert payload["delivery_address"] is not None
+    assert payload["delivery_address_differs"] is True
+
+    loaded = snapshot_from_canonical_json(_SCHEMA_V2_CANONICAL_JSON)
+    assert loaded.schema_version == SCHEMA_VERSION_V2
+    assert loaded.fulfillment_mode is None
+    assert loaded.address_facts_stored is True
+    assert loaded.document_hash == _SCHEMA_V2_DOCUMENT_HASH
+    assert compute_document_hash(loaded) == _SCHEMA_V2_DOCUMENT_HASH
+    assert "invoice_address" in snapshot_hash_payload(loaded)
+    assert "delivery_address" in snapshot_hash_payload(loaded)
+    assert "fulfillment_mode" not in snapshot_hash_payload(loaded)
+
+    roundtrip = json.loads(snapshot_to_canonical_json(loaded))
+    assert roundtrip == payload
 
 
 def test_f_boundary_no_offer_or_inquiry_in_persisted_preview_path() -> None:
@@ -287,30 +374,48 @@ def test_g_api_preview_shape_exposes_address_contract_keys() -> None:
         "invoice_address",
         "delivery_address",
         "delivery_address_differs",
+        "fulfillment_facts_stored",
+        "fulfillment_mode",
+        "fulfillment_label",
         "document_warnings",
         "title",
         "positions",
         "watermark",
     }
     assert required.issubset(shape)
-    assert shape["schema_version"] == SCHEMA_VERSION_V2
+    assert shape["fulfillment_facts_stored"] is True
+    assert shape["fulfillment_mode"] == "DELIVERY"
+    assert shape["fulfillment_label"] == "Lieferung"
+    assert shape["schema_version"] == SCHEMA_VERSION_V3
     assert shape["address_facts_stored"] is True
     assert shape["delivery_address_differs"] is True
     assert WARNING_DELIVERY_ADDRESS_DIFFERS in shape["document_warnings"]
 
 
 def test_unknown_mode_persists_nullable_projection_values() -> None:
+    """delivery_address_mode=UNKNOWN under fulfillment_mode=PICKUP — DELIVERY
+    would now be blocked by DELIVERY_ADDRESS_REQUIRED_FOR_DELIVERY (see
+    test_fulfillment_source_v1.py); PICKUP is fulfillment's own way of
+    saying delivery address is not applicable. Also covers the persisted
+    preview's PICKUP presentation: Abholung shown, no delivery-address
+    placeholder or differs text."""
     orders, _offers, inquiries, documents, service, _core, _offer = _services()
     order, version = _effective_order(
         (orders, _offers, inquiries, documents, service, _core, _offer)
     )
     _set_inquiry_addresses(
-        inquiries, order, invoice=_INVOICE, delivery=None, mode="UNKNOWN"
+        inquiries,
+        order,
+        invoice=_INVOICE,
+        delivery=None,
+        mode="UNKNOWN",
+        fulfillment_mode="PICKUP",
     )
     snapshot = service.prepare_snapshot(
         order.order_id, version.order_version_id, "office-panel"
     )
-    assert snapshot.schema_version == SCHEMA_VERSION_V2
+    assert snapshot.schema_version == SCHEMA_VERSION_V3
+    assert snapshot.fulfillment_mode == "PICKUP"
     assert snapshot.invoice_address == _INVOICE
     assert snapshot.delivery_address is None
     assert snapshot.delivery_address_differs is False
@@ -318,10 +423,18 @@ def test_unknown_mode_persists_nullable_projection_values() -> None:
     preview = build_preview(snapshot)
     assert preview.delivery_address is None
     assert preview.delivery_address_differs is False
+    # PICKUP fulfillment fact (frozen in the schema-3 snapshot, not
+    # inferred): persisted preview shows Abholung, never a delivery-address
+    # placeholder or a differs presentation that doesn't apply to pickup.
+    assert preview.fulfillment_facts_stored is True
+    assert preview.fulfillment_mode == "PICKUP"
+    assert preview.fulfillment_label == "Abholung"
     html = render_preview_html(preview)
-    assert "Lieferadresse nicht festgelegt" in html
+    assert "Abholung" in html
+    assert "Lieferadresse nicht festgelegt" not in html
     assert "weicht ab: nein" not in html
     assert "weicht ab: ja" not in html
+    assert "Bürostraße 1" in html
 
 
 def _schema2_payload_from_legacy(**overrides: object) -> dict[str, object]:
@@ -380,7 +493,9 @@ def test_schema2_rejects_malformed_address_object() -> None:
 
 
 def test_schema2_rejects_unsupported_schema_version() -> None:
-    payload = _schema2_payload_from_legacy(schema_version=3)
+    # schema_version=3 is FULFILLMENT_SOURCE_V1 and now valid — use a truly
+    # unsupported version to keep testing the same rejection path.
+    payload = _schema2_payload_from_legacy(schema_version=4)
     with pytest.raises(ValueError, match="unsupported order confirmation document"):
         snapshot_from_canonical_json(_dumps(payload))
 
@@ -400,3 +515,4 @@ def test_same_as_invoice_html_may_show_differs_nein() -> None:
     assert "Lieferadresse nicht festgelegt" not in html
     assert "weicht ab: nein" in html
     assert "Bürostraße 1" in html
+    assert "Lieferung" in html

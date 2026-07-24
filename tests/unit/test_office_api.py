@@ -3288,6 +3288,18 @@ def _ensure_inquiry_recipient_email(base: str, inquiry_id: str) -> None:
     )
 
 
+def _ensure_inquiry_fulfillment_mode(
+    base: str, inquiry_id: str, *, mode: str = "PICKUP"
+) -> None:
+    detail = _get(f"{base}/office/v1/inquiries/{inquiry_id}")[1]
+    status, _body, _h = _post(
+        f"{base}/office/v1/inquiries/{inquiry_id}/fulfillment-mode",
+        args={"fulfillment_mode": mode},
+        expect={"updated_at": detail["updated_at"]},
+    )
+    assert status == 200
+
+
 def _set_inquiry_customer_snapshot(
     db: Path,
     inquiry_id: str,
@@ -3330,6 +3342,7 @@ def _make_effective_offer_order(
     resolved_inquiry = inquiry_id or ids["inquiry_offer_ready"]
     if ensure_recipient_email:
         _ensure_inquiry_recipient_email(base, resolved_inquiry)
+    _ensure_inquiry_fulfillment_mode(base, resolved_inquiry)
     resolved_snapshot = snapshot or _unique_offer_snapshot(inquiry_id=resolved_inquiry)
     variant_id = resolved_snapshot["variants"][0]["variant_id"]  # type: ignore[index]
     prep_status, prep_body, _h = _post(
@@ -3493,7 +3506,7 @@ def test_confirmation_document_preview_json_and_html(api) -> None:
     assert preview["net_total_eur"]
     assert preview["vat_total_eur"]
     assert preview["gross_total_eur"]
-    assert preview["schema_version"] == 2
+    assert preview["schema_version"] == 3
     assert preview["address_facts_stored"] is True
     assert "invoice_address" in preview
     assert "delivery_address" in preview
@@ -3798,6 +3811,7 @@ def test_live_confirmation_preview_missing_commercial_returns_200_with_blocker(
     orders = SQLiteOrderRepository(db)
     inquiry = inquiries.get_by_id(ids["inquiry_convertible"])
     assert inquiry is not None
+    inquiries.update(replace(inquiry, fulfillment_mode="PICKUP"))
     order, version = seed_order(orders, inquiry)
     core = OperationalCoreService(orders)
     core.confirm_kitchen_print(order.order_id, version.order_version_id)

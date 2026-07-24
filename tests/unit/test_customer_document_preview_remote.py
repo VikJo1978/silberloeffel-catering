@@ -33,6 +33,7 @@ def _eligible_payload() -> dict[str, Any]:
     return {
         "document_type": "ORDER_CONFIRMATION",
         "eligible": True,
+        "fulfillment_mode": "PICKUP",
         "blockers": [],
         "warnings": [],
         "recipient": {

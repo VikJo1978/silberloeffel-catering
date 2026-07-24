@@ -709,6 +709,14 @@ def make_office_panel_handler(
                     self._redirect(f"/order/{return_order_id}")
                 else:
                     self._redirect(f"/inquiry/{inquiry_id}")
+            elif action == "fulfillment-mode":
+                form = self._form()
+                panel.set_inquiry_fulfillment_mode(inquiry_id, form)
+                return_order_id = form.get("return_order_id", "").strip()
+                if return_order_id:
+                    self._redirect(f"/order/{return_order_id}")
+                else:
+                    self._redirect(f"/inquiry/{inquiry_id}")
             elif action == "verify":
                 panel.inquiry_service.verify_customer_by_call(inquiry_id)
                 self._redirect(f"/inquiry/{inquiry_id}")

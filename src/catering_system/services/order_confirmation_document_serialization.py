@@ -6,7 +6,11 @@ import json
 from datetime import date, datetime
 
 from catering_system.domain.customer_document_projection import CustomerAddress
-from catering_system.domain.inquiry import validate_planning_mode
+from catering_system.domain.inquiry import (
+    FulfillmentMode,
+    validate_fulfillment_mode,
+    validate_planning_mode,
+)
 from catering_system.domain.inquiry_customer_snapshot import (
     customer_address_from_mapping,
     customer_address_to_mapping,
@@ -18,6 +22,7 @@ from catering_system.domain.order_confirmation_document import (
     RecipientStatus,
     SCHEMA_VERSION_V1,
     SCHEMA_VERSION_V2,
+    SCHEMA_VERSION_V3,
 )
 from catering_system.domain.order_payment_reminder import validate_payment_method
 
@@ -41,6 +46,7 @@ def snapshot_from_canonical_json(raw: str) -> OrderConfirmationDocumentSnapshot:
     invoice_address, delivery_address, delivery_address_differs = _address_facts(
         payload, schema_version=schema_version
     )
+    fulfillment_mode = _fulfillment_fact(payload, schema_version=schema_version)
     return OrderConfirmationDocumentSnapshot(
         document_snapshot_id=str(payload["document_snapshot_id"]),
         order_id=str(payload["order_id"]),
@@ -73,6 +79,7 @@ def snapshot_from_canonical_json(raw: str) -> OrderConfirmationDocumentSnapshot:
         invoice_address=invoice_address,
         delivery_address=delivery_address,
         delivery_address_differs=delivery_address_differs,
+        fulfillment_mode=fulfillment_mode,
     )
 
 
@@ -132,7 +139,7 @@ def _snapshot_payload(snapshot: OrderConfirmationDocumentSnapshot) -> dict[str, 
         "document_warnings": list(snapshot.document_warnings),
     }
     # Schema 1 canonical payload must omit address keys (legacy hash/shape).
-    if snapshot.schema_version == SCHEMA_VERSION_V2:
+    if snapshot.schema_version >= SCHEMA_VERSION_V2:
         payload["invoice_address"] = customer_address_to_mapping(
             snapshot.invoice_address
         )
@@ -140,6 +147,9 @@ def _snapshot_payload(snapshot: OrderConfirmationDocumentSnapshot) -> dict[str, 
             snapshot.delivery_address
         )
         payload["delivery_address_differs"] = snapshot.delivery_address_differs
+    # Schema 1/2 canonical payload must omit fulfillment_mode (legacy shape).
+    if snapshot.schema_version >= SCHEMA_VERSION_V3:
+        payload["fulfillment_mode"] = snapshot.fulfillment_mode
     return payload
 
 
@@ -152,7 +162,7 @@ def _address_facts(
         # Explicit NOT_STORED — do not invent delivery_address_differs=False.
         # Extra address keys on legacy payloads are ignored (tolerant reader).
         return None, None, None
-    if schema_version != SCHEMA_VERSION_V2:
+    if schema_version not in (SCHEMA_VERSION_V2, SCHEMA_VERSION_V3):
         raise ValueError("unsupported order confirmation document schema version")
     required = ("invoice_address", "delivery_address", "delivery_address_differs")
     missing = [key for key in required if key not in payload]
@@ -169,6 +179,26 @@ def _address_facts(
         customer_address_from_mapping(payload["delivery_address"]),
         differs_raw,
     )
+
+
+def _fulfillment_fact(
+    payload: dict[str, object],
+    *,
+    schema_version: int,
+) -> FulfillmentMode | None:
+    if schema_version in (SCHEMA_VERSION_V1, SCHEMA_VERSION_V2):
+        # Explicit NOT_STORED — never backfilled from live Order/Inquiry.
+        # An extra fulfillment_mode key on a legacy payload is ignored
+        # (tolerant reader, same convention as legacy address keys).
+        return None
+    if schema_version != SCHEMA_VERSION_V3:
+        raise ValueError("unsupported order confirmation document schema version")
+    if "fulfillment_mode" not in payload:
+        raise ValueError("schema 3 snapshot requires fulfillment_mode")
+    mode_raw = payload["fulfillment_mode"]
+    if not isinstance(mode_raw, str) or mode_raw not in ("DELIVERY", "PICKUP"):
+        raise ValueError("schema 3 fulfillment_mode must be DELIVERY or PICKUP")
+    return validate_fulfillment_mode(mode_raw)
 
 
 def _position(raw: object) -> OrderConfirmationDocumentPosition:

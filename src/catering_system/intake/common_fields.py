@@ -20,6 +20,7 @@ class CommonInquiryFields(TypedDict):
     contact_phone: str | None
     contact_name: str | None
     company_name: str | None
+    fulfillment_mode: str
 
 
 def _optional_contact_str(raw: Mapping[str, Any], key: str, channel: str) -> str | None:
@@ -93,6 +94,17 @@ def parse_common_inquiry_fields(
             f"{channel} intake: call_verification_required must be bool or absent"
         )
 
+    # FULFILLMENT_SOURCE_V1: structured optional field only — never inferred
+    # from any other value (address, text, payment). Absent/None -> UNKNOWN,
+    # same default every create path gets.
+    fulfillment_raw = raw.get("fulfillment_mode")
+    if fulfillment_raw is None:
+        fulfillment_mode = "UNKNOWN"
+    elif isinstance(fulfillment_raw, str):
+        fulfillment_mode = fulfillment_raw
+    else:
+        raise TypeError(f"{channel} intake: fulfillment_mode must be str or absent")
+
     return {
         "event_date": event_date,
         "crm_stage": crm_stage,
@@ -108,4 +120,5 @@ def parse_common_inquiry_fields(
         "contact_phone": _optional_contact_str(raw, "contact_phone", channel),
         "contact_name": _optional_contact_str(raw, "contact_name", channel),
         "company_name": _optional_contact_str(raw, "company_name", channel),
+        "fulfillment_mode": fulfillment_mode,
     }

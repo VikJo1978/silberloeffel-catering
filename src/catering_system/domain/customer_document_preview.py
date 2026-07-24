@@ -17,6 +17,7 @@ from catering_system.domain.customer_document_projection import (
     DocumentType,
     DOCUMENT_TYPES,
 )
+from catering_system.domain.inquiry import FulfillmentMode, validate_fulfillment_mode
 from catering_system.domain.order_payment_reminder import (
     PaymentMethod,
     validate_payment_method,
@@ -40,6 +41,7 @@ class CustomerDocumentPreview:
     net_total_cents: int | None = None
     vat_total_cents: int | None = None
     gross_total_cents: int | None = None
+    fulfillment_mode: FulfillmentMode = "UNKNOWN"
 
     def __post_init__(self) -> None:
         if self.document_type not in DOCUMENT_TYPES:
@@ -48,6 +50,7 @@ class CustomerDocumentPreview:
             raise ValueError("eligible must equal (blockers == ())")
         if self.payment_method is not None:
             validate_payment_method(self.payment_method)
+        validate_fulfillment_mode(self.fulfillment_mode)
         money = (
             self.net_total_cents,
             self.vat_total_cents,

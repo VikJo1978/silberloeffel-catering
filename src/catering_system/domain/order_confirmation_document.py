@@ -3,6 +3,12 @@
 CONFIRMATION_ADDRESS_SNAPSHOT_V1: schema 2 persists invoice/delivery address
 facts once at create time. Schema 1 is legacy without address facts
 (delivery_address_differs is None / NOT_STORED — never false-by-default).
+
+FULFILLMENT_SOURCE_V1: schema 3 additionally freezes fulfillment_mode
+(DELIVERY/PICKUP only — UNKNOWN is never persisted, eligibility blocks
+document creation while it stays UNKNOWN). Schema 1/2 keep
+fulfillment_mode = None / NOT_STORED forever — never soft-added, never
+backfilled from live Order/Inquiry.
 """
 
 from __future__ import annotations
@@ -16,12 +22,15 @@ from catering_system.domain.customer_document_projection import (
     CustomerAddress,
     customer_addresses_equal,
 )
-from catering_system.domain.inquiry import PlanningMode
+from catering_system.domain.inquiry import FulfillmentMode, PlanningMode
 
 SCHEMA_VERSION_V1 = 1
 SCHEMA_VERSION_V2 = 2
-SCHEMA_VERSION = SCHEMA_VERSION_V2
-SUPPORTED_SCHEMA_VERSIONS = frozenset({SCHEMA_VERSION_V1, SCHEMA_VERSION_V2})
+SCHEMA_VERSION_V3 = 3
+SCHEMA_VERSION = SCHEMA_VERSION_V3
+SUPPORTED_SCHEMA_VERSIONS = frozenset(
+    {SCHEMA_VERSION_V1, SCHEMA_VERSION_V2, SCHEMA_VERSION_V3}
+)
 RecipientStatus = Literal["ready", "missing"]
 _DOCUMENT_HASH = re.compile(r"sha256:[0-9a-f]{64}\Z")
 
@@ -82,8 +91,11 @@ class OrderConfirmationDocumentSnapshot:
     document_warnings: tuple[str, ...] = ()
     invoice_address: CustomerAddress | None = None
     delivery_address: CustomerAddress | None = None
-    # None = NOT_STORED (schema 1 legacy). Schema 2 requires bool.
+    # None = NOT_STORED (schema 1 legacy). Schema 2/3 require bool.
     delivery_address_differs: bool | None = None
+    # None = NOT_STORED (schema 1/2 legacy). Schema 3 requires DELIVERY/PICKUP
+    # — never UNKNOWN (eligibility already refused create while UNKNOWN).
+    fulfillment_mode: FulfillmentMode | None = None
 
     def __post_init__(self) -> None:
         if self.schema_version not in SUPPORTED_SCHEMA_VERSIONS:
@@ -95,13 +107,15 @@ class OrderConfirmationDocumentSnapshot:
                 self.invoice_address is not None
                 or self.delivery_address is not None
                 or self.delivery_address_differs is not None
+                or self.fulfillment_mode is not None
             ):
                 raise ValueError(
-                    "schema 1 confirmation snapshot must not store address facts"
+                    "schema 1 confirmation snapshot must not store address "
+                    "or fulfillment facts"
                 )
             return
         if self.delivery_address_differs is None:
-            raise ValueError("schema 2 requires delivery_address_differs as bool")
+            raise ValueError("schema 2/3 requires delivery_address_differs as bool")
         expected_differs = (
             self.invoice_address is not None
             and self.delivery_address is not None
@@ -111,11 +125,26 @@ class OrderConfirmationDocumentSnapshot:
         )
         if self.delivery_address_differs != expected_differs:
             raise ValueError("delivery_address_differs does not match addresses")
+        if self.schema_version == SCHEMA_VERSION_V2:
+            if self.fulfillment_mode is not None:
+                raise ValueError(
+                    "schema 2 confirmation snapshot must not store fulfillment_mode"
+                )
+            return
+        if self.fulfillment_mode not in ("DELIVERY", "PICKUP"):
+            raise ValueError(
+                "schema 3 requires fulfillment_mode to be DELIVERY or PICKUP"
+            )
 
     @property
     def address_facts_stored(self) -> bool:
-        """True when invoice/delivery facts were persisted (schema 2)."""
-        return self.schema_version == SCHEMA_VERSION_V2
+        """True when invoice/delivery facts were persisted (schema 2+)."""
+        return self.schema_version >= SCHEMA_VERSION_V2
+
+    @property
+    def fulfillment_fact_stored(self) -> bool:
+        """True when fulfillment_mode was persisted (schema 3+)."""
+        return self.schema_version >= SCHEMA_VERSION_V3
 
 
 def mask_recipient_email(email: str | None) -> str | None:

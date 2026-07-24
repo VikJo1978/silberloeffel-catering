@@ -150,6 +150,7 @@ def test_valid_order_is_allowed() -> None:
         order_version=_version(),
         commercial_snapshot=_commercial(),
         recipient=_recipient(),
+        fulfillment_mode="PICKUP",
     )
     assert result.allowed is True
     assert result.blockers == ()
@@ -161,6 +162,7 @@ def test_missing_commercial_snapshot_blocks() -> None:
         order_version=_version(),
         commercial_snapshot=None,
         recipient=_recipient(),
+        fulfillment_mode="PICKUP",
     )
     assert result.allowed is False
     assert _codes(result) == ("MISSING_COMMERCIAL_SNAPSHOT",)
@@ -172,6 +174,7 @@ def test_cancelled_order_blocks_with_invalid_order_state() -> None:
         order_version=_version(),
         commercial_snapshot=_commercial(),
         recipient=_recipient(),
+        fulfillment_mode="PICKUP",
     )
     assert result.allowed is False
     assert _codes(result) == ("INVALID_ORDER_STATE",)
@@ -183,6 +186,7 @@ def test_candidate_and_missing_kitchen_print_are_invalid_order_state() -> None:
         order_version=_version(),
         commercial_snapshot=_commercial(),
         recipient=_recipient(),
+        fulfillment_mode="PICKUP",
     )
     assert candidate.allowed is False
     assert _codes(candidate) == ("INVALID_ORDER_STATE",)
@@ -192,6 +196,7 @@ def test_candidate_and_missing_kitchen_print_are_invalid_order_state() -> None:
         order_version=_version(kitchen_print=False),
         commercial_snapshot=_commercial(),
         recipient=_recipient(),
+        fulfillment_mode="PICKUP",
     )
     assert no_print.allowed is False
     assert _codes(no_print) == ("INVALID_ORDER_STATE",)
@@ -208,6 +213,7 @@ def test_missing_customer_name_and_contact_block() -> None:
             company_name=None,
             phone=None,
         ),
+        fulfillment_mode="PICKUP",
     )
     assert result.allowed is False
     assert _codes(result) == (
@@ -227,6 +233,7 @@ def test_company_name_alone_satisfies_name_requirement() -> None:
             email="anna@example.invalid",
             phone=None,
         ),
+        fulfillment_mode="PICKUP",
     )
     assert result.allowed is True
     assert result.blockers == ()
@@ -242,6 +249,7 @@ def test_phone_alone_satisfies_contact_requirement() -> None:
             email=None,
             phone="+49301234567",
         ),
+        fulfillment_mode="PICKUP",
     )
     assert result.allowed is True
     assert result.blockers == ()
@@ -255,6 +263,7 @@ def test_address_warning_does_not_block_eligibility() -> None:
         order_version=_version(),
         commercial_snapshot=_commercial(),
         recipient=recipient,
+        fulfillment_mode="DELIVERY",
     )
     assert result.allowed is True
     assert result.blockers == ()
