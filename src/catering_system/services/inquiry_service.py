@@ -11,15 +11,18 @@ from typing import Any
 
 from catering_system.domain.inquiry import (
     apply_inquiry_customer_reference,
+    set_inquiry_fulfillment_mode,
     CallVerificationStatus,
     CrmStage,
     CustomerLinkage,
+    FulfillmentMode,
     Inquiry,
     InquirySource,
     PlanningMode,
     validate_call_verification_status,
     validate_crm_stage,
     validate_customer_linkage,
+    validate_fulfillment_mode,
     validate_planning_mode,
 )
 from catering_system.domain.slice_a_events import (
@@ -133,6 +136,7 @@ class InquiryService:
         contact_phone: str | None = None,
         contact_name: str | None = None,
         company_name: str | None = None,
+        fulfillment_mode: str = "UNKNOWN",
     ) -> Inquiry:
         _log.info("create_inquiry called inquiry_source=%s", inquiry_source)
         intake_subject_norm = _normalize_intake(intake_subject)
@@ -143,6 +147,9 @@ class InquiryService:
             linkage = validate_customer_linkage(customer_linkage)
             pm = validate_planning_mode(planning_mode)
             cvs = validate_call_verification_status(call_verification_status)
+            # FULFILLMENT_SOURCE_V1: structured, optional, never inferred —
+            # every channel that omits it gets UNKNOWN (the default above).
+            fm = validate_fulfillment_mode(fulfillment_mode)
             customer_snapshot = snapshot_from_structured_contact(
                 contact_email=contact_email,
                 contact_phone=contact_phone,
@@ -182,6 +189,7 @@ class InquiryService:
             intake_external_ref=_normalize_intake(intake_external_ref),
             customer_id=None,
             customer_snapshot=customer_snapshot,
+            fulfillment_mode=fm,
         )
         self._repository.save(inquiry)
         _log.info("inquiry created inquiry_id=%s", inquiry.inquiry_id)
@@ -348,6 +356,28 @@ class InquiryService:
         updated = replace(updated, updated_at=_utc_now())
         self._repository.update(updated)
         _log.info("inquiry customer addresses updated inquiry_id=%s", inquiry_id)
+        self._emit(InquiryUpdated(inquiry_id=inquiry_id))
+        return updated
+
+    def set_inquiry_fulfillment_mode(
+        self, inquiry_id: str, *, fulfillment_mode: FulfillmentMode | str
+    ) -> Inquiry:
+        """Explicit Office write of Lieferung/Abholung (FULFILLMENT_SOURCE_V1).
+
+        UNKNOWN/DELIVERY/PICKUP only; never inferred from address/text/
+        payment. Same optimistic-locking contract as set_inquiry_customer_
+        addresses (caller compares updated_at before calling).
+        """
+        _log.info("set_inquiry_fulfillment_mode called inquiry_id=%s", inquiry_id)
+        current = self._repository.get_by_id(inquiry_id)
+        if current is None:
+            raise KeyError(inquiry_id)
+        updated = set_inquiry_fulfillment_mode(current, fulfillment_mode)
+        if updated.fulfillment_mode == current.fulfillment_mode:
+            return current
+        updated = replace(updated, updated_at=_utc_now())
+        self._repository.update(updated)
+        _log.info("inquiry fulfillment mode updated inquiry_id=%s", inquiry_id)
         self._emit(InquiryUpdated(inquiry_id=inquiry_id))
         return updated
 

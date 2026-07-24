@@ -651,7 +651,7 @@ def test_sqlite_round_trip_and_legacy_null_snapshot(tmp_path: Path) -> None:
 def test_latest_inquiry_migration_is_v5() -> None:
     from catering_system.repositories.sqlite_inquiry_repository import _MIGRATIONS
 
-    assert max(number for number, _name, _fn in _MIGRATIONS) == 5
+    assert max(number for number, _name, _fn in _MIGRATIONS) == 6
 
 
 def test_completion_persists_in_sqlite(tmp_path: Path) -> None:

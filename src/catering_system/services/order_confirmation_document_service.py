@@ -20,6 +20,7 @@ from catering_system.domain.customer_document_projection import (
     CustomerDocumentProjection,
     CustomerDocumentRecipient,
 )
+from catering_system.domain.inquiry import FulfillmentMode
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_commercial_snapshot import OrderCommercialSnapshot
 from catering_system.domain.order_confirmation_document import (
@@ -27,7 +28,7 @@ from catering_system.domain.order_confirmation_document import (
     OrderConfirmationDocumentSnapshot,
     OrderConfirmationVatBucket,
     RecipientStatus,
-    SCHEMA_VERSION_V2,
+    SCHEMA_VERSION_V3,
 )
 from catering_system.domain.order_payment_reminder import (
     PAYMENT_METHOD_LABELS,
@@ -163,7 +164,7 @@ class OrderConfirmationDocumentService:
         if existing is not None:
             return existing
 
-        version, commercial, recipient = self._create_inputs(
+        version, commercial, recipient, fulfillment_mode = self._create_inputs(
             order,
             invoice_address=invoice_address,
             delivery_address=delivery_address,
@@ -173,6 +174,7 @@ class OrderConfirmationDocumentService:
             order_version=version,
             commercial_snapshot=commercial,
             recipient=recipient,
+            fulfillment_mode=fulfillment_mode,
         )
         if not decision.allowed:
             raise CustomerDocumentCreationBlocked(decision)
@@ -263,7 +265,7 @@ class OrderConfirmationDocumentService:
         invoice_address: CustomerAddress | None = None,
         delivery_address: CustomerAddress | None = None,
     ) -> DocumentCreateEligibility:
-        version, commercial, recipient = self._create_inputs(
+        version, commercial, recipient, fulfillment_mode = self._create_inputs(
             order,
             invoice_address=invoice_address,
             delivery_address=delivery_address,
@@ -273,6 +275,7 @@ class OrderConfirmationDocumentService:
             order_version=version,
             commercial_snapshot=commercial,
             recipient=recipient,
+            fulfillment_mode=fulfillment_mode,
         )
 
     def _create_inputs(
@@ -285,18 +288,23 @@ class OrderConfirmationDocumentService:
         OrderVersion | None,
         OrderCommercialSnapshot | None,
         CustomerDocumentRecipient,
+        FulfillmentMode,
     ]:
         version: OrderVersion | None = None
         if order.effective_order_version_id is not None:
             version = self._orders.get_order_version(order.effective_order_version_id)
         commercial = self._commercial_snapshots.get_by_order_id(order.order_id)
         inquiry = self._inquiries.get_by_id(order.source_inquiry_id)
+        fulfillment_mode: FulfillmentMode = (
+            inquiry.fulfillment_mode if inquiry is not None else "UNKNOWN"
+        )
         recipient = build_customer_document_recipient(
             inquiry,
             invoice_address=invoice_address,
             delivery_address=delivery_address,
+            fulfillment_mode=fulfillment_mode,
         )
-        return version, commercial, recipient
+        return version, commercial, recipient, fulfillment_mode
 
 
 def _persist_snapshot_from_projection(
@@ -340,11 +348,12 @@ def _persist_snapshot_from_projection(
         payment_method=projection.payment_method,
         payment_customer_visible_text=projection.payment_customer_visible_text,
         document_hash=document_hash,
-        schema_version=SCHEMA_VERSION_V2,
+        schema_version=SCHEMA_VERSION_V3,
         document_warnings=tuple(projection.recipient.warnings),
         invoice_address=projection.recipient.invoice_address,
         delivery_address=projection.recipient.delivery_address,
         delivery_address_differs=projection.recipient.delivery_address_differs,
+        fulfillment_mode=projection.fulfillment_mode,
     )
 
 

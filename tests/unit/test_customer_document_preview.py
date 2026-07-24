@@ -67,6 +67,7 @@ _DELIVERY = CustomerAddress(
 def _inquiry(
     *,
     snapshot: InquiryCustomerSnapshot | None = None,
+    fulfillment_mode: str = "PICKUP",
 ) -> Inquiry:
     return Inquiry(
         inquiry_id=_INQUIRY_ID,
@@ -90,6 +91,7 @@ def _inquiry(
             phone="+49301234567",
         ),
         intake_message="Firma: SHOULD-NOT-USE\nE-Mail: intake@example.invalid\n",
+        fulfillment_mode=fulfillment_mode,
     )
 
 
@@ -199,7 +201,7 @@ def test_address_warning_keeps_preview_eligible() -> None:
         order=_order(),
         order_version=_version(),
         commercial_snapshot=_commercial(),
-        recipient_inquiry=_inquiry(),
+        recipient_inquiry=_inquiry(fulfillment_mode="DELIVERY"),
         invoice_address=_INVOICE,
         delivery_address=_DELIVERY,
         now=_NOW,

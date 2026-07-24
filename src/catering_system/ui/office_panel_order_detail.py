@@ -9,7 +9,7 @@ from typing import Literal
 
 from catering_system.domain.customer_document_preview import CustomerDocumentPreview
 from catering_system.domain.customer_document_projection import CustomerAddress
-from catering_system.domain.inquiry import PLANNING_MODES, Inquiry
+from catering_system.domain.inquiry import FULFILLMENT_MODES, PLANNING_MODES, Inquiry
 from catering_system.domain.inquiry_customer_snapshot import DELIVERY_ADDRESS_MODES
 from catering_system.domain.order import (
     Order,
@@ -49,6 +49,14 @@ _DOCUMENT_BLOCKER_LABELS = {
     "MISSING_CUSTOMER_NAME": "Kundenname fehlt",
     "MISSING_CUSTOMER_CONTACT": "Kundenkontakt fehlt",
     "INVALID_ORDER_STATE": "Auftrag nicht bereit für Kundendokument",
+    "FULFILLMENT_MODE_REQUIRED": "Auftragsart (Lieferung/Abholung) fehlt",
+    "DELIVERY_ADDRESS_REQUIRED_FOR_DELIVERY": "Lieferadresse fehlt für Lieferung",
+}
+
+_FULFILLMENT_MODE_LABELS = {
+    "UNKNOWN": "Nicht festgelegt",
+    "DELIVERY": "Lieferung",
+    "PICKUP": "Abholung",
 }
 
 _DOCUMENT_WARNING_LABELS = {
@@ -165,6 +173,7 @@ class OrderDetailFormFields:
     pause_command_fields: str = ""
     resume_command_fields: str = ""
     customer_addresses_command_fields: str = ""
+    fulfillment_mode_command_fields: str = ""
     version_change_prefill: OrderVersionChangePrefill | None = None
 
 
@@ -885,6 +894,64 @@ def render_customer_addresses_card(
     )
 
 
+def _fulfillment_mode_form(
+    inquiry: Inquiry,
+    order: Order,
+    forms: OrderDetailFormFields,
+) -> str:
+    mode = inquiry.fulfillment_mode
+    options = "".join(
+        f'<option value="{_e(value)}"{" selected" if value == mode else ""}>'
+        f"{_e(_FULFILLMENT_MODE_LABELS[value])}</option>"
+        for value in FULFILLMENT_MODES
+    )
+    return (
+        '<details class="order-edit"><summary>Auftragsart bearbeiten</summary>'
+        '<div class="order-edit-body">'
+        f'<form method="post" action="/inquiry/{_e(inquiry.inquiry_id)}/fulfillment-mode">'
+        f"{forms.csrf_input}{forms.fulfillment_mode_command_fields}"
+        f'<input type="hidden" name="return_order_id" value="{_e(order.order_id)}">'
+        "<fieldset>"
+        "<p><label>Auftragsart</label>"
+        f'<select name="fulfillment_mode">{options}</select></p>'
+        '<p><button type="submit">Auftragsart speichern</button></p>'
+        "</fieldset></form></div></details>"
+    )
+
+
+def render_fulfillment_mode_card(
+    inquiry: Inquiry | None,
+    order: Order,
+    forms: OrderDetailFormFields,
+    *,
+    editable: bool = True,
+) -> str:
+    """Auftragsart (Lieferung/Abholung) — never guessed, always explicit."""
+    if inquiry is None:
+        return (
+            '<section class="order-card order-content-card order-fulfillment-card">'
+            "<h2>Auftragsart</h2>"
+            '<p class="order-section-note">Keine Anfrage verknüpft.</p>'
+            "</section>"
+        )
+    label = _FULFILLMENT_MODE_LABELS.get(
+        inquiry.fulfillment_mode, inquiry.fulfillment_mode
+    )
+    form = (
+        _fulfillment_mode_form(inquiry, order, forms)
+        if editable and order.cancelled_at is None
+        else ""
+    )
+    return (
+        '<section class="order-card order-content-card order-fulfillment-card">'
+        "<h2>Auftragsart</h2>"
+        f'<dl class="order-payment-facts">'
+        f"<div><dt>Auftragsart</dt><dd>{_e(label)}</dd></div></dl>"
+        + form
+        + "</section>"
+    )
+
+
 def render_confirmation_card(
     order: Order,
     confirmation: OrderConfirmationDocumentEligibility,
@@ -1209,6 +1276,7 @@ def render_order_detail(
         + "</div>"
         '<aside class="order-detail-side">'
         + _primary_action(order, target, next_action, forms)
+        + render_fulfillment_mode_card(source_inquiry, order, forms)
         + render_customer_addresses_card(source_inquiry, order, forms)
         + _confirmation_card(order, confirmation, forms, live_preview)
         + render_confirmation_outbound_card(

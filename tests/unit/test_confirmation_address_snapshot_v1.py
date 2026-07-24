@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -18,6 +19,7 @@ from catering_system.domain.inquiry_customer_snapshot import (
 from catering_system.domain.order_confirmation_document import (
     SCHEMA_VERSION_V1,
     SCHEMA_VERSION_V2,
+    SCHEMA_VERSION_V3,
 )
 from catering_system.services.order_confirmation_document_hash import (
     compute_document_hash,
@@ -88,17 +90,21 @@ def _set_inquiry_addresses(
     invoice: CustomerAddress | None,
     delivery: CustomerAddress | None,
     mode: str,
+    fulfillment_mode: str = "DELIVERY",
 ) -> None:
+    """FULFILLMENT_SOURCE_V1: every test in this file is about DELIVERY
+    address resolution unless it explicitly overrides fulfillment_mode
+    (e.g. PICKUP, where delivery_address_mode stops mattering)."""
     inquiry = inquiries.get_by_id(order.source_inquiry_id)  # type: ignore[attr-defined]
     assert inquiry is not None
-    inquiries.update(  # type: ignore[attr-defined]
-        set_inquiry_customer_addresses(
-            inquiry,
-            invoice_address=invoice,
-            delivery_address=delivery,
-            delivery_address_mode=mode,
-        )
+    updated = set_inquiry_customer_addresses(
+        inquiry,
+        invoice_address=invoice,
+        delivery_address=delivery,
+        delivery_address_mode=mode,
     )
+    updated = replace(updated, fulfillment_mode=fulfillment_mode)
+    inquiries.update(updated)  # type: ignore[attr-defined]
 
 
 def test_a_same_as_invoice_persists_effective_delivery() -> None:
@@ -112,7 +118,8 @@ def test_a_same_as_invoice_persists_effective_delivery() -> None:
     snapshot = service.prepare_snapshot(
         order.order_id, version.order_version_id, "office-panel"
     )
-    assert snapshot.schema_version == SCHEMA_VERSION_V2
+    assert snapshot.schema_version == SCHEMA_VERSION_V3
+    assert snapshot.fulfillment_mode == "DELIVERY"
     assert snapshot.invoice_address == _INVOICE
     assert snapshot.delivery_address == _INVOICE
     assert snapshot.delivery_address_differs is False
@@ -144,13 +151,15 @@ def test_b_separate_persists_differs_warning() -> None:
     snapshot = service.prepare_snapshot(
         order.order_id, version.order_version_id, "office-panel"
     )
-    assert snapshot.schema_version == SCHEMA_VERSION_V2
+    assert snapshot.schema_version == SCHEMA_VERSION_V3
+    assert snapshot.fulfillment_mode == "DELIVERY"
     assert snapshot.invoice_address == _INVOICE
     assert snapshot.delivery_address == _DELIVERY
     assert snapshot.delivery_address_differs is True
     assert WARNING_DELIVERY_ADDRESS_DIFFERS in snapshot.document_warnings
     payload = json.loads(snapshot_to_canonical_json(snapshot))
     assert payload["delivery_address_differs"] is True
+    assert payload["fulfillment_mode"] == "DELIVERY"
     assert WARNING_DELIVERY_ADDRESS_DIFFERS in payload["document_warnings"]
 
 
@@ -293,24 +302,35 @@ def test_g_api_preview_shape_exposes_address_contract_keys() -> None:
         "watermark",
     }
     assert required.issubset(shape)
-    assert shape["schema_version"] == SCHEMA_VERSION_V2
+    assert shape["schema_version"] == SCHEMA_VERSION_V3
     assert shape["address_facts_stored"] is True
     assert shape["delivery_address_differs"] is True
     assert WARNING_DELIVERY_ADDRESS_DIFFERS in shape["document_warnings"]
 
 
 def test_unknown_mode_persists_nullable_projection_values() -> None:
+    """delivery_address_mode=UNKNOWN under fulfillment_mode=PICKUP — DELIVERY
+    would now be blocked by DELIVERY_ADDRESS_REQUIRED_FOR_DELIVERY (see
+    test_fulfillment_source_v1.py); PICKUP is fulfillment's own way of
+    saying delivery address is not applicable, tested here at the address
+    layer to keep this file's original nullable-projection assertions."""
     orders, _offers, inquiries, documents, service, _core, _offer = _services()
     order, version = _effective_order(
         (orders, _offers, inquiries, documents, service, _core, _offer)
     )
     _set_inquiry_addresses(
-        inquiries, order, invoice=_INVOICE, delivery=None, mode="UNKNOWN"
+        inquiries,
+        order,
+        invoice=_INVOICE,
+        delivery=None,
+        mode="UNKNOWN",
+        fulfillment_mode="PICKUP",
     )
     snapshot = service.prepare_snapshot(
         order.order_id, version.order_version_id, "office-panel"
     )
-    assert snapshot.schema_version == SCHEMA_VERSION_V2
+    assert snapshot.schema_version == SCHEMA_VERSION_V3
+    assert snapshot.fulfillment_mode == "PICKUP"
     assert snapshot.invoice_address == _INVOICE
     assert snapshot.delivery_address is None
     assert snapshot.delivery_address_differs is False
@@ -380,7 +400,9 @@ def test_schema2_rejects_malformed_address_object() -> None:
 
 
 def test_schema2_rejects_unsupported_schema_version() -> None:
-    payload = _schema2_payload_from_legacy(schema_version=3)
+    # schema_version=3 is FULFILLMENT_SOURCE_V1 and now valid — use a truly
+    # unsupported version to keep testing the same rejection path.
+    payload = _schema2_payload_from_legacy(schema_version=4)
     with pytest.raises(ValueError, match="unsupported order confirmation document"):
         snapshot_from_canonical_json(_dumps(payload))
 

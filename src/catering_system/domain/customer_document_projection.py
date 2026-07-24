@@ -13,7 +13,11 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Literal
 
-from catering_system.domain.inquiry import PlanningMode
+from catering_system.domain.inquiry import (
+    FulfillmentMode,
+    PlanningMode,
+    validate_fulfillment_mode,
+)
 from catering_system.domain.order_payment_reminder import (
     PaymentMethod,
     validate_payment_method,
@@ -256,6 +260,10 @@ class CustomerDocumentProjection:
     net_total_cents: int
     vat_total_cents: int
     gross_total_cents: int
+    # FULFILLMENT_SOURCE_V1: frozen Inquiry.fulfillment_mode fact, never
+    # inferred here. UNKNOWN is a valid *projection* value (create-time
+    # eligibility is what blocks a customer document while it stays UNKNOWN).
+    fulfillment_mode: FulfillmentMode = "UNKNOWN"
 
     def __post_init__(self) -> None:
         if self.document_type not in DOCUMENT_TYPES:
@@ -265,6 +273,7 @@ class CustomerDocumentProjection:
         if not self.positions:
             raise ValueError("positions must not be empty")
         validate_payment_method(self.payment_method)
+        validate_fulfillment_mode(self.fulfillment_mode)
         _require_text(
             self.payment_customer_visible_text, "payment_customer_visible_text"
         )

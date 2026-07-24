@@ -19,7 +19,7 @@ from catering_system.domain.customer_document_projection import (
     DocumentType,
     customer_addresses_equal,
 )
-from catering_system.domain.inquiry import Inquiry
+from catering_system.domain.inquiry import FulfillmentMode, Inquiry
 from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot
 from catering_system.domain.order import OrderVersion
 from catering_system.domain.order_commercial_snapshot import (
@@ -36,12 +36,18 @@ def build_customer_document_recipient(
     *,
     invoice_address: CustomerAddress | None = None,
     delivery_address: CustomerAddress | None = None,
+    fulfillment_mode: FulfillmentMode = "UNKNOWN",
 ) -> CustomerDocumentRecipient:
     """Map Inquiry.customer_snapshot to recipient (CUSTOMER_ADDRESS_SOURCE_V1-A).
 
     Optional address kwargs override snapshot addresses for tests only. When
     kwargs are omitted, delivery_address_mode on the snapshot controls effective
     delivery and the soft differ warning.
+
+    FULFILLMENT_SOURCE_V1: PICKUP never surfaces a delivery address or the
+    address-differs warning here — Lieferadresse is not applicable to an
+    Abholung, regardless of what is stored on the Inquiry snapshot (storage
+    is left untouched; only this customer-facing projection suppresses it).
     """
     snapshot = inquiry.customer_snapshot if inquiry is not None else None
     name, email = _name_and_email(snapshot)
@@ -50,6 +56,7 @@ def build_customer_document_recipient(
         snapshot,
         invoice_override=invoice_address,
         delivery_override=delivery_address,
+        fulfillment_mode=fulfillment_mode,
     )
     warnings: tuple[CustomerDocumentWarning, ...] = (
         (WARNING_DELIVERY_ADDRESS_DIFFERS,) if differs else ()
@@ -71,6 +78,7 @@ def _resolve_addresses(
     *,
     invoice_override: CustomerAddress | None,
     delivery_override: CustomerAddress | None,
+    fulfillment_mode: FulfillmentMode = "UNKNOWN",
 ) -> tuple[CustomerAddress | None, CustomerAddress | None, bool]:
     """Resolve invoice/delivery/differs from snapshot mode (or test overrides)."""
     # Explicit kwargs (both provided as non-default path): legacy test override
@@ -80,6 +88,8 @@ def _resolve_addresses(
         # slots (tests). Mode is ignored in that case.
         invoice = invoice_override
         delivery = delivery_override
+        if fulfillment_mode == "PICKUP":
+            return invoice, None, False
         differs = (
             invoice is not None
             and delivery is not None
@@ -90,6 +100,10 @@ def _resolve_addresses(
     if snapshot is None:
         return None, None, False
     invoice = snapshot.invoice_address
+    if fulfillment_mode == "PICKUP":
+        # Abholung: Rechnungsadresse still applies, Lieferadresse does not —
+        # not derived from delivery_address_mode, storage stays untouched.
+        return invoice, None, False
     mode = snapshot.delivery_address_mode
     if mode == "UNKNOWN":
         return invoice, None, False
@@ -112,6 +126,7 @@ def build_customer_document_projection(
     order_version: OrderVersion,
     commercial_snapshot: OrderCommercialSnapshot,
     recipient: CustomerDocumentRecipient,
+    fulfillment_mode: FulfillmentMode = "UNKNOWN",
 ) -> CustomerDocumentProjection:
     """Assemble a frozen customer-document projection from value objects."""
     if commercial_snapshot.order_id != order_version.order_id:
@@ -150,6 +165,7 @@ def build_customer_document_projection(
         net_total_cents=sum(p.net_total_cents for p in positions),
         vat_total_cents=sum(p.vat_amount_cents for p in positions),
         gross_total_cents=sum(p.gross_total_cents for p in positions),
+        fulfillment_mode=fulfillment_mode,
     )
 
 
@@ -210,10 +226,14 @@ class CustomerDocumentProjectionService:
         invoice_address: CustomerAddress | None = None,
         delivery_address: CustomerAddress | None = None,
     ) -> CustomerDocumentProjection:
+        fulfillment_mode = (
+            inquiry.fulfillment_mode if inquiry is not None else "UNKNOWN"
+        )
         recipient = build_customer_document_recipient(
             inquiry,
             invoice_address=invoice_address,
             delivery_address=delivery_address,
+            fulfillment_mode=fulfillment_mode,
         )
         return build_customer_document_projection(
             document_type=document_type,
@@ -222,4 +242,5 @@ class CustomerDocumentProjectionService:
             order_version=order_version,
             commercial_snapshot=commercial_snapshot,
             recipient=recipient,
+            fulfillment_mode=fulfillment_mode,
         )

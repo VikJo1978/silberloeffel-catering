@@ -13,6 +13,7 @@ from catering_system.domain.customer_document_eligibility import (
 from catering_system.domain.customer_document_projection import (
     CustomerDocumentRecipient,
 )
+from catering_system.domain.inquiry import FulfillmentMode
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_commercial_snapshot import OrderCommercialSnapshot
 
@@ -25,6 +26,7 @@ def evaluate_customer_document_eligibility(
     order_version: OrderVersion | None,
     commercial_snapshot: OrderCommercialSnapshot | None,
     recipient: CustomerDocumentRecipient,
+    fulfillment_mode: FulfillmentMode = "UNKNOWN",
 ) -> CustomerDocumentEligibility:
     """Decide whether a customer document may be created for this order state."""
     blockers: list[DocumentBlocker] = []
@@ -40,6 +42,13 @@ def evaluate_customer_document_eligibility(
 
     if not _has_usable_contact(recipient):
         blockers.append(DocumentBlocker(code="MISSING_CUSTOMER_CONTACT"))
+
+    # FULFILLMENT_SOURCE_V1: fulfillment_mode is the sole source for these
+    # two blockers — never derived from address presence/equality/text.
+    if fulfillment_mode == "UNKNOWN":
+        blockers.append(DocumentBlocker(code="FULFILLMENT_MODE_REQUIRED"))
+    elif fulfillment_mode == "DELIVERY" and recipient.delivery_address is None:
+        blockers.append(DocumentBlocker(code="DELIVERY_ADDRESS_REQUIRED_FOR_DELIVERY"))
 
     ordered = sort_document_blockers(tuple(blockers))
     return CustomerDocumentEligibility(allowed=not ordered, blockers=ordered)

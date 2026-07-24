@@ -18,6 +18,7 @@ from catering_system.domain.customer_document_projection import (
     WARNING_DELIVERY_ADDRESS_DIFFERS,
     CustomerAddress,
 )
+from catering_system.domain.inquiry import Inquiry
 from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot
 from catering_system.domain.order_commercial_snapshot import (
     OrderCommercialPosition,
@@ -98,6 +99,10 @@ def _services() -> tuple[
         replace(
             inquiry,
             intake_message="Firma: Example GmbH\nE-Mail: customer@example.invalid\n",
+            # FULFILLMENT_SOURCE_V1: PICKUP is this fixture's neutral default
+            # — no address setup here, and PICKUP never requires one. Tests
+            # that specifically need DELIVERY set fulfillment_mode themselves.
+            fulfillment_mode="PICKUP",
         )
     )
     _converted, order, order_version = offer_service.convert_accepted_offer(
@@ -143,7 +148,8 @@ def test_snapshot_created_for_effective_order() -> None:
     assert snapshot.gross_total_cents == 24824
     assert snapshot.recipient_status == "ready"
     assert snapshot.document_hash.startswith("sha256:")
-    assert snapshot.schema_version == 2
+    assert snapshot.schema_version == 3
+    assert snapshot.fulfillment_mode == "PICKUP"
     assert snapshot.delivery_address_differs is False
     assert snapshot.address_facts_stored is True
 
@@ -304,6 +310,30 @@ def test_totals_and_vat_match_positions() -> None:
     )
 
 
+def _pickup_inquiry() -> Inquiry:
+    """Minimal Inquiry fixture for direct CustomerDocumentProjectionService.build()
+    calls in this file that pass inquiry=None — schema 3 requires a real
+    fulfillment_mode (never UNKNOWN) on any persisted snapshot, and PICKUP
+    keeps these position-focused tests free of address setup."""
+    now = datetime(2026, 7, 18, 10, 0, tzinfo=UTC)
+    return Inquiry(
+        inquiry_id="55555555-5555-4555-8555-555555555555",
+        event_date=date(2026, 8, 20),
+        created_at=now,
+        updated_at=now,
+        inquiry_source="manual",
+        crm_stage="Neue Anfrage",
+        customer_linkage={},
+        time_window_text="18:00–22:00",
+        location_text="Hamburg",
+        guest_count_estimate=10,
+        planning_mode="caterer_suggestion",
+        call_verification_required=False,
+        call_verification_status="not_required",
+        fulfillment_mode="PICKUP",
+    )
+
+
 def test_surcharge_linkage_preserved() -> None:
     base_id = "88888888-8888-4888-8888-888888888881"
     surcharge_id = "99999999-9999-4999-8999-999999999991"
@@ -364,7 +394,7 @@ def test_surcharge_linkage_preserved() -> None:
         created_at=now,
         order_version=version,
         commercial_snapshot=commercial,
-        inquiry=None,
+        inquiry=_pickup_inquiry(),
     )
     document = _persist_snapshot_from_projection(
         projection,
@@ -438,7 +468,7 @@ def test_fee_position_preserved() -> None:
         created_at=now,
         order_version=version,
         commercial_snapshot=commercial,
-        inquiry=None,
+        inquiry=_pickup_inquiry(),
     )
     document = _persist_snapshot_from_projection(
         projection,
@@ -478,6 +508,7 @@ def test_phone_without_email_still_allows_prepare() -> None:
                 email=None,
             ),
             intake_message="Firma: SHOULD-NOT-USE\nE-Mail: intake@example.invalid\n",
+            fulfillment_mode="PICKUP",
         )
     )
     core = OperationalCoreService(orders)
@@ -555,6 +586,10 @@ def test_missing_customer_contact_blocks_prepare() -> None:
 def test_address_warning_flows_into_confirmation_document() -> None:
     services = _services()
     order, version = _effective_order(services)
+    inquiries = services[2]
+    inquiry = inquiries.get_by_id(order.source_inquiry_id)
+    assert inquiry is not None
+    inquiries.update(replace(inquiry, fulfillment_mode="DELIVERY"))
     service = services[4]
     invoice = CustomerAddress(
         street="Bürostraße 1",
@@ -575,7 +610,8 @@ def test_address_warning_flows_into_confirmation_document() -> None:
         invoice_address=invoice,
         delivery_address=delivery,
     )
-    assert snapshot.schema_version == 2
+    assert snapshot.schema_version == 3
+    assert snapshot.fulfillment_mode == "DELIVERY"
     assert snapshot.invoice_address == invoice
     assert snapshot.delivery_address == delivery
     assert snapshot.delivery_address_differs is True

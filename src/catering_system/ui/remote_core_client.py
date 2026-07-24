@@ -35,13 +35,16 @@ from catering_system.domain.customer_document_projection import (
     DocumentType,
 )
 from catering_system.domain.inquiry import (
+    FulfillmentMode,
     Inquiry,
     InquiryOfficeNextAction,
     PLANNING_MODE_SET,
     PlanningMode,
+    set_inquiry_fulfillment_mode,
     validate_call_verification_status,
     validate_crm_stage,
     validate_customer_linkage,
+    validate_fulfillment_mode,
     validate_planning_mode,
 )
 from catering_system.domain.order import Order, OrderVersion
@@ -102,6 +105,7 @@ _INQUIRY_SUMMARY_KEYS = frozenset(
         "planning_mode",
         "call_verification_required",
         "call_verification_status",
+        "fulfillment_mode",
     }
 )
 _INQUIRY_LIST_KEYS = _INQUIRY_SUMMARY_KEYS | {
@@ -485,6 +489,7 @@ def _inquiry(
         verification = validate_call_verification_status(
             _str(data["call_verification_status"])
         )
+        fulfillment_mode = validate_fulfillment_mode(_str(data["fulfillment_mode"]))
     except (KeyError, TypeError, ValueError):
         _bad_response()
     return Inquiry(
@@ -501,6 +506,7 @@ def _inquiry(
         planning_mode=planning_mode,
         call_verification_required=_bool(data.get("call_verification_required")),
         call_verification_status=verification,
+        fulfillment_mode=fulfillment_mode,
         intake_subject=_optional_str(data.get("intake_subject")),
         intake_message=_optional_str(data.get("intake_message")),
         intake_summary=_optional_str(data.get("intake_summary")),
@@ -2555,6 +2561,36 @@ class _RemoteInquiryService:
             _bad_response()
         return replace(updated, updated_at=_datetime(result["updated_at"]))
 
+    def set_inquiry_fulfillment_mode(
+        self,
+        inquiry_id: str,
+        *,
+        fulfillment_mode: FulfillmentMode | str,
+    ) -> Inquiry:
+        current = self._client.get_by_id(inquiry_id)
+        if current is None:
+            raise RemoteCoreError(404, "not_found")
+        args: dict[str, object] = {"fulfillment_mode": fulfillment_mode}
+        expected_at = self._client.form_value("_expect_updated_at")
+        result = self._client.command(
+            f"/office/v1/inquiries/{quote(inquiry_id, safe='')}/fulfillment-mode",
+            args,
+            {"updated_at": expected_at or current.updated_at.isoformat()},
+            expected={200},
+            result_keys={
+                "inquiry_id",
+                "updated_at",
+                "fulfillment_mode",
+            },
+        )
+        if _uuid4(result["inquiry_id"]) != inquiry_id:
+            _bad_response()
+        # Reapply domain locally for redirect render parity (no silent defaults).
+        updated = set_inquiry_fulfillment_mode(current, fulfillment_mode)
+        if updated.fulfillment_mode != result["fulfillment_mode"]:
+            _bad_response()
+        return replace(updated, updated_at=_datetime(result["updated_at"]))
+
     def verify_customer_by_call(self, inquiry_id: str) -> Inquiry:
         current = self._client.get_by_id(inquiry_id)
         if current is None:
@@ -2984,6 +3020,7 @@ _CUSTOMER_DOCUMENT_PREVIEW_KEYS = frozenset(
     {
         "document_type",
         "eligible",
+        "fulfillment_mode",
         "blockers",
         "warnings",
         "recipient",
@@ -3233,6 +3270,7 @@ def _customer_document_preview(raw: object) -> CustomerDocumentPreview:
         _bad_response()
     document_type: DocumentType = "ORDER_CONFIRMATION"
     eligible = _bool(data["eligible"])
+    fulfillment_mode = validate_fulfillment_mode(_str(data["fulfillment_mode"]))
     blockers = tuple(_preview_blocker(item) for item in _list(data["blockers"]))
     warnings = _preview_warnings(data["warnings"])
     recipient = _preview_recipient(data["recipient"])
@@ -3268,6 +3306,7 @@ def _customer_document_preview(raw: object) -> CustomerDocumentPreview:
             net_total_cents=_optional_int(data["net_total_cents"]),
             vat_total_cents=_optional_int(data["vat_total_cents"]),
             gross_total_cents=_optional_int(data["gross_total_cents"]),
+            fulfillment_mode=fulfillment_mode,
         )
     except ValueError:
         _bad_response()

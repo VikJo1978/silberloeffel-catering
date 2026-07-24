@@ -172,6 +172,7 @@ def _sqlite_world(
         _sample_inquiry(),
         intake_message=intake_message,
         customer_snapshot=snapshot,
+        fulfillment_mode="PICKUP",
     )
     inquiries.save(inquiry)
     offer_service = OfferService(offers, inquiries, orders, commercial_snapshots)
@@ -583,6 +584,7 @@ def test_confirmation_card_escapes_hostile_user_data() -> None:
                 email="safe@example.invalid",
                 phone="+49301234567",
             ),
+            fulfillment_mode="PICKUP",
         )
     )
     updated, order, order_version = offer_service.convert_accepted_offer(

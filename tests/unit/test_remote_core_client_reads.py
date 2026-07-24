@@ -63,6 +63,7 @@ def _valid_queue_body() -> dict[str, object]:
                 "planning_mode": "caterer_suggestion",
                 "call_verification_required": False,
                 "call_verification_status": "not_required",
+                "fulfillment_mode": "UNKNOWN",
                 "created_at": "2026-07-14T10:00:00+02:00",
                 "updated_at": "2026-07-14T10:00:00+02:00",
                 "next_action": "verify",

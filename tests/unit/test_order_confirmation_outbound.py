@@ -86,6 +86,7 @@ def _world() -> tuple[
                 email="customer@example.invalid",
                 phone="+49301234567",
             ),
+            fulfillment_mode="PICKUP",
         )
     )
     _converted, order, order_version = offer_service.convert_accepted_offer(

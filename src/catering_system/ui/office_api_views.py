@@ -382,6 +382,7 @@ def inquiry_summary(inquiry: Inquiry) -> dict[str, object]:
         "planning_mode": inquiry.planning_mode,
         "call_verification_required": inquiry.call_verification_required,
         "call_verification_status": inquiry.call_verification_status,
+        "fulfillment_mode": inquiry.fulfillment_mode,
     }
 
 
@@ -699,6 +700,7 @@ def customer_document_preview_shape(preview: object) -> dict[str, object]:
     return {
         "document_type": preview.document_type,
         "eligible": preview.eligible,
+        "fulfillment_mode": preview.fulfillment_mode,
         "warnings": list(preview.warnings),
         "blockers": [
             {"code": blocker.code, "detail": blocker.detail}

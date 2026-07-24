@@ -19,6 +19,7 @@ from catering_system.domain.inquiry import (
     validate_call_verification_status,
     validate_crm_stage,
     validate_customer_linkage,
+    validate_fulfillment_mode,
     validate_planning_mode,
 )
 from catering_system.repositories.inquiry_repository import (
@@ -131,12 +132,24 @@ def _migration_5_add_customer_addresses(connection: sqlite3.Connection) -> None:
             connection.execute(f"ALTER TABLE inquiries ADD COLUMN {column} TEXT")
 
 
+def _migration_6_add_fulfillment_mode(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(inquiries)").fetchall()
+    }
+    if "fulfillment_mode" not in columns:
+        connection.execute(
+            "ALTER TABLE inquiries ADD COLUMN fulfillment_mode TEXT "
+            "NOT NULL DEFAULT 'UNKNOWN'"
+        )
+
+
 _MIGRATIONS = (
     (1, "create_inquiries", _migration_1_create_table),
     (2, "add_intake_context", _migration_2_add_intake_context),
     (3, "unique_website_external_ref", _migration_3_unique_website_external_ref),
     (4, "add_customer_reference", _migration_4_add_customer_reference),
     (5, "add_customer_addresses", _migration_5_add_customer_addresses),
+    (6, "add_fulfillment_mode", _migration_6_add_fulfillment_mode),
 )
 
 
@@ -180,8 +193,9 @@ class SQLiteInquiryRepository:
                     "intake_message, intake_summary, intake_external_ref, customer_id, "
                     "snapshot_company_name, snapshot_contact_name, snapshot_email, "
                     "snapshot_phone, snapshot_delivery_address_mode, "
-                    "snapshot_invoice_address_json, snapshot_delivery_address_json) VALUES "
-                    "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "snapshot_invoice_address_json, snapshot_delivery_address_json, "
+                    "fulfillment_mode) VALUES "
+                    "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     self._values(inquiry),
                 )
         except sqlite3.IntegrityError as exc:
@@ -224,6 +238,9 @@ class SQLiteInquiryRepository:
             intake_external_ref=row[16],
             customer_id=row[17],
             customer_snapshot=snapshot,
+            fulfillment_mode=validate_fulfillment_mode(
+                row[25] if len(row) > 25 and row[25] is not None else "UNKNOWN"
+            ),
         )
 
     @staticmethod
@@ -280,7 +297,8 @@ class SQLiteInquiryRepository:
                         snapshot_email = ?, snapshot_phone = ?,
                         snapshot_delivery_address_mode = ?,
                         snapshot_invoice_address_json = ?,
-                        snapshot_delivery_address_json = ?
+                        snapshot_delivery_address_json = ?,
+                        fulfillment_mode = ?
                     WHERE inquiry_id = ?
                     """,
                     self._values(inquiry)[1:] + (inquiry.inquiry_id,),
@@ -334,6 +352,7 @@ class SQLiteInquiryRepository:
                 None,
                 None,
                 None,
+                inquiry.fulfillment_mode,
             )
         invoice_json = None
         delivery_json = None
@@ -369,6 +388,7 @@ class SQLiteInquiryRepository:
             snapshot.delivery_address_mode,
             invoice_json,
             delivery_json,
+            inquiry.fulfillment_mode,
         )
 
     def find_by_source_and_external_ref(

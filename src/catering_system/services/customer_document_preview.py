@@ -14,7 +14,7 @@ from catering_system.domain.customer_document_projection import (
     CustomerAddress,
     CustomerDocumentEvent,
 )
-from catering_system.domain.inquiry import Inquiry
+from catering_system.domain.inquiry import FulfillmentMode, Inquiry
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_commercial_snapshot import OrderCommercialSnapshot
 from catering_system.repositories.inquiry_repository import InquiryRepository
@@ -48,16 +48,23 @@ def build_customer_document_preview(
     now: datetime | None = None,
 ) -> CustomerDocumentPreview:
     """Pure assemble of live preview facts + eligibility (no repos)."""
+    fulfillment_mode: FulfillmentMode = (
+        recipient_inquiry.fulfillment_mode
+        if recipient_inquiry is not None
+        else "UNKNOWN"
+    )
     recipient = build_customer_document_recipient(
         recipient_inquiry,
         invoice_address=invoice_address,
         delivery_address=delivery_address,
+        fulfillment_mode=fulfillment_mode,
     )
     eligibility = evaluate_customer_document_eligibility(
         order=order,
         order_version=order_version,
         commercial_snapshot=commercial_snapshot,
         recipient=recipient,
+        fulfillment_mode=fulfillment_mode,
     )
     event = _event_from_version(order_version)
     if commercial_snapshot is not None and order_version is not None:
@@ -68,6 +75,7 @@ def build_customer_document_preview(
             order_version=order_version,
             commercial_snapshot=commercial_snapshot,
             recipient=recipient,
+            fulfillment_mode=fulfillment_mode,
         )
         return CustomerDocumentPreview(
             document_type="ORDER_CONFIRMATION",
@@ -83,6 +91,7 @@ def build_customer_document_preview(
             net_total_cents=projection.net_total_cents,
             vat_total_cents=projection.vat_total_cents,
             gross_total_cents=projection.gross_total_cents,
+            fulfillment_mode=projection.fulfillment_mode,
         )
     return CustomerDocumentPreview(
         document_type="ORDER_CONFIRMATION",
@@ -98,6 +107,7 @@ def build_customer_document_preview(
         net_total_cents=None,
         vat_total_cents=None,
         gross_total_cents=None,
+        fulfillment_mode=fulfillment_mode,
     )
 
 
