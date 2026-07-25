@@ -41,6 +41,9 @@ from catering_system.services.inquiry_service import InquiryService
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
 from catering_system.ui.office_api import create_office_api_server
+from tests.helpers.offer_pdf_static_content import (
+    fake_offer_pdf_static_content,
+)
 from catering_system.ui.office_panel_http import (
     create_office_panel_server,
     csrf_token_for_password,
@@ -350,7 +353,13 @@ def direct_world(tmp_path: Path):
     db = tmp_path / "convert-accepted.db"
     ids = _seed(db)
     api_url, api_server = _run_server_in_thread(
-        lambda: create_office_api_server(str(db), _API_TOKEN, "127.0.0.1", 0)
+        lambda: create_office_api_server(
+            str(db),
+            _API_TOKEN,
+            "127.0.0.1",
+            0,
+            offer_pdf_static_content=fake_offer_pdf_static_content(),
+        )
     )
     panel_url, panel_server = _start_direct_panel(db)
     try:
@@ -443,7 +452,13 @@ def test_remote_panel_convert_accepted_parity(tmp_path: Path) -> None:
     ids = _seed(db)
     inquiry_id = ids["inquiry_convertible"]
     api_url, api_server = _run_server_in_thread(
-        lambda: create_office_api_server(str(db), _API_TOKEN, "127.0.0.1", 0)
+        lambda: create_office_api_server(
+            str(db),
+            _API_TOKEN,
+            "127.0.0.1",
+            0,
+            offer_pdf_static_content=fake_offer_pdf_static_content(),
+        )
     )
     _accept_offer_via_api(api_url, inquiry_id)
     remote = RemoteCoreClient(api_url, _API_TOKEN)

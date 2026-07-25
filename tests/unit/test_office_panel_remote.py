@@ -51,6 +51,9 @@ from catering_system.services.inquiry_service import InquiryService
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
 from catering_system.ui.office_api import create_office_api_server
+from tests.helpers.offer_pdf_static_content import (
+    fake_offer_pdf_static_content,
+)
 from catering_system.ui.office_panel_http import (
     create_office_panel_server,
     csrf_token_for_password,
@@ -195,7 +198,13 @@ def _run_server_in_thread(build_server) -> tuple[str, HTTPServer]:
 
 def _start_api_server(db: Path) -> tuple[str, HTTPServer]:
     return _run_server_in_thread(
-        lambda: create_office_api_server(str(db), _API_TOKEN, "127.0.0.1", 0)
+        lambda: create_office_api_server(
+            str(db),
+            _API_TOKEN,
+            "127.0.0.1",
+            0,
+            offer_pdf_static_content=fake_offer_pdf_static_content(),
+        )
     )
 
 

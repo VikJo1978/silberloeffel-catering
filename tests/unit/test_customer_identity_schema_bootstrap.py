@@ -214,11 +214,19 @@ def test_ambiguous_matches_have_deterministic_order(tmp_path: Path) -> None:
 
 
 def test_office_api_bootstrap_applies_foundation_schema(tmp_path: Path) -> None:
+    from catering_system.domain.offer_pdf import OfferPdfStaticContent
     from catering_system.repositories.core_transaction import open_core_connection
     from catering_system.ui.office_api import OfficeApi
 
     db = tmp_path / "core.db"
-    OfficeApi(open_core_connection(db))
+    OfficeApi(
+        open_core_connection(db),
+        offer_pdf_static_content=OfferPdfStaticContent(
+            company_legal_name="TEST GmbH [PLATZHALTER]",
+            company_address_lines=("Teststraße 1", "20095 Hamburg"),
+            acceptance_statement="[TEST PLACEHOLDER — NOT APPROVED CUSTOMER WORDING]",
+        ),
+    )
     connection = sqlite3.connect(db)
     tables = {
         row[0]

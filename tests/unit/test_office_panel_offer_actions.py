@@ -38,6 +38,9 @@ from catering_system.repositories.sqlite_payment_reminder_repository import (
 )
 from catering_system.services.inquiry_service import InquiryService
 from catering_system.ui.office_api import create_office_api_server
+from tests.helpers.offer_pdf_static_content import (
+    fake_offer_pdf_static_content,
+)
 from catering_system.ui.office_panel_http import (
     create_office_panel_server,
     csrf_token_for_password,
@@ -337,7 +340,13 @@ def direct_world(tmp_path: Path):
     db = tmp_path / "offer-actions.db"
     ids = _seed(db)
     api_url, api_server = _run_server_in_thread(
-        lambda: create_office_api_server(str(db), _API_TOKEN, "127.0.0.1", 0)
+        lambda: create_office_api_server(
+            str(db),
+            _API_TOKEN,
+            "127.0.0.1",
+            0,
+            offer_pdf_static_content=fake_offer_pdf_static_content(),
+        )
     )
     panel_url, panel_server = _start_direct_panel(db)
     try:
@@ -722,7 +731,13 @@ def test_remote_offer_mark_sent_parity(tmp_path: Path) -> None:
     ids = _seed(db)
     inquiry_id = ids["inquiry_convertible"]
     api_url, api_server = _run_server_in_thread(
-        lambda: create_office_api_server(str(db), _API_TOKEN, "127.0.0.1", 0)
+        lambda: create_office_api_server(
+            str(db),
+            _API_TOKEN,
+            "127.0.0.1",
+            0,
+            offer_pdf_static_content=fake_offer_pdf_static_content(),
+        )
     )
     offer_id, _version_id = _prepare_offer(api_url, inquiry_id)
     remote = RemoteCoreClient(api_url, _API_TOKEN)

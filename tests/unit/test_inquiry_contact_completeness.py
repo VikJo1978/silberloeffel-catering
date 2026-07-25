@@ -707,13 +707,22 @@ def contact_api(tmp_path: Path):
     import threading
 
     from catering_system.ui.office_api import create_office_api_server
+    from tests.helpers.offer_pdf_static_content import (
+        fake_offer_pdf_static_content,
+    )
 
     db = tmp_path / "core.db"
     ids = _api_seed(db)
     ready: queue.Queue = queue.Queue()
 
     def run() -> None:
-        server = create_office_api_server(str(db), _API_TOKEN, "127.0.0.1", 0)
+        server = create_office_api_server(
+            str(db),
+            _API_TOKEN,
+            "127.0.0.1",
+            0,
+            offer_pdf_static_content=fake_offer_pdf_static_content(),
+        )
         ready.put(server)
         server.serve_forever()
 

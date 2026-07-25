@@ -809,10 +809,18 @@ def test_k4_free_text_mentioning_lieferung_or_abholung_is_never_parsed() -> None
 
 
 def test_neg_office_api_rejects_invalid_fulfillment_mode(tmp_path: Path) -> None:
+    from catering_system.domain.offer_pdf import OfferPdfStaticContent
     from catering_system.repositories.core_transaction import open_core_connection
     from catering_system.ui.office_api import ApiError, OfficeApi
 
-    api = OfficeApi(open_core_connection(tmp_path / "core.db"))
+    api = OfficeApi(
+        open_core_connection(tmp_path / "core.db"),
+        offer_pdf_static_content=OfferPdfStaticContent(
+            company_legal_name="TEST GmbH [PLATZHALTER]",
+            company_address_lines=("Teststraße 1", "20095 Hamburg"),
+            acceptance_statement="[TEST PLACEHOLDER — NOT APPROVED CUSTOMER WORDING]",
+        ),
+    )
     inquiry = api.inquiry_service.create_inquiry(
         event_date=date(2026, 8, 20),
         inquiry_source="manual",

@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 from tests.helpers.commercial_snapshot_seed import seed_commercial_snapshot
+from tests.helpers.offer_pdf_static_content import fake_offer_pdf_static_content
 from tests.helpers.order_seed import seed_order
 
+import hashlib
 import json
 import queue
 import sqlite3
@@ -152,7 +154,13 @@ def api(tmp_path: Path):
     def run() -> None:
         from catering_system.ui.office_api import create_office_api_server
 
-        server = create_office_api_server(str(db), _TOKEN, "127.0.0.1", 0)
+        server = create_office_api_server(
+            str(db),
+            _TOKEN,
+            "127.0.0.1",
+            0,
+            offer_pdf_static_content=fake_offer_pdf_static_content(),
+        )
         ready.put(server)
         server.serve_forever()
 
@@ -4488,3 +4496,211 @@ def test_offer_document_routes_require_bearer_auth(api) -> None:
         headers=no_auth,
     )
     assert (status, body["error"]) == (401, "unauthorized")
+
+
+# --- OFFER_PDF_DOWNLOAD_V1 — offer-document/pdf endpoint -------------------------
+
+
+def _offer_document_pdf_url(base: str, offer_id: str) -> str:
+    return f"{base}/office/v1/offers/{offer_id}/offer-document/pdf"
+
+
+def _prepared_offer_for_pdf(
+    api: tuple[str, dict[str, str], Path],
+    *,
+    inquiry_id: str | None = None,
+    contact_name: str = "Anna",
+) -> tuple[str, str, str, str]:
+    """Like _prepared_offer_for_document, but also creates the
+    OfferDocumentSnapshot (JSON create) so the PDF endpoint has something
+    real to read. Returns (base, offer_id, offer_version_id, offer_document_snapshot_id)."""
+    base, ids, db = api
+    resolved_inquiry = inquiry_id or ids["inquiry_offer_ready"]
+    _set_inquiry_customer_snapshot(
+        db,
+        resolved_inquiry,
+        replace(_pickup_eligible_invoice_snapshot(), contact_name=contact_name),
+    )
+    _ensure_inquiry_fulfillment_mode(base, resolved_inquiry, mode="PICKUP")
+    snapshot = _valid_offer_snapshot(inquiry_id=resolved_inquiry)
+    status, body, _h = _post(
+        _prepare_offer_url(base, resolved_inquiry),
+        args={"snapshot": snapshot},
+    )
+    assert status == 201
+    offer_id = body["offer_id"]
+    offer_version_id = body["offer_version_id"]
+    variant_id = snapshot["variants"][0]["variant_id"]  # type: ignore[index]
+
+    create_status, create_body, _h = _post(
+        _offer_document_url(base, offer_id),
+        args={
+            "offer_version_id": offer_version_id,
+            "offer_variant_id": variant_id,
+            "created_by": "office-api-test",
+        },
+    )
+    assert create_status == 201
+    return base, offer_id, offer_version_id, create_body["offer_document_snapshot_id"]
+
+
+def test_offer_document_pdf_download_returns_valid_pdf(api) -> None:
+    base, offer_id, offer_version_id, _snapshot_id = _prepared_offer_for_pdf(api)
+    status, data, headers = _get_raw(
+        f"{_offer_document_pdf_url(base, offer_id)}?offer_version_id={offer_version_id}"
+    )
+    assert status == 200
+    assert data[:5] == b"%PDF-"
+    assert headers.get("Content-Type") == "application/pdf"
+
+
+def test_offer_document_pdf_content_disposition_filename(api) -> None:
+    base, offer_id, offer_version_id, _snapshot_id = _prepared_offer_for_pdf(api)
+    # read back the frozen document_reference the filename must be derived from
+    read_status, read_body, _h = _get(
+        f"{_offer_document_url(base, offer_id)}?offer_version_id={offer_version_id}"
+    )
+    assert read_status == 200
+    document_reference = read_body["snapshot"]["document_reference"]
+
+    _status, _data, headers = _get_raw(
+        f"{_offer_document_pdf_url(base, offer_id)}?offer_version_id={offer_version_id}"
+    )
+    assert headers.get("Content-Disposition") == (
+        f'attachment; filename="{document_reference}.pdf"'
+    )
+
+
+def test_offer_document_pdf_repeated_download_is_byte_identical(api) -> None:
+    base, offer_id, offer_version_id, _snapshot_id = _prepared_offer_for_pdf(api)
+    url = (
+        f"{_offer_document_pdf_url(base, offer_id)}?offer_version_id={offer_version_id}"
+    )
+    status1, data1, _h1 = _get_raw(url)
+    status2, data2, _h2 = _get_raw(url)
+    assert status1 == status2 == 200
+    assert data1 == data2
+    assert hashlib.sha256(data1).hexdigest() == hashlib.sha256(data2).hexdigest()
+
+
+def test_offer_document_pdf_missing_snapshot_returns_404(api) -> None:
+    base, ids, _db = api
+    offer_id = ids["inquiry_offer_ready"]
+    missing_version_id = str(uuid.uuid4())
+    status, data, _h = _get_raw(
+        f"{_offer_document_pdf_url(base, offer_id)}?offer_version_id={missing_version_id}"
+    )
+    assert status == 404
+    assert json.loads(data) == {"error": "not_found"}
+
+
+def test_offer_document_pdf_cross_offer_access_returns_404_without_leak(api) -> None:
+    base, ids, db = api
+    base_a, offer_a_id, version_a_id, _snap_a = _prepared_offer_for_pdf(
+        api, inquiry_id=ids["inquiry_offer_ready"]
+    )
+    other_inquiry_id = ids["inquiry_convertible"]
+    other_status, other_body, _h = _post(
+        _prepare_offer_url(base, other_inquiry_id),
+        args={"snapshot": _unique_offer_snapshot(inquiry_id=other_inquiry_id)},
+    )
+    assert other_status == 201
+    offer_b_id = other_body["offer_id"]
+    assert offer_b_id != offer_a_id
+
+    status, data, _h = _get_raw(
+        f"{_offer_document_pdf_url(base, offer_b_id)}?offer_version_id={version_a_id}"
+    )
+    assert status == 404
+    assert json.loads(data) == {"error": "not_found"}
+    assert b"%PDF-" not in data
+
+
+def test_offer_document_pdf_routes_require_bearer_auth(api) -> None:
+    base, offer_id, offer_version_id, _snapshot_id = _prepared_offer_for_pdf(api)
+    no_auth: dict[str, str] = {}
+    status, data, _h = _get_raw(
+        f"{_offer_document_pdf_url(base, offer_id)}?offer_version_id={offer_version_id}",
+        headers=no_auth,
+    )
+    assert status == 401
+    assert json.loads(data) == {"error": "unauthorized"}
+    assert b"%PDF-" not in data
+
+
+def test_offer_document_pdf_unsupported_character_returns_422(api) -> None:
+    base, offer_id, offer_version_id, _snapshot_id = _prepared_offer_for_pdf(
+        api, contact_name="Анна Иванова"
+    )
+    status, data, _h = _get_raw(
+        f"{_offer_document_pdf_url(base, offer_id)}?offer_version_id={offer_version_id}"
+    )
+    assert status == 422
+    assert json.loads(data) == {"error": "offer_pdf_unsupported_character"}
+    assert b"%PDF-" not in data
+
+
+def test_offer_document_pdf_download_does_not_create_new_snapshot(api) -> None:
+    base, offer_id, offer_version_id, _snapshot_id = _prepared_offer_for_pdf(api)
+    _base, _db_ids, db = api
+    conn = sqlite3.connect(db)
+    before = conn.execute(
+        "SELECT COUNT(*) FROM offer_document_snapshots WHERE offer_id = ?",
+        (offer_id,),
+    ).fetchone()[0]
+    conn.close()
+    assert before == 1
+
+    for _ in range(3):
+        status, _data, _h = _get_raw(
+            f"{_offer_document_pdf_url(base, offer_id)}?offer_version_id={offer_version_id}"
+        )
+        assert status == 200
+
+    conn = sqlite3.connect(db)
+    after = conn.execute(
+        "SELECT COUNT(*) FROM offer_document_snapshots WHERE offer_id = ?",
+        (offer_id,),
+    ).fetchone()[0]
+    conn.close()
+    assert after == 1
+
+
+def test_offer_document_pdf_static_content_overflow_returns_422(api) -> None:
+    """Configured footer text too long for the reserved footer area is an
+    operator-fixable static-content validation failure (422), never a 500
+    and never a clipped PDF."""
+    from dataclasses import replace as dataclass_replace
+
+    base, offer_id, offer_version_id, _snapshot_id = _prepared_offer_for_pdf(api)
+    _base, _ids, db = api
+
+    oversized = dataclass_replace(
+        fake_offer_pdf_static_content(),
+        footer_note="Sehr langer Footertext. " * 40,
+    )
+    ready: queue.Queue = queue.Queue()
+
+    def run() -> None:
+        from catering_system.ui.office_api import create_office_api_server
+
+        server = create_office_api_server(
+            str(db), _TOKEN, "127.0.0.1", 0, offer_pdf_static_content=oversized
+        )
+        ready.put(server)
+        server.serve_forever()
+
+    threading.Thread(target=run, daemon=True).start()
+    server = ready.get(timeout=5)
+    host, port = server.server_address[:2]
+    try:
+        status, data, _h = _get_raw(
+            f"http://{host}:{port}/office/v1/offers/{offer_id}"
+            f"/offer-document/pdf?offer_version_id={offer_version_id}"
+        )
+        assert status == 422
+        assert json.loads(data) == {"error": "offer_pdf_render_failed"}
+        assert b"%PDF-" not in data
+    finally:
+        server.shutdown()
+        server.server_close()

@@ -54,6 +54,11 @@ from catering_system.domain.offer_document_snapshot import (
     OfferDocumentCreationBlocked,
     OfferDocumentVariantConflictError,
 )
+from catering_system.domain.offer_pdf import (
+    OfferPdfRenderError,
+    OfferPdfStaticContent,
+    OfferPdfUnsupportedCharacterError,
+)
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_commercial_snapshot import (
     MissingCommercialSnapshotError,
@@ -115,6 +120,10 @@ from catering_system.services.inquiry_service import (
 from catering_system.services.offer_document_snapshot_service import (
     OfferDocumentNotFoundError,
     OfferDocumentSnapshotService,
+)
+from catering_system.services.offer_pdf_renderer import (
+    offer_document_pdf_filename,
+    render_offer_document_pdf,
 )
 from catering_system.services.offer_service import OfferService
 from catering_system.services.operational_core_service import OperationalCoreService
@@ -403,8 +412,14 @@ class OfficeApi:
     """All routes against one shared connection; commands run inside the
     CoreCommandExecutor so precondition + write + ledger are atomic."""
 
-    def __init__(self, connection: sqlite3.Connection) -> None:
+    def __init__(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        offer_pdf_static_content: OfferPdfStaticContent,
+    ) -> None:
         self._conn = connection
+        self.offer_pdf_static_content = offer_pdf_static_content
         self.inquiries = SQLiteInquiryRepository.from_connection(connection)
         bootstrap_customer_identity_schema(connection)
         self.orders = SQLiteOrderRepository.from_connection(connection)
@@ -1235,6 +1250,33 @@ class OfficeApi:
             "offer_document_snapshot_id": snapshot.offer_document_snapshot_id,
             "snapshot": views.offer_document_snapshot_summary(snapshot),
         }
+
+    def offer_document_pdf(
+        self, offer_id: str, offer_version_id: str | None
+    ) -> tuple[bytes, str]:
+        """Render the already-persisted immutable snapshot to PDF.
+
+        Read-only: never creates a snapshot, never touches Inquiry/Offer/
+        catalog. Same ownership check as the JSON read (offer_document)."""
+        if offer_version_id is None:
+            raise _invalid()
+        snapshot = self.offer_document_service.get_by_offer_version_id(offer_version_id)
+        if snapshot is None or snapshot.offer_id != offer_id:
+            raise ApiError(404, "not_found")
+        try:
+            pdf_bytes = render_offer_document_pdf(
+                snapshot, self.offer_pdf_static_content
+            )
+        except OfferPdfUnsupportedCharacterError as exc:
+            raise ApiError(422, "offer_pdf_unsupported_character") from exc
+        except OfferPdfRenderError as exc:
+            # Reachable case is configured static content that does not fit
+            # the reserved footer area — an operator-fixable validation
+            # failure, not an unexpected internal fault. The renderer's own
+            # messages never carry paths or library internals, and only the
+            # stable code below is returned to the client.
+            raise ApiError(422, "offer_pdf_render_failed") from exc
+        return pdf_bytes, offer_document_pdf_filename(snapshot)
 
     def cmd_prepare_next_version(
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict
@@ -2261,6 +2303,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         {"POST": "offer-document", "GET": "offer_document"},
     ),
     (
+        re.compile(r"^/office/v1/offers/(?P<offer_id>[^/]+)/offer-document/pdf$"),
+        "/office/v1/offers/{offer_id}/offer-document/pdf",
+        {"GET": "offer_document_pdf"},
+    ),
+    (
         re.compile(r"^/office/v1/tasks$"),
         "/office/v1/tasks",
         {"GET": "list_tasks"},
@@ -2529,6 +2576,28 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             self.end_headers()
             self.wfile.write(payload)
 
+        def _respond_bytes(
+            self,
+            status: int,
+            payload: bytes,
+            *,
+            content_type: str,
+            filename: str | None = None,
+        ) -> None:
+            if len(payload) > _MAX_RESPONSE_BYTES:
+                raise ApiError(500, "internal")
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            if filename is not None:
+                self.send_header(
+                    "Content-Disposition", f'attachment; filename="{filename}"'
+                )
+            self.end_headers()
+            self.wfile.write(payload)
+
         def _error(
             self,
             status: int,
@@ -2783,6 +2852,19 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
                     else None
                 )
                 self._respond(200, api.offer_document(path_ids["offer_id"], version_id))
+            elif kind == "offer_document_pdf":
+                params = self._query({"offer_version_id"})
+                version_id = (
+                    _v_uuid(params["offer_version_id"])
+                    if "offer_version_id" in params
+                    else None
+                )
+                pdf_bytes, filename = api.offer_document_pdf(
+                    path_ids["offer_id"], version_id
+                )
+                self._respond_bytes(
+                    200, pdf_bytes, content_type="application/pdf", filename=filename
+                )
             elif kind == "inquiry_detail":
                 self._query(set())
                 self._respond(200, api.inquiry_detail(path_ids["id"]))
@@ -2919,12 +3001,74 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
 
 
 def create_office_api_server(
-    db_path: str, token: str, host: str = "127.0.0.1", port: int = 0
+    db_path: str,
+    token: str,
+    host: str = "127.0.0.1",
+    port: int = 0,
+    *,
+    offer_pdf_static_content: OfferPdfStaticContent,
 ) -> HTTPServer:
     """Build connection, repositories and server in the calling thread —
     single-threaded on purpose (sqlite3 thread affinity, Entry 048)."""
-    api = OfficeApi(open_core_connection(db_path))
+    api = OfficeApi(
+        open_core_connection(db_path),
+        offer_pdf_static_content=offer_pdf_static_content,
+    )
     return HTTPServer((host, port), make_office_api_handler(api, token))
+
+
+def _offer_pdf_static_content_from_env() -> OfferPdfStaticContent:
+    """OFFER_PDF_DOWNLOAD_V1: no approved production company/legal text
+    exists yet. Required facts are read from environment variables and
+    startup refuses to proceed if any are missing — never invented,
+    never a test placeholder silently reaching production composition."""
+    import os
+
+    legal_name = os.environ.get("OFFICE_PDF_COMPANY_LEGAL_NAME", "").strip()
+    address_raw = os.environ.get("OFFICE_PDF_COMPANY_ADDRESS_LINES", "").strip()
+    acceptance = os.environ.get("OFFICE_PDF_ACCEPTANCE_STATEMENT", "").strip()
+    missing = [
+        name
+        for name, value in (
+            ("OFFICE_PDF_COMPANY_LEGAL_NAME", legal_name),
+            ("OFFICE_PDF_COMPANY_ADDRESS_LINES", address_raw),
+            ("OFFICE_PDF_ACCEPTANCE_STATEMENT", acceptance),
+        )
+        if not value
+    ]
+    if missing:
+        raise SystemExit(
+            "Missing required offer-PDF static content environment "
+            "variable(s): " + ", ".join(missing) + " — refusing to start "
+            "with invented or placeholder company/legal text."
+        )
+    address_lines = tuple(
+        line.strip() for line in address_raw.split("|") if line.strip()
+    )
+    logo_path = os.environ.get("OFFICE_PDF_LOGO_PATH", "").strip()
+    logo_bytes = None
+    if logo_path:
+        with open(logo_path, "rb") as logo_file:
+            logo_bytes = logo_file.read()
+    return OfferPdfStaticContent(
+        company_legal_name=legal_name,
+        company_address_lines=address_lines,
+        acceptance_statement=acceptance,
+        company_phone=os.environ.get("OFFICE_PDF_COMPANY_PHONE", "").strip() or None,
+        company_email=os.environ.get("OFFICE_PDF_COMPANY_EMAIL", "").strip() or None,
+        company_web=os.environ.get("OFFICE_PDF_COMPANY_WEB", "").strip() or None,
+        company_register_text=(
+            os.environ.get("OFFICE_PDF_COMPANY_REGISTER_TEXT", "").strip() or None
+        ),
+        company_vat_id_text=(
+            os.environ.get("OFFICE_PDF_COMPANY_VAT_ID_TEXT", "").strip() or None
+        ),
+        footer_note=os.environ.get("OFFICE_PDF_FOOTER_NOTE", "").strip() or None,
+        bank_details_text=(
+            os.environ.get("OFFICE_PDF_BANK_DETAILS_TEXT", "").strip() or None
+        ),
+        logo_png_bytes=logo_bytes,
+    )
 
 
 def main() -> None:
@@ -2946,7 +3090,15 @@ def main() -> None:
             "refusing to start unauthenticated"
         )
 
-    server = create_office_api_server(args.db, token, args.host, args.port)
+    offer_pdf_static_content = _offer_pdf_static_content_from_env()
+
+    server = create_office_api_server(
+        args.db,
+        token,
+        args.host,
+        args.port,
+        offer_pdf_static_content=offer_pdf_static_content,
+    )
     print(f"Core Office API on http://{args.host}:{args.port}/office/v1/")
     server.serve_forever()
 
