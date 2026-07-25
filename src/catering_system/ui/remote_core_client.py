@@ -8,6 +8,7 @@ is sent to the frozen Core Office API.  It never opens ``core.db``.
 from __future__ import annotations
 
 import json
+import re
 import socket
 import urllib.error
 import urllib.request
@@ -303,6 +304,16 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def _bad_response() -> NoReturn:
     raise RemoteCoreError(502, "invalid_response", unavailable=True)
+
+
+_CONTENT_DISPOSITION_FILENAME = re.compile(r'filename="([^"]+)"')
+
+
+def _filename_from_content_disposition(value: str | None) -> str | None:
+    if value is None:
+        return None
+    match = _CONTENT_DISPOSITION_FILENAME.search(value)
+    return match.group(1) if match else None
 
 
 def _dict(value: object) -> dict[str, object]:
@@ -1022,6 +1033,54 @@ class RemoteCoreClient:
             _bad_response()
         return raw.decode("utf-8")
 
+    def get_bytes(
+        self, path: str, query: Mapping[str, object] | None = None
+    ) -> tuple[bytes, str | None]:
+        """Raw binary GET (offer-document PDF download). The token is
+        attached here, server-side, and never reaches the browser. Unlike
+        get_text, HTTPError is handled explicitly so the real status code
+        (404/422/...) survives as a RemoteCoreError.status, not collapsed
+        into a generic 503 — callers need that to map errors correctly."""
+        request = urllib.request.Request(
+            self._url(path, query),
+            headers={"Authorization": f"Bearer {self._token}"},
+            method="GET",
+        )
+        try:
+            response = self._opener.open(request, timeout=_READ_TIMEOUT_SECONDS)
+        except urllib.error.HTTPError as exc:
+            if 300 <= exc.code < 400:
+                raise RemoteCoreError(
+                    502, "redirect_refused", unavailable=True
+                ) from exc
+            raw = exc.read(_MAX_RESPONSE_BYTES + 1)
+            code = "unexpected_status"
+            if (
+                exc.headers.get_content_type() == "application/json"
+                and len(raw) <= _MAX_RESPONSE_BYTES
+            ):
+                try:
+                    parsed = _dict(json.loads(raw.decode("utf-8")))
+                    _exact(parsed, {"error"})
+                    code = _str(parsed["error"])
+                except (UnicodeDecodeError, json.JSONDecodeError, RemoteCoreError):
+                    pass
+            raise RemoteCoreError(exc.code, code) from exc
+        except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as exc:
+            raise RemoteCoreError(503, "unreachable", unavailable=True) from exc
+        with response:
+            if response.status != 200:
+                raise RemoteCoreError(
+                    response.status, "unexpected_status", unavailable=True
+                )
+            if response.headers.get_content_type() != "application/pdf":
+                _bad_response()
+            disposition = response.headers.get("Content-Disposition")
+            raw = response.read(_MAX_RESPONSE_BYTES + 1)
+        if len(raw) > _MAX_RESPONSE_BYTES:
+            _bad_response()
+        return raw, _filename_from_content_disposition(disposition)
+
     def command(
         self,
         path: str,
@@ -1623,6 +1682,30 @@ class RemoteCoreClient:
             _datetime(entry["at"])
             _str(entry["label"])
         return body
+
+    def offer_document_exists(self, offer_id: str, offer_version_id: str) -> bool:
+        """Read-only existence check for the frozen OfferDocumentSnapshot —
+        used only to decide whether the panel shows the download button."""
+        try:
+            self.get(
+                f"/office/v1/offers/{quote(offer_id, safe='')}/offer-document",
+                {"offer_version_id": offer_version_id},
+            )
+        except RemoteCoreError as exc:
+            if exc.status == 404:
+                return False
+            raise
+        return True
+
+    def offer_document_pdf(
+        self, offer_id: str, offer_version_id: str
+    ) -> tuple[bytes, str | None]:
+        """Download the already-persisted immutable snapshot as PDF.
+        Never creates a snapshot; the Bearer token stays server-side."""
+        return self.get_bytes(
+            f"/office/v1/offers/{quote(offer_id, safe='')}/offer-document/pdf",
+            {"offer_version_id": offer_version_id},
+        )
 
     def list_contacts(self) -> dict[str, object]:
         body = self.get("/office/v1/contacts")

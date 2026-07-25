@@ -43,6 +43,7 @@ from catering_system.integration.auerswald_sync import (
     resolve_missed_call,
 )
 from catering_system.ui.office_panel import (
+    OfferPdfUnavailableError,
     OfficePageContext,
     OfficePanel,
     _e,
@@ -54,6 +55,10 @@ from catering_system.ui.office_panel import (
     render_proposal_preview,
     render_proposal_preview_form,
     render_rueckruf,
+)
+from catering_system.domain.offer_pdf import OfferPdfStaticContent
+from catering_system.repositories.offer_document_snapshot_repository import (
+    OfferDocumentSnapshotRepository,
 )
 from catering_system.domain.order_commercial_snapshot import (
     MissingCommercialSnapshotError,
@@ -241,6 +246,8 @@ def make_office_panel_handler(
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     commercial_snapshot_repo: OrderCommercialSnapshotRepository | None = None,
+    offer_document_repo: OfferDocumentSnapshotRepository | None = None,
+    offer_pdf_static_content: OfferPdfStaticContent | None = None,
     ui_version: str = "legacy",
 ) -> type[BaseHTTPRequestHandler]:
     panel = OfficePanel(
@@ -259,6 +266,8 @@ def make_office_panel_handler(
         offer_repo=offer_repo,
         catalog_repo=catalog_repo,
         commercial_snapshot_repo=commercial_snapshot_repo,
+        offer_document_repo=offer_document_repo,
+        offer_pdf_static_content=offer_pdf_static_content,
         ui_version=ui_version,
     )
     expected = "Basic " + base64.b64encode(f"office:{password}".encode()).decode()
@@ -295,6 +304,16 @@ def make_office_panel_handler(
             self.send_response(status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def _pdf_bytes(self, payload: bytes, filename: str) -> None:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Length", str(len(payload)))
+            self.send_header(
+                "Content-Disposition", f'attachment; filename="{filename}"'
+            )
             self.end_headers()
             self.wfile.write(payload)
 
@@ -480,6 +499,13 @@ def make_office_panel_handler(
             elif len(parts) == 2 and parts[0] == "offer":
                 page = panel.render_offer(parts[1], context=context)
                 self._html(page) if page else self.send_error(404)
+            elif (
+                len(parts) == 4
+                and parts[0] == "offer"
+                and parts[2] == "offer-document"
+                and parts[3] == "pdf"
+            ):
+                self._offer_document_pdf_download(parts[1], parsed.query)
             elif len(parts) == 2 and parts[0] == "kontakt":
                 page = panel.render_kontakt(unquote(parts[1]), context=context)
                 self._html(page) if page else self.send_error(404)
@@ -583,6 +609,29 @@ def make_office_panel_handler(
                 self.send_error(404)
                 return
             self._html(html)
+
+        def _offer_document_pdf_download(self, offer_id: str, query: str) -> None:
+            """Proxy the immutable ANGEBOT PDF to the browser. The Office API
+            Bearer token is attached (remote mode) or never involved (direct
+            mode) entirely server-side — this handler only ever forwards PDF
+            bytes, never the token, to the client."""
+            version_id = parse_qs(query).get("offer_version_id", [""])[0]
+            if not version_id:
+                self.send_error(404)
+                return
+            try:
+                result = panel.offer_document_pdf(offer_id, version_id)
+            except OfferPdfUnavailableError:
+                self._error_page(
+                    "Das PDF konnte nicht erzeugt werden — bitte Support kontaktieren.",
+                    status=422,
+                )
+                return
+            if result is None:
+                self.send_error(404)
+                return
+            pdf_bytes, filename = result
+            self._pdf_bytes(pdf_bytes, filename)
 
         def _confirmation_fake_outbox(self, order_id: str) -> None:
             try:
@@ -805,6 +854,8 @@ def create_office_panel_server(
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     commercial_snapshot_repo: OrderCommercialSnapshotRepository | None = None,
+    offer_document_repo: OfferDocumentSnapshotRepository | None = None,
+    offer_pdf_static_content: OfferPdfStaticContent | None = None,
     ui_version: str = "legacy",
 ) -> HTTPServer:
     """Create the intentionally single-threaded office HTTP server."""
@@ -830,6 +881,8 @@ def create_office_panel_server(
             offer_repo=offer_repo,
             catalog_repo=catalog_repo,
             commercial_snapshot_repo=commercial_snapshot_repo,
+            offer_document_repo=offer_document_repo,
+            offer_pdf_static_content=offer_pdf_static_content,
             ui_version=ui_version,
         ),
     )

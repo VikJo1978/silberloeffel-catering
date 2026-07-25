@@ -74,6 +74,14 @@ def _surface_version(detail: dict[str, object]) -> dict[str, object]:
     return versions[-1]
 
 
+def surface_version_id(detail: dict[str, object]) -> str:
+    """Public wrapper: the OfferVersion id actually displayed for this
+    detail (same resolution render_offer_detail uses internally) — needed
+    by the caller before rendering, to decide whether a PDF download link
+    exists for exactly the version about to be shown."""
+    return str(_surface_version(detail).get("offer_version_id", ""))
+
+
 def _version_list(detail: dict[str, object]) -> str:
     versions = cast(list[dict[str, object]], detail["versions"])
     current_id = str(detail["offer_version_id"])
@@ -315,6 +323,7 @@ def render_offer_detail(
     context: OfficePageContext,
     forms: OfferDetailFormFields,
     revision_prefill_url: str | None = None,
+    pdf_download_url: str | None = None,
 ) -> str:
     offer_id = str(detail["offer_id"])
     inquiry_id = str(detail["inquiry_id"])
@@ -372,8 +381,14 @@ def render_offer_detail(
                 acceptance_id=acceptance_id,
                 forms=forms,
             )
+    pdf_link = (
+        f'<p><a href="{_e(pdf_download_url)}">PDF herunterladen</a></p>'
+        if pdf_download_url is not None
+        else ""
+    )
     body = (
         f'<p class="subtitle">Angebot {_e(offer_id[:8])}</p>'
+        + pdf_link
         + action_section
         + '<section class="offer-detail-section">'
         "<h2>Status</h2>"

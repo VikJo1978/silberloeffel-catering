@@ -3017,60 +3017,6 @@ def create_office_api_server(
     return HTTPServer((host, port), make_office_api_handler(api, token))
 
 
-def _offer_pdf_static_content_from_env() -> OfferPdfStaticContent:
-    """OFFER_PDF_DOWNLOAD_V1: no approved production company/legal text
-    exists yet. Required facts are read from environment variables and
-    startup refuses to proceed if any are missing — never invented,
-    never a test placeholder silently reaching production composition."""
-    import os
-
-    legal_name = os.environ.get("OFFICE_PDF_COMPANY_LEGAL_NAME", "").strip()
-    address_raw = os.environ.get("OFFICE_PDF_COMPANY_ADDRESS_LINES", "").strip()
-    acceptance = os.environ.get("OFFICE_PDF_ACCEPTANCE_STATEMENT", "").strip()
-    missing = [
-        name
-        for name, value in (
-            ("OFFICE_PDF_COMPANY_LEGAL_NAME", legal_name),
-            ("OFFICE_PDF_COMPANY_ADDRESS_LINES", address_raw),
-            ("OFFICE_PDF_ACCEPTANCE_STATEMENT", acceptance),
-        )
-        if not value
-    ]
-    if missing:
-        raise SystemExit(
-            "Missing required offer-PDF static content environment "
-            "variable(s): " + ", ".join(missing) + " — refusing to start "
-            "with invented or placeholder company/legal text."
-        )
-    address_lines = tuple(
-        line.strip() for line in address_raw.split("|") if line.strip()
-    )
-    logo_path = os.environ.get("OFFICE_PDF_LOGO_PATH", "").strip()
-    logo_bytes = None
-    if logo_path:
-        with open(logo_path, "rb") as logo_file:
-            logo_bytes = logo_file.read()
-    return OfferPdfStaticContent(
-        company_legal_name=legal_name,
-        company_address_lines=address_lines,
-        acceptance_statement=acceptance,
-        company_phone=os.environ.get("OFFICE_PDF_COMPANY_PHONE", "").strip() or None,
-        company_email=os.environ.get("OFFICE_PDF_COMPANY_EMAIL", "").strip() or None,
-        company_web=os.environ.get("OFFICE_PDF_COMPANY_WEB", "").strip() or None,
-        company_register_text=(
-            os.environ.get("OFFICE_PDF_COMPANY_REGISTER_TEXT", "").strip() or None
-        ),
-        company_vat_id_text=(
-            os.environ.get("OFFICE_PDF_COMPANY_VAT_ID_TEXT", "").strip() or None
-        ),
-        footer_note=os.environ.get("OFFICE_PDF_FOOTER_NOTE", "").strip() or None,
-        bank_details_text=(
-            os.environ.get("OFFICE_PDF_BANK_DETAILS_TEXT", "").strip() or None
-        ),
-        logo_png_bytes=logo_bytes,
-    )
-
-
 def main() -> None:
     import os
 
@@ -3090,7 +3036,11 @@ def main() -> None:
             "refusing to start unauthenticated"
         )
 
-    offer_pdf_static_content = _offer_pdf_static_content_from_env()
+    from catering_system.ui.offer_pdf_static_content_env import (
+        offer_pdf_static_content_from_env,
+    )
+
+    offer_pdf_static_content = offer_pdf_static_content_from_env()
 
     server = create_office_api_server(
         args.db,

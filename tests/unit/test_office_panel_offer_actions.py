@@ -12,6 +12,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from dataclasses import replace
 from datetime import date
 from http.server import HTTPServer
 from pathlib import Path
@@ -19,6 +20,9 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from catering_system.domain.customer_document_projection import CustomerAddress
+from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot
+from catering_system.domain.offer_pdf import OfferPdfStaticContent
 from catering_system.domain.offer_snapshot import compute_snapshot_hash
 from catering_system.repositories.core_transaction import (
     CoreCommandExecutor,
@@ -26,6 +30,9 @@ from catering_system.repositories.core_transaction import (
 )
 from catering_system.repositories.sqlite_inquiry_repository import (
     SQLiteInquiryRepository,
+)
+from catering_system.repositories.sqlite_offer_document_snapshot_repository import (
+    SQLiteOfferDocumentSnapshotRepository,
 )
 from catering_system.repositories.sqlite_offer_repository import (
     SQLiteOfferRepository,
@@ -40,6 +47,9 @@ from catering_system.services.inquiry_service import InquiryService
 from catering_system.ui.office_api import create_office_api_server
 from tests.helpers.offer_pdf_static_content import (
     fake_offer_pdf_static_content,
+)
+from catering_system.ui.office_panel import (
+    create_office_panel_server as create_office_panel_server_compat,
 )
 from catering_system.ui.office_panel_http import (
     create_office_panel_server,
@@ -139,7 +149,11 @@ def _run_server_in_thread(build_server) -> tuple[str, HTTPServer]:
 
 
 def _valid_offer_snapshot(
-    *, inquiry_id: str, variant_label: str = "Variante A"
+    *,
+    inquiry_id: str,
+    variant_label: str = "Variante A",
+    variant_id: str = _VARIANT_ID,
+    position_id: str = _POSITION_ID,
 ) -> dict:
     payload: dict[str, object] = {
         "schema_version": "offer_snapshot_v1",
@@ -180,12 +194,12 @@ def _valid_offer_snapshot(
         },
         "variants": [
             {
-                "variant_id": _VARIANT_ID,
+                "variant_id": variant_id,
                 "label": variant_label,
                 "description": "Customer-visible alternative",
                 "positions": [
                     {
-                        "position_id": _POSITION_ID,
+                        "position_id": position_id,
                         "kind": "catalog",
                         "catalog_item_id": "catalog-1",
                         "name": "Fingerfood Paket",
@@ -241,10 +255,22 @@ def _api_post(
         return exc.code, json.loads(exc.read().decode())
 
 
-def _prepare_offer(api_url: str, inquiry_id: str) -> tuple[str, str]:
+def _prepare_offer(
+    api_url: str,
+    inquiry_id: str,
+    *,
+    variant_id: str = _VARIANT_ID,
+    position_id: str = _POSITION_ID,
+) -> tuple[str, str]:
     status, body = _api_post(
         f"{api_url}/office/v1/inquiries/{inquiry_id}/prepare-offer",
-        args={"snapshot": _valid_offer_snapshot(inquiry_id=inquiry_id)},
+        args={
+            "snapshot": _valid_offer_snapshot(
+                inquiry_id=inquiry_id,
+                variant_id=variant_id,
+                position_id=position_id,
+            )
+        },
     )
     assert status == 201
     return body["offer_id"], body["offer_version_id"]
@@ -270,7 +296,83 @@ def _record_acceptance_api(api_url: str, offer_id: str, version_id: str) -> None
     )
 
 
-def _start_direct_panel(db: Path) -> tuple[str, HTTPServer]:
+def _pickup_eligible_snapshot() -> InquiryCustomerSnapshot:
+    return InquiryCustomerSnapshot(
+        company_name="ACME GmbH",
+        contact_name="Anna",
+        email="anna@example.invalid",
+        phone="+49301234567",
+        invoice_address=CustomerAddress(
+            street="Bürostraße 1",
+            postal_code="20095",
+            city="Hamburg",
+            country="DE",
+        ),
+        delivery_address=None,
+        delivery_address_mode="SAME_AS_INVOICE",
+    )
+
+
+def _set_customer_snapshot(
+    db: Path, inquiry_id: str, snapshot: InquiryCustomerSnapshot
+) -> None:
+    inquiries = SQLiteInquiryRepository(db)
+    inquiry = inquiries.get_by_id(inquiry_id)
+    assert inquiry is not None
+    inquiries.update(replace(inquiry, customer_snapshot=snapshot))
+    inquiries.close()
+
+
+def _set_fulfillment_mode(
+    api_url: str, inquiry_id: str, *, mode: str = "PICKUP"
+) -> None:
+    _status, detail = _api_get(f"{api_url}/office/v1/inquiries/{inquiry_id}")
+    status, _body = _api_post(
+        f"{api_url}/office/v1/inquiries/{inquiry_id}/fulfillment-mode",
+        args={"fulfillment_mode": mode},
+        expect={"updated_at": detail["updated_at"]},
+    )
+    assert status == 200
+
+
+def _create_offer_document(
+    api_url: str, offer_id: str, offer_version_id: str, variant_id: str
+) -> dict:
+    status, body = _api_post(
+        f"{api_url}/office/v1/offers/{offer_id}/offer-document",
+        args={
+            "offer_version_id": offer_version_id,
+            "offer_variant_id": variant_id,
+            "created_by": "office-panel-test",
+        },
+    )
+    assert status in (200, 201)
+    return body
+
+
+def _prepare_offer_with_document(
+    api_url: str,
+    db: Path,
+    inquiry_id: str,
+    *,
+    variant_id: str = _VARIANT_ID,
+    position_id: str = _POSITION_ID,
+) -> tuple[str, str, dict]:
+    """Prepares a PICKUP-eligible offer and freezes its OfferDocumentSnapshot
+    via the real Office API, so the panel's PDF download link/route has a
+    genuine immutable snapshot to read."""
+    _set_customer_snapshot(db, inquiry_id, _pickup_eligible_snapshot())
+    _set_fulfillment_mode(api_url, inquiry_id, mode="PICKUP")
+    offer_id, offer_version_id = _prepare_offer(
+        api_url, inquiry_id, variant_id=variant_id, position_id=position_id
+    )
+    document = _create_offer_document(api_url, offer_id, offer_version_id, variant_id)
+    return offer_id, offer_version_id, document
+
+
+def _start_direct_panel(
+    db: Path, *, static_content: OfferPdfStaticContent | None = None
+) -> tuple[str, HTTPServer]:
     def build() -> HTTPServer:
         conn = open_core_connection(db)
         return create_office_panel_server(
@@ -282,6 +384,10 @@ def _start_direct_panel(db: Path) -> tuple[str, HTTPServer]:
             command_executor=CoreCommandExecutor(conn),
             payment_reminder_repo=SQLitePaymentReminderRepository.from_connection(conn),
             offer_repo=SQLiteOfferRepository.from_connection(conn),
+            offer_document_repo=SQLiteOfferDocumentSnapshotRepository.from_connection(
+                conn
+            ),
+            offer_pdf_static_content=static_content or fake_offer_pdf_static_content(),
             ui_version="v2",
         )
 
@@ -296,6 +402,26 @@ def _get(url: str) -> tuple[int, str]:
             return resp.status, resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read().decode("utf-8")
+
+
+def _get_raw(url: str) -> tuple[int, bytes, dict[str, str]]:
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", _AUTH)
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return resp.status, resp.read(), dict(resp.headers)
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read(), dict(exc.headers)
+
+
+def _api_get(url: str) -> tuple[int, dict]:
+    req = urllib.request.Request(url)
+    req.add_header("Authorization", _API_AUTH["Authorization"])
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return resp.status, json.loads(resp.read().decode())
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode() or "{}")
 
 
 def _post(url: str, fields: dict[str, str]) -> tuple[int, str, str]:
@@ -848,3 +974,354 @@ def test_rejected_offer_has_no_lifecycle_actions(direct_world) -> None:
     assert "Kunde lehnt ab" not in html
     assert "Angebot zurückziehen" not in html
     assert "Abgelehnt" in html
+
+
+# --- OFFER_PDF_PANEL_DOWNLOAD_V1 — PDF download button + proxy route -------
+
+
+def test_offer_detail_shows_pdf_download_button_when_snapshot_exists(
+    direct_world,
+) -> None:
+    panel_url, api_url, ids, db = direct_world
+    offer_id, offer_version_id, _document = _prepare_offer_with_document(
+        api_url, db, ids["inquiry_convertible"]
+    )
+    _status, html = _get(f"{panel_url}/offer/{offer_id}")
+    assert "PDF herunterladen" in html
+    assert (
+        f"/offer/{offer_id}/offer-document/pdf?offer_version_id={offer_version_id}"
+        in html
+    )
+
+
+def test_offer_detail_hides_pdf_download_button_when_snapshot_missing(
+    direct_world,
+) -> None:
+    panel_url, api_url, ids, _db = direct_world
+    offer_id, _version_id = _prepare_offer(api_url, ids["inquiry_convertible"])
+    _status, html = _get(f"{panel_url}/offer/{offer_id}")
+    assert "PDF herunterladen" not in html
+    # Regression check: the rest of the Prepared-state detail page (existing
+    # lifecycle actions) must still render unchanged around the new link.
+    assert "Als versendet erfassen" in html or "sent_at" in html
+
+
+def test_offer_detail_pdf_button_coexists_with_mark_sent_action(direct_world) -> None:
+    panel_url, api_url, ids, db = direct_world
+    offer_id, _version_id, _document = _prepare_offer_with_document(
+        api_url, db, ids["inquiry_convertible"]
+    )
+    _status, html = _get(f"{panel_url}/offer/{offer_id}")
+    assert "PDF herunterladen" in html
+    fields = _offer_form_fields(html, "/mark-sent")
+    assert fields is not None  # mark-sent form still present alongside the link
+
+
+def test_panel_pdf_download_returns_valid_pdf(direct_world) -> None:
+    panel_url, api_url, ids, db = direct_world
+    offer_id, offer_version_id, _document = _prepare_offer_with_document(
+        api_url, db, ids["inquiry_convertible"]
+    )
+    status, data, headers = _get_raw(
+        f"{panel_url}/offer/{offer_id}/offer-document/pdf"
+        f"?offer_version_id={offer_version_id}"
+    )
+    assert status == 200
+    assert data[:5] == b"%PDF-"
+    assert headers.get("Content-Type") == "application/pdf"
+
+
+def test_panel_pdf_download_content_disposition_filename_preserved(
+    direct_world,
+) -> None:
+    panel_url, api_url, ids, db = direct_world
+    offer_id, offer_version_id, document = _prepare_offer_with_document(
+        api_url, db, ids["inquiry_convertible"]
+    )
+    document_reference = document["snapshot"]["document_reference"]
+    _status, _data, headers = _get_raw(
+        f"{panel_url}/offer/{offer_id}/offer-document/pdf"
+        f"?offer_version_id={offer_version_id}"
+    )
+    assert headers.get("Content-Disposition") == (
+        f'attachment; filename="{document_reference}.pdf"'
+    )
+
+
+def test_panel_pdf_download_missing_snapshot_returns_404(direct_world) -> None:
+    panel_url, api_url, ids, _db = direct_world
+    offer_id, offer_version_id = _prepare_offer(api_url, ids["inquiry_convertible"])
+    status, _data, _headers = _get_raw(
+        f"{panel_url}/offer/{offer_id}/offer-document/pdf"
+        f"?offer_version_id={offer_version_id}"
+    )
+    assert status == 404
+
+
+def test_panel_pdf_download_missing_version_query_returns_404(direct_world) -> None:
+    panel_url, api_url, ids, db = direct_world
+    offer_id, _version_id, _document = _prepare_offer_with_document(
+        api_url, db, ids["inquiry_convertible"]
+    )
+    status, _data, _headers = _get_raw(
+        f"{panel_url}/offer/{offer_id}/offer-document/pdf"
+    )
+    assert status == 404
+
+
+def test_panel_pdf_download_cross_offer_access_returns_404_without_leak(
+    direct_world,
+) -> None:
+    panel_url, api_url, ids, db = direct_world
+    offer_a_id, version_a_id, _doc_a = _prepare_offer_with_document(
+        api_url, db, ids["inquiry_convertible"]
+    )
+    offer_b_id, version_b_id, doc_b = _prepare_offer_with_document(
+        api_url,
+        db,
+        ids["inquiry_rejected"],
+        variant_id=_OTHER_VARIANT,
+        position_id=str(uuid.uuid4()),
+    )
+    status, data, _headers = _get_raw(
+        f"{panel_url}/offer/{offer_a_id}/offer-document/pdf"
+        f"?offer_version_id={version_b_id}"
+    )
+    assert status == 404
+    reference_b = doc_b["snapshot"]["document_reference"]
+    assert reference_b.encode() not in data
+
+    status2, _data2, _headers2 = _get_raw(
+        f"{panel_url}/offer/{offer_b_id}/offer-document/pdf"
+        f"?offer_version_id={version_a_id}"
+    )
+    assert status2 == 404
+
+
+def test_panel_repeated_pdf_download_does_not_create_additional_snapshot(
+    direct_world,
+) -> None:
+    panel_url, api_url, ids, db = direct_world
+    offer_id, offer_version_id, document = _prepare_offer_with_document(
+        api_url, db, ids["inquiry_convertible"]
+    )
+    original_snapshot_id = document["offer_document_snapshot_id"]
+    url = (
+        f"{panel_url}/offer/{offer_id}/offer-document/pdf"
+        f"?offer_version_id={offer_version_id}"
+    )
+    status1, data1, _h1 = _get_raw(url)
+    status2, data2, _h2 = _get_raw(url)
+    assert status1 == status2 == 200
+    assert data1 == data2
+
+    documents = SQLiteOfferDocumentSnapshotRepository(db)
+    snapshot = documents.get_by_offer_version_id(offer_version_id)
+    documents.close()
+    assert snapshot is not None
+    assert snapshot.offer_document_snapshot_id == original_snapshot_id
+
+
+def test_direct_pdf_download_renderer_failure_shows_clear_german_message(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "offer-pdf-422.db"
+    ids = _seed(db)
+    api_url, api_server = _run_server_in_thread(
+        lambda: create_office_api_server(
+            str(db),
+            _API_TOKEN,
+            "127.0.0.1",
+            0,
+            offer_pdf_static_content=fake_offer_pdf_static_content(),
+        )
+    )
+    oversized_content = OfferPdfStaticContent(
+        company_legal_name="TEST GmbH [PLATZHALTER]",
+        company_address_lines=("Teststraße 1", "20095 Hamburg"),
+        acceptance_statement="[TEST PLACEHOLDER — NOT APPROVED CUSTOMER WORDING]",
+        footer_note="Sehr langer Footertext. " * 40,
+    )
+    panel_url, panel_server = _start_direct_panel(db, static_content=oversized_content)
+    try:
+        offer_id, offer_version_id, _document = _prepare_offer_with_document(
+            api_url, db, ids["inquiry_convertible"]
+        )
+        status, body, _headers = _get_raw(
+            f"{panel_url}/offer/{offer_id}/offer-document/pdf"
+            f"?offer_version_id={offer_version_id}"
+        )
+        assert status == 422
+        text = body.decode("utf-8")
+        assert "PDF konnte nicht erzeugt werden" in text
+        assert "Traceback" not in text
+    finally:
+        panel_server.shutdown()
+        panel_server.server_close()
+        api_server.shutdown()
+        api_server.server_close()
+
+
+def test_remote_panel_pdf_download_never_exposes_office_api_token(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "remote-offer-pdf.db"
+    ids = _seed(db)
+    inquiry_id = ids["inquiry_convertible"]
+    api_url, api_server = _run_server_in_thread(
+        lambda: create_office_api_server(
+            str(db),
+            _API_TOKEN,
+            "127.0.0.1",
+            0,
+            offer_pdf_static_content=fake_offer_pdf_static_content(),
+        )
+    )
+    offer_id, offer_version_id, _document = _prepare_offer_with_document(
+        api_url, db, inquiry_id
+    )
+    remote = RemoteCoreClient(api_url, _API_TOKEN)
+    panel_url, panel_server = _run_server_in_thread(
+        lambda: create_office_panel_server(
+            remote,
+            remote,
+            _PASSWORD,
+            host="127.0.0.1",
+            port=0,
+            remote=remote,
+            ui_version="v2",
+        )
+    )
+    try:
+        _status, html = _get(f"{panel_url}/offer/{offer_id}")
+        assert "PDF herunterladen" in html
+        assert _API_TOKEN not in html
+
+        status, data, headers = _get_raw(
+            f"{panel_url}/offer/{offer_id}/offer-document/pdf"
+            f"?offer_version_id={offer_version_id}"
+        )
+        assert status == 200
+        assert data[:5] == b"%PDF-"
+        assert headers.get("Content-Type") == "application/pdf"
+        assert _API_TOKEN.encode() not in data
+        assert all(_API_TOKEN not in value for value in headers.values())
+    finally:
+        panel_server.shutdown()
+        panel_server.server_close()
+        api_server.shutdown()
+        api_server.server_close()
+
+
+def test_compat_wrapper_forwards_offer_document_dependencies(tmp_path: Path) -> None:
+    """OFFER_PDF_PANEL_DOWNLOAD_V1 direct-mode review fix: office_panel.py's
+    create_office_panel_server (the compatibility wrapper main() calls in
+    direct mode) must forward offer_document_repo/offer_pdf_static_content
+    through to office_panel_http.create_office_panel_server — not silently
+    fall back to an ephemeral InMemory repository backed by nothing on disk.
+    The snapshot is created here through a separate SQLite connection (the
+    Office API server), so the panel can only see it if the repository it
+    was constructed with is genuinely reading from the same db file."""
+    db = tmp_path / "compat-wrapper-pdf.db"
+    ids = _seed(db)
+    api_url, api_server = _run_server_in_thread(
+        lambda: create_office_api_server(
+            str(db),
+            _API_TOKEN,
+            "127.0.0.1",
+            0,
+            offer_pdf_static_content=fake_offer_pdf_static_content(),
+        )
+    )
+    offer_id, offer_version_id, document = _prepare_offer_with_document(
+        api_url, db, ids["inquiry_convertible"]
+    )
+
+    def build() -> HTTPServer:
+        conn = open_core_connection(db)
+        return create_office_panel_server_compat(
+            SQLiteInquiryRepository.from_connection(conn),
+            SQLiteOrderRepository.from_connection(conn),
+            _PASSWORD,
+            host="127.0.0.1",
+            port=0,
+            command_executor=CoreCommandExecutor(conn),
+            payment_reminder_repo=SQLitePaymentReminderRepository.from_connection(conn),
+            offer_repo=SQLiteOfferRepository.from_connection(conn),
+            offer_document_repo=SQLiteOfferDocumentSnapshotRepository.from_connection(
+                conn
+            ),
+            offer_pdf_static_content=fake_offer_pdf_static_content(),
+            ui_version="v2",
+        )
+
+    panel_url, panel_server = _run_server_in_thread(build)
+    try:
+        _status, html = _get(f"{panel_url}/offer/{offer_id}")
+        assert "PDF herunterladen" in html
+
+        status, data, headers = _get_raw(
+            f"{panel_url}/offer/{offer_id}/offer-document/pdf"
+            f"?offer_version_id={offer_version_id}"
+        )
+        assert status == 200
+        assert data[:5] == b"%PDF-"
+        assert headers.get("Content-Type") == "application/pdf"
+        document_reference = document["snapshot"]["document_reference"]
+        assert headers.get("Content-Disposition") == (
+            f'attachment; filename="{document_reference}.pdf"'
+        )
+    finally:
+        panel_server.shutdown()
+        panel_server.server_close()
+        api_server.shutdown()
+        api_server.server_close()
+
+
+def test_compat_wrapper_without_offer_document_repo_shows_no_button(
+    tmp_path: Path,
+) -> None:
+    """Without offer_document_repo, the compat wrapper still falls back to
+    an empty InMemory repository (matching every other repo param on
+    OfficePanel) rather than raising — but that means an existing snapshot
+    is invisible, which is exactly the bug the direct-mode fix closes for
+    main()'s own wiring. This locks in the (safe, non-crashing) fallback
+    behavior for callers that genuinely don't pass the param."""
+    db = tmp_path / "compat-wrapper-no-doc-repo.db"
+    ids = _seed(db)
+    api_url, api_server = _run_server_in_thread(
+        lambda: create_office_api_server(
+            str(db),
+            _API_TOKEN,
+            "127.0.0.1",
+            0,
+            offer_pdf_static_content=fake_offer_pdf_static_content(),
+        )
+    )
+    offer_id, _offer_version_id, _document = _prepare_offer_with_document(
+        api_url, db, ids["inquiry_convertible"]
+    )
+
+    def build() -> HTTPServer:
+        conn = open_core_connection(db)
+        return create_office_panel_server_compat(
+            SQLiteInquiryRepository.from_connection(conn),
+            SQLiteOrderRepository.from_connection(conn),
+            _PASSWORD,
+            host="127.0.0.1",
+            port=0,
+            command_executor=CoreCommandExecutor(conn),
+            payment_reminder_repo=SQLitePaymentReminderRepository.from_connection(conn),
+            offer_repo=SQLiteOfferRepository.from_connection(conn),
+            ui_version="v2",
+        )
+
+    panel_url, panel_server = _run_server_in_thread(build)
+    try:
+        _status, html = _get(f"{panel_url}/offer/{offer_id}")
+        assert "PDF herunterladen" not in html
+    finally:
+        panel_server.shutdown()
+        panel_server.server_close()
+        api_server.shutdown()
+        api_server.server_close()
