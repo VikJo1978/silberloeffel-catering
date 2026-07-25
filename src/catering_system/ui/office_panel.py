@@ -51,8 +51,26 @@ from catering_system.domain.order_payment_reminder import (
     OrderPaymentReminder,
     validate_payment_method,
 )
+from catering_system.domain.offer_pdf import (
+    OfferPdfRenderError,
+    OfferPdfStaticContent,
+    OfferPdfUnsupportedCharacterError,
+)
+from catering_system.services.offer_document_snapshot_service import (
+    OfferDocumentSnapshotService,
+)
+from catering_system.services.offer_pdf_renderer import (
+    offer_document_pdf_filename,
+    render_offer_document_pdf,
+)
 from catering_system.repositories.in_memory_offer_repository import (
     InMemoryOfferRepository,
+)
+from catering_system.repositories.in_memory_offer_document_snapshot_repository import (
+    InMemoryOfferDocumentSnapshotRepository,
+)
+from catering_system.repositories.offer_document_snapshot_repository import (
+    OfferDocumentSnapshotRepository,
 )
 from catering_system.repositories.in_memory_order_commercial_snapshot_repository import (
     InMemoryOrderCommercialSnapshotRepository,
@@ -164,6 +182,7 @@ from catering_system.ui.office_panel_tasks_list import render_aufgaben_list
 from catering_system.ui.office_panel_offer_detail import (
     OfferDetailFormFields,
     render_offer_detail,
+    surface_version_id,
 )
 from catering_system.ui.office_panel_offers_list import render_angebote_queue
 from catering_system.ui.office_panel_inquiry_detail import (
@@ -317,6 +336,12 @@ def render_rueckruf(
     return _page("Offene Rückrufe", body, active_section="callbacks", context=context)
 
 
+class OfferPdfUnavailableError(Exception):
+    """Raised when a PDF snapshot exists but cannot be rendered (renderer or
+    static content validation failure) — mapped by the HTTP layer to a clear
+    German 422 message, never a stack trace."""
+
+
 class OfficePanel:
     """Route handling and rendering; kept separate from the HTTP handler for testability."""
 
@@ -338,6 +363,8 @@ class OfficePanel:
         offer_repo: OfferRepository | None = None,
         catalog_repo: CatalogRepository | None = None,
         commercial_snapshot_repo: OrderCommercialSnapshotRepository | None = None,
+        offer_document_repo: OfferDocumentSnapshotRepository | None = None,
+        offer_pdf_static_content: OfferPdfStaticContent | None = None,
         ui_version: str = "legacy",
     ) -> None:
         if ui_version not in {"legacy", "v2"}:
@@ -345,6 +372,10 @@ class OfficePanel:
         self._inquiries = inquiry_repo
         self._orders = order_repo
         self._offers = offer_repo or InMemoryOfferRepository()
+        self._offer_documents = (
+            offer_document_repo or InMemoryOfferDocumentSnapshotRepository()
+        )
+        self.offer_pdf_static_content = offer_pdf_static_content
         self._commercial_snapshots = (
             commercial_snapshot_repo or InMemoryOrderCommercialSnapshotRepository()
         )
@@ -407,6 +438,9 @@ class OfficePanel:
                 document_repo,
                 outbound_repo,
                 self.core,
+            )
+            self.offer_document_service = OfferDocumentSnapshotService(
+                self._offers, self._inquiries, self._offer_documents
             )
         else:
             # Structurally duck-typed, not the same concrete class — the
@@ -709,12 +743,64 @@ class OfficePanel:
                 revision_prefill_url = build_offer_prefill_url(
                     self.configurator_url, inquiry
                 )
+        version_id = surface_version_id(detail)
+        pdf_download_url: str | None = None
+        if version_id and self.offer_document_exists(offer_id, version_id):
+            pdf_download_url = (
+                f"/offer/{quote(offer_id, safe='')}/offer-document/pdf"
+                f"?{urlencode({'offer_version_id': version_id})}"
+            )
         return render_offer_detail(
             detail,
             context=context,
             forms=forms,
             revision_prefill_url=revision_prefill_url or None,
+            pdf_download_url=pdf_download_url,
         )
+
+    def offer_document_exists(self, offer_id: str, offer_version_id: str) -> bool:
+        """Read-only existence check used only to decide whether the PDF
+        download link is shown — same ownership check as offer_document_pdf,
+        without doing any rendering work."""
+        if self._remote is not None:
+            return self._remote.offer_document_exists(offer_id, offer_version_id)
+        snapshot = self.offer_document_service.get_by_offer_version_id(offer_version_id)
+        return snapshot is not None and snapshot.offer_id == offer_id
+
+    def offer_document_pdf(
+        self, offer_id: str, offer_version_id: str
+    ) -> tuple[bytes, str] | None:
+        """Render the already-persisted immutable snapshot to PDF bytes for
+        download. Read-only: never creates a snapshot. Returns None when no
+        snapshot exists for this offer/version (404 case); raises
+        OfferPdfUnavailableError on renderer/static-content failure (422
+        case)."""
+        from catering_system.ui.remote_core_client import RemoteCoreError
+
+        if self._remote is not None:
+            try:
+                pdf_bytes, filename = self._remote.offer_document_pdf(
+                    offer_id, offer_version_id
+                )
+            except RemoteCoreError as exc:
+                if exc.status == 404:
+                    return None
+                if exc.status == 422:
+                    raise OfferPdfUnavailableError(exc.code) from exc
+                raise
+            return pdf_bytes, filename or f"{offer_id}.pdf"
+        snapshot = self.offer_document_service.get_by_offer_version_id(offer_version_id)
+        if snapshot is None or snapshot.offer_id != offer_id:
+            return None
+        if self.offer_pdf_static_content is None:
+            raise OfferPdfUnavailableError("offer PDF static content not configured")
+        try:
+            pdf_bytes = render_offer_document_pdf(
+                snapshot, self.offer_pdf_static_content
+            )
+        except (OfferPdfUnsupportedCharacterError, OfferPdfRenderError) as exc:
+            raise OfferPdfUnavailableError(str(exc)) from exc
+        return pdf_bytes, offer_document_pdf_filename(snapshot)
 
     def _offer_detail_dict(self, offer_id: str) -> dict[str, object]:
         if self._remote is not None:
