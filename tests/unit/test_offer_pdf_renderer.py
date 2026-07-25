@@ -25,13 +25,21 @@ from catering_system.domain.offer_pdf import (
     OfferDocumentUnsupportedSchemaError,
     OfferPdfMalformedSnapshotError,
     OfferPdfMissingStaticContentError,
+    OfferPdfRenderError,
     OfferPdfStaticContent,
     OfferPdfUnsupportedCharacterError,
 )
 from catering_system.services.offer_document_snapshot_hash import compute_document_hash
 from catering_system.services.offer_pdf_renderer import (
+    _BOTTOM_MARGIN,
+    _FOOTER_AVAILABLE_WIDTH,
+    _FOOTER_LEADING,
+    _FOOTER_MAX_HEIGHT,
+    _UPPER_FOOTER_Y,
     _eur,
+    _footer_paragraph,
     _payment_terms_line,
+    _styles,
     offer_document_pdf_filename,
     render_offer_document_pdf,
 )
@@ -60,6 +68,12 @@ def _static(**overrides: object) -> OfferPdfStaticContent:
 def _text(pdf_bytes: bytes) -> str:
     reader = PdfReader(io.BytesIO(pdf_bytes))
     return "\n".join(page.extract_text() for page in reader.pages)
+
+
+def _normalize_ws(text: str) -> str:
+    """Collapse whitespace/newlines so a substring check survives a
+    Paragraph's own visual line wrap (pypdf inserts a newline per line)."""
+    return " ".join(text.split())
 
 
 # --- determinism ------------------------------------------------------------------
@@ -357,6 +371,141 @@ def test_long_fixture_with_company_fields_remains_valid_and_shows_footer() -> No
     # same deterministic footer line on every page, not just the first
     for page in reader.pages:
         assert "HRB TEST 00000" in page.extract_text()
+
+
+# --- footer layout (REVIEW FIX: no overlap with page number) --------------------
+
+_REALISTIC_FOOTER_NOTE = "Bei Rückfragen wenden Sie sich bitte an unser Büro."
+_REALISTIC_REGISTER_TEXT = "Handelsregister: Amtsgericht Hamburg, HRB 123456"
+_REALISTIC_VAT_ID_TEXT = "USt-IdNr. DE123456789"
+
+_VERY_LONG_FOOTER_NOTE = (
+    "Bei Rückfragen wenden Sie sich bitte an unser Büro in Hamburg, wir "
+    "freuen uns auf Ihre Nachricht. "
+)
+_VERY_LONG_REGISTER_TEXT = (
+    "Handelsregister: Amtsgericht Hamburg-Mitte, Handelsregisternummer "
+    "HRB 987654321 Abteilung B "
+)
+_VERY_LONG_VAT_ID_TEXT = (
+    "Umsatzsteuer-Identifikationsnummer gemäß Paragraph 27a "
+    "Umsatzsteuergesetz: DE999888777"
+)
+
+
+def _static_realistic_footer(**overrides: object) -> OfferPdfStaticContent:
+    base: dict[str, object] = dict(
+        footer_note=_REALISTIC_FOOTER_NOTE,
+        company_register_text=_REALISTIC_REGISTER_TEXT,
+        company_vat_id_text=_REALISTIC_VAT_ID_TEXT,
+    )
+    base.update(overrides)
+    return _static(**base)
+
+
+def test_realistic_combined_footer_fits_and_does_not_overlap_page_number() -> None:
+    """This exact combination (475pt at Helvetica 8) overflowed the old
+    single-baseline layout (~447pt available alongside 'Seite N'). With the
+    upper footer area now using the full page width and a separate lower
+    line for document_reference/Seite N, it must fit without any shared
+    horizontal space — measured directly, not inferred from text order."""
+    static = _static_realistic_footer()
+    paragraph = _footer_paragraph(static, _styles())
+    width, height = paragraph.wrap(_FOOTER_AVAILABLE_WIDTH, _FOOTER_MAX_HEIGHT * 100)
+    assert width <= _FOOTER_AVAILABLE_WIDTH
+    assert height <= _FOOTER_MAX_HEIGHT
+
+    pdf = render_offer_document_pdf(_valid_snapshot(), static)
+    text = _text(pdf)
+    assert _REALISTIC_FOOTER_NOTE in text
+    assert _REALISTIC_REGISTER_TEXT in text
+    assert _REALISTIC_VAT_ID_TEXT in text
+    assert len(PdfReader(io.BytesIO(pdf)).pages) == 1
+
+
+def test_very_long_footer_wraps_onto_multiple_lines_within_budget() -> None:
+    static = _static_realistic_footer(
+        footer_note=_VERY_LONG_FOOTER_NOTE,
+        company_register_text=_VERY_LONG_REGISTER_TEXT,
+        company_vat_id_text=_VERY_LONG_VAT_ID_TEXT,
+    )
+    paragraph = _footer_paragraph(static, _styles())
+    _, height = paragraph.wrap(_FOOTER_AVAILABLE_WIDTH, _FOOTER_MAX_HEIGHT * 100)
+    assert height > _FOOTER_LEADING  # genuinely wraps onto more than one line
+    assert height <= _FOOTER_MAX_HEIGHT  # still within the supported budget
+
+    pdf = render_offer_document_pdf(_valid_snapshot(), static)
+    text = _normalize_ws(_text(pdf))
+    assert _normalize_ws(_VERY_LONG_FOOTER_NOTE) in text
+    assert _normalize_ws(_VERY_LONG_REGISTER_TEXT) in text
+    assert _normalize_ws(_VERY_LONG_VAT_ID_TEXT) in text
+
+
+def test_short_footer_needs_only_one_line() -> None:
+    static = _static(footer_note="Kurzer Hinweis.")
+    paragraph = _footer_paragraph(static, _styles())
+    _, height = paragraph.wrap(_FOOTER_AVAILABLE_WIDTH, _FOOTER_MAX_HEIGHT * 100)
+    assert height == pytest.approx(_FOOTER_LEADING)
+
+
+def test_document_reference_and_page_number_present_on_lower_line() -> None:
+    snap = _valid_snapshot()
+    text = _text(render_offer_document_pdf(snap, _static()))
+    assert snap.document_reference in text
+    assert "Seite 1" in text
+
+
+def test_multipage_wrapped_footer_present_on_every_page() -> None:
+    static = _static_realistic_footer(
+        footer_note=_VERY_LONG_FOOTER_NOTE,
+        company_register_text=_VERY_LONG_REGISTER_TEXT,
+        company_vat_id_text=_VERY_LONG_VAT_ID_TEXT,
+    )
+    snap = _many_positions(_valid_snapshot(), 40)
+    pdf = render_offer_document_pdf(snap, static)
+    reader = PdfReader(io.BytesIO(pdf))
+    assert len(reader.pages) > 1
+    for page in reader.pages:
+        page_text = _normalize_ws(page.extract_text())
+        assert _normalize_ws(_VERY_LONG_REGISTER_TEXT) in page_text
+
+
+def test_reserved_footer_height_geometry_invariant() -> None:
+    """ReportLab-measured proof, not text-order inference: the document's
+    own bottomMargin always reserves at least the worst-case wrapped footer
+    area, so Platypus's frame layout structurally cannot place story
+    content (positions/totals/acceptance) inside the footer band."""
+    assert _BOTTOM_MARGIN >= _UPPER_FOOTER_Y + _FOOTER_MAX_HEIGHT
+
+
+def test_body_content_does_not_overlap_footer_area() -> None:
+    static = _static_realistic_footer()
+    pdf = render_offer_document_pdf(_valid_snapshot(), static)
+    text = _text(pdf)
+    # totals and acceptance are present (not pushed off/into the footer)
+    assert "Summe brutto:" in text
+    assert "Annahme" in text
+    assert len(PdfReader(io.BytesIO(pdf)).pages) == 1
+
+
+def test_extremely_long_footer_fails_closed_not_clipped() -> None:
+    excessive = "Sehr langer Footertext. " * 40
+    static = _static(footer_note=excessive)
+    with pytest.raises(OfferPdfRenderError):
+        render_offer_document_pdf(_valid_snapshot(), static)
+
+
+def test_repeated_render_with_wrapped_footer_is_byte_identical() -> None:
+    static = _static_realistic_footer(
+        footer_note=_VERY_LONG_FOOTER_NOTE,
+        company_register_text=_VERY_LONG_REGISTER_TEXT,
+        company_vat_id_text=_VERY_LONG_VAT_ID_TEXT,
+    )
+    snap = _valid_snapshot()
+    a = render_offer_document_pdf(snap, static)
+    b = render_offer_document_pdf(snap, static)
+    assert a == b
+    assert hashlib.sha256(a).hexdigest() == hashlib.sha256(b).hexdigest()
 
 
 # --- forbidden content -----------------------------------------------------------

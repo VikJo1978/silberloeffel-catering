@@ -66,8 +66,26 @@ _MONTHS_DE = (
 _PAGE_SIZE = A4
 _LEFT_MARGIN = 20 * mm
 _RIGHT_MARGIN = 20 * mm
-_TOP_MARGIN = 18 * mm
-_BOTTOM_MARGIN = 16 * mm
+_TOP_MARGIN = 16 * mm
+
+# Footer geometry: two vertically stacked, never-overlapping bands.
+#   lower line  (fixed, one line):   document_reference (left) · Seite N (right)
+#   upper area  (wrapped Paragraph): footer_note / register / VAT-ID facts
+# _FOOTER_MAX_LINES is the deterministic maximum the upper area supports;
+# content that would need more lines fails closed (OfferPdfRenderError)
+# instead of being clipped. bottomMargin always reserves the worst case,
+# so wrapped footer content can never collide with story content
+# (positions/totals/acceptance) regardless of how short the actual text is.
+_FOOTER_FONT_SIZE = 8
+_FOOTER_LEADING = 9.5
+_FOOTER_MAX_LINES = 3
+_FOOTER_MAX_HEIGHT = _FOOTER_MAX_LINES * _FOOTER_LEADING
+_LOWER_FOOTER_Y = 8 * mm
+_FOOTER_GAP = 2 * mm
+_UPPER_FOOTER_Y = _LOWER_FOOTER_Y + _FOOTER_GAP
+_FOOTER_SAFETY_MARGIN = 2 * mm
+_BOTTOM_MARGIN = _UPPER_FOOTER_Y + _FOOTER_MAX_HEIGHT + _FOOTER_SAFETY_MARGIN
+_FOOTER_AVAILABLE_WIDTH = _PAGE_SIZE[0] - _LEFT_MARGIN - _RIGHT_MARGIN
 
 
 class _FixedTimeStamp:
@@ -106,6 +124,7 @@ def render_offer_document_pdf(
     _check_all_text(snapshot, static_content)
 
     styles = _styles()
+    _ensure_footer_fits(static_content, styles)
     story = _build_story(snapshot, static_content, styles)
 
     buf = io.BytesIO()
@@ -124,7 +143,7 @@ def render_offer_document_pdf(
             creator="silberloeffel-catering-offer-pdf-renderer",
             producer="silberloeffel-catering-offer-pdf-renderer",
         )
-        on_page = _page_decorator(snapshot, static_content)
+        on_page = _page_decorator(snapshot, static_content, styles)
         doc.build(story, onFirstPage=on_page, onLaterPages=on_page)
     except (
         OfferDocumentUnsupportedSchemaError,
@@ -264,6 +283,30 @@ def _company_footer_line(static: OfferPdfStaticContent) -> str | None:
     return " · ".join(parts) if parts else None
 
 
+def _footer_paragraph(
+    static: OfferPdfStaticContent, styles: _Styles
+) -> Paragraph | None:
+    line = _company_footer_line(static)
+    if line is None:
+        return None
+    return _p(line, styles.footer)
+
+
+def _ensure_footer_fits(static: OfferPdfStaticContent, styles: _Styles) -> None:
+    """Fail closed, before any PDF construction, when the supplied footer
+    facts need more vertical space than the reserved footer area supports.
+    Never silently clipped."""
+    paragraph = _footer_paragraph(static, styles)
+    if paragraph is None:
+        return
+    _, height = paragraph.wrap(_FOOTER_AVAILABLE_WIDTH, _FOOTER_MAX_HEIGHT * 100)
+    if height > _FOOTER_MAX_HEIGHT + 0.01:
+        raise OfferPdfRenderError(
+            "footer content (footer_note / company_register_text / "
+            "company_vat_id_text) exceeds the maximum supported footer height"
+        )
+
+
 # --- document assembly -----------------------------------------------------------
 
 
@@ -276,6 +319,7 @@ class _Styles:
     right: ParagraphStyle
     right_bold: ParagraphStyle
     table_header: ParagraphStyle
+    footer: ParagraphStyle
 
 
 def _styles() -> _Styles:
@@ -315,6 +359,13 @@ def _styles() -> _Styles:
             fontSize=8.5,
             leading=10,
             fontName="Helvetica-Bold",
+        ),
+        footer=ParagraphStyle(
+            "OfferFooter",
+            parent=base["Normal"],
+            fontSize=_FOOTER_FONT_SIZE,
+            leading=_FOOTER_LEADING,
+            textColor=colors.HexColor("#595959"),
         ),
     )
 
@@ -661,7 +712,9 @@ def _acceptance_block(static: OfferPdfStaticContent, styles: _Styles) -> list[Fl
     ]
 
 
-def _page_decorator(snapshot: OfferDocumentSnapshot, static: OfferPdfStaticContent):
+def _page_decorator(
+    snapshot: OfferDocumentSnapshot, static: OfferPdfStaticContent, styles: _Styles
+):
     def _on_page(pdf_canvas, doc) -> None:  # noqa: ANN001
         # invariant=1 alone pins /CreationDate + /ModDate to a hardcoded
         # placeholder (2000-01-01), not a real date. Override with the
@@ -677,12 +730,27 @@ def _page_decorator(snapshot: OfferDocumentSnapshot, static: OfferPdfStaticConte
             page_height - 12 * mm,
             f"{_TITLE} · {snapshot.document_reference}",
         )
-        pdf_canvas.drawRightString(
-            page_width - _RIGHT_MARGIN, 12 * mm, f"Seite {doc.page}"
+
+        # Lower footer line: document_reference (left) · Seite N (right).
+        # Fixed single line, always short and fixed-format — never wraps,
+        # never shares horizontal space with the upper wrapped area above it.
+        pdf_canvas.drawString(
+            _LEFT_MARGIN, _LOWER_FOOTER_Y, snapshot.document_reference
         )
-        footer_line = _company_footer_line(static)
-        if footer_line is not None:
-            pdf_canvas.drawString(_LEFT_MARGIN, 12 * mm, footer_line)
+        pdf_canvas.drawRightString(
+            page_width - _RIGHT_MARGIN, _LOWER_FOOTER_Y, f"Seite {doc.page}"
+        )
+
+        # Upper footer area: footer_note / register / VAT-ID, width-wrapped
+        # via a real Paragraph so long combined text never collides with
+        # the lower line or runs past the page — already proven to fit
+        # within _FOOTER_MAX_HEIGHT by _ensure_footer_fits before build().
+        paragraph = _footer_paragraph(static, styles)
+        if paragraph is not None:
+            paragraph.wrapOn(
+                pdf_canvas, _FOOTER_AVAILABLE_WIDTH, _FOOTER_MAX_HEIGHT * 100
+            )
+            paragraph.drawOn(pdf_canvas, _LEFT_MARGIN, _UPPER_FOOTER_Y)
         pdf_canvas.restoreState()
 
     return _on_page
