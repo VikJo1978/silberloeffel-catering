@@ -251,6 +251,114 @@ def test_static_footer_present() -> None:
     assert "TEST FOOTER Silberlöffel" in text
 
 
+# --- static company contact/legal details (REVIEW FIX) --------------------------
+
+
+def _static_with_contact_details(**overrides: object) -> OfferPdfStaticContent:
+    base: dict[str, object] = dict(
+        company_phone="+49 40 000000",
+        company_email="info@test.invalid",
+        company_web="www.test.invalid",
+        company_register_text="HRB TEST 00000",
+        company_vat_id_text="DE000000000",
+    )
+    base.update(overrides)
+    return _static(**base)
+
+
+def test_all_five_company_fields_render_when_supplied() -> None:
+    static = _static_with_contact_details()
+    text = _text(render_offer_document_pdf(_valid_snapshot(), static))
+    assert "Telefon: +49 40 000000" in text
+    assert "E-Mail: info@test.invalid" in text
+    assert "Web: www.test.invalid" in text
+    assert "HRB TEST 00000" in text
+    assert "DE000000000" in text
+
+
+def test_optional_contact_and_legal_fields_omitted_without_blank_labels() -> None:
+    static = _static(
+        footer_note=None,
+        company_phone=None,
+        company_email=None,
+        company_web=None,
+        company_register_text=None,
+        company_vat_id_text=None,
+    )
+    text = _text(render_offer_document_pdf(_valid_snapshot(), static))
+    assert "Telefon" not in text
+    assert "E-Mail" not in text
+    assert "Web" not in text
+    # no stray separator or empty footer line either
+    assert "· ·" not in text
+    assert " · \n" not in text
+
+
+def test_contact_fields_with_markup_characters_render_as_inert_text() -> None:
+    static = _static_with_contact_details(
+        company_phone="+49 40 000000",
+        company_email="info<test>@test.invalid & co",
+    )
+    text = _text(render_offer_document_pdf(_valid_snapshot(), static))
+    assert "info<test>@test.invalid & co" in text
+
+
+def test_legal_footer_fields_with_markup_characters_render_as_inert_text() -> None:
+    static = _static_with_contact_details(
+        company_register_text="HRB <TEST> & Co 00000",
+    )
+    text = _text(render_offer_document_pdf(_valid_snapshot(), static))
+    assert "HRB <TEST> & Co 00000" in text
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "company_phone",
+        "company_email",
+        "company_web",
+        "company_register_text",
+        "company_vat_id_text",
+    ],
+)
+def test_unsupported_glyph_in_company_field_raises_before_pdf_returned(
+    field: str,
+) -> None:
+    static = _static_with_contact_details(**{field: "Анна"})
+    with pytest.raises(OfferPdfUnsupportedCharacterError) as excinfo:
+        render_offer_document_pdf(_valid_snapshot(), static)
+    assert excinfo.value.field == field
+
+
+def test_repeated_render_with_all_company_fields_is_byte_identical() -> None:
+    static = _static_with_contact_details()
+    snap = _valid_snapshot()
+    a = render_offer_document_pdf(snap, static)
+    b = render_offer_document_pdf(snap, static)
+    assert a == b
+    assert hashlib.sha256(a).hexdigest() == hashlib.sha256(b).hexdigest()
+
+
+def test_standard_fixture_with_company_fields_remains_one_page() -> None:
+    static = _static_with_contact_details()
+    pdf = render_offer_document_pdf(_valid_snapshot(), static)
+    assert len(PdfReader(io.BytesIO(pdf)).pages) == 1
+
+
+def test_long_fixture_with_company_fields_remains_valid_and_shows_footer() -> None:
+    static = _static_with_contact_details()
+    snap = _many_positions(_valid_snapshot(), 40)
+    pdf = render_offer_document_pdf(snap, static)
+    reader = PdfReader(io.BytesIO(pdf))
+    assert len(reader.pages) > 1
+    full_text = "\n".join(p.extract_text() for p in reader.pages)
+    assert "HRB TEST 00000" in full_text
+    assert "DE000000000" in full_text
+    # same deterministic footer line on every page, not just the first
+    for page in reader.pages:
+        assert "HRB TEST 00000" in page.extract_text()
+
+
 # --- forbidden content -----------------------------------------------------------
 
 

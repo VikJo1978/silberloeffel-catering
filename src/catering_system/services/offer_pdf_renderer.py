@@ -236,6 +236,34 @@ def _payment_terms_line(method: str, customer_visible_text: str) -> str | None:
     return normalized
 
 
+def _company_contact_line(static: OfferPdfStaticContent) -> str | None:
+    """Compact labeled 'Telefon: ... · E-Mail: ... · Web: ...' header line.
+
+    None when no contact value was supplied — never an empty label."""
+    parts: list[str] = []
+    if static.company_phone and static.company_phone.strip():
+        parts.append(f"Telefon: {static.company_phone.strip()}")
+    if static.company_email and static.company_email.strip():
+        parts.append(f"E-Mail: {static.company_email.strip()}")
+    if static.company_web and static.company_web.strip():
+        parts.append(f"Web: {static.company_web.strip()}")
+    return " · ".join(parts) if parts else None
+
+
+def _company_footer_line(static: OfferPdfStaticContent) -> str | None:
+    """Compact footer line: footer_note, then register/VAT-ID facts
+    verbatim, each only when supplied. No labels are invented for the
+    legal facts — they are rendered exactly as approved."""
+    parts: list[str] = []
+    if static.footer_note and static.footer_note.strip():
+        parts.append(static.footer_note.strip())
+    if static.company_register_text and static.company_register_text.strip():
+        parts.append(static.company_register_text.strip())
+    if static.company_vat_id_text and static.company_vat_id_text.strip():
+        parts.append(static.company_vat_id_text.strip())
+    return " · ".join(parts) if parts else None
+
+
 # --- document assembly -----------------------------------------------------------
 
 
@@ -341,6 +369,9 @@ def _header_block(
     for line in static.company_address_lines:
         if line.strip():
             blocks.append(_p(line, styles.small))
+    contact_line = _company_contact_line(static)
+    if contact_line is not None:
+        blocks.append(_p(contact_line, styles.small))
     blocks.append(Spacer(1, 6))
     blocks.append(_p(_TITLE, styles.title))
     blocks.append(
@@ -649,8 +680,9 @@ def _page_decorator(snapshot: OfferDocumentSnapshot, static: OfferPdfStaticConte
         pdf_canvas.drawRightString(
             page_width - _RIGHT_MARGIN, 12 * mm, f"Seite {doc.page}"
         )
-        if static.footer_note:
-            pdf_canvas.drawString(_LEFT_MARGIN, 12 * mm, static.footer_note)
+        footer_line = _company_footer_line(static)
+        if footer_line is not None:
+            pdf_canvas.drawString(_LEFT_MARGIN, 12 * mm, footer_line)
         pdf_canvas.restoreState()
 
     return _on_page
