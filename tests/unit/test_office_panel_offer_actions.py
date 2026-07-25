@@ -48,6 +48,9 @@ from catering_system.ui.office_api import create_office_api_server
 from tests.helpers.offer_pdf_static_content import (
     fake_offer_pdf_static_content,
 )
+from catering_system.ui.office_panel import (
+    create_office_panel_server as create_office_panel_server_compat,
+)
 from catering_system.ui.office_panel_http import (
     create_office_panel_server,
     csrf_token_for_password,
@@ -1203,6 +1206,120 @@ def test_remote_panel_pdf_download_never_exposes_office_api_token(
         assert headers.get("Content-Type") == "application/pdf"
         assert _API_TOKEN.encode() not in data
         assert all(_API_TOKEN not in value for value in headers.values())
+    finally:
+        panel_server.shutdown()
+        panel_server.server_close()
+        api_server.shutdown()
+        api_server.server_close()
+
+
+def test_compat_wrapper_forwards_offer_document_dependencies(tmp_path: Path) -> None:
+    """OFFER_PDF_PANEL_DOWNLOAD_V1 direct-mode review fix: office_panel.py's
+    create_office_panel_server (the compatibility wrapper main() calls in
+    direct mode) must forward offer_document_repo/offer_pdf_static_content
+    through to office_panel_http.create_office_panel_server — not silently
+    fall back to an ephemeral InMemory repository backed by nothing on disk.
+    The snapshot is created here through a separate SQLite connection (the
+    Office API server), so the panel can only see it if the repository it
+    was constructed with is genuinely reading from the same db file."""
+    db = tmp_path / "compat-wrapper-pdf.db"
+    ids = _seed(db)
+    api_url, api_server = _run_server_in_thread(
+        lambda: create_office_api_server(
+            str(db),
+            _API_TOKEN,
+            "127.0.0.1",
+            0,
+            offer_pdf_static_content=fake_offer_pdf_static_content(),
+        )
+    )
+    offer_id, offer_version_id, document = _prepare_offer_with_document(
+        api_url, db, ids["inquiry_convertible"]
+    )
+
+    def build() -> HTTPServer:
+        conn = open_core_connection(db)
+        return create_office_panel_server_compat(
+            SQLiteInquiryRepository.from_connection(conn),
+            SQLiteOrderRepository.from_connection(conn),
+            _PASSWORD,
+            host="127.0.0.1",
+            port=0,
+            command_executor=CoreCommandExecutor(conn),
+            payment_reminder_repo=SQLitePaymentReminderRepository.from_connection(conn),
+            offer_repo=SQLiteOfferRepository.from_connection(conn),
+            offer_document_repo=SQLiteOfferDocumentSnapshotRepository.from_connection(
+                conn
+            ),
+            offer_pdf_static_content=fake_offer_pdf_static_content(),
+            ui_version="v2",
+        )
+
+    panel_url, panel_server = _run_server_in_thread(build)
+    try:
+        _status, html = _get(f"{panel_url}/offer/{offer_id}")
+        assert "PDF herunterladen" in html
+
+        status, data, headers = _get_raw(
+            f"{panel_url}/offer/{offer_id}/offer-document/pdf"
+            f"?offer_version_id={offer_version_id}"
+        )
+        assert status == 200
+        assert data[:5] == b"%PDF-"
+        assert headers.get("Content-Type") == "application/pdf"
+        document_reference = document["snapshot"]["document_reference"]
+        assert headers.get("Content-Disposition") == (
+            f'attachment; filename="{document_reference}.pdf"'
+        )
+    finally:
+        panel_server.shutdown()
+        panel_server.server_close()
+        api_server.shutdown()
+        api_server.server_close()
+
+
+def test_compat_wrapper_without_offer_document_repo_shows_no_button(
+    tmp_path: Path,
+) -> None:
+    """Without offer_document_repo, the compat wrapper still falls back to
+    an empty InMemory repository (matching every other repo param on
+    OfficePanel) rather than raising — but that means an existing snapshot
+    is invisible, which is exactly the bug the direct-mode fix closes for
+    main()'s own wiring. This locks in the (safe, non-crashing) fallback
+    behavior for callers that genuinely don't pass the param."""
+    db = tmp_path / "compat-wrapper-no-doc-repo.db"
+    ids = _seed(db)
+    api_url, api_server = _run_server_in_thread(
+        lambda: create_office_api_server(
+            str(db),
+            _API_TOKEN,
+            "127.0.0.1",
+            0,
+            offer_pdf_static_content=fake_offer_pdf_static_content(),
+        )
+    )
+    offer_id, _offer_version_id, _document = _prepare_offer_with_document(
+        api_url, db, ids["inquiry_convertible"]
+    )
+
+    def build() -> HTTPServer:
+        conn = open_core_connection(db)
+        return create_office_panel_server_compat(
+            SQLiteInquiryRepository.from_connection(conn),
+            SQLiteOrderRepository.from_connection(conn),
+            _PASSWORD,
+            host="127.0.0.1",
+            port=0,
+            command_executor=CoreCommandExecutor(conn),
+            payment_reminder_repo=SQLitePaymentReminderRepository.from_connection(conn),
+            offer_repo=SQLiteOfferRepository.from_connection(conn),
+            ui_version="v2",
+        )
+
+    panel_url, panel_server = _run_server_in_thread(build)
+    try:
+        _status, html = _get(f"{panel_url}/offer/{offer_id}")
+        assert "PDF herunterladen" not in html
     finally:
         panel_server.shutdown()
         panel_server.server_close()

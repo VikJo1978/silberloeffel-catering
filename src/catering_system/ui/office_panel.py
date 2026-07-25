@@ -3537,6 +3537,8 @@ def create_office_panel_server(
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     commercial_snapshot_repo: OrderCommercialSnapshotRepository | None = None,
+    offer_document_repo: OfferDocumentSnapshotRepository | None = None,
+    offer_pdf_static_content: OfferPdfStaticContent | None = None,
     ui_version: str = "legacy",
 ) -> HTTPServer:
     """Compatibility wrapper; server construction lives in office_panel_http."""
@@ -3566,6 +3568,8 @@ def create_office_panel_server(
         offer_repo=offer_repo,
         catalog_repo=catalog_repo,
         commercial_snapshot_repo=commercial_snapshot_repo,
+        offer_document_repo=offer_document_repo,
+        offer_pdf_static_content=offer_pdf_static_content,
         ui_version=ui_version,
     )
 
@@ -3716,8 +3720,14 @@ def main() -> None:
         from catering_system.repositories.sqlite_order_commercial_snapshot_repository import (
             SQLiteOrderCommercialSnapshotRepository,
         )
+        from catering_system.repositories.sqlite_offer_document_snapshot_repository import (
+            SQLiteOfferDocumentSnapshotRepository,
+        )
         from catering_system.repositories.bootstrap_customer_identity_schema import (
             bootstrap_customer_identity_schema,
+        )
+        from catering_system.ui.offer_pdf_static_content_env import (
+            offer_pdf_static_content_from_env,
         )
 
         connection = open_core_connection(args.db)
@@ -3729,6 +3739,10 @@ def main() -> None:
         commercial_snapshot_repo = (
             SQLiteOrderCommercialSnapshotRepository.from_connection(connection)
         )
+        offer_document_repo = SQLiteOfferDocumentSnapshotRepository.from_connection(
+            connection
+        )
+        offer_pdf_static_content = offer_pdf_static_content_from_env()
         payment_reminder_repo = SQLitePaymentReminderRepository.from_connection(
             connection
         )
@@ -3769,6 +3783,8 @@ def main() -> None:
             offer_repo=offer_repo,
             catalog_repo=catalog_repo,
             commercial_snapshot_repo=commercial_snapshot_repo,
+            offer_document_repo=offer_document_repo,
+            offer_pdf_static_content=offer_pdf_static_content,
             ui_version=args.ui_version,
         )
         print(f"Office panel on http://{args.host}:{args.port}/ (user: office)")
