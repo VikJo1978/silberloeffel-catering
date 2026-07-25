@@ -74,6 +74,13 @@ class OfferDocumentSnapshotService:
         # working after the Offer has moved on to Sent.
         existing = self._snapshots.get_by_offer_version_id(offer_version_id)
         if existing is not None:
+            # Ownership before variant-conflict: offer_version_id is unique
+            # across the whole system, but the caller's offer_id must still
+            # be the true owner. A mismatch is treated exactly like an
+            # unknown offer/version (never a stale-data leak of another
+            # offer's recipient, addresses, narrative or totals).
+            if existing.offer_id != offer_id:
+                raise OfferDocumentNotFoundError(offer_id)
             if existing.offer_variant_id != offer_variant_id:
                 raise OfferDocumentVariantConflictError(
                     offer_version_id=offer_version_id,

@@ -4325,6 +4325,79 @@ def test_offer_document_variant_conflict(api) -> None:
     assert (status2, body2["error"]) == (409, "offer_document_variant_conflict")
 
 
+def test_offer_document_create_rejects_mismatched_offer_id(api) -> None:
+    """REVIEW FIX: POSTing Offer B's path with Offer A's real version/variant
+    must 404, never return (or leak) Offer A's document."""
+    base, ids, _db = api
+    _base_a, offer_a_id, version_a_id, variant_a_id = _prepared_offer_for_document(
+        api, inquiry_id=ids["inquiry_offer_ready"]
+    )
+    # Offer B only needs to exist as a real, distinct Offer — it is never
+    # itself made document-eligible. Its snapshot must use fresh
+    # variant/position ids (_unique_offer_snapshot) so it doesn't collide
+    # with Offer A's fixed-id fixture snapshot in the shared offer_variants
+    # table.
+    other_inquiry_id = ids["inquiry_convertible"]
+    other_status, other_body, _h = _post(
+        _prepare_offer_url(base, other_inquiry_id),
+        args={"snapshot": _unique_offer_snapshot(inquiry_id=other_inquiry_id)},
+    )
+    assert other_status == 201
+    offer_b_id = other_body["offer_id"]
+    assert offer_b_id != offer_a_id
+
+    # Establish the real snapshot for Offer A first (this is what a replay
+    # under the wrong offer_id must not be able to reach).
+    create_status, create_body, _h = _post(
+        _offer_document_url(base, offer_a_id),
+        args={
+            "offer_version_id": version_a_id,
+            "offer_variant_id": variant_a_id,
+            "created_by": "office-api-test",
+        },
+    )
+    assert create_status == 201
+
+    status, body, _h = _post(
+        _offer_document_url(base, offer_b_id),
+        args={
+            "offer_version_id": version_a_id,
+            "offer_variant_id": variant_a_id,
+            "created_by": "office-api-test",
+        },
+    )
+    assert (status, body["error"]) == (404, "not_found")
+    leaked_keys = {
+        "document_reference",
+        "document_hash",
+        "recipient",
+        "recipient_name",
+        "recipient_company",
+        "recipient_email",
+        "recipient_phone",
+        "invoice_address",
+        "delivery_address",
+        "positions",
+        "vat_buckets",
+        "net_total_cents",
+        "vat_total_cents",
+        "gross_total_cents",
+        "snapshot",
+        "offer_document_snapshot_id",
+    }
+    assert not leaked_keys & set(body)
+
+    # Offer A's document is unaffected and reads back exactly as created.
+    read_status, read_body, _h = _get(
+        f"{_offer_document_url(base, offer_a_id)}?offer_version_id={version_a_id}"
+    )
+    assert read_status == 200
+    assert (
+        read_body["offer_document_snapshot_id"]
+        == create_body["offer_document_snapshot_id"]
+    )
+
+
 def test_offer_document_eligibility_blocked_missing_invoice_address(api) -> None:
     base, ids, db = api
     resolved_inquiry = ids["inquiry_offer_ready"]

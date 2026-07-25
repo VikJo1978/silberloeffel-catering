@@ -338,6 +338,52 @@ def test_different_variant_for_same_version_is_rejected() -> None:
         )
 
 
+def test_replay_rejects_mismatched_offer_id() -> None:
+    """REVIEW FIX: prepare_offer_document's replay branch must confirm the
+    resolved snapshot belongs to the offer_id the caller supplied, not just
+    the offer_version_id. A caller passing a different Offer's id together
+    with a real version/variant from Offer A must be treated exactly like an
+    unknown offer/version (404-equivalent), never a leak of Offer A's
+    recipient/addresses/narrative/positions/totals."""
+    offers, inquiries, documents, doc_service, offer_a = _world()
+    version_a = offer_a.versions[0]
+    variant_a_id = version_a.variants[0].variant_id
+    snap = doc_service.prepare_offer_document(
+        offer_a.offer_id, version_a.offer_version_id, variant_a_id, "office"
+    )
+
+    other_inquiry_id = "33333333-3333-4333-8333-333333333333"
+    other_inquiry = replace(
+        _sample_inquiry(inquiry_id=other_inquiry_id),
+        customer_snapshot=InquiryCustomerSnapshot(
+            company_name="Other GmbH",
+            contact_name="Bea",
+            email="bea@example.invalid",
+            phone="+49309999999",
+            invoice_address=_INVOICE,
+            delivery_address=None,
+            delivery_address_mode="SAME_AS_INVOICE",
+        ),
+        fulfillment_mode="DELIVERY",
+    )
+    inquiries.save(other_inquiry)
+    offer_service = OfferService(offers, inquiries, InMemoryOrderRepository())
+    offer_b = offer_service.prepare_offer_version(
+        other_inquiry_id, _valid_snapshot(inquiry_id=other_inquiry_id)
+    )
+    assert offer_b.offer_id != offer_a.offer_id
+
+    with pytest.raises(OfferDocumentNotFoundError):
+        doc_service.prepare_offer_document(
+            offer_b.offer_id, version_a.offer_version_id, variant_a_id, "office"
+        )
+
+    # Offer A's snapshot is untouched, and no second row was created for it.
+    reloaded = documents.get_by_offer_version_id(version_a.offer_version_id)
+    assert reloaded == snap
+    assert len(documents._rows) == 1  # noqa: SLF001
+
+
 def test_only_one_snapshot_row_exists_per_version(tmp_path: Path) -> None:
     _offers, _inquiries, documents, doc_service, offer = _world()
     version = offer.versions[0]
