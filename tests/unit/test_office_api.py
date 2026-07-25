@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from catering_system.domain.customer_document_projection import CustomerAddress
 from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot
 from catering_system.repositories.sqlite_inquiry_repository import (
     SQLiteInquiryRepository,
@@ -4188,3 +4189,302 @@ def test_confirmation_outbound_routes_require_bearer_auth(api) -> None:
     ):
         status, body, _h = _get(url, headers=no_auth)
         assert (status, body["error"]) == (401, "unauthorized")
+
+
+# --- OFFER_DOCUMENT_SNAPSHOT_V1 — offer-document endpoint ---------------------
+
+
+def _offer_document_url(base: str, offer_id: str) -> str:
+    return f"{base}/office/v1/offers/{offer_id}/offer-document"
+
+
+def _pickup_eligible_invoice_snapshot() -> InquiryCustomerSnapshot:
+    return InquiryCustomerSnapshot(
+        company_name="ACME GmbH",
+        contact_name="Anna",
+        email="anna@example.invalid",
+        phone="+49301234567",
+        invoice_address=CustomerAddress(
+            street="Bürostraße 1",
+            postal_code="20095",
+            city="Hamburg",
+            country="DE",
+        ),
+        delivery_address=None,
+        delivery_address_mode="SAME_AS_INVOICE",
+    )
+
+
+def _prepared_offer_for_document(
+    api: tuple[str, dict[str, str], Path],
+    *,
+    inquiry_id: str | None = None,
+) -> tuple[str, str, str, str]:
+    """Returns (base, offer_id, offer_version_id, offer_variant_id) for a
+    freshly Prepared, PICKUP-eligible offer (invoice address only)."""
+    base, ids, db = api
+    resolved_inquiry = inquiry_id or ids["inquiry_offer_ready"]
+    _set_inquiry_customer_snapshot(
+        db, resolved_inquiry, _pickup_eligible_invoice_snapshot()
+    )
+    _ensure_inquiry_fulfillment_mode(base, resolved_inquiry, mode="PICKUP")
+    snapshot = _valid_offer_snapshot(inquiry_id=resolved_inquiry)
+    status, body, _h = _post(
+        _prepare_offer_url(base, resolved_inquiry),
+        args={"snapshot": snapshot},
+    )
+    assert status == 201
+    variant_id = snapshot["variants"][0]["variant_id"]  # type: ignore[index]
+    return base, body["offer_id"], body["offer_version_id"], variant_id
+
+
+def test_offer_document_create_success(api) -> None:
+    base, offer_id, offer_version_id, variant_id = _prepared_offer_for_document(api)
+    status, body, _h = _post(
+        _offer_document_url(base, offer_id),
+        args={
+            "offer_version_id": offer_version_id,
+            "offer_variant_id": variant_id,
+            "created_by": "office-api-test",
+        },
+    )
+    assert status == 201
+    assert body["offer_id"] == offer_id
+    snapshot = body["snapshot"]
+    assert snapshot["offer_version_id"] == offer_version_id
+    assert snapshot["offer_variant_id"] == variant_id
+    assert snapshot["fulfillment_mode"] == "PICKUP"
+    assert snapshot["document_reference"].startswith("ANG-")
+    assert snapshot["document_hash"].startswith("sha256:")
+
+
+def test_offer_document_replay_is_idempotent(api) -> None:
+    base, offer_id, offer_version_id, variant_id = _prepared_offer_for_document(api)
+    args = {
+        "offer_version_id": offer_version_id,
+        "offer_variant_id": variant_id,
+        "created_by": "office-api-test",
+    }
+    status1, body1, _h = _post(_offer_document_url(base, offer_id), args=args)
+    assert status1 == 201
+    status2, body2, _h = _post(_offer_document_url(base, offer_id), args=args)
+    assert status2 == 200
+    assert body2["offer_document_snapshot_id"] == body1["offer_document_snapshot_id"]
+    assert body2["snapshot"]["document_hash"] == body1["snapshot"]["document_hash"]
+
+
+def _two_variant_offer_snapshot(*, inquiry_id: str) -> dict[str, object]:
+    payload = _valid_offer_snapshot(inquiry_id=inquiry_id)
+    second_variant_id = "44444444-4444-4444-8444-444444444442"
+    second_position_id = "88888888-8888-4888-8888-888888888882"
+    second_variant = json.loads(json.dumps(payload["variants"][0]))
+    second_variant["variant_id"] = second_variant_id
+    second_variant["label"] = "Variante B"
+    second_variant["positions"][0]["position_id"] = second_position_id
+    payload["variants"].append(second_variant)  # type: ignore[union-attr]
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+    return payload
+
+
+def test_offer_document_variant_conflict(api) -> None:
+    base, ids, db = api
+    resolved_inquiry = ids["inquiry_offer_ready"]
+    _set_inquiry_customer_snapshot(
+        db, resolved_inquiry, _pickup_eligible_invoice_snapshot()
+    )
+    _ensure_inquiry_fulfillment_mode(base, resolved_inquiry, mode="PICKUP")
+    snapshot = _two_variant_offer_snapshot(inquiry_id=resolved_inquiry)
+    status, body, _h = _post(
+        _prepare_offer_url(base, resolved_inquiry),
+        args={"snapshot": snapshot},
+    )
+    assert status == 201
+    offer_id = body["offer_id"]
+    offer_version_id = body["offer_version_id"]
+    variant_ids = [v["variant_id"] for v in snapshot["variants"]]  # type: ignore[index]
+    assert len(variant_ids) >= 2, "test requires an offer with 2+ variants"
+
+    first = _post(
+        _offer_document_url(base, offer_id),
+        args={
+            "offer_version_id": offer_version_id,
+            "offer_variant_id": variant_ids[0],
+            "created_by": "office-api-test",
+        },
+    )
+    assert first[0] == 201
+
+    status2, body2, _h = _post(
+        _offer_document_url(base, offer_id),
+        args={
+            "offer_version_id": offer_version_id,
+            "offer_variant_id": variant_ids[1],
+            "created_by": "office-api-test",
+        },
+    )
+    assert (status2, body2["error"]) == (409, "offer_document_variant_conflict")
+
+
+def test_offer_document_create_rejects_mismatched_offer_id(api) -> None:
+    """REVIEW FIX: POSTing Offer B's path with Offer A's real version/variant
+    must 404, never return (or leak) Offer A's document."""
+    base, ids, _db = api
+    _base_a, offer_a_id, version_a_id, variant_a_id = _prepared_offer_for_document(
+        api, inquiry_id=ids["inquiry_offer_ready"]
+    )
+    # Offer B only needs to exist as a real, distinct Offer — it is never
+    # itself made document-eligible. Its snapshot must use fresh
+    # variant/position ids (_unique_offer_snapshot) so it doesn't collide
+    # with Offer A's fixed-id fixture snapshot in the shared offer_variants
+    # table.
+    other_inquiry_id = ids["inquiry_convertible"]
+    other_status, other_body, _h = _post(
+        _prepare_offer_url(base, other_inquiry_id),
+        args={"snapshot": _unique_offer_snapshot(inquiry_id=other_inquiry_id)},
+    )
+    assert other_status == 201
+    offer_b_id = other_body["offer_id"]
+    assert offer_b_id != offer_a_id
+
+    # Establish the real snapshot for Offer A first (this is what a replay
+    # under the wrong offer_id must not be able to reach).
+    create_status, create_body, _h = _post(
+        _offer_document_url(base, offer_a_id),
+        args={
+            "offer_version_id": version_a_id,
+            "offer_variant_id": variant_a_id,
+            "created_by": "office-api-test",
+        },
+    )
+    assert create_status == 201
+
+    status, body, _h = _post(
+        _offer_document_url(base, offer_b_id),
+        args={
+            "offer_version_id": version_a_id,
+            "offer_variant_id": variant_a_id,
+            "created_by": "office-api-test",
+        },
+    )
+    assert (status, body["error"]) == (404, "not_found")
+    leaked_keys = {
+        "document_reference",
+        "document_hash",
+        "recipient",
+        "recipient_name",
+        "recipient_company",
+        "recipient_email",
+        "recipient_phone",
+        "invoice_address",
+        "delivery_address",
+        "positions",
+        "vat_buckets",
+        "net_total_cents",
+        "vat_total_cents",
+        "gross_total_cents",
+        "snapshot",
+        "offer_document_snapshot_id",
+    }
+    assert not leaked_keys & set(body)
+
+    # Offer A's document is unaffected and reads back exactly as created.
+    read_status, read_body, _h = _get(
+        f"{_offer_document_url(base, offer_a_id)}?offer_version_id={version_a_id}"
+    )
+    assert read_status == 200
+    assert (
+        read_body["offer_document_snapshot_id"]
+        == create_body["offer_document_snapshot_id"]
+    )
+
+
+def test_offer_document_eligibility_blocked_missing_invoice_address(api) -> None:
+    base, ids, db = api
+    resolved_inquiry = ids["inquiry_offer_ready"]
+    # No invoice address set on the inquiry's customer_snapshot.
+    _ensure_inquiry_fulfillment_mode(base, resolved_inquiry, mode="PICKUP")
+    snapshot = _valid_offer_snapshot(inquiry_id=resolved_inquiry)
+    status, body, _h = _post(
+        _prepare_offer_url(base, resolved_inquiry),
+        args={"snapshot": snapshot},
+    )
+    assert status == 201
+    offer_id = body["offer_id"]
+    offer_version_id = body["offer_version_id"]
+    variant_id = snapshot["variants"][0]["variant_id"]  # type: ignore[index]
+
+    status2, body2, _h = _post(
+        _offer_document_url(base, offer_id),
+        args={
+            "offer_version_id": offer_version_id,
+            "offer_variant_id": variant_id,
+            "created_by": "office-api-test",
+        },
+    )
+    assert (status2, body2["error"]) == (422, "offer_document_blocked")
+    assert "INVOICE_ADDRESS_REQUIRED" in body2["reasons"]
+
+    conn = sqlite3.connect(db)
+    count = conn.execute(
+        "SELECT COUNT(*) FROM offer_document_snapshots WHERE offer_id = ?",
+        (offer_id,),
+    ).fetchone()[0]
+    conn.close()
+    assert count == 0
+
+
+def test_offer_document_read_after_create(api) -> None:
+    base, offer_id, offer_version_id, variant_id = _prepared_offer_for_document(api)
+    create_status, create_body, _h = _post(
+        _offer_document_url(base, offer_id),
+        args={
+            "offer_version_id": offer_version_id,
+            "offer_variant_id": variant_id,
+            "created_by": "office-api-test",
+        },
+    )
+    assert create_status == 201
+
+    read_status, read_body, _h = _get(
+        f"{_offer_document_url(base, offer_id)}?offer_version_id={offer_version_id}"
+    )
+    assert read_status == 200
+    assert (
+        read_body["offer_document_snapshot_id"]
+        == create_body["offer_document_snapshot_id"]
+    )
+    assert (
+        read_body["snapshot"]["document_hash"]
+        == create_body["snapshot"]["document_hash"]
+    )
+
+
+def test_offer_document_read_not_found(api) -> None:
+    base, ids, _db = api
+    offer_id = str(uuid.uuid4())
+    missing_version_id = str(uuid.uuid4())
+    status, body, _h = _get(
+        f"{_offer_document_url(base, offer_id)}?offer_version_id={missing_version_id}"
+    )
+    assert (status, body["error"]) == (404, "not_found")
+
+
+def test_offer_document_routes_require_bearer_auth(api) -> None:
+    base, ids, _db = api
+    offer_id = str(uuid.uuid4())
+    no_auth: dict[str, str] = {}
+    status, body, _h = _get(
+        f"{_offer_document_url(base, offer_id)}?offer_version_id={offer_id}",
+        headers=no_auth,
+    )
+    assert (status, body["error"]) == (401, "unauthorized")
+    status, body, _h = _post(
+        _offer_document_url(base, offer_id),
+        args={
+            "offer_version_id": offer_id,
+            "offer_variant_id": offer_id,
+            "created_by": "office-api-test",
+        },
+        headers=no_auth,
+    )
+    assert (status, body["error"]) == (401, "unauthorized")
