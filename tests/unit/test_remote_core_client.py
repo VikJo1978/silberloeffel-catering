@@ -484,11 +484,20 @@ def test_find_by_source_and_external_ref_no_match_returns_none() -> None:
 
 def _run_office_api_in_thread(db_path):  # noqa: ANN001, ANN202
     from catering_system.ui.office_api import create_office_api_server
+    from tests.helpers.offer_pdf_static_content import (
+        fake_offer_pdf_static_content,
+    )
 
     ready: queue.Queue = queue.Queue()
 
     def run() -> None:
-        server = create_office_api_server(str(db_path), _TOKEN, "127.0.0.1", 0)
+        server = create_office_api_server(
+            str(db_path),
+            _TOKEN,
+            "127.0.0.1",
+            0,
+            offer_pdf_static_content=fake_offer_pdf_static_content(),
+        )
         ready.put(server)
         server.serve_forever()
 
