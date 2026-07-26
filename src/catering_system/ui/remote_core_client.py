@@ -13,7 +13,7 @@ import socket
 import urllib.error
 import urllib.request
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, datetime
 from typing import Any, NoReturn, cast
@@ -77,7 +77,13 @@ from catering_system.services.order_confirmation_outbound_service import (
     OutboundSendSummary,
 )
 from catering_system.domain.order_confirmation_outbound import FakeOutboxMessage
-from catering_system.domain.catalog import validate_pricing_unit
+from catering_system.domain.catalog import (
+    CatalogDish,
+    CatalogDishCreatePayload,
+    PricingUnit,
+    validate_allergen_codes,
+    validate_pricing_unit,
+)
 from catering_system.services.inquiry_service import validate_inquiry_source
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjection,
@@ -247,6 +253,7 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
             "withdrawal_evidence_exists",
             "order_already_paused",
             "order_not_paused",
+            "already_exists",
         }
     ),
     413: frozenset({"body_too_large"}),
@@ -273,6 +280,7 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
             "invalid_rejection_evidence",
             "invalid_withdrawal_evidence",
             "order_version_not_current_candidate",
+            "validation_error",
         }
     ),
     500: frozenset({"internal"}),
@@ -447,7 +455,7 @@ def _optional_int(value: object) -> int | None:
     return _int(value)
 
 
-def _optional_pricing_unit(value: object) -> str | None:
+def _optional_pricing_unit(value: object) -> PricingUnit | None:
     """CATALOG_ADMIN_COMPLETION_V1A review fix: fail-closed against the
     closed pricing_unit set, not just a loose string type-check — NULL
     stays valid for legacy rows, but an unknown non-null value (a tampered
@@ -456,6 +464,37 @@ def _optional_pricing_unit(value: object) -> str | None:
         return None
     try:
         return validate_pricing_unit(_str(value))
+    except ValueError:
+        _bad_response()
+
+
+def _catalog_dish_from_detail(detail: dict[str, object]) -> CatalogDish:
+    """CATALOG_ADMIN_REMOTE_CLIENT_V1: builds and returns a real, fully
+    domain-validated CatalogDish from an already-structurally-checked
+    catalog_dish_detail() payload — construction itself is the strict
+    response validation (UUID shape, non-negative price, known allergen
+    codes, closed category/pricing_unit/vat_rate_percent sets, timezone-
+    aware timestamps). Any mismatch — from either the Office API or a
+    tampered response — surfaces as the same _bad_response() every other
+    contract violation in this file does."""
+    try:
+        return CatalogDish(
+            dish_id=_uuid4(detail["dish_id"]),
+            name=_str(detail["name"]),
+            description=_optional_str(detail.get("description")),
+            composition=_optional_str(detail.get("composition")),
+            notes=_optional_str(detail.get("notes")),
+            current_unit_net_cents=_nonnegative_int(detail["current_unit_net_cents"]),
+            allergens=validate_allergen_codes(
+                [_str(code) for code in _list(detail["allergens"])]
+            ),
+            active=_bool(detail["active"]),
+            created_at=_datetime(detail["created_at"]),
+            updated_at=_datetime(detail["updated_at"]),
+            category=_optional_str(detail.get("category")),
+            pricing_unit=_optional_pricing_unit(detail.get("pricing_unit")),
+            vat_rate_percent=_optional_int(detail.get("vat_rate_percent")),
+        )
     except ValueError:
         _bad_response()
 
@@ -1901,6 +1940,114 @@ class RemoteCoreClient:
             _uuid4(result["price_history_entry_id"])
         return result
 
+    def create_catalog_dish(
+        self,
+        *,
+        name: str,
+        category: str,
+        pricing_unit: str,
+        current_unit_net_cents: int,
+        vat_rate_percent: int,
+        description: str | None = None,
+        composition: str | None = None,
+        notes: str | None = None,
+        allergens: Sequence[str] = (),
+        command_id: str | None = None,
+    ) -> CatalogDish:
+        """CATALOG_ADMIN_REMOTE_CLIENT_V1: mirrors the Office API's
+        POST /office/v1/catalog/dishes contract exactly — dish_id and active
+        are never accepted here (the server always mints dish_id and always
+        starts a new dish inactive), so there is no parameter for either.
+        No `expect` — a create has no prior state to stake a precondition
+        on. The command response is minimal (dish_id/active/updated_at);
+        the full CatalogDish is built from a follow-up catalog_dish_detail()
+        read, matching the read endpoint's own strict validation."""
+        args: dict[str, object] = {
+            "name": name,
+            "category": category,
+            "pricing_unit": pricing_unit,
+            "current_unit_net_cents": current_unit_net_cents,
+            "vat_rate_percent": vat_rate_percent,
+            "description": description,
+            "composition": composition,
+            "notes": notes,
+            "allergens": list(allergens),
+        }
+        result = self.command(
+            "/office/v1/catalog/dishes",
+            args,
+            {},
+            command_id=command_id,
+            expected={201},
+            result_keys={"dish_id", "active", "updated_at"},
+        )
+        dish_id = _uuid4(result["dish_id"])
+        if _bool(result["active"]) is not False:
+            _bad_response()
+        _datetime(result["updated_at"])
+        detail = self.catalog_dish_detail(dish_id)
+        if detail is None:
+            _bad_response()
+        return _catalog_dish_from_detail(detail)
+
+    def _set_catalog_dish_active(
+        self,
+        dish_id: str,
+        *,
+        active: bool,
+        expected_updated_at: str,
+        command_id: str | None = None,
+    ) -> CatalogDish:
+        path = (
+            f"/office/v1/catalog/dishes/{quote(dish_id, safe='')}"
+            f"/{'activate' if active else 'deactivate'}"
+        )
+        result = self.command(
+            path,
+            {},
+            {"updated_at": expected_updated_at},
+            command_id=command_id,
+            expected={200},
+            result_keys={"dish_id", "active", "updated_at"},
+        )
+        if _uuid4(result["dish_id"]) != dish_id:
+            _bad_response()
+        if _bool(result["active"]) != active:
+            _bad_response()
+        _datetime(result["updated_at"])
+        detail = self.catalog_dish_detail(dish_id)
+        if detail is None:
+            _bad_response()
+        return _catalog_dish_from_detail(detail)
+
+    def activate_catalog_dish(
+        self,
+        dish_id: str,
+        *,
+        expected_updated_at: str,
+        command_id: str | None = None,
+    ) -> CatalogDish:
+        return self._set_catalog_dish_active(
+            dish_id,
+            active=True,
+            expected_updated_at=expected_updated_at,
+            command_id=command_id,
+        )
+
+    def deactivate_catalog_dish(
+        self,
+        dish_id: str,
+        *,
+        expected_updated_at: str,
+        command_id: str | None = None,
+    ) -> CatalogDish:
+        return self._set_catalog_dish_active(
+            dish_id,
+            active=False,
+            expected_updated_at=expected_updated_at,
+            command_id=command_id,
+        )
+
     def contact_detail(self, contact_key: str) -> dict[str, object] | None:
         try:
             body = self.get(f"/office/v1/contacts/{quote(contact_key, safe='')}")
@@ -2849,6 +2996,37 @@ class _RemoteCatalogDishWriteService:
         self._client.update_catalog_dish(
             dish_id,
             args=args,
+            expected_updated_at=expected_updated_at,
+            command_id=self._client._id(),
+        )
+
+    def create_dish(self, create: CatalogDishCreatePayload) -> CatalogDish:
+        """CATALOG_ADMIN_REMOTE_CLIENT_V1: mirrors direct-mode
+        CatalogDishWriteService.create_dish's name and payload type; dish_id
+        and active are never accepted, matching the Office API contract."""
+        return self._client.create_catalog_dish(
+            name=create.name,
+            category=create.category,
+            pricing_unit=create.pricing_unit,
+            current_unit_net_cents=create.current_unit_net_cents,
+            vat_rate_percent=create.vat_rate_percent,
+            description=create.description,
+            composition=create.composition,
+            notes=create.notes,
+            allergens=create.allergens,
+            command_id=self._client._id(),
+        )
+
+    def activate_dish(self, dish_id: str, *, expected_updated_at: str) -> CatalogDish:
+        return self._client.activate_catalog_dish(
+            dish_id,
+            expected_updated_at=expected_updated_at,
+            command_id=self._client._id(),
+        )
+
+    def deactivate_dish(self, dish_id: str, *, expected_updated_at: str) -> CatalogDish:
+        return self._client.deactivate_catalog_dish(
+            dish_id,
             expected_updated_at=expected_updated_at,
             command_id=self._client._id(),
         )
