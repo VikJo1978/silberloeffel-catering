@@ -1808,14 +1808,18 @@ class RemoteCoreClient:
     def list_catalog_dishes(
         self,
         *,
-        active_only: bool = False,
+        active: bool | None = None,
         q: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> dict[str, object]:
+        """CATALOG_ADMIN_PANEL_V1: sends the status filter as `active`
+        (true/false/omitted) so Core applies it in SQL before LIMIT. Never
+        sends the legacy `active_only` — that alias exists on the API only
+        for callers older than this change."""
         params: dict[str, str] = {}
-        if active_only:
-            params["active_only"] = "true"
+        if active is not None:
+            params["active"] = "true" if active else "false"
         if q:
             params["q"] = q
         if limit != 100:

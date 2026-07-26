@@ -110,12 +110,12 @@ class SQLiteCatalogRepository:
     def list_dishes(
         self,
         *,
-        active_only: bool = False,
+        active: bool | None = None,
         q: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[CatalogDish]:
-        where, params = self._filters(active_only=active_only, q=q)
+        where, params = self._filters(active=active, q=q)
         rows = self._conn.execute(
             f"""
             SELECT dish_id, name, description, composition, notes,
@@ -134,10 +134,10 @@ class SQLiteCatalogRepository:
     def count_dishes(
         self,
         *,
-        active_only: bool = False,
+        active: bool | None = None,
         q: str | None = None,
     ) -> int:
-        where, params = self._filters(active_only=active_only, q=q)
+        where, params = self._filters(active=active, q=q)
         row = self._conn.execute(
             f"SELECT COUNT(*) FROM catalog_dishes {where}",
             params,
@@ -283,11 +283,15 @@ class SQLiteCatalogRepository:
                 self._conn.commit()
 
     @staticmethod
-    def _filters(*, active_only: bool, q: str | None) -> tuple[str, list[object]]:
+    def _filters(*, active: bool | None, q: str | None) -> tuple[str, list[object]]:
         clauses: list[str] = []
         params: list[object] = []
-        if active_only:
-            clauses.append("active = 1")
+        # CATALOG_ADMIN_PANEL_V1: bound as a parameter and applied in WHERE, so
+        # both the status filter and the search narrow the rows before
+        # ORDER BY/LIMIT rather than after.
+        if active is not None:
+            clauses.append("active = ?")
+            params.append(1 if active else 0)
         if q:
             clauses.append("name LIKE ? ESCAPE '\\'")
             params.append(f"%{_escape_like(q)}%")

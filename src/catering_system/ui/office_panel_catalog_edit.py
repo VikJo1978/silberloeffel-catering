@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from catering_system.domain.catalog import ALLERGEN_CODES, ALLERGEN_LABELS
 from catering_system.ui.office_api_views import catalog_price_input_value
+from catering_system.ui.office_panel_catalog_list import (
+    pricing_unit_label,
+    vat_label,
+)
 from catering_system.ui.office_panel_views import (
     OfficePageContext,
     _e,
@@ -61,6 +65,22 @@ def render_gericht_edit(
     body = (
         error_html
         + f'<p class="subtitle"><a href="/gerichte/{_e(dish_id)}">← Zurück zum Gericht</a></p>'
+        # CATALOG_ADMIN_PANEL_V1: status and the creation-time fields are shown
+        # here for orientation but are not editable on this form — status has
+        # its own Aktivieren/Deaktivieren commands on the detail page, and
+        # Kategorie/Preiseinheit/MwSt have no edit path in this slice. A
+        # checkbox for `active` would additionally be unsafe: an unchecked box
+        # is indistinguishable from an absent one, so a plain save would read
+        # as "deactivate".
+        + '<p class="catalog-readonly"><strong>Status:</strong> '
+        + f"{_e('Aktiv' if active else 'Inaktiv')} — "
+        + f'<a href="/gerichte/{_e(dish_id)}">Status ändern</a></p>'
+        + '<p class="catalog-readonly"><strong>Kategorie:</strong> '
+        + f"{_e(str(detail.get('category') or '–'))}</p>"
+        + '<p class="catalog-readonly"><strong>Preiseinheit:</strong> '
+        + f"{pricing_unit_label(detail.get('pricing_unit'))}</p>"
+        + '<p class="catalog-readonly"><strong>MwSt:</strong> '
+        + f"{vat_label(detail.get('vat_rate_percent'))}</p>"
         + f'<form method="post" action="/gerichte/{_e(dish_id)}/update">'
         + command_fields
         + _text_input("name", "Name", name)
@@ -73,10 +93,6 @@ def render_gericht_edit(
             catalog_price_input_value(cents),
         )
         + _allergen_checkboxes(detail.get("allergens"))
-        + (
-            f'<p><label><input type="checkbox" name="active" value="1"'
-            f"{' checked' if active else ''}> Aktiv</label></p>"
-        )
         + _text_input("effective_from", "Gültig ab (Preis)", effective_default)
         + '<p><button type="submit">Speichern</button></p>'
         + "</form>"

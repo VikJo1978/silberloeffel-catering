@@ -3113,6 +3113,99 @@ def test_list_catalog_dishes_rejects_invalid_boolean_query(api) -> None:
     assert (status, body["error"]) == (400, "invalid_request")
 
 
+def _seed_active_and_inactive(db) -> None:
+    _seed_catalog_dish(db)
+    _seed_catalog_dish(
+        db,
+        dish_id=_INACTIVE_CATALOG_DISH_ID,
+        name="Inaktives Gericht",
+        active=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "query,expect_active,expect_inactive",
+    [
+        ("", True, True),
+        ("?active=true", True, False),
+        ("?active=false", False, True),
+        # legacy alias: active_only=true still means "active only", and
+        # active_only=false keeps its original meaning of "no filter"
+        ("?active_only=true", True, False),
+        ("?active_only=false", True, True),
+    ],
+    ids=["no-filter", "active", "inactive", "legacy-true", "legacy-false"],
+)
+def test_list_catalog_dishes_active_filter_contract(
+    api, query: str, expect_active: bool, expect_inactive: bool
+) -> None:
+    """CATALOG_ADMIN_PANEL_V1: `active` is the tri-state contract;
+    `active_only` stays supported for callers older than this change."""
+    base, _ids, db = api
+    _seed_active_and_inactive(db)
+    status, body, _h = _get(f"{base}/office/v1/catalog/dishes{query}")
+    assert status == 200
+    returned = {row["dish_id"] for row in body["dishes"]}
+    assert (_CATALOG_DISH_ID in returned) is expect_active
+    assert (_INACTIVE_CATALOG_DISH_ID in returned) is expect_inactive
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "?active=true&active_only=true",
+        "?active=false&active_only=true",
+        "?active=true&active_only=false",
+    ],
+)
+def test_list_catalog_dishes_rejects_conflicting_active_params(api, query: str) -> None:
+    """Fail closed: `active=false&active_only=true` has no honest answer, so
+    the request is rejected rather than resolved by precedence — including
+    the combinations that happen to agree, which would otherwise make the
+    contract depend on which value the server chose to believe."""
+    base, _ids, db = api
+    _seed_active_and_inactive(db)
+    status, body, _h = _get(f"{base}/office/v1/catalog/dishes{query}")
+    assert (status, body["error"]) == (400, "invalid_request")
+
+
+def test_list_catalog_dishes_rejects_invalid_active_value(api) -> None:
+    base, _ids, _db = api
+    status, body, _h = _get(f"{base}/office/v1/catalog/dishes?active=maybe")
+    assert (status, body["error"]) == (400, "invalid_request")
+
+
+def test_list_catalog_dishes_active_filter_runs_before_limit(api) -> None:
+    """The regression this contract exists for: with more active dishes than
+    a page holds, `active=false` must still return the inactive ones."""
+    base, _ids, db = api
+    for index in range(120):
+        _seed_catalog_dish(
+            db,
+            dish_id=f"{index:08d}-1111-4111-8111-111111111111",
+            name=f"Aktiv {index:03d}",
+            active=True,
+        )
+    for index in range(3):
+        _seed_catalog_dish(
+            db,
+            dish_id=f"9999{index:04d}-2222-4222-8222-222222222222",
+            name=f"Zzz Inaktiv {index}",
+            active=False,
+        )
+    status, body, _h = _get(f"{base}/office/v1/catalog/dishes?active=false")
+    assert status == 200
+    assert len(body["dishes"]) == 3
+    assert body["total_count"] == 3
+    assert all(row["active"] is False for row in body["dishes"])
+
+    status, body, _h = _get(f"{base}/office/v1/catalog/dishes?active=true")
+    assert status == 200
+    assert len(body["dishes"]) == 100
+    assert body["total_count"] == 120
+    assert body["truncated"] is True
+
+
 def test_catalog_dish_detail_schema(api) -> None:
     base, _ids, db = api
     _seed_catalog_dish(db)
