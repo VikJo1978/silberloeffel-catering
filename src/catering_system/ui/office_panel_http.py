@@ -43,6 +43,7 @@ from catering_system.integration.auerswald_sync import (
     resolve_missed_call,
 )
 from catering_system.ui.office_panel import (
+    CatalogCommandError,
     OfferPdfUnavailableError,
     OfficePageContext,
     OfficePanel,
@@ -148,11 +149,42 @@ _OFFER_COMMAND_ERROR_LABELS: dict[str, str] = {
 }
 
 
+# CATALOG_ADMIN_PANEL_V1: catalog-specific keys, deliberately prefixed rather
+# than reusing the raw Office API codes (validation_error/already_exists/
+# stale_state/not_found). Those codes are generic across every command in the
+# API, so a bare "not_found" entry here would put "Das Gericht ..." in front of
+# an unrelated inquiry or order failure. OfficePanel's catalog write methods
+# translate both direct-mode domain exceptions and remote-mode RemoteCoreError
+# codes into these prefixed keys, which is what makes the two modes show the
+# same German text.
+_CATALOG_COMMAND_ERROR_LABELS: dict[str, str] = {
+    "catalog_validation_error": (
+        "Die eingegebenen Gerichtdaten sind ungültig — bitte Name, Kategorie, "
+        "Preiseinheit, Preis und MwSt prüfen."
+    ),
+    "catalog_invalid_price": (
+        "Der Preis ist ungültig. Bitte geben Sie einen Betrag mit höchstens "
+        "zwei Nachkommastellen an, zum Beispiel 12,50."
+    ),
+    "catalog_invalid_input": (
+        "Die Anfrage war unvollständig oder fehlerhaft. "
+        "Bitte laden Sie die Seite neu und versuchen Sie es erneut."
+    ),
+    "catalog_already_exists": "Dieses Gericht existiert bereits.",
+    "catalog_stale_state": (
+        "Das Gericht wurde zwischenzeitlich geändert. Bitte laden Sie die Seite neu."
+    ),
+    "catalog_not_found": "Das Gericht wurde nicht gefunden.",
+}
+
+
 def office_command_error_message(code_or_text: str) -> str:
     if code_or_text in _INQUIRY_COMMAND_ERROR_LABELS:
         return _INQUIRY_COMMAND_ERROR_LABELS[code_or_text]
     if code_or_text in _OFFER_COMMAND_ERROR_LABELS:
         return _OFFER_COMMAND_ERROR_LABELS[code_or_text]
+    if code_or_text in _CATALOG_COMMAND_ERROR_LABELS:
+        return _CATALOG_COMMAND_ERROR_LABELS[code_or_text]
     lowered = code_or_text.lower()
     if "sent evidence already exists" in lowered:
         return _OFFER_COMMAND_ERROR_LABELS["sent_evidence_exists"]
@@ -457,7 +489,16 @@ def make_office_panel_handler(
                     panel.render_kontakte(search_query, status_filter, context=context)
                 )
             elif parts == ["gerichte"]:
-                self._html(panel.render_gerichte(context=context))
+                query = parse_qs(parsed.query)
+                self._html(
+                    panel.render_gerichte(
+                        query.get("q", [""])[0],
+                        query.get("status", ["all"])[0],
+                        context=context,
+                    )
+                )
+            elif parts == ["gerichte", "new"]:
+                self._html(panel.render_gericht_new(context=context))
             elif parts == ["emails"] or parts == ["email"]:
                 self._html(panel.render_email(context=context))
             elif parts == ["aufgaben"]:
@@ -676,6 +717,14 @@ def make_office_panel_handler(
             parts = [part for part in urlparse(self.path).path.split("/") if part]
             try:
                 self._route_post(parts)
+            except CatalogCommandError as exc:
+                # CATALOG_ADMIN_PANEL_V1: carries its own status (404/409/422/
+                # 400) so a catalog rejection keeps its meaning instead of
+                # being flattened into the generic 400 below. Must precede the
+                # ValueError branch — it is a ValueError subclass.
+                self._error_page(
+                    office_command_error_message(exc.code), status=exc.status
+                )
             except RemoteCoreError as exc:
                 self._remote_error_page(exc)
             except (ValueError, KeyError) as exc:
@@ -733,8 +782,21 @@ def make_office_panel_handler(
                     call_id,
                 )
                 self._redirect("/rueckruf")
+            elif parts == ["gerichte", "new"]:
+                self._create_catalog_dish()
             elif len(parts) == 3 and parts[0] == "gerichte" and parts[2] == "update":
                 panel.update_catalog_dish(parts[1], self._form())
+                self._redirect(f"/gerichte/{parts[1]}")
+            elif (
+                len(parts) == 3
+                and parts[0] == "gerichte"
+                and parts[2] in ("activate", "deactivate")
+            ):
+                panel.set_catalog_dish_active(
+                    parts[1],
+                    self._form(),
+                    active=parts[2] == "activate",
+                )
                 self._redirect(f"/gerichte/{parts[1]}")
             elif len(parts) == 3 and parts[0] == "kontakt" and parts[2] == "notizen":
                 contact_key = unquote(parts[1])
@@ -742,6 +804,39 @@ def make_office_panel_handler(
                 self._redirect(f"/kontakt/{quote(contact_key, safe='')}")
             else:
                 self.send_error(404)
+
+        def _create_catalog_dish(self) -> None:
+            """CATALOG_ADMIN_PANEL_V1: a rejected create re-renders the form
+            with the submitted values and the German reason, rather than the
+            generic error page — the operator would otherwise lose everything
+            they typed. Unavailability keeps the shared 503 path."""
+            form = self._form()
+            try:
+                dish_id = panel.create_catalog_dish(form)
+            except CatalogCommandError as exc:
+                self._html(
+                    panel.render_gericht_new(
+                        context=self._fetch_page_context(),
+                        form=form,
+                        error_message=office_command_error_message(exc.code),
+                    ),
+                    exc.status,
+                )
+                return
+            except RemoteCoreError as exc:
+                self._remote_error_page(exc)
+                return
+            except (ValueError, KeyError) as exc:
+                self._html(
+                    panel.render_gericht_new(
+                        context=self._fetch_page_context(),
+                        form=form,
+                        error_message=office_command_error_message(str(exc)),
+                    ),
+                    400,
+                )
+                return
+            self._redirect(f"/gerichte/{quote(dish_id, safe='')}")
 
         def _inquiry_action(self, inquiry_id: str, action: str) -> None:
             if action == "update":

@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING, Any, cast
@@ -152,8 +155,13 @@ from catering_system.services.catalog_dish_write_service import CatalogDishWrite
 from catering_system.domain.catalog import (
     AllergenCode,
     ALLERGEN_CODES,
+    CatalogDishAlreadyExistsError,
+    CatalogDishCreatePayload,
+    CatalogDishNotFoundError,
     CatalogDishStaleError,
     CatalogDishUpdatePayload,
+    validate_category,
+    validate_pricing_unit,
 )
 from catering_system.services.email_intake_projection_service import (
     EmailIntakeProjectionService,
@@ -175,6 +183,7 @@ from catering_system.ui.office_panel_contacts_list import render_kontakte_list
 from catering_system.ui.office_panel_catalog_list import render_gerichte_list
 from catering_system.ui.office_panel_catalog_detail import render_gericht_detail
 from catering_system.ui.office_panel_catalog_edit import render_gericht_edit
+from catering_system.ui.office_panel_catalog_new import render_gericht_new
 from catering_system.ui.office_panel_email_detail import render_email_detail
 from catering_system.ui.office_panel_emails_list import render_email_list
 from catering_system.ui.office_panel_calendar_list import render_kalender_list
@@ -340,6 +349,91 @@ class OfferPdfUnavailableError(Exception):
     """Raised when a PDF snapshot exists but cannot be rendered (renderer or
     static content validation failure) — mapped by the HTTP layer to a clear
     German 422 message, never a stack trace."""
+
+
+# CATALOG_ADMIN_PANEL_V1: the Aktiv/Inaktiv selector's accepted values;
+# anything else falls back to "all" rather than erroring, matching how the
+# existing Kontakte status filter treats an unknown query string.
+_CATALOG_STATUS_FILTERS = ("all", "active", "inactive")
+
+# Selector value -> the neutral `active` filter carried down to the query.
+_CATALOG_ACTIVE_BY_FILTER: dict[str, bool | None] = {
+    "all": None,
+    "active": True,
+    "inactive": False,
+}
+
+
+class CatalogCommandError(ValueError):
+    """A catalog write rejected for a reason the operator should see.
+
+    Carries the HTTP status alongside the message key so direct and remote
+    mode answer identically *and* keep the meaning of the failure. Collapsing
+    everything onto 400 would tell a caller that a missing dish, a concurrent
+    edit and a malformed price are the same kind of problem — and would
+    regress the remote path, which already surfaced the API's real status.
+
+    Stays a ValueError so any caller that only knows the old contract still
+    catches it.
+    """
+
+    def __init__(self, code: str, status: int) -> None:
+        super().__init__(code)
+        self.code = code
+        self.status = status
+
+
+# Catalog failure -> (message key, HTTP status). The keys are deliberately
+# catalog-prefixed: the API's own codes (not_found, stale_state, …) are
+# generic across every command, so an unprefixed entry in the shared label
+# table would put "Das Gericht …" in front of an unrelated inquiry error.
+_CATALOG_NOT_FOUND = ("catalog_not_found", 404)
+_CATALOG_STALE = ("catalog_stale_state", 409)
+_CATALOG_EXISTS = ("catalog_already_exists", 409)
+_CATALOG_INVALID_DOMAIN = ("catalog_validation_error", 422)
+_CATALOG_INVALID_INPUT = ("catalog_invalid_input", 400)
+_CATALOG_INVALID_PRICE = ("catalog_invalid_price", 400)
+
+# Remote Office API error codes -> the same (key, status) pairs, so a remote
+# rejection is indistinguishable from the direct-mode one it mirrors.
+_CATALOG_REMOTE_ERRORS: dict[str, tuple[str, int]] = {
+    "not_found": _CATALOG_NOT_FOUND,
+    "stale_state": _CATALOG_STALE,
+    "already_exists": _CATALOG_EXISTS,
+    "validation_error": _CATALOG_INVALID_DOMAIN,
+    "invalid_request": _CATALOG_INVALID_INPUT,
+}
+
+# A price the operator typed: digits, then at most one separator followed by
+# one or two digits. No sign (a negative price is not a catalog price), no
+# exponent, no thousands separator — "1.000,50" is ambiguous, so it is
+# rejected rather than guessed at. Anything with a third decimal is refused
+# instead of being quietly rounded into a price nobody entered.
+_CATALOG_PRICE_RE = re.compile(r"^\d+(?:[.,]\d{1,2})?$")
+
+
+def parse_catalog_price_input(raw: str) -> int:
+    """CATALOG_ADMIN_PANEL_V1: gate in front of the shared
+    ``parse_catalog_price_cents``. That helper quantizes, so "1,999" would
+    become 2,00 € with no warning; this refuses the input instead. Shape is
+    checked here, the Decimal conversion stays there — no float anywhere.
+
+    A separator-less amount is normalised to euros first. The shared helper
+    reads a bare integer as *cents*, which would make "12" 0,12 € while
+    "12,00" is 12,00 € — a hundredfold difference between two spellings of
+    the same number, in a field labelled €. Every rendered form pre-fills
+    "12,00", so this only affects a hand-typed value, and euros is the only
+    reading consistent with the label. The shared helper is left untouched
+    for any other caller.
+    """
+    text = raw.strip()
+    if text.endswith("€"):
+        text = text[:-1].strip()
+    if not _CATALOG_PRICE_RE.fullmatch(text):
+        raise CatalogCommandError(*_CATALOG_INVALID_PRICE)
+    if "." not in text and "," not in text:
+        text = f"{text}.00"
+    return api_views.parse_catalog_price_cents(text)
 
 
 class OfficePanel:
@@ -1255,19 +1349,60 @@ class OfficePanel:
             note_text=form.get("note_text", ""),
         )
 
-    def _catalog_list_payload(self) -> dict[str, object]:
+    def _catalog_list_payload(
+        self, *, q: str | None = None, active: bool | None = None
+    ) -> dict[str, object]:
         if self._remote is not None:
-            return self._remote.list_catalog_dishes()
+            return self._remote.list_catalog_dishes(q=q, active=active)
         service = CatalogDishService(self._catalog)
-        return api_views.catalog_dish_list_view(service.list_dishes())
+        return api_views.catalog_dish_list_view(service.list_dishes(q=q, active=active))
 
     def render_gerichte(
-        self, *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
+        self,
+        q: str = "",
+        status: str = "all",
+        *,
+        context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
     ) -> str:
-        return render_gerichte_list(self._catalog_list_payload(), context=context)
+        """CATALOG_ADMIN_PANEL_V1: both the search and the Aktiv/Inaktiv
+        filter are pushed all the way down to the query (SQL WHERE in direct
+        mode, `q`/`active` on the read endpoint in remote mode), so they
+        narrow the rows *before* the 100-row page limit. Filtering here
+        instead would answer "Keine Gerichte gefunden" whenever the excluded
+        dishes happened to fill the first page."""
+        query = q.strip()
+        status_filter = status if status in _CATALOG_STATUS_FILTERS else "all"
+        payload = self._catalog_list_payload(
+            q=query or None,
+            active=_CATALOG_ACTIVE_BY_FILTER[status_filter],
+        )
+        return render_gerichte_list(
+            payload,
+            search_query=query,
+            status_filter=status_filter,
+            context=context,
+        )
+
+    def render_gericht_new(
+        self,
+        *,
+        context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
+        form: dict[str, str] | None = None,
+        error_message: str | None = None,
+    ) -> str:
+        return render_gericht_new(
+            command_fields=_csrf_input(context) + self._command_fields(),
+            context=context,
+            form=form or {},
+            error_message=error_message,
+        )
 
     def render_gericht(
-        self, dish_id: str, *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
+        self,
+        dish_id: str,
+        *,
+        context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
+        error_message: str | None = None,
     ) -> str | None:
         if self._remote is not None:
             detail = self._remote.catalog_dish_detail(dish_id)
@@ -1280,7 +1415,14 @@ class OfficePanel:
                 return None
             history = service.list_price_history(dish_id)
             detail = api_views.catalog_dish_detail_view(dish, history)
-        return render_gericht_detail(detail, context=context)
+        return render_gericht_detail(
+            detail,
+            context=context,
+            command_fields=self._catalog_update_command_fields(
+                str(detail["updated_at"]), context=context
+            ),
+            error_message=error_message,
+        )
 
     def _catalog_detail_payload(self, dish_id: str) -> dict[str, object] | None:
         if self._remote is not None:
@@ -1337,49 +1479,195 @@ class OfficePanel:
             code for code in ALLERGEN_CODES if form.get(f"allergen_{code}") == "1"
         )
 
+    def _run_catalog_write(self, work: Callable[[], None]) -> None:
+        if self._remote is not None:
+            work()
+        elif self._command_executor is not None:
+            self._command_executor.run(work)
+        else:
+            work()
+
+    @contextmanager
+    def _catalog_write_errors(self) -> Iterator[None]:
+        """CATALOG_ADMIN_PANEL_V1: maps direct-mode domain exceptions and
+        remote-mode RemoteCoreError codes onto the same CatalogCommandError,
+        so both modes produce the same German message *and* the same HTTP
+        status — a missing dish stays 404, a concurrent edit stays 409, a
+        domain rejection stays 422.
+
+        Unavailability is re-raised untouched: "Core nicht erreichbar" is a
+        degradation, not a business rejection, and the HTTP layer renders it
+        through its own 503 path.
+
+        Order matters — RemoteCoreError, CatalogDishStaleError and
+        CatalogDishAlreadyExistsError are all ValueError subclasses, so the
+        catch-all domain branch has to come last, and an already-classified
+        CatalogCommandError has to pass through untouched before it.
+        """
+        from catering_system.ui.remote_core_client import RemoteCoreError
+
+        try:
+            yield
+        except CatalogCommandError:
+            raise
+        except RemoteCoreError as exc:
+            if exc.unavailable:
+                raise
+            mapped = _CATALOG_REMOTE_ERRORS.get(exc.code)
+            if mapped is None:
+                raise
+            raise CatalogCommandError(*mapped) from exc
+        except CatalogDishStaleError as exc:
+            raise CatalogCommandError(*_CATALOG_STALE) from exc
+        except CatalogDishAlreadyExistsError as exc:
+            raise CatalogCommandError(*_CATALOG_EXISTS) from exc
+        except CatalogDishNotFoundError as exc:
+            raise CatalogCommandError(*_CATALOG_NOT_FOUND) from exc
+        except ValueError as exc:
+            raise CatalogCommandError(*_CATALOG_INVALID_DOMAIN) from exc
+
+    def create_catalog_dish(self, form: dict[str, str]) -> str:
+        """CATALOG_ADMIN_PANEL_V1: builds the domain payload from the form and
+        delegates; the dish_id is minted by Core (direct service or Office
+        API), never here, and `active` is not part of the payload at all —
+        a new dish is always created inactive and is activated by the
+        separate Aktivieren command."""
+        created_id = ""
+        with self._catalog_write_errors():
+            price_cents = parse_catalog_price_input(form.get("price_net", ""))
+            vat_raw = form.get("vat_rate_percent", "").strip()
+            if not vat_raw.isdigit():
+                raise CatalogCommandError(*_CATALOG_INVALID_DOMAIN)
+            payload = CatalogDishCreatePayload(
+                name=form.get("name", "").strip(),
+                category=validate_category(form.get("category", "")),
+                pricing_unit=validate_pricing_unit(
+                    form.get("pricing_unit", "").strip()
+                ),
+                current_unit_net_cents=price_cents,
+                vat_rate_percent=int(vat_raw),
+                description=form.get("description", "").strip() or None,
+                composition=form.get("composition", "").strip() or None,
+                notes=form.get("notes", "").strip() or None,
+                allergens=self._catalog_allergens_from_form(form),
+            )
+
+            def work() -> None:
+                nonlocal created_id
+                if self._remote is not None:
+                    created_id = self._remote.catalog_dish_write_service.create_dish(
+                        payload
+                    ).dish_id
+                    return
+                created_id = self.catalog_dish_write_service.create_dish(
+                    payload
+                ).dish_id
+
+            self._run_catalog_write(work)
+        return created_id
+
+    def set_catalog_dish_active(
+        self, dish_id: str, form: dict[str, str], *, active: bool
+    ) -> None:
+        """CATALOG_ADMIN_PANEL_V1: status is its own command in both modes —
+        activate_dish/deactivate_dish, never a field of the edit form — so the
+        optimistic-concurrency token has to travel with it exactly as the
+        update form's does."""
+        expected_raw = form.get("_expect_updated_at", "").strip()
+        if not expected_raw:
+            raise CatalogCommandError(*_CATALOG_INVALID_INPUT)
+        with self._catalog_write_errors():
+            try:
+                expected_updated_at = datetime.fromisoformat(expected_raw)
+            except ValueError as exc:
+                # A malformed precondition is a bad request, not a domain
+                # rejection — it never reached the dish.
+                raise CatalogCommandError(*_CATALOG_INVALID_INPUT) from exc
+
+            def work() -> None:
+                if self._remote is not None:
+                    remote_service = self._remote.catalog_dish_write_service
+                    if active:
+                        remote_service.activate_dish(
+                            dish_id, expected_updated_at=expected_raw
+                        )
+                    else:
+                        remote_service.deactivate_dish(
+                            dish_id, expected_updated_at=expected_raw
+                        )
+                    return
+                if active:
+                    self.catalog_dish_write_service.activate_dish(
+                        dish_id, expected_updated_at=expected_updated_at
+                    )
+                else:
+                    self.catalog_dish_write_service.deactivate_dish(
+                        dish_id, expected_updated_at=expected_updated_at
+                    )
+
+            self._run_catalog_write(work)
+
     def update_catalog_dish(self, dish_id: str, form: dict[str, str]) -> None:
         expected_raw = form.get("_expect_updated_at", "").strip()
         if not expected_raw:
-            raise ValueError("missing catalog updated_at precondition")
-        expected_updated_at = datetime.fromisoformat(expected_raw)
-        current = self._catalog_detail_payload(dish_id)
-        if current is None:
-            raise ValueError(f"no catalog dish with id {dish_id!r}")
-        new_cents = api_views.parse_catalog_price_cents(form.get("price_net", ""))
-        effective_raw = form.get("effective_from", "").strip()
-        effective_from = date.fromisoformat(effective_raw) if effective_raw else None
-        if (
-            new_cents != int(str(current["current_unit_net_cents"]))
-            and effective_from is None
-        ):
-            effective_from = api_views.berlin_today()
-        name = form.get("name", "").strip()
-        description = form.get("description", "").strip() or None
-        composition = form.get("composition", "").strip() or None
-        notes = form.get("notes", "").strip() or None
-        allergens = self._catalog_allergens_from_form(form)
-        active = form.get("active") == "1"
-        args: dict[str, object] = {
-            "name": name,
-            "description": description,
-            "composition": composition,
-            "notes": notes,
-            "current_unit_net_cents": new_cents,
-            "allergens": list(allergens),
-            "active": active,
-        }
-        if effective_from is not None:
-            args["effective_from"] = effective_from.isoformat()
-
-        def work() -> None:
-            if self._remote is not None:
-                self._remote.catalog_dish_write_service.update(
-                    dish_id,
-                    args=args,
-                    expected_updated_at=expected_raw,
-                )
-                return
+            raise CatalogCommandError(*_CATALOG_INVALID_INPUT)
+        with self._catalog_write_errors():
             try:
+                expected_updated_at = datetime.fromisoformat(expected_raw)
+            except ValueError as exc:
+                # A malformed precondition is a bad request, not a domain
+                # rejection — it never reached the dish.
+                raise CatalogCommandError(*_CATALOG_INVALID_INPUT) from exc
+            current = self._catalog_detail_payload(dish_id)
+            if current is None:
+                raise CatalogCommandError(*_CATALOG_NOT_FOUND)
+            # Same price rule as the create form: reject a third decimal
+            # rather than let the shared parser quantize it away.
+            new_cents = parse_catalog_price_input(form.get("price_net", ""))
+            effective_raw = form.get("effective_from", "").strip()
+            try:
+                effective_from = (
+                    date.fromisoformat(effective_raw) if effective_raw else None
+                )
+            except ValueError as exc:
+                raise CatalogCommandError(*_CATALOG_INVALID_INPUT) from exc
+            if (
+                new_cents != int(str(current["current_unit_net_cents"]))
+                and effective_from is None
+            ):
+                effective_from = api_views.berlin_today()
+            name = form.get("name", "").strip()
+            description = form.get("description", "").strip() or None
+            composition = form.get("composition", "").strip() or None
+            notes = form.get("notes", "").strip() or None
+            allergens = self._catalog_allergens_from_form(form)
+            # CATALOG_ADMIN_PANEL_V1: the edit form no longer carries an Aktiv
+            # checkbox (status is its own command now), so `active` must be
+            # read back from the dish's current state. Deriving it from the
+            # form here would silently deactivate every dish on each save,
+            # since a missing checkbox is indistinguishable from an
+            # unchecked one.
+            active = bool(current["active"])
+            args: dict[str, object] = {
+                "name": name,
+                "description": description,
+                "composition": composition,
+                "notes": notes,
+                "current_unit_net_cents": new_cents,
+                "allergens": list(allergens),
+                "active": active,
+            }
+            if effective_from is not None:
+                args["effective_from"] = effective_from.isoformat()
+
+            def work() -> None:
+                if self._remote is not None:
+                    self._remote.catalog_dish_write_service.update(
+                        dish_id,
+                        args=args,
+                        expected_updated_at=expected_raw,
+                    )
+                    return
                 self.catalog_dish_write_service.update_dish(
                     dish_id,
                     update=CatalogDishUpdatePayload(
@@ -1394,18 +1682,8 @@ class OfficePanel:
                     ),
                     expected_updated_at=expected_updated_at,
                 )
-            except CatalogDishStaleError as exc:
-                raise ValueError(
-                    "Das Gericht wurde zwischenzeitlich geändert. "
-                    "Bitte laden Sie die Seite neu."
-                ) from exc
 
-        if self._remote is not None:
-            work()
-        elif self._command_executor is not None:
-            self._command_executor.run(work)
-        else:
-            work()
+            self._run_catalog_write(work)
 
     def _email_list_rows(self) -> list[dict[str, object]]:
         if self._remote is not None:

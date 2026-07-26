@@ -36,16 +36,21 @@ class CatalogDishService:
     def list_dishes(
         self,
         *,
-        active_only: bool = False,
+        active: bool | None = None,
         q: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> CatalogDishListResult:
+        """CATALOG_ADMIN_PANEL_V1: `active` (True/False/None) goes straight to
+        the repository, so both the status filter and the search narrow the
+        rows inside the query — ahead of the page limit. `total_count` counts
+        that same filtered set, which is what makes `truncated` mean "more
+        rows matching *this* filter" rather than "more rows in the catalog"."""
         page_size = min(max(limit, 1), _MAX_PAGE_SIZE)
         offset = max(offset, 0)
-        total = self._catalog.count_dishes(active_only=active_only, q=q)
+        total = self._catalog.count_dishes(active=active, q=q)
         rows = self._catalog.list_dishes(
-            active_only=active_only,
+            active=active,
             q=q,
             limit=page_size,
             offset=offset,

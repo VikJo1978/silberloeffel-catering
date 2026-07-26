@@ -61,7 +61,9 @@ def test_sqlite_catalog_price_history_empty_by_default(tmp_path: Path) -> None:
         repo.close()
 
 
-def test_sqlite_catalog_active_only_filter(tmp_path: Path) -> None:
+def test_sqlite_catalog_active_filter(tmp_path: Path) -> None:
+    """CATALOG_ADMIN_PANEL_V1: active is tri-state — True/False select one
+    status in SQL, None applies no status clause at all."""
     db = tmp_path / "core.db"
     repo = SQLiteCatalogRepository(db)
     try:
@@ -70,8 +72,45 @@ def test_sqlite_catalog_active_only_filter(tmp_path: Path) -> None:
         repo.insert_dish_if_absent(
             _dish(dish_id=inactive_id, name="Inaktiv", active=False)
         )
-        active_rows = repo.list_dishes(active_only=True)
-        assert [row.dish_id for row in active_rows] == [_DISH_ID]
+        assert [row.dish_id for row in repo.list_dishes(active=True)] == [_DISH_ID]
+        assert [row.dish_id for row in repo.list_dishes(active=False)] == [inactive_id]
+        assert len(repo.list_dishes(active=None)) == 2
+        assert repo.count_dishes(active=True) == 1
+        assert repo.count_dishes(active=False) == 1
+        assert repo.count_dishes(active=None) == 2
+    finally:
+        repo.close()
+
+
+def test_sqlite_catalog_active_filter_applies_before_limit(tmp_path: Path) -> None:
+    """The regression this contract exists for: with more active dishes than
+    one page holds, the inactive ones must still be found — filtering has to
+    happen in the WHERE clause, not on an already-truncated page."""
+    db = tmp_path / "core.db"
+    repo = SQLiteCatalogRepository(db)
+    try:
+        for index in range(120):
+            repo.insert_dish_if_absent(
+                _dish(
+                    dish_id=f"{index:08d}-1111-4111-8111-111111111111",
+                    name=f"Aktiv {index:03d}",
+                    active=True,
+                )
+            )
+        for index in range(3):
+            repo.insert_dish_if_absent(
+                _dish(
+                    dish_id=f"9999{index:04d}-2222-4222-8222-222222222222",
+                    name=f"Zzz Inaktiv {index}",
+                    active=False,
+                )
+            )
+        inactive = repo.list_dishes(active=False, limit=100)
+        assert len(inactive) == 3
+        assert all(not row.active for row in inactive)
+        assert len(repo.list_dishes(active=True, limit=100)) == 100
+        assert repo.count_dishes(active=True) == 120
+        assert repo.count_dishes(active=False) == 3
     finally:
         repo.close()
 

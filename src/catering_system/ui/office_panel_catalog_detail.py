@@ -1,7 +1,11 @@
-"""Gericht detail — read-only catalog projection (6D-1)."""
+"""Gericht detail — catalog projection and status commands (6D-1)."""
 
 from __future__ import annotations
 
+from catering_system.ui.office_panel_catalog_list import (
+    pricing_unit_label,
+    vat_label,
+)
 from catering_system.ui.office_panel_views import (
     OfficePageContext,
     _e,
@@ -53,21 +57,57 @@ def _price_history_block(history: object) -> str:
     return "<p><strong>Preisänderungen:</strong></p><ul>" + "".join(items) + "</ul>"
 
 
+def _status_command_form(
+    dish_id: str,
+    *,
+    active: bool,
+    command_fields: str,
+) -> str:
+    """CATALOG_ADMIN_PANEL_V1: exactly one status command is offered at a
+    time — the one that would actually change something. Both carry the same
+    optimistic-concurrency token the edit form uses, so a stale page cannot
+    flip a status that somebody else already changed."""
+    action = "deactivate" if active else "activate"
+    label = "Deaktivieren" if active else "Aktivieren"
+    return (
+        f'<form method="post" action="/gerichte/{_e(dish_id)}/{action}">'
+        + command_fields
+        + f'<button type="submit">{_e(label)}</button>'
+        + "</form>"
+    )
+
+
 def render_gericht_detail(
     detail: dict[str, object],
     *,
     context: OfficePageContext,
+    command_fields: str = "",
+    error_message: str | None = None,
 ) -> str:
     name = str(detail.get("name", "Gericht"))
-    status = "Aktiv" if detail.get("active") else "Inaktiv"
+    active = bool(detail.get("active"))
+    status = "Aktiv" if active else "Inaktiv"
+    dish_id = str(detail.get("dish_id", ""))
+    error_html = f'<p class="error">{_e(error_message)}</p>' if error_message else ""
     body = (
-        f'<p class="subtitle">Status: {_e(status)}</p>'
+        error_html
+        + f'<p class="subtitle">Status: {_e(status)}</p>'
+        + _status_command_form(dish_id, active=active, command_fields=command_fields)
         + _text_block("Beschreibung", detail.get("description"))
         + _text_block("Zusammensetzung", detail.get("composition"))
+        + _text_block("Hinweise", detail.get("notes"))
+        # CATALOG_ADMIN_PANEL_V1: read-only in this slice — these are set once
+        # at creation and have no edit path yet.
+        + f"<p><strong>Kategorie:</strong> "
+        f"{_e(str(detail.get('category') or '–'))}</p>"
+        + f"<p><strong>Preiseinheit:</strong> "
+        f"{pricing_unit_label(detail.get('pricing_unit'))}</p>"
+        + f"<p><strong>MwSt:</strong> "
+        f"{vat_label(detail.get('vat_rate_percent'))}</p>"
         + _allergen_block(detail.get("allergen_labels"))
         + f"<p><strong>Preis:</strong> {_e(str(detail.get('price_display', '–')))}</p>"
         + _price_history_block(detail.get("price_history"))
-        + f'<p><a href="/gerichte/{_e(str(detail.get("dish_id", "")))}/edit">Bearbeiten</a></p>'
+        + f'<p><a href="/gerichte/{_e(dish_id)}/edit">Bearbeiten</a></p>'
         + '<p><a href="/gerichte">← Zurück zu Gerichte</a></p>'
     )
     return _page(name, body, active_section="catalog", context=context)

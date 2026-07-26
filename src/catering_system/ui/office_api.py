@@ -264,6 +264,28 @@ def _v_query_bool(value: str) -> bool:
     raise _invalid()
 
 
+def _catalog_active_filter(params: dict[str, str]) -> bool | None:
+    """CATALOG_ADMIN_PANEL_V1: resolves the catalog list's status filter.
+
+    `active` is the current contract — true/false select one status, omitted
+    means no filter. `active_only` is kept as a legacy alias because it is a
+    published query parameter: `active_only=true` still means "active only",
+    and `active_only=false` keeps its original meaning of *no* filter (it
+    never selected inactive dishes).
+
+    Sending both is rejected with 400 rather than resolved by precedence:
+    `active=false&active_only=true` has no honest answer, and silently
+    picking one would hide a caller's bug behind a wrong dish list.
+    """
+    if "active" in params and "active_only" in params:
+        raise _invalid()
+    if "active" in params:
+        return _v_query_bool(params["active"])
+    if "active_only" in params:
+        return True if _v_query_bool(params["active_only"]) else None
+    return None
+
+
 def _v_date(value: object) -> date:
     if not isinstance(value, str) or not _DATE_RE.fullmatch(value):
         raise _invalid()
@@ -688,7 +710,7 @@ class OfficeApi:
     def list_catalog_dishes(
         self,
         *,
-        active_only: bool = False,
+        active: bool | None = None,
         q: str | None = None,
         limit: int = 100,
         offset: int = 0,
@@ -697,7 +719,7 @@ class OfficeApi:
             raise _invalid()
         return views.catalog_dish_list_view(
             self.catalog_dish_service.list_dishes(
-                active_only=active_only,
+                active=active,
                 q=q,
                 limit=limit,
                 offset=offset,
@@ -2895,12 +2917,8 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
                 self._query(set())
                 self._respond(200, api.contact_detail(path_ids["contact_key"]))
             elif kind == "list_catalog_dishes":
-                params = self._query({"active_only", "q", "limit", "offset"})
-                active_only = (
-                    _v_query_bool(params["active_only"])
-                    if "active_only" in params
-                    else False
-                )
+                params = self._query({"active", "active_only", "q", "limit", "offset"})
+                active = _catalog_active_filter(params)
                 catalog_q_raw = params.get("q")
                 catalog_q = (
                     _v_str(catalog_q_raw, _MAX_Q_CHARS).strip()
@@ -2913,7 +2931,7 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
                 self._respond(
                     200,
                     api.list_catalog_dishes(
-                        active_only=active_only,
+                        active=active,
                         q=catalog_q,
                         limit=limit,
                         offset=offset,

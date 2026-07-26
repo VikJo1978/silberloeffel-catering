@@ -1056,6 +1056,46 @@ def test_gericht_edit_direct_remote_parity(parity_world) -> None:
     assert _strip_remote_fields(d_html) == _strip_remote_fields(r_html)
 
 
+@pytest.mark.parametrize(
+    "query",
+    ["", "?q=Kartoffelsalat", "?status=active", "?status=inactive", "?q=nichts"],
+    ids=["all", "search", "active", "inactive", "no-match"],
+)
+def test_gerichte_search_and_filter_direct_remote_parity(
+    parity_world, query: str
+) -> None:
+    """CATALOG_ADMIN_PANEL_V1: the search is pushed down to each mode's own
+    list call (repository vs query string) while the Aktiv/Inaktiv split is
+    applied in the panel — both have to land on byte-identical HTML."""
+    direct_url, remote_url, _ids = parity_world
+    d_status, d_html = _get(f"{direct_url}/gerichte{query}")
+    r_status, r_html = _get(f"{remote_url}/gerichte{query}")
+    assert d_status == r_status == 200
+    assert d_html == r_html
+
+
+def test_gericht_detail_direct_remote_parity(parity_world) -> None:
+    """The detail page now carries the Aktivieren/Deaktivieren command form,
+    so its hidden precondition fields must match too (modulo the remote-only
+    _command_id, which is minted per render)."""
+    direct_url, remote_url, ids = parity_world
+    dish_id = ids["catalog_dish_id"]
+    d_status, d_html = _get(f"{direct_url}/gerichte/{dish_id}")
+    r_status, r_html = _get(f"{remote_url}/gerichte/{dish_id}")
+    assert d_status == r_status == 200
+    assert "Deaktivieren" in d_html
+    assert _strip_remote_fields(d_html) == _strip_remote_fields(r_html)
+
+
+def test_gericht_new_form_direct_remote_parity(parity_world) -> None:
+    direct_url, remote_url, _ids = parity_world
+    d_status, d_html = _get(f"{direct_url}/gerichte/new")
+    r_status, r_html = _get(f"{remote_url}/gerichte/new")
+    assert d_status == r_status == 200
+    assert "Gericht anlegen" in d_html
+    assert _strip_remote_fields(d_html) == _strip_remote_fields(r_html)
+
+
 def test_rueckruf_stays_local_not_routed_through_core(parity_world) -> None:
     """Rückruf/Auerswald stays outside Core.  On Proxmox, an unconfigured
     local integration must carry the frozen "only on premises" explanation
@@ -1290,6 +1330,261 @@ def test_full_write_flow_through_remote_panel(remote_world) -> None:
     assert status == 200
     status, order_html = _get(f"{base}/order/{order_id}")
     assert "STORNIERT" in order_html
+
+
+def test_catalog_status_filter_uses_server_side_query_in_remote_mode(
+    remote_world,
+) -> None:
+    """CATALOG_ADMIN_PANEL_V1 review fix: with more active dishes than one
+    page holds, Inaktiv must still find the inactive ones — proving the panel
+    sends `active` to Core rather than filtering an already-truncated page.
+    Driven through the real Office API, so the query string, the SQL WHERE
+    and the LIMIT are all exercised."""
+    base, _api_url = remote_world
+    created_inactive = []
+    for index in range(3):
+        _status, form_html = _get(f"{base}/gerichte/new")
+        _status, detail_html = _post_form(
+            f"{base}/gerichte/new",
+            {
+                "_csrf_token": _CSRF_TOKEN,
+                "_command_id": _extract_hidden(form_html, "_command_id"),
+                "name": f"Zzz Inaktiv {index}",
+                "description": "",
+                "composition": "",
+                "notes": "",
+                "category": "fingerfood",
+                "pricing_unit": "stueck",
+                "price_net": "1,00",
+                "vat_rate_percent": "7",
+            },
+        )
+        created_inactive.append(
+            re.search(r"/gerichte/([0-9a-f-]{36})/edit", detail_html).group(1)
+        )
+
+    status, body = _get(f"{base}/gerichte?status=inactive")
+    assert status == 200
+    assert body.count("Zzz Inaktiv") == 3
+    assert "Keine Gerichte gefunden." not in body
+
+    status, body = _get(f"{base}/gerichte?status=active")
+    assert status == 200
+    assert "Zzz Inaktiv" not in body
+
+    status, body = _get(f"{base}/gerichte?q=Zzz&status=inactive")
+    assert status == 200
+    assert body.count("Zzz Inaktiv") == 3
+
+
+def test_catalog_status_filter_direct_remote_parity_beyond_one_page(
+    parity_world,
+) -> None:
+    """Both modes must answer identically for every filter, including the
+    combinations that only differ once server-side filtering is in play."""
+    direct_url, remote_url, _ids = parity_world
+    for query in ("?status=inactive", "?status=active", "?q=Kartoffel&status=active"):
+        d_status, d_html = _get(f"{direct_url}/gerichte{query}")
+        r_status, r_html = _get(f"{remote_url}/gerichte{query}")
+        assert d_status == r_status == 200
+        assert d_html == r_html
+
+
+def test_catalog_admin_flow_through_remote_panel(remote_world) -> None:
+    """CATALOG_ADMIN_PANEL_V1: create → activate → deactivate driven entirely
+    through the remote panel, so the whole chain (panel → RemoteCoreClient's
+    create_dish/activate_dish/deactivate_dish → the frozen Office API command
+    envelope → Core) is exercised for real rather than mocked."""
+    base, _api_url = remote_world
+
+    _status, form_html = _get(f"{base}/gerichte/new")
+    status, detail_html = _post_form(
+        f"{base}/gerichte/new",
+        {
+            "_csrf_token": _CSRF_TOKEN,
+            "_command_id": _extract_hidden(form_html, "_command_id"),
+            "name": "Ofengemüse",
+            "description": "Saisonal",
+            "composition": "Karotten",
+            "notes": "",
+            "category": "warme_speisen",
+            "pricing_unit": "per_person",
+            "price_net": "7,40",
+            "vat_rate_percent": "19",
+            "allergen_G": "1",
+        },
+    )
+    assert status == 200
+    assert "Ofengemüse" in detail_html
+    # a new dish always lands inactive, so the only status command offered
+    # is Aktivieren
+    assert "Aktivieren" in detail_html
+    assert "Deaktivieren" not in detail_html
+    assert "warme_speisen" in detail_html
+    assert "7,40 €" in detail_html
+    assert "19 %" in detail_html
+
+    dish_id = re.search(r"/gerichte/([0-9a-f-]{36})/edit", detail_html).group(1)
+
+    activate_form = re.search(
+        r'(<form method="post" action="/gerichte/[^"]*/activate".*?</form>)',
+        detail_html,
+        re.DOTALL,
+    ).group(0)
+    status, activated_html = _post_form(
+        f"{base}/gerichte/{dish_id}/activate",
+        {
+            "_csrf_token": _CSRF_TOKEN,
+            "_command_id": _extract_hidden(activate_form, "_command_id"),
+            "_expect_updated_at": _extract_hidden(activate_form, "_expect_updated_at"),
+        },
+    )
+    assert status == 200
+    assert "Deaktivieren" in activated_html
+
+    deactivate_form = re.search(
+        r'(<form method="post" action="/gerichte/[^"]*/deactivate".*?</form>)',
+        activated_html,
+        re.DOTALL,
+    ).group(0)
+    status, deactivated_html = _post_form(
+        f"{base}/gerichte/{dish_id}/deactivate",
+        {
+            "_csrf_token": _CSRF_TOKEN,
+            "_command_id": _extract_hidden(deactivate_form, "_command_id"),
+            "_expect_updated_at": _extract_hidden(
+                deactivate_form, "_expect_updated_at"
+            ),
+        },
+    )
+    assert status == 200
+    assert "Aktivieren" in deactivated_html
+    assert "Deaktivieren" not in deactivated_html
+
+
+def test_catalog_stale_status_command_rejected_through_remote_panel(
+    remote_world,
+) -> None:
+    """A stale optimistic-concurrency token must surface the same German
+    message *and* the same 409 in both modes: remote maps the API's
+    stale_state, direct maps CatalogDishStaleError, and both land on
+    CatalogCommandError, which carries the status through to the response."""
+    base, _api_url = remote_world
+    _status, form_html = _get(f"{base}/gerichte/new")
+    _status, detail_html = _post_form(
+        f"{base}/gerichte/new",
+        {
+            "_csrf_token": _CSRF_TOKEN,
+            "_command_id": _extract_hidden(form_html, "_command_id"),
+            "name": "Stale-Test",
+            "description": "",
+            "composition": "",
+            "notes": "",
+            "category": "fingerfood",
+            "pricing_unit": "stueck",
+            "price_net": "1,00",
+            "vat_rate_percent": "7",
+        },
+    )
+    dish_id = re.search(r"/gerichte/([0-9a-f-]{36})/edit", detail_html).group(1)
+    activate_form = re.search(
+        r'(<form method="post" action="/gerichte/[^"]*/activate".*?</form>)',
+        detail_html,
+        re.DOTALL,
+    ).group(0)
+    stale_token = _extract_hidden(activate_form, "_expect_updated_at")
+    status, _body = _post_form(
+        f"{base}/gerichte/{dish_id}/activate",
+        {
+            "_csrf_token": _CSRF_TOKEN,
+            "_command_id": _extract_hidden(activate_form, "_command_id"),
+            "_expect_updated_at": stale_token,
+        },
+    )
+    assert status == 200
+
+    status, error_html = _post_form(
+        f"{base}/gerichte/{dish_id}/deactivate",
+        {
+            "_csrf_token": _CSRF_TOKEN,
+            "_command_id": "11111111-1111-4111-8111-aaaaaaaaaaaa",
+            "_expect_updated_at": stale_token,
+        },
+    )
+    assert status == 409
+    assert "zwischenzeitlich geändert" in error_html
+    status, detail_html = _get(f"{base}/gerichte/{dish_id}")
+    assert "Deaktivieren" in detail_html  # still active — nothing changed
+
+
+def test_catalog_missing_dish_status_command_is_404_in_remote_mode(
+    remote_world,
+) -> None:
+    """CATALOG_ADMIN_PANEL_V1 review fix: the remote path must keep the API's
+    404 instead of flattening it into the generic 400."""
+    base, _api_url = remote_world
+    missing = "33333333-3333-4333-8333-333333333333"
+    status, body = _post_form(
+        f"{base}/gerichte/{missing}/activate",
+        {
+            "_csrf_token": _CSRF_TOKEN,
+            "_command_id": "11111111-1111-4111-8111-dddddddddddd",
+            "_expect_updated_at": "2026-07-16T08:00:00+00:00",
+        },
+    )
+    assert status == 404
+    assert "nicht gefunden" in body
+
+
+def test_catalog_domain_rejection_is_422_in_remote_mode(remote_world) -> None:
+    """A value the domain refuses (name past its length limit) comes back as
+    the API's validation_error and must surface as 422, distinct from the 400
+    a malformed price gets."""
+    base, _api_url = remote_world
+    _status, form_html = _get(f"{base}/gerichte/new")
+    status, body = _post_form(
+        f"{base}/gerichte/new",
+        {
+            "_csrf_token": _CSRF_TOKEN,
+            "_command_id": _extract_hidden(form_html, "_command_id"),
+            "name": "x" * 600,
+            "description": "",
+            "composition": "",
+            "notes": "",
+            "category": "fingerfood",
+            "pricing_unit": "stueck",
+            "price_net": "1,00",
+            "vat_rate_percent": "7",
+        },
+    )
+    assert status == 422
+    assert "ungültig" in body
+
+
+def test_catalog_malformed_price_is_400_in_remote_mode(remote_world) -> None:
+    """The price is rejected in the panel before any command is sent, so both
+    modes answer 400 without Core ever seeing the request."""
+    base, _api_url = remote_world
+    _status, form_html = _get(f"{base}/gerichte/new")
+    status, body = _post_form(
+        f"{base}/gerichte/new",
+        {
+            "_csrf_token": _CSRF_TOKEN,
+            "_command_id": _extract_hidden(form_html, "_command_id"),
+            "name": "Dreistellig",
+            "description": "",
+            "composition": "",
+            "notes": "",
+            "category": "fingerfood",
+            "pricing_unit": "stueck",
+            "price_net": "1,999",
+            "vat_rate_percent": "7",
+        },
+    )
+    assert status == 400
+    assert "Nachkommastellen" in body
+    status, list_html = _get(f"{base}/gerichte")
+    assert "Dreistellig" not in list_html
 
 
 def test_verify_flow_through_remote_panel(remote_world) -> None:

@@ -20,21 +20,21 @@ class InMemoryCatalogRepository:
     def list_dishes(
         self,
         *,
-        active_only: bool = False,
+        active: bool | None = None,
         q: str | None = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[CatalogDish]:
-        rows = self._filtered(active_only=active_only, q=q)
+        rows = self._filtered(active=active, q=q)
         return rows[offset : offset + limit]
 
     def count_dishes(
         self,
         *,
-        active_only: bool = False,
+        active: bool | None = None,
         q: str | None = None,
     ) -> int:
-        return len(self._filtered(active_only=active_only, q=q))
+        return len(self._filtered(active=active, q=q))
 
     def get_dish(self, dish_id: str) -> CatalogDish | None:
         return self._dishes.get(dish_id)
@@ -73,10 +73,11 @@ class InMemoryCatalogRepository:
     def close(self) -> None:
         return None
 
-    def _filtered(self, *, active_only: bool, q: str | None) -> list[CatalogDish]:
+    def _filtered(self, *, active: bool | None, q: str | None) -> list[CatalogDish]:
         rows = list(self._dishes.values())
-        if active_only:
-            rows = [row for row in rows if row.active]
+        # Mirrors the SQL WHERE: narrow before the caller's slice, never after.
+        if active is not None:
+            rows = [row for row in rows if row.active is active]
         if q:
             needle = q.casefold()
             rows = [row for row in rows if needle in row.name.casefold()]

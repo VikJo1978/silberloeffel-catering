@@ -10,10 +10,18 @@ from catering_system.domain.catalog import CatalogDish, CatalogPriceHistoryEntry
 
 
 class CatalogRepository(Protocol):
+    # CATALOG_ADMIN_PANEL_V1: `active` replaces the earlier `active_only`
+    # flag, which could only ever express "active" or "everything". The
+    # Inaktiv view needs the third state, and it has to be applied in the
+    # query — filtering a page that LIMIT already truncated would report an
+    # empty result whenever the excluded rows happen to fill it.
+    #   True  -> only active dishes
+    #   False -> only inactive dishes
+    #   None  -> no status filter
     def list_dishes(
         self,
         *,
-        active_only: bool = False,
+        active: bool | None = None,
         q: str | None = None,
         limit: int = 100,
         offset: int = 0,
@@ -22,7 +30,7 @@ class CatalogRepository(Protocol):
     def count_dishes(
         self,
         *,
-        active_only: bool = False,
+        active: bool | None = None,
         q: str | None = None,
     ) -> int: ...
 
