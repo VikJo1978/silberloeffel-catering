@@ -67,3 +67,40 @@ def test_seed_import_idempotent(tmp_path: Path) -> None:
         assert repo.list_price_history(dish.dish_id) == []
     finally:
         repo.close()
+
+
+def test_seed_compatible_with_admin_completion_schema(tmp_path: Path) -> None:
+    """CATALOG_ADMIN_COMPLETION_V1A: the seed script needs no code changes
+    to keep working against the migrated schema — it has never populated
+    category/pricing_unit/vat_rate_percent, and decision #3 (no fictitious
+    backfill) means it must keep producing NULL for them, not guess."""
+    seed_catalog = _load_seed_module().seed_catalog
+    db = tmp_path / "core.db"
+    items = tmp_path / "items.json"
+    items.write_text(
+        json.dumps(
+            [
+                {
+                    "id": _DISH_ID,
+                    "name": "Schnitzel",
+                    "price": "8.50",
+                    "allergens": ["A"],
+                    "active": True,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    inserted, skipped = seed_catalog(db, items)
+    assert inserted == 1
+    assert skipped == 0
+
+    repo = SQLiteCatalogRepository(db)
+    try:
+        dish = repo.list_dishes()[0]
+        assert dish.category is None
+        assert dish.pricing_unit is None
+        assert dish.vat_rate_percent is None
+    finally:
+        repo.close()

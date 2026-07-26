@@ -7,12 +7,14 @@ import sqlite3
 from contextlib import nullcontext
 from datetime import date, datetime
 from pathlib import Path
+from typing import cast
 
 from catering_system.domain.catalog import (
     CatalogDish,
     CatalogDishNotFoundError,
     CatalogDishStaleError,
     CatalogPriceHistoryEntry,
+    PricingUnit,
     validate_allergen_codes,
 )
 from catering_system.repositories.sqlite_migrations import apply_migrations
@@ -63,7 +65,22 @@ def _migration_1_create_catalog_tables(connection: sqlite3.Connection) -> None:
     )
 
 
-_MIGRATIONS = ((1, "catalog_dishes_v1", _migration_1_create_catalog_tables),)
+def _migration_2_add_admin_completion_columns(connection: sqlite3.Connection) -> None:
+    """CATALOG_ADMIN_COMPLETION_V1A (decision #2): nullable columns only —
+    legacy rows keep NULL, no fictitious backfill (decision #3)."""
+    connection.execute("ALTER TABLE catalog_dishes ADD COLUMN category TEXT")
+    connection.execute("ALTER TABLE catalog_dishes ADD COLUMN pricing_unit TEXT")
+    connection.execute("ALTER TABLE catalog_dishes ADD COLUMN vat_rate_percent INTEGER")
+
+
+_MIGRATIONS = (
+    (1, "catalog_dishes_v1", _migration_1_create_catalog_tables),
+    (
+        2,
+        "catalog_dishes_admin_completion_v1a",
+        _migration_2_add_admin_completion_columns,
+    ),
+)
 
 
 class SQLiteCatalogRepository:
@@ -103,7 +120,8 @@ class SQLiteCatalogRepository:
             f"""
             SELECT dish_id, name, description, composition, notes,
                    current_unit_net_cents, allergens_json, active,
-                   created_at, updated_at
+                   created_at, updated_at, category, pricing_unit,
+                   vat_rate_percent
             FROM catalog_dishes
             {where}
             ORDER BY active DESC, name COLLATE NOCASE ASC, dish_id ASC
@@ -132,7 +150,8 @@ class SQLiteCatalogRepository:
             """
             SELECT dish_id, name, description, composition, notes,
                    current_unit_net_cents, allergens_json, active,
-                   created_at, updated_at
+                   created_at, updated_at, category, pricing_unit,
+                   vat_rate_percent
             FROM catalog_dishes
             WHERE dish_id = ?
             """,
@@ -171,8 +190,9 @@ class SQLiteCatalogRepository:
                 INSERT INTO catalog_dishes (
                     dish_id, name, description, composition, notes,
                     current_unit_net_cents, allergens_json, active,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    created_at, updated_at, category, pricing_unit,
+                    vat_rate_percent
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     dish.dish_id,
@@ -185,6 +205,9 @@ class SQLiteCatalogRepository:
                     int(dish.active),
                     dish.created_at.isoformat(),
                     dish.updated_at.isoformat(),
+                    dish.category,
+                    dish.pricing_unit,
+                    dish.vat_rate_percent,
                 ),
             )
             if self._manage_transactions:
@@ -215,7 +238,8 @@ class SQLiteCatalogRepository:
                 UPDATE catalog_dishes
                 SET name = ?, description = ?, composition = ?, notes = ?,
                     current_unit_net_cents = ?, allergens_json = ?, active = ?,
-                    updated_at = ?
+                    updated_at = ?, category = ?, pricing_unit = ?,
+                    vat_rate_percent = ?
                 WHERE dish_id = ?
                 """,
                 (
@@ -227,6 +251,9 @@ class SQLiteCatalogRepository:
                     json.dumps(list(dish.allergens)),
                     int(dish.active),
                     dish.updated_at.isoformat(),
+                    dish.category,
+                    dish.pricing_unit,
+                    dish.vat_rate_percent,
                     dish.dish_id,
                 ),
             )
@@ -287,6 +314,7 @@ def _row_to_dish(row: tuple[object, ...]) -> CatalogDish:
     allergens_raw = json.loads(str(row[6]))
     if not isinstance(allergens_raw, list):
         raise ValueError("allergens_json must decode to a list")
+    pricing_unit_raw = row[11]
     return CatalogDish(
         dish_id=str(row[0]),
         name=str(row[1]),
@@ -298,6 +326,13 @@ def _row_to_dish(row: tuple[object, ...]) -> CatalogDish:
         active=bool(row[7]),
         created_at=datetime.fromisoformat(str(row[8])),
         updated_at=datetime.fromisoformat(str(row[9])),
+        category=_optional_sql_text(row[10]),
+        pricing_unit=(
+            cast(PricingUnit, str(pricing_unit_raw))
+            if pricing_unit_raw is not None
+            else None
+        ),
+        vat_rate_percent=_sql_int(row[12]) if row[12] is not None else None,
     )
 
 

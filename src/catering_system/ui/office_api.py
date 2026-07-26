@@ -178,10 +178,13 @@ from catering_system.services.catalog_dish_service import CatalogDishService
 from catering_system.services.catalog_dish_write_service import CatalogDishWriteService
 from catering_system.domain.catalog import (
     AllergenCode,
+    CatalogDishAlreadyExistsError,
+    CatalogDishCreatePayload,
     CatalogDishNotFoundError,
     CatalogDishStaleError,
     CatalogDishUpdatePayload,
     validate_allergen_codes,
+    validate_pricing_unit,
 )
 from catering_system.ui import office_api_views as views
 
@@ -764,6 +767,78 @@ class OfficeApi:
         if result.price_history_entry_id is not None:
             body["price_history_entry_id"] = result.price_history_entry_id
         return 200, body
+
+    def cmd_create_catalog_dish(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        """CATALOG_ADMIN_COMPLETION_V1A: dish_id is minted server-side, never
+        client-supplied — no expect/staleness check applies (a create has no
+        prior state). New dishes are always active=false (decision #8)."""
+        try:
+            dish = self.catalog_dish_write_service.create_dish(
+                CatalogDishCreatePayload(
+                    name=_v_str(args["name"], 500),
+                    category=_v_str(args["category"], 200),
+                    pricing_unit=_v_enum(args["pricing_unit"], validate_pricing_unit),
+                    current_unit_net_cents=_v_int(args["current_unit_net_cents"]),
+                    vat_rate_percent=_v_int(args["vat_rate_percent"]),
+                    description=_v_catalog_text(args.get("description"), 20_000),
+                    composition=_v_catalog_text(args.get("composition"), 20_000),
+                    notes=_v_catalog_text(args.get("notes"), 20_000),
+                    allergens=(
+                        _v_allergen_codes(args["allergens"])
+                        if "allergens" in args
+                        else ()
+                    ),
+                )
+            )
+        except CatalogDishAlreadyExistsError as exc:
+            raise ApiError(409, "already_exists") from exc
+        except ValueError as exc:
+            raise ApiError(422, "validation_error") from exc
+        return 201, {
+            "dish_id": dish.dish_id,
+            "active": dish.active,
+            "updated_at": dish.updated_at.isoformat(),
+        }
+
+    def _cmd_set_catalog_dish_active(
+        self, path_ids: dict[str, str], expect: dict, *, active: bool
+    ) -> tuple[int, dict[str, object]]:
+        dish_id = _v_catalog_uuid(path_ids["id"])
+        current = self.catalog_dish_service.get_dish(dish_id)
+        if current is None:
+            raise ApiError(404, "not_found")
+        if _v_datetime(expect["updated_at"]) != current.updated_at:
+            raise ApiError(409, "stale_state")
+        try:
+            if active:
+                dish = self.catalog_dish_write_service.activate_dish(
+                    dish_id, expected_updated_at=current.updated_at
+                )
+            else:
+                dish = self.catalog_dish_write_service.deactivate_dish(
+                    dish_id, expected_updated_at=current.updated_at
+                )
+        except CatalogDishNotFoundError as exc:
+            raise ApiError(404, "not_found") from exc
+        except CatalogDishStaleError as exc:
+            raise ApiError(409, "stale_state") from exc
+        return 200, {
+            "dish_id": dish.dish_id,
+            "active": dish.active,
+            "updated_at": dish.updated_at.isoformat(),
+        }
+
+    def cmd_activate_catalog_dish(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        return self._cmd_set_catalog_dish_active(path_ids, expect, active=True)
+
+    def cmd_deactivate_catalog_dish(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        return self._cmd_set_catalog_dish_active(path_ids, expect, active=False)
 
     def list_emails(self) -> dict[str, object]:
         return {
@@ -2152,6 +2227,18 @@ _CATALOG_DISH_UPDATE_ARGS = _ArgKeys(
     ),
     optional=frozenset({"description", "composition", "notes", "effective_from"}),
 )
+_CATALOG_DISH_CREATE_ARGS = _ArgKeys(
+    required=frozenset(
+        {
+            "name",
+            "category",
+            "pricing_unit",
+            "current_unit_net_cents",
+            "vat_rate_percent",
+        }
+    ),
+    optional=frozenset({"description", "composition", "notes", "allergens"}),
+)
 
 _COMMANDS: dict[str, _CommandSpec] = {
     "create_inquiry": _CommandSpec("cmd_create_inquiry", _CREATE_ARGS, set()),
@@ -2236,6 +2323,15 @@ _COMMANDS: dict[str, _CommandSpec] = {
     ),
     "update_catalog_dish": _CommandSpec(
         "cmd_update_catalog_dish", _CATALOG_DISH_UPDATE_ARGS, {"updated_at"}
+    ),
+    "create_catalog_dish": _CommandSpec(
+        "cmd_create_catalog_dish", _CATALOG_DISH_CREATE_ARGS, set()
+    ),
+    "activate_catalog_dish": _CommandSpec(
+        "cmd_activate_catalog_dish", _NO_ARGS, {"updated_at"}
+    ),
+    "deactivate_catalog_dish": _CommandSpec(
+        "cmd_deactivate_catalog_dish", _NO_ARGS, {"updated_at"}
     ),
 }
 
@@ -2340,7 +2436,7 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
     (
         re.compile(r"^/office/v1/catalog/dishes$"),
         "/office/v1/catalog/dishes",
-        {"GET": "list_catalog_dishes"},
+        {"GET": "list_catalog_dishes", "POST": "create_catalog_dish"},
     ),
     (
         re.compile(r"^/office/v1/catalog/dishes/(?P<id>[^/]+)$"),
@@ -2356,6 +2452,16 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/catalog/dishes/(?P<id>[^/]+)/update$"),
         "/office/v1/catalog/dishes/{id}/update",
         {"POST": "update_catalog_dish"},
+    ),
+    (
+        re.compile(r"^/office/v1/catalog/dishes/(?P<id>[^/]+)/activate$"),
+        "/office/v1/catalog/dishes/{id}/activate",
+        {"POST": "activate_catalog_dish"},
+    ),
+    (
+        re.compile(r"^/office/v1/catalog/dishes/(?P<id>[^/]+)/deactivate$"),
+        "/office/v1/catalog/dishes/{id}/deactivate",
+        {"POST": "deactivate_catalog_dish"},
     ),
     (
         re.compile(r"^/office/v1/offers$"),

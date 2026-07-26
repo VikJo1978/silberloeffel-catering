@@ -1169,6 +1169,10 @@ def catalog_dish_list_row(dish: CatalogDish) -> dict[str, object]:
         "allergens": list(dish.allergens),
         "allergen_labels": list(allergen_labels(dish.allergens)),
         "active": dish.active,
+        # CATALOG_ADMIN_COMPLETION_V1A: null for legacy rows (decision #2/#3)
+        "category": dish.category,
+        "pricing_unit": dish.pricing_unit,
+        "vat_rate_percent": dish.vat_rate_percent,
     }
 
 
