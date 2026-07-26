@@ -1292,9 +1292,15 @@ class OfficePanel:
         history = service.list_price_history(dish_id)
         return api_views.catalog_dish_detail_view(dish, history)
 
-    def _catalog_update_command_fields(self, updated_at: str) -> str:
+    def _catalog_update_command_fields(
+        self, updated_at: str, *, context: OfficePageContext
+    ) -> str:
+        # CATALOG_EDIT_CSRF_FIX_V1: every other mutating form pairs
+        # _csrf_input(context) with _command_fields(...) — this one didn't,
+        # so a real browser submit of the rendered page was rejected by
+        # do_POST's global CSRF check (office_panel_http.py) with 403.
         expect = {"updated_at": updated_at}
-        fields = self._command_fields(expect)
+        fields = _csrf_input(context) + self._command_fields(expect)
         if self._remote is None:
             fields += (
                 f'<input type="hidden" name="_expect_updated_at" '
@@ -1317,7 +1323,7 @@ class OfficePanel:
         return render_gericht_edit(
             detail,
             command_fields=self._catalog_update_command_fields(
-                str(detail["updated_at"])
+                str(detail["updated_at"]), context=context
             ),
             context=context,
             error_message=error_message,

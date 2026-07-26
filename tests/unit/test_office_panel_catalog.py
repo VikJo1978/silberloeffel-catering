@@ -77,6 +77,7 @@ def _get(url: str) -> tuple[int, str]:
 
 
 def _post(url: str, fields: dict[str, str]) -> tuple[int, str]:
+    import urllib.error
     import urllib.parse
     import urllib.request
 
@@ -84,8 +85,27 @@ def _post(url: str, fields: dict[str, str]) -> tuple[int, str]:
     req = urllib.request.Request(url, data=data, method="POST")
     req.add_header("Authorization", _auth_header())
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
-    with urllib.request.urlopen(req) as resp:
-        return resp.status, resp.read().decode("utf-8")
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return resp.status, resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read().decode("utf-8")
+
+
+def _extract_csrf_token(html: str) -> str:
+    import re
+
+    match = re.search(r'name="_csrf_token" value="([^"]*)"', html)
+    assert match, "edit form is missing the _csrf_token hidden field"
+    return match.group(1)
+
+
+def _extract_expect_updated_at(html: str) -> str:
+    import re
+
+    match = re.search(r'name="_expect_updated_at" value="([^"]+)"', html)
+    assert match
+    return match.group(1)
 
 
 def test_gerichte_list_renders(catalog_panel: str) -> None:
@@ -118,6 +138,90 @@ def test_gericht_edit_form_renders(catalog_panel: str) -> None:
     assert 'name="allergen_A"' in body
     assert 'name="price_net"' in body
     assert 'name="_expect_updated_at"' in body
+
+
+def test_gericht_edit_form_includes_csrf_token(catalog_panel: str) -> None:
+    """CATALOG_EDIT_CSRF_FIX_V1: the rendered edit page must carry the same
+    hidden _csrf_token field every other mutating form does — without it, a
+    real browser submit is rejected by do_POST's global CSRF check."""
+    status, body = _get(f"{catalog_panel}/gerichte/{_DISH_ID}/edit")
+    assert status == 200
+    assert _extract_csrf_token(body) == _CSRF_TOKEN
+
+
+def test_gericht_update_post_with_token_from_rendered_form_succeeds(
+    catalog_panel: str,
+) -> None:
+    """Proves the fix end-to-end: extract the CSRF token from the actual
+    rendered page (not a precomputed constant) and confirm the submit is
+    accepted — this is what a real browser does."""
+    _status, edit_html = _get(f"{catalog_panel}/gerichte/{_DISH_ID}/edit")
+    token = _extract_csrf_token(edit_html)
+    updated_at = _extract_expect_updated_at(edit_html)
+    status, _body = _post(
+        f"{catalog_panel}/gerichte/{_DISH_ID}/update",
+        {
+            "_csrf_token": token,
+            "_expect_updated_at": updated_at,
+            "name": "Schnitzel <test>",
+            "description": "Beschreibung",
+            "composition": "Zusammensetzung",
+            "notes": "",
+            "price_net": "8,50",
+            "allergen_A": "1",
+            "allergen_C": "1",
+            "allergen_G": "1",
+            "active": "1",
+        },
+    )
+    assert status == 200
+
+
+def test_gericht_update_post_without_csrf_token_returns_403(
+    catalog_panel: str,
+) -> None:
+    _status, edit_html = _get(f"{catalog_panel}/gerichte/{_DISH_ID}/edit")
+    updated_at = _extract_expect_updated_at(edit_html)
+    status, _body = _post(
+        f"{catalog_panel}/gerichte/{_DISH_ID}/update",
+        {
+            "_expect_updated_at": updated_at,
+            "name": "Sollte nicht gespeichert werden",
+            "description": "",
+            "composition": "",
+            "notes": "",
+            "price_net": "8,50",
+            "active": "1",
+        },
+    )
+    assert status == 403
+    status, detail = _get(f"{catalog_panel}/gerichte/{_DISH_ID}")
+    assert status == 200
+    assert "Sollte nicht gespeichert werden" not in detail
+
+
+def test_gericht_update_post_with_wrong_csrf_token_returns_403(
+    catalog_panel: str,
+) -> None:
+    _status, edit_html = _get(f"{catalog_panel}/gerichte/{_DISH_ID}/edit")
+    updated_at = _extract_expect_updated_at(edit_html)
+    status, _body = _post(
+        f"{catalog_panel}/gerichte/{_DISH_ID}/update",
+        {
+            "_csrf_token": "wrong-token",
+            "_expect_updated_at": updated_at,
+            "name": "Sollte nicht gespeichert werden",
+            "description": "",
+            "composition": "",
+            "notes": "",
+            "price_net": "8,50",
+            "active": "1",
+        },
+    )
+    assert status == 403
+    status, detail = _get(f"{catalog_panel}/gerichte/{_DISH_ID}")
+    assert status == 200
+    assert "Sollte nicht gespeichert werden" not in detail
 
 
 def test_gericht_update_post_success(catalog_panel: str) -> None:
