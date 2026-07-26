@@ -416,6 +416,9 @@ def test_list_catalog_dishes_accepts_valid_payload() -> None:
                 "allergens": ["A"],
                 "allergen_labels": ["Gluten"],
                 "active": True,
+                "category": None,
+                "pricing_unit": None,
+                "vat_rate_percent": None,
             }
         ],
         "total_count": 1,
@@ -440,6 +443,9 @@ def test_catalog_dish_detail_accepts_valid_payload() -> None:
         "allergens": ["A"],
         "allergen_labels": ["Gluten"],
         "active": True,
+        "category": "fingerfood",
+        "pricing_unit": "stueck",
+        "vat_rate_percent": 7,
         "description": "Desc",
         "composition": "Comp",
         "notes": "Notes",
@@ -452,6 +458,145 @@ def test_catalog_dish_detail_accepts_valid_payload() -> None:
         parsed = RemoteCoreClient(url, _TOKEN).catalog_dish_detail(dish_id)
         assert parsed is not None
         assert parsed["dish_id"] == dish_id
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _catalog_dish_row(dish_id: str, **overrides: object) -> dict[str, object]:
+    row: dict[str, object] = {
+        "dish_id": dish_id,
+        "name": "Fingerfood",
+        "current_unit_net_cents": 290,
+        "price_display": "2,90 EUR",
+        "allergens": ["A"],
+        "allergen_labels": ["Gluten"],
+        "active": True,
+        "category": None,
+        "pricing_unit": None,
+        "vat_rate_percent": None,
+    }
+    row.update(overrides)
+    return row
+
+
+def test_list_catalog_dishes_accepts_valid_pricing_unit() -> None:
+    """CATALOG_ADMIN_COMPLETION_V1A review fix: a real (non-null) pricing_unit
+    from the closed set must parse successfully."""
+    dish_id = str(uuid.uuid4())
+    payload = {
+        "dishes": [
+            _catalog_dish_row(
+                dish_id,
+                category="fingerfood",
+                pricing_unit="stueck",
+                vat_rate_percent=7,
+            )
+        ],
+        "total_count": 1,
+        "truncated": False,
+    }
+    url, server = _serve(_json_handler(payload))
+    try:
+        parsed = RemoteCoreClient(url, _TOKEN).list_catalog_dishes()
+        assert parsed["dishes"][0]["pricing_unit"] == "stueck"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_list_catalog_dishes_accepts_null_legacy_pricing_unit() -> None:
+    """CATALOG_ADMIN_COMPLETION_V1A review fix: NULL stays valid — a legacy
+    row (created before this slice) has no pricing_unit at all."""
+    dish_id = str(uuid.uuid4())
+    payload = {
+        "dishes": [_catalog_dish_row(dish_id)],
+        "total_count": 1,
+        "truncated": False,
+    }
+    url, server = _serve(_json_handler(payload))
+    try:
+        parsed = RemoteCoreClient(url, _TOKEN).list_catalog_dishes()
+        assert parsed["dishes"][0]["pricing_unit"] is None
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_list_catalog_dishes_rejects_unknown_pricing_unit() -> None:
+    """CATALOG_ADMIN_COMPLETION_V1A review fix: fail-closed against the
+    closed pricing_unit set — a tampered/buggy non-null value that isn't
+    per_person/stueck/pauschal must be rejected as an invalid contract,
+    not passed through as an opaque string."""
+    dish_id = str(uuid.uuid4())
+    payload = {
+        "dishes": [_catalog_dish_row(dish_id, pricing_unit="kg")],
+        "total_count": 1,
+        "truncated": False,
+    }
+    url, server = _serve(_json_handler(payload))
+    try:
+        with pytest.raises(RemoteCoreError):
+            RemoteCoreClient(url, _TOKEN).list_catalog_dishes()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_catalog_dish_detail_accepts_null_legacy_pricing_unit() -> None:
+    dish_id = str(uuid.uuid4())
+    payload = {
+        "dish_id": dish_id,
+        "name": "Fingerfood",
+        "current_unit_net_cents": 290,
+        "price_display": "2,90 EUR",
+        "allergens": ["A"],
+        "allergen_labels": ["Gluten"],
+        "active": True,
+        "category": None,
+        "pricing_unit": None,
+        "vat_rate_percent": None,
+        "description": None,
+        "composition": None,
+        "notes": None,
+        "created_at": "2026-07-14T10:00:00+02:00",
+        "updated_at": "2026-07-14T10:00:00+02:00",
+        "price_history": [],
+    }
+    url, server = _serve(_json_handler(payload))
+    try:
+        parsed = RemoteCoreClient(url, _TOKEN).catalog_dish_detail(dish_id)
+        assert parsed is not None
+        assert parsed["pricing_unit"] is None
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_catalog_dish_detail_rejects_unknown_pricing_unit() -> None:
+    dish_id = str(uuid.uuid4())
+    payload = {
+        "dish_id": dish_id,
+        "name": "Fingerfood",
+        "current_unit_net_cents": 290,
+        "price_display": "2,90 EUR",
+        "allergens": ["A"],
+        "allergen_labels": ["Gluten"],
+        "active": True,
+        "category": "fingerfood",
+        "pricing_unit": "kg",
+        "vat_rate_percent": 7,
+        "description": None,
+        "composition": None,
+        "notes": None,
+        "created_at": "2026-07-14T10:00:00+02:00",
+        "updated_at": "2026-07-14T10:00:00+02:00",
+        "price_history": [],
+    }
+    url, server = _serve(_json_handler(payload))
+    try:
+        with pytest.raises(RemoteCoreError):
+            RemoteCoreClient(url, _TOKEN).catalog_dish_detail(dish_id)
     finally:
         server.shutdown()
         server.server_close()

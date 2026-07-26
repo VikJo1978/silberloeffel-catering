@@ -5,18 +5,29 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from pathlib import Path
 
-from catering_system.domain.catalog import CatalogDish, CatalogDishUpdatePayload
+from catering_system.domain.catalog import (
+    CatalogDish,
+    CatalogDishCreatePayload,
+    CatalogDishUpdatePayload,
+)
 from catering_system.domain.offer import (
     Offer,
     OfferPosition,
     OfferVariant,
     OfferVersion,
 )
+from catering_system.repositories.in_memory_catalog_repository import (
+    InMemoryCatalogRepository,
+)
+from catering_system.repositories.in_memory_order_commercial_snapshot_repository import (
+    InMemoryOrderCommercialSnapshotRepository,
+)
 from catering_system.repositories.sqlite_catalog_repository import (
     SQLiteCatalogRepository,
 )
 from catering_system.repositories.sqlite_offer_repository import SQLiteOfferRepository
 from catering_system.services.catalog_dish_write_service import CatalogDishWriteService
+from tests.helpers.commercial_snapshot_seed import seed_commercial_snapshot
 
 _NOW = datetime(2026, 7, 16, 8, 0, tzinfo=UTC)
 _DISH_ID = "11111111-1111-4111-8111-111111111111"
@@ -118,3 +129,78 @@ def test_offer_position_unchanged_after_catalog_price_update(tmp_path: Path) -> 
         assert len(catalog_repo.list_price_history(_DISH_ID)) == 1
     finally:
         catalog_repo.close()
+
+
+def test_catalog_admin_completion_writes_do_not_touch_offer_or_order_snapshots() -> (
+    None
+):
+    """CATALOG_ADMIN_COMPLETION_V1A: creating a new dish and
+    activating/deactivating it are pure catalog Stammdaten writes — a
+    previously-frozen OfferPosition and OrderCommercialSnapshot (both
+    already-immutable-by-design) must be byte-for-byte unaffected."""
+    frozen_position = OfferPosition(
+        position_id=_POSITION_ID,
+        kind="catalog",
+        name="Schnitzel",
+        unit_net_cents=850,
+        net_total_cents=8500,
+        vat_rate_percent=7,
+        vat_amount_cents=595,
+        gross_total_cents=9095,
+    )
+    offer = Offer(
+        offer_id=_OFFER_ID,
+        source_inquiry_id=_INQUIRY_ID,
+        created_at=_NOW,
+        versions=(
+            OfferVersion(
+                offer_version_id=_VERSION_ID,
+                offer_id=_OFFER_ID,
+                version_number=1,
+                created_at=_NOW,
+                valid_until=date(2026, 12, 31),
+                snapshot_id="77777777-7777-4777-8777-777777777771",
+                snapshot_hash="sha256:" + ("a" * 64),
+                event_date=_EVENT_DATE,
+                time_window_text="18:00–22:00",
+                location_text="Hamburg",
+                guest_count=80,
+                planning_mode="caterer_suggestion",
+                payment_method="RECHNUNG",
+                payment_customer_visible_text="Zahlung per Rechnung",
+                variants=(
+                    OfferVariant(
+                        variant_id=_VARIANT_ID,
+                        offer_version_id=_VERSION_ID,
+                        label="Standard",
+                        positions=(frozen_position,),
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    catalog_repo = InMemoryCatalogRepository()
+    write_service = CatalogDishWriteService(catalog_repo)
+    commercial_snapshots = InMemoryOrderCommercialSnapshotRepository()
+    frozen_snapshot = seed_commercial_snapshot(
+        commercial_snapshots, "order-1", created_at=_NOW, position_name="Schnitzel"
+    )
+
+    new_dish = write_service.create_dish(
+        CatalogDishCreatePayload(
+            name="Neues Gericht",
+            category="fingerfood",
+            pricing_unit="stueck",
+            current_unit_net_cents=250,
+            vat_rate_percent=7,
+        ),
+        now=_NOW,
+    )
+    write_service.activate_dish(
+        new_dish.dish_id, expected_updated_at=new_dish.updated_at
+    )
+
+    assert offer.versions[0].variants[0].positions[0] == frozen_position
+    reloaded_snapshot = commercial_snapshots.get_by_id(frozen_snapshot.snapshot_id)
+    assert reloaded_snapshot == frozen_snapshot

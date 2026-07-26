@@ -77,6 +77,7 @@ from catering_system.services.order_confirmation_outbound_service import (
     OutboundSendSummary,
 )
 from catering_system.domain.order_confirmation_outbound import FakeOutboxMessage
+from catering_system.domain.catalog import validate_pricing_unit
 from catering_system.services.inquiry_service import validate_inquiry_source
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjection,
@@ -444,6 +445,19 @@ def _optional_int(value: object) -> int | None:
     if value is None:
         return None
     return _int(value)
+
+
+def _optional_pricing_unit(value: object) -> str | None:
+    """CATALOG_ADMIN_COMPLETION_V1A review fix: fail-closed against the
+    closed pricing_unit set, not just a loose string type-check — NULL
+    stays valid for legacy rows, but an unknown non-null value (a tampered
+    or buggy Office API response) is rejected as an invalid contract."""
+    if value is None:
+        return None
+    try:
+        return validate_pricing_unit(_str(value))
+    except ValueError:
+        _bad_response()
 
 
 def _guest_count(value: object) -> int | None:
@@ -1783,6 +1797,9 @@ class RemoteCoreClient:
                     "allergens",
                     "allergen_labels",
                     "active",
+                    "category",
+                    "pricing_unit",
+                    "vat_rate_percent",
                 },
             )
             _uuid4(row["dish_id"])
@@ -1794,6 +1811,9 @@ class RemoteCoreClient:
             for label in _list(row["allergen_labels"]):
                 _str(label)
             _bool(row["active"])
+            _optional_str(row["category"])
+            _optional_pricing_unit(row["pricing_unit"])
+            _optional_int(row["vat_rate_percent"])
         _nonnegative_int(body["total_count"])
         _bool(body["truncated"])
         return body
@@ -1815,6 +1835,9 @@ class RemoteCoreClient:
                 "allergens",
                 "allergen_labels",
                 "active",
+                "category",
+                "pricing_unit",
+                "vat_rate_percent",
                 "description",
                 "composition",
                 "notes",
@@ -1825,6 +1848,9 @@ class RemoteCoreClient:
         )
         if _uuid4(body["dish_id"]) != dish_id:
             _bad_response()
+        _optional_str(body["category"])
+        _optional_pricing_unit(body["pricing_unit"])
+        _optional_int(body["vat_rate_percent"])
         for raw in _list(body["price_history"]):
             entry = _dict(raw)
             _exact(

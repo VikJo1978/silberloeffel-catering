@@ -3066,8 +3066,16 @@ def test_list_catalog_dishes_schema(api) -> None:
         "allergens",
         "allergen_labels",
         "active",
+        "category",
+        "pricing_unit",
+        "vat_rate_percent",
     }
     assert row["price_display"] == "3,20 €"
+    # _seed_catalog_dish predates CATALOG_ADMIN_COMPLETION_V1A — legacy row,
+    # no fictitious backfill.
+    assert row["category"] is None
+    assert row["pricing_unit"] is None
+    assert row["vat_rate_percent"] is None
 
 
 @pytest.mark.parametrize(
@@ -3196,6 +3204,323 @@ def test_update_catalog_dish_stale_state_409(api) -> None:
         expect={"updated_at": "2020-01-01T00:00:00+00:00"},
     )
     assert (status, body["error"]) == (409, "stale_state")
+
+
+# --- CATALOG_ADMIN_COMPLETION_V1A: create/activate/deactivate ---------------
+
+
+def _create_dish_url(base: str) -> str:
+    return f"{base}/office/v1/catalog/dishes"
+
+
+def _full_dish_create_args(**overrides: object) -> dict[str, object]:
+    args: dict[str, object] = {
+        "name": "Lachs-Canape",
+        "category": "fingerfood",
+        "pricing_unit": "stueck",
+        "current_unit_net_cents": 250,
+        "vat_rate_percent": 7,
+        "description": "Frisch",
+        "composition": "Lachs, Brot",
+        "notes": "Küchennotiz",
+        "allergens": ["A", "D"],
+    }
+    args.update(overrides)
+    return args
+
+
+def test_create_catalog_dish_full_dish_is_inactive(api) -> None:
+    base, _ids, _db = api
+    status, body, _h = _post(_create_dish_url(base), args=_full_dish_create_args())
+    assert status == 201
+    assert body["active"] is False
+    dish_id = body["dish_id"]
+
+    status, detail, _h = _get(f"{base}/office/v1/catalog/dishes/{dish_id}")
+    assert status == 200
+    assert detail["name"] == "Lachs-Canape"
+    assert detail["category"] == "fingerfood"
+    assert detail["pricing_unit"] == "stueck"
+    assert detail["vat_rate_percent"] == 7
+    assert detail["active"] is False
+    assert detail["allergens"] == ["A", "D"]
+
+
+def test_create_catalog_dish_minimal_required_fields(api) -> None:
+    base, _ids, _db = api
+    args = {
+        "name": "Minimal",
+        "category": "sonstiges",
+        "pricing_unit": "per_person",
+        "current_unit_net_cents": 100,
+        "vat_rate_percent": 19,
+    }
+    status, body, _h = _post(_create_dish_url(base), args=args)
+    assert status == 201
+    assert body["active"] is False
+
+
+def test_create_catalog_dish_missing_required_field_returns_400(api) -> None:
+    base, _ids, _db = api
+    args = _full_dish_create_args()
+    del args["category"]
+    status, body, _h = _post(_create_dish_url(base), args=args)
+    assert (status, body["error"]) == (400, "invalid_request")
+
+
+def test_create_catalog_dish_invalid_pricing_unit_returns_400(api) -> None:
+    base, _ids, _db = api
+    status, body, _h = _post(
+        _create_dish_url(base), args=_full_dish_create_args(pricing_unit="kg")
+    )
+    assert (status, body["error"]) == (400, "invalid_request")
+
+
+def test_create_catalog_dish_empty_category_returns_422(api) -> None:
+    base, _ids, _db = api
+    status, body, _h = _post(
+        _create_dish_url(base), args=_full_dish_create_args(category="   ")
+    )
+    assert (status, body["error"]) == (422, "validation_error")
+
+
+@pytest.mark.parametrize(
+    "category",
+    [
+        "Fingerfood",
+        "finger food",
+        "getränke",
+        "-dessert",
+        "dessert-",
+        "food--hot",
+        "food__hot",
+    ],
+)
+def test_create_catalog_dish_invalid_category_key_returns_422(
+    api, category: str
+) -> None:
+    base, _ids, _db = api
+    status, body, _h = _post(
+        _create_dish_url(base), args=_full_dish_create_args(category=category)
+    )
+    assert (status, body["error"]) == (422, "validation_error")
+
+
+def test_create_catalog_dish_accepts_hyphen_and_underscore_category(api) -> None:
+    base, _ids, _db = api
+    status, body, _h = _post(
+        _create_dish_url(base),
+        args=_full_dish_create_args(category="service-personal"),
+    )
+    assert status == 201
+    dish_id = body["dish_id"]
+    status, detail, _h = _get(f"{base}/office/v1/catalog/dishes/{dish_id}")
+    assert detail["category"] == "service-personal"
+
+    status, body2, _h = _post(
+        _create_dish_url(base),
+        args=_full_dish_create_args(name="Warme Suppe", category="warme_speisen"),
+    )
+    assert status == 201
+    dish_id2 = body2["dish_id"]
+    status, detail2, _h = _get(f"{base}/office/v1/catalog/dishes/{dish_id2}")
+    assert detail2["category"] == "warme_speisen"
+
+
+def test_create_catalog_dish_invalid_vat_returns_422(api) -> None:
+    base, _ids, _db = api
+    status, body, _h = _post(
+        _create_dish_url(base), args=_full_dish_create_args(vat_rate_percent=13)
+    )
+    assert (status, body["error"]) == (422, "validation_error")
+
+
+def _activate_url(base: str, dish_id: str) -> str:
+    return f"{base}/office/v1/catalog/dishes/{dish_id}/activate"
+
+
+def _deactivate_url(base: str, dish_id: str) -> str:
+    return f"{base}/office/v1/catalog/dishes/{dish_id}/deactivate"
+
+
+def test_activate_catalog_dish_success(api) -> None:
+    base, _ids, _db = api
+    _status, created, _h = _post(_create_dish_url(base), args=_full_dish_create_args())
+    dish_id = created["dish_id"]
+    status, body, _h = _post(
+        _activate_url(base, dish_id),
+        args={},
+        expect={"updated_at": created["updated_at"]},
+    )
+    assert status == 200
+    assert body["active"] is True
+
+    status, detail, _h = _get(f"{base}/office/v1/catalog/dishes/{dish_id}")
+    assert detail["active"] is True
+
+
+def test_deactivate_catalog_dish_success(api) -> None:
+    base, _ids, db = api
+    _seed_catalog_dish(db, active=True)
+    repo = SQLiteCatalogRepository(db)
+    try:
+        updated_at = repo.get_dish(_CATALOG_DISH_ID).updated_at.isoformat()  # type: ignore[union-attr]
+    finally:
+        repo.close()
+    status, body, _h = _post(
+        _deactivate_url(base, _CATALOG_DISH_ID),
+        args={},
+        expect={"updated_at": updated_at},
+    )
+    assert status == 200
+    assert body["active"] is False
+
+
+def test_activate_catalog_dish_repeated_is_idempotent(api) -> None:
+    base, _ids, _db = api
+    _status, created, _h = _post(_create_dish_url(base), args=_full_dish_create_args())
+    dish_id = created["dish_id"]
+    status1, body1, _h = _post(
+        _activate_url(base, dish_id),
+        args={},
+        expect={"updated_at": created["updated_at"]},
+    )
+    assert status1 == 200
+    status2, body2, _h = _post(
+        _activate_url(base, dish_id),
+        args={},
+        expect={"updated_at": body1["updated_at"]},
+    )
+    assert status2 == 200
+    assert body2["updated_at"] == body1["updated_at"]
+
+
+def test_deactivate_catalog_dish_repeated_is_idempotent(api) -> None:
+    base, _ids, db = api
+    _seed_catalog_dish(db, active=True)
+    repo = SQLiteCatalogRepository(db)
+    try:
+        updated_at = repo.get_dish(_CATALOG_DISH_ID).updated_at.isoformat()  # type: ignore[union-attr]
+    finally:
+        repo.close()
+    status1, body1, _h = _post(
+        _deactivate_url(base, _CATALOG_DISH_ID),
+        args={},
+        expect={"updated_at": updated_at},
+    )
+    assert status1 == 200
+    status2, body2, _h = _post(
+        _deactivate_url(base, _CATALOG_DISH_ID),
+        args={},
+        expect={"updated_at": body1["updated_at"]},
+    )
+    assert status2 == 200
+    assert body2["updated_at"] == body1["updated_at"]
+
+
+def test_activate_catalog_dish_stale_state_409(api) -> None:
+    base, _ids, db = api
+    _seed_catalog_dish(db, active=False)
+    status, body, _h = _post(
+        _activate_url(base, _CATALOG_DISH_ID),
+        args={},
+        expect={"updated_at": "2020-01-01T00:00:00+00:00"},
+    )
+    assert (status, body["error"]) == (409, "stale_state")
+
+
+def test_deactivate_catalog_dish_stale_state_409(api) -> None:
+    base, _ids, db = api
+    _seed_catalog_dish(db, active=True)
+    status, body, _h = _post(
+        _deactivate_url(base, _CATALOG_DISH_ID),
+        args={},
+        expect={"updated_at": "2020-01-01T00:00:00+00:00"},
+    )
+    assert (status, body["error"]) == (409, "stale_state")
+
+
+def test_activate_catalog_dish_missing_dish_returns_404(api) -> None:
+    base, _ids, _db = api
+    missing_id = "99999999-9999-4999-8999-999999999999"
+    status, body, _h = _post(
+        _activate_url(base, missing_id),
+        args={},
+        expect={"updated_at": "2026-01-01T00:00:00+00:00"},
+    )
+    assert (status, body["error"]) == (404, "not_found")
+
+
+def test_deactivate_catalog_dish_missing_dish_returns_404(api) -> None:
+    base, _ids, _db = api
+    missing_id = "99999999-9999-4999-8999-999999999999"
+    status, body, _h = _post(
+        _deactivate_url(base, missing_id),
+        args={},
+        expect={"updated_at": "2026-01-01T00:00:00+00:00"},
+    )
+    assert (status, body["error"]) == (404, "not_found")
+
+
+def test_create_catalog_dish_routes_require_bearer_auth(api) -> None:
+    base, _ids, _db = api
+    no_auth: dict[str, str] = {}
+    status, body, _h = _post(
+        _create_dish_url(base),
+        args=_full_dish_create_args(),
+        headers=no_auth,
+    )
+    assert (status, body["error"]) == (401, "unauthorized")
+
+
+def test_activate_catalog_dish_requires_bearer_auth_and_does_not_change_dish(
+    api,
+) -> None:
+    base, _ids, db = api
+    _seed_catalog_dish(db, active=False)
+    repo = SQLiteCatalogRepository(db)
+    try:
+        updated_at = repo.get_dish(_CATALOG_DISH_ID).updated_at.isoformat()  # type: ignore[union-attr]
+    finally:
+        repo.close()
+    no_auth: dict[str, str] = {}
+    status, body, _h = _post(
+        _activate_url(base, _CATALOG_DISH_ID),
+        args={},
+        expect={"updated_at": updated_at},
+        headers=no_auth,
+    )
+    assert (status, body["error"]) == (401, "unauthorized")
+
+    status, detail, _h = _get(f"{base}/office/v1/catalog/dishes/{_CATALOG_DISH_ID}")
+    assert status == 200
+    assert detail["active"] is False
+    assert detail["updated_at"] == updated_at
+
+
+def test_deactivate_catalog_dish_requires_bearer_auth_and_does_not_change_dish(
+    api,
+) -> None:
+    base, _ids, db = api
+    _seed_catalog_dish(db, active=True)
+    repo = SQLiteCatalogRepository(db)
+    try:
+        updated_at = repo.get_dish(_CATALOG_DISH_ID).updated_at.isoformat()  # type: ignore[union-attr]
+    finally:
+        repo.close()
+    no_auth: dict[str, str] = {}
+    status, body, _h = _post(
+        _deactivate_url(base, _CATALOG_DISH_ID),
+        args={},
+        expect={"updated_at": updated_at},
+        headers=no_auth,
+    )
+    assert (status, body["error"]) == (401, "unauthorized")
+
+    status, detail, _h = _get(f"{base}/office/v1/catalog/dishes/{_CATALOG_DISH_ID}")
+    assert status == 200
+    assert detail["active"] is True
+    assert detail["updated_at"] == updated_at
 
 
 # --- confirmation document (EMAIL_MVP_1 / outbound pack B1) -------------------

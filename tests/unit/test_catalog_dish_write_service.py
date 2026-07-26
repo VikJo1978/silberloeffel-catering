@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, date, datetime
 
 import pytest
 
 from catering_system.domain.catalog import (
     CatalogDish,
+    CatalogDishAlreadyExistsError,
+    CatalogDishCreatePayload,
     CatalogDishNotFoundError,
     CatalogDishStaleError,
     CatalogDishUpdatePayload,
@@ -167,3 +170,183 @@ def test_update_missing_dish_raises_not_found() -> None:
             ),
             expected_updated_at=_NOW,
         )
+
+
+def test_update_preserves_admin_completion_fields_not_in_payload() -> None:
+    """Editing a dish through the pre-existing update endpoint must never
+    silently wipe category/pricing_unit/vat_rate_percent back to NULL —
+    that payload has no way to set them (CATALOG_ADMIN_COMPLETION_V1A)."""
+    dish = _dish(category="fingerfood", pricing_unit="stueck", vat_rate_percent=7)
+    service = _service(dish)
+    result = service.update_dish(
+        _DISH_ID,
+        update=CatalogDishUpdatePayload(
+            name="Schnitzel Wiener Art",
+            description="Alt",
+            composition="mit Kartoffeln",
+            notes=None,
+            current_unit_net_cents=850,
+            allergens=("A",),
+            active=True,
+        ),
+        expected_updated_at=_NOW,
+        now=_LATER,
+    )
+    assert result.dish.category == "fingerfood"
+    assert result.dish.pricing_unit == "stueck"
+    assert result.dish.vat_rate_percent == 7
+
+
+# --- CATALOG_ADMIN_COMPLETION_V1A: create/activate/deactivate ---------------
+
+
+def _create_payload(**overrides: object) -> CatalogDishCreatePayload:
+    base: dict[str, object] = {
+        "name": "Lachs-Canape",
+        "category": "fingerfood",
+        "pricing_unit": "stueck",
+        "current_unit_net_cents": 250,
+        "vat_rate_percent": 7,
+    }
+    base.update(overrides)
+    return CatalogDishCreatePayload(**base)  # type: ignore[arg-type]
+
+
+def test_create_dish_full_dish_is_inactive() -> None:
+    service = _service()
+    dish = service.create_dish(
+        _create_payload(
+            description="Frisch",
+            composition="Lachs, Brot",
+            notes="Küchennotiz",
+            allergens=("A", "D"),
+        ),
+        now=_NOW,
+    )
+    assert dish.active is False
+    assert dish.name == "Lachs-Canape"
+    assert dish.category == "fingerfood"
+    assert dish.pricing_unit == "stueck"
+    assert dish.current_unit_net_cents == 250
+    assert dish.vat_rate_percent == 7
+    assert dish.description == "Frisch"
+    assert dish.composition == "Lachs, Brot"
+    assert dish.notes == "Küchennotiz"
+    assert dish.allergens == ("A", "D")
+    assert dish.created_at == _NOW
+    assert dish.updated_at == _NOW
+
+
+def test_create_dish_mints_a_fresh_dish_id_each_call() -> None:
+    service = _service()
+    first = service.create_dish(_create_payload(), now=_NOW)
+    second = service.create_dish(_create_payload(name="Andere"), now=_NOW)
+    assert first.dish_id != second.dish_id
+
+
+def test_create_dish_read_roundtrip_via_repository() -> None:
+    repo = InMemoryCatalogRepository()
+    service = CatalogDishWriteService(repo)
+    created = service.create_dish(_create_payload(), now=_NOW)
+    fetched = repo.get_dish(created.dish_id)
+    assert fetched == created
+    listed = repo.list_dishes()
+    assert [row.dish_id for row in listed] == [created.dish_id]
+
+
+def test_create_dish_duplicate_dish_id_rejected_at_repository(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dish_id is server-minted (uuid4) so a real collision can't happen
+    through normal use — but the repository guarantee create_dish relies on
+    must hold. Force two calls to mint the same id to exercise the actual
+    service code path end to end: the second is rejected, not silently
+    overwritten, and CatalogDishAlreadyExistsError surfaces the failure."""
+    import catering_system.services.catalog_dish_write_service as write_service_module
+
+    fixed_id = uuid.UUID("11111111-1111-4111-8111-111111111111")
+    monkeypatch.setattr(write_service_module.uuid, "uuid4", lambda: fixed_id)
+
+    repo = InMemoryCatalogRepository()
+    service = CatalogDishWriteService(repo)
+    first = service.create_dish(_create_payload(), now=_NOW)
+    assert first.dish_id == str(fixed_id)
+
+    with pytest.raises(CatalogDishAlreadyExistsError):
+        service.create_dish(_create_payload(name="Andere"), now=_LATER)
+
+    unchanged = repo.get_dish(first.dish_id)
+    assert unchanged == first
+
+
+def test_activate_dish_flips_active_and_bumps_updated_at() -> None:
+    service = _service(_dish(active=False))
+    activated = service.activate_dish(_DISH_ID, expected_updated_at=_NOW, now=_LATER)
+    assert activated.active is True
+    assert activated.updated_at == _LATER
+
+
+def test_deactivate_dish_flips_active_and_bumps_updated_at() -> None:
+    service = _service(_dish(active=True))
+    deactivated = service.deactivate_dish(
+        _DISH_ID, expected_updated_at=_NOW, now=_LATER
+    )
+    assert deactivated.active is False
+    assert deactivated.updated_at == _LATER
+
+
+def test_repeated_activate_is_idempotent_no_op() -> None:
+    service = _service(_dish(active=False))
+    first = service.activate_dish(_DISH_ID, expected_updated_at=_NOW, now=_LATER)
+    assert first.active is True
+    second = service.activate_dish(
+        _DISH_ID, expected_updated_at=first.updated_at, now=_LATER
+    )
+    assert second.active is True
+    assert second.updated_at == first.updated_at
+
+
+def test_repeated_deactivate_is_idempotent_no_op() -> None:
+    service = _service(_dish(active=True))
+    first = service.deactivate_dish(_DISH_ID, expected_updated_at=_NOW, now=_LATER)
+    assert first.active is False
+    second = service.deactivate_dish(
+        _DISH_ID, expected_updated_at=first.updated_at, now=_LATER
+    )
+    assert second.active is False
+    assert second.updated_at == first.updated_at
+
+
+def test_activate_dish_rejects_stale_updated_at() -> None:
+    service = _service(_dish(active=False))
+    with pytest.raises(CatalogDishStaleError):
+        service.activate_dish(_DISH_ID, expected_updated_at=_LATER)
+
+
+def test_deactivate_dish_rejects_stale_updated_at() -> None:
+    service = _service(_dish(active=True))
+    with pytest.raises(CatalogDishStaleError):
+        service.deactivate_dish(_DISH_ID, expected_updated_at=_LATER)
+
+
+def test_activate_dish_missing_dish_raises_not_found() -> None:
+    service = _service()
+    with pytest.raises(CatalogDishNotFoundError):
+        service.activate_dish(_DISH_ID, expected_updated_at=_NOW)
+
+
+def test_deactivate_dish_missing_dish_raises_not_found() -> None:
+    service = _service()
+    with pytest.raises(CatalogDishNotFoundError):
+        service.deactivate_dish(_DISH_ID, expected_updated_at=_NOW)
+
+
+def test_activate_dish_preserves_admin_completion_fields() -> None:
+    dish = _dish(
+        active=False, category="fingerfood", pricing_unit="stueck", vat_rate_percent=7
+    )
+    service = _service(dish)
+    activated = service.activate_dish(_DISH_ID, expected_updated_at=_NOW, now=_LATER)
+    assert activated.category == "fingerfood"
+    assert activated.pricing_unit == "stueck"
+    assert activated.vat_rate_percent == 7
