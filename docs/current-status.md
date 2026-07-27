@@ -14,15 +14,17 @@ recorded. See `docs/runbooks/deployment-truth-checklist.md`.
 
 | Item | Value |
 |---|---|
-| `origin/main` HEAD | `03a3780e699357c30e36049f1293f5a93a214f6f` (`03a3780`) |
-| Latest merged PR | [#42 — Fix PDF startup preflight ordering and document configuration contract](https://github.com/VikJo1978/silberloeffel-catering/pull/42) (merge commit `03a3780e699357c30e36049f1293f5a93a214f6f`, parents `a67875d8` + `5f4df5e6`) |
-| CI on the merged commit | `quality` — **pass** (both required checks green at merge time) |
-| Full test suite at this commit (locally verified during review) | **2212 passed**, coverage **90.7%** (≥90% threshold), Ruff/mypy clean |
+| `origin/main` HEAD | `8abb9b5ea3350ec71c66e87f0481be0b0823ccf7` (`8abb9b5`) |
+| Latest merged functional PR | [#42 — Fix PDF startup preflight ordering and document configuration contract](https://github.com/VikJo1978/silberloeffel-catering/pull/42) (merge commit `03a3780e699357c30e36049f1293f5a93a214f6f`, parents `a67875d8` + `5f4df5e6`) |
+| Latest merged PR (docs-only) | [#43 — Align project status documentation with main and production](https://github.com/VikJo1978/silberloeffel-catering/pull/43) (merge commit `8abb9b5ea3350ec71c66e87f0481be0b0823ccf7`) — this and the current follow-up correction are documentation-only; they do not change PR #42's merged/not-deployed status below |
+| CI on the latest functional merge (`03a3780`) | `quality` — **pass** (both required checks green at merge time) |
+| Full test suite at `03a3780` (locally verified during review) | **2212 passed**, coverage **90.7%** (≥90% threshold), Ruff/mypy clean |
 
 **Do not treat the SHA above as permanent:** query Git for the current value;
-repository HEAD advances with every merge. Docs-only commits (including this
-update) change repository HEAD but are **not** application deployments —
-production state below remains authoritative until services restart.
+repository HEAD advances with every merge. Docs-only commits (including PR
+#43 and this update) change repository HEAD but are **not** application
+deployments — production state below remains authoritative until services
+restart.
 
 ## Production state
 
