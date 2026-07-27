@@ -261,6 +261,119 @@ def test_known_error_code_on_wrong_status_is_invalid_response() -> None:
         server.server_close()
 
 
+# --- structured error bodies (issue #39) -------------------------------------
+#
+# Office API 422s from the document blockers carry an optional `reasons`
+# list next to `error`. Validating the body as an exact {"error"} key set
+# turned those valid responses into 502 invalid_response, and
+# `offer_document_blocked` was additionally missing from the 422 whitelist.
+
+
+def _error_body(**payload: object) -> bytes:
+    return json.dumps(payload).encode()
+
+
+def _expect_error(status: int, body: bytes) -> RemoteCoreError:
+    url, server = _json_server(status, "application/json", body)
+    try:
+        with pytest.raises(RemoteCoreError) as exc:
+            RemoteCoreClient(url, _TOKEN).get("/office/v1/queue")
+        return exc.value
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize("code", ["validation_error", "offer_document_blocked"])
+def test_structured_422_without_reasons_keeps_status_and_code(code: str) -> None:
+    error = _expect_error(422, _error_body(error=code))
+    assert (error.status, error.code) == (422, code)
+    assert not error.unavailable
+
+
+@pytest.mark.parametrize("code", ["validation_error", "offer_document_blocked"])
+def test_structured_422_with_reasons_keeps_status_and_code(code: str) -> None:
+    """The regression: a valid `reasons` list must not become a 502."""
+    error = _expect_error(
+        422, _error_body(error=code, reasons=["missing_address", "no_positions"])
+    )
+    assert (error.status, error.code) == (422, code)
+    assert not error.unavailable
+
+
+def test_structured_422_with_empty_reasons_is_accepted() -> None:
+    error = _expect_error(422, _error_body(error="validation_error", reasons=[]))
+    assert (error.status, error.code) == (422, "validation_error")
+
+
+@pytest.mark.parametrize(
+    "reasons",
+    [
+        "not-a-list",
+        [1, 2],
+        [{"code": "x"}],
+        [None],
+        [["nested"]],
+        None,
+        {"a": "b"},
+    ],
+    ids=["string", "ints", "objects", "null-entry", "nested-list", "null", "object"],
+)
+def test_malformed_reasons_still_fails_closed(reasons: object) -> None:
+    """A malformed `reasons` must never be carried along as trusted data —
+    it is refused exactly like any other contract violation."""
+    error = _expect_error(422, _error_body(error="validation_error", reasons=reasons))
+    assert error.code == "invalid_response"
+    assert error.unavailable
+
+
+def test_unknown_422_code_is_still_rejected() -> None:
+    error = _expect_error(422, _error_body(error="totally_unknown_code"))
+    assert error.code == "invalid_response"
+
+
+def test_unknown_422_code_with_reasons_is_still_rejected() -> None:
+    """Accepting `reasons` must not smuggle an unwhitelisted code through."""
+    error = _expect_error(422, _error_body(error="totally_unknown_code", reasons=["a"]))
+    assert error.code == "invalid_response"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"error": "validation_error", "detail": "extra"},
+        {"error": "validation_error", "reasons": ["a"], "detail": "extra"},
+        {"reasons": ["a"]},
+        {"error": 42},
+        {},
+    ],
+    ids=[
+        "extra-key",
+        "extra-key-with-reasons",
+        "no-error",
+        "error-not-string",
+        "empty",
+    ],
+)
+def test_error_body_schema_stays_strict(body: dict) -> None:
+    """Only `error` (required) and `reasons` (optional) are tolerated — the
+    fix widens the contract by one declared field, not generally."""
+    error = _expect_error(422, json.dumps(body).encode())
+    assert error.code == "invalid_response"
+
+
+def test_reasons_do_not_bypass_the_per_status_whitelist() -> None:
+    """`not_found` is valid for 404, not for 409 — attaching reasons must
+    not change which codes a status accepts."""
+    error = _expect_error(409, _error_body(error="not_found", reasons=["a"]))
+    assert error.code == "invalid_response"
+
+
+def test_other_statuses_still_accept_their_codes_with_reasons() -> None:
+    error = _expect_error(404, _error_body(error="not_found", reasons=["a"]))
+    assert (error.status, error.code) == (404, "not_found")
+
+
 def test_queue_view_rejects_unknown_response_field() -> None:
     body = json.dumps(
         {

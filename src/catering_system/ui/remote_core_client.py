@@ -281,6 +281,11 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
             "invalid_withdrawal_evidence",
             "order_version_not_current_candidate",
             "validation_error",
+            # Issue #39: emitted by POST /offers/.../offer-document when the
+            # snapshot is blocked, together with a `reasons` list. Without
+            # this entry the code was refused by the status whitelist and
+            # surfaced as 502 invalid_response instead of the real 422.
+            "offer_document_blocked",
         }
     ),
     500: frozenset({"internal"}),
@@ -361,6 +366,29 @@ def _inquiry_offer_projection(value: object) -> dict[str, object]:
 def _exact(data: Mapping[str, object], keys: frozenset[str] | set[str]) -> None:
     if set(data) != set(keys):
         _bad_response()
+
+
+def _error_body_code(parsed: Mapping[str, object]) -> str:
+    """Issue #39: read the error code out of an Office API error body.
+
+    The body is `{"error": "<code>"}` plus an optional `reasons` list that
+    some 422s attach (offer/confirmation document blockers). Validating the
+    body with an exact `{"error"}` key set therefore rejected a perfectly
+    valid structured error and turned it into 502 invalid_response.
+
+    `error` stays required and must be a string. `reasons`, when present,
+    must be a list of strings — a malformed one still fails closed rather
+    than being carried along as trusted data. Every other key is still
+    refused, so this widens the contract by exactly one declared field.
+    """
+    keys = set(parsed)
+    if not ({"error"} <= keys <= {"error", "reasons"}):
+        _bad_response()
+    code = _str(parsed["error"])
+    if "reasons" in parsed:
+        for reason in _list(parsed["reasons"]):
+            _str(reason)
+    return code
 
 
 def _operational_pause(value: object) -> dict[str, object]:
@@ -1034,8 +1062,7 @@ class RemoteCoreClient:
                 _bad_response()
             try:
                 parsed = _dict(json.loads(raw.decode("utf-8")))
-                _exact(parsed, {"error"})
-                code = _str(parsed["error"])
+                code = _error_body_code(parsed)
             except (UnicodeDecodeError, json.JSONDecodeError, RemoteCoreError) as error:
                 raise RemoteCoreError(
                     502, "invalid_response", unavailable=True
@@ -1114,8 +1141,7 @@ class RemoteCoreClient:
             ):
                 try:
                     parsed = _dict(json.loads(raw.decode("utf-8")))
-                    _exact(parsed, {"error"})
-                    code = _str(parsed["error"])
+                    code = _error_body_code(parsed)
                 except (UnicodeDecodeError, json.JSONDecodeError, RemoteCoreError):
                     pass
             raise RemoteCoreError(exc.code, code) from exc
