@@ -115,3 +115,79 @@ def test_optional_vars_populate_when_set(monkeypatch: pytest.MonkeyPatch) -> Non
     content = offer_pdf_static_content_from_env()
     assert content.company_phone == "+49 40 1234567"
     assert content.footer_note == "Vielen Dank für Ihr Vertrauen."
+
+
+# --- OFFICE_PDF_LOGO_PATH: fail closed, never a raw traceback (issue #41) ---
+
+
+def test_logo_path_pointing_at_missing_file_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _clear_all(monkeypatch)
+    _set_required(monkeypatch)
+    missing = tmp_path / "does-not-exist.png"
+    monkeypatch.setenv("OFFICE_PDF_LOGO_PATH", str(missing))
+    with pytest.raises(SystemExit) as exc_info:
+        offer_pdf_static_content_from_env()
+    message = str(exc_info.value)
+    assert "OFFICE_PDF_LOGO_PATH" in message
+    assert str(missing) in message
+
+
+def test_logo_path_pointing_at_unreadable_file_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _clear_all(monkeypatch)
+    _set_required(monkeypatch)
+    unreadable = tmp_path / "no-permission.png"
+    unreadable.write_bytes(b"\x89PNG\r\n")
+    unreadable.chmod(0o000)
+    monkeypatch.setenv("OFFICE_PDF_LOGO_PATH", str(unreadable))
+    try:
+        with pytest.raises(SystemExit) as exc_info:
+            offer_pdf_static_content_from_env()
+        message = str(exc_info.value)
+        assert "OFFICE_PDF_LOGO_PATH" in message
+        assert str(unreadable) in message
+    finally:
+        unreadable.chmod(0o644)
+
+
+def test_logo_path_pointing_at_a_directory_fails_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _clear_all(monkeypatch)
+    _set_required(monkeypatch)
+    monkeypatch.setenv("OFFICE_PDF_LOGO_PATH", str(tmp_path))
+    with pytest.raises(SystemExit) as exc_info:
+        offer_pdf_static_content_from_env()
+    message = str(exc_info.value)
+    assert "OFFICE_PDF_LOGO_PATH" in message
+    assert str(tmp_path) in message
+
+
+def test_logo_path_error_never_carries_a_raw_traceback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """The failure must be a clean SystemExit, not an unhandled OSError —
+    proven by asserting the raised type directly rather than only its
+    message."""
+    _clear_all(monkeypatch)
+    _set_required(monkeypatch)
+    monkeypatch.setenv("OFFICE_PDF_LOGO_PATH", str(tmp_path / "missing.png"))
+    with pytest.raises(SystemExit):
+        offer_pdf_static_content_from_env()
+    # If this were still the unhandled-OSError bug, pytest.raises(SystemExit)
+    # above would itself fail with an unexpected exception type.
+
+
+def test_valid_logo_path_still_loads_bytes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    _clear_all(monkeypatch)
+    _set_required(monkeypatch)
+    logo = tmp_path / "logo.png"
+    logo.write_bytes(b"\x89PNG\r\n\x1a\n")
+    monkeypatch.setenv("OFFICE_PDF_LOGO_PATH", str(logo))
+    content = offer_pdf_static_content_from_env()
+    assert content.logo_png_bytes == b"\x89PNG\r\n\x1a\n"
