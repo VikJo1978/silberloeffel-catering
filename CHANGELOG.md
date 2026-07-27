@@ -166,6 +166,30 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
   `08034ba` after successful CI; no service restart was needed because the
   running production modules were unchanged.
 
+### Fixed
+
+- `RemoteCoreClient` accepts declared structured `422` errors
+  (`offer_document_blocked`, `confirmation_document_blocked`,
+  `order_not_ready_to_send`) with validated `reasons`, instead of masking
+  them as a generic `502` (closes #39, PR #40). Deployed to production.
+- Catalog dish detail accepts valid price-history responses instead of
+  rejecting any dish that has price history (closes #37, PR #38). Deployed
+  to production.
+- Office Panel direct mode validates `OFFICE_PDF_*` configuration before
+  opening `core.db`, instead of after already applying migrations and
+  constructing repositories (closes #41, PR #42). **Merged to `main`, not
+  yet deployed to production.**
+- Unreadable or missing `OFFICE_PDF_LOGO_PATH` files now fail startup
+  cleanly with a controlled message instead of an unhandled traceback
+  (PR #42). **Merged to `main`, not yet deployed to production.**
+
+### Documentation
+
+- Documented the full `OFFICE_PDF_*` environment contract (3 required, 8
+  optional variables) in `.env.example` (PR #42).
+- Added PDF configuration preflight, verification, and rollback guidance to
+  the Lenovo production runbook (PR #42).
+
 ## 2026-07-12
 
 ### Staging website
