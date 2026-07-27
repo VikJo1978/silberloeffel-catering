@@ -281,10 +281,36 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
             "invalid_withdrawal_evidence",
             "order_version_not_current_candidate",
             "validation_error",
+            # Issue #39: the three document blockers. All are real Office API
+            # business errors that were missing here, so the status whitelist
+            # refused them and they surfaced as 502 invalid_response instead
+            # of the 422 the operator needs to see.
+            "offer_document_blocked",
+            "confirmation_document_blocked",
+            "order_not_ready_to_send",
         }
     ),
     500: frozenset({"internal"}),
     503: frozenset({"core_busy"}),
+}
+
+# Issue #39: the error contracts that may carry a `reasons` list, keyed by
+# status. Deliberately narrower than _ERROR_CODES_BY_STATUS — `reasons` is
+# not a general-purpose field, it is part of these three blocker contracts
+# only. Every other status/code pair must still arrive as a bare
+# {"error": ...} body, so an unexpected `reasons` anywhere else is a
+# contract violation rather than something to tolerate.
+#
+# `confirmation_document_blocked` has both reasons-bearing and bare paths in
+# the API, so it appears here *and* must keep working without `reasons`.
+_ERROR_CODES_WITH_REASONS_BY_STATUS: dict[int, frozenset[str]] = {
+    422: frozenset(
+        {
+            "offer_document_blocked",
+            "confirmation_document_blocked",
+            "order_not_ready_to_send",
+        }
+    ),
 }
 
 
@@ -361,6 +387,34 @@ def _inquiry_offer_projection(value: object) -> dict[str, object]:
 def _exact(data: Mapping[str, object], keys: frozenset[str] | set[str]) -> None:
     if set(data) != set(keys):
         _bad_response()
+
+
+def _error_body_code(parsed: Mapping[str, object], status: int) -> str:
+    """Issue #39: read the error code out of an Office API error body.
+
+    Most errors are a bare `{"error": "<code>"}`. Three 422 blocker
+    contracts also attach a `reasons` list, and validating every body with
+    an exact `{"error"}` key set rejected those valid responses, turning a
+    real business error into 502 invalid_response.
+
+    `reasons` is accepted only for the status/code pairs in
+    _ERROR_CODES_WITH_REASONS_BY_STATUS — it is part of those contracts, not
+    a field any error may carry. On any other pair its presence is a
+    contract violation. When it is allowed it must still be a list of
+    strings, so a malformed one fails closed rather than being carried
+    along as trusted data. Unknown keys are refused as before.
+    """
+    keys = set(parsed)
+    if not ({"error"} <= keys <= {"error", "reasons"}):
+        _bad_response()
+    code = _str(parsed["error"])
+    if "reasons" in parsed:
+        allowed = _ERROR_CODES_WITH_REASONS_BY_STATUS.get(status, frozenset())
+        if code not in allowed:
+            _bad_response()
+        for reason in _list(parsed["reasons"]):
+            _str(reason)
+    return code
 
 
 def _operational_pause(value: object) -> dict[str, object]:
@@ -1034,8 +1088,7 @@ class RemoteCoreClient:
                 _bad_response()
             try:
                 parsed = _dict(json.loads(raw.decode("utf-8")))
-                _exact(parsed, {"error"})
-                code = _str(parsed["error"])
+                code = _error_body_code(parsed, exc.code)
             except (UnicodeDecodeError, json.JSONDecodeError, RemoteCoreError) as error:
                 raise RemoteCoreError(
                     502, "invalid_response", unavailable=True
@@ -1114,9 +1167,10 @@ class RemoteCoreClient:
             ):
                 try:
                     parsed = _dict(json.loads(raw.decode("utf-8")))
-                    _exact(parsed, {"error"})
-                    code = _str(parsed["error"])
+                    code = _error_body_code(parsed, exc.code)
                 except (UnicodeDecodeError, json.JSONDecodeError, RemoteCoreError):
+                    # get_bytes keeps its existing fallback: the real HTTP
+                    # status survives, the code degrades to unexpected_status.
                     pass
             raise RemoteCoreError(exc.code, code) from exc
         except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as exc:

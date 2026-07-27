@@ -43,6 +43,7 @@ from catering_system.domain.offer_snapshot import compute_snapshot_hash
 from catering_system.services.inquiry_service import InquiryService
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
+from catering_system.ui.remote_core_client import RemoteCoreClient, RemoteCoreError
 
 _SNAPSHOT_ID = "77777777-7777-4777-8777-777777777771"
 _VARIANT_ID = "44444444-4444-4444-8444-444444444441"
@@ -5122,3 +5123,149 @@ def test_offer_document_pdf_static_content_overflow_returns_422(api) -> None:
     finally:
         server.shutdown()
         server.server_close()
+
+
+# --- issue #39: structured error contracts, client against the real API ------
+#
+# These are contract tests, not schema tests: they drive the actual Office API
+# server through RemoteCoreClient and assert that a reasons-bearing 422 keeps
+# its real business code. The JSON is never hand-written here — it is whatever
+# the endpoint really produces, which is exactly what the unit-level tests in
+# test_remote_core_client.py cannot prove on their own.
+
+
+def _remote_client(base: str) -> RemoteCoreClient:
+    client = RemoteCoreClient(base, _TOKEN)
+    client.begin_request({})
+    return client
+
+
+def test_remote_client_preserves_offer_document_blocked_with_reasons(api) -> None:
+    """Real producer: POST /offers/{id}/offer-document with no invoice
+    address returns 422 offer_document_blocked + reasons."""
+    base, ids, _db = api
+    resolved_inquiry = ids["inquiry_offer_ready"]
+    _ensure_inquiry_fulfillment_mode(base, resolved_inquiry, mode="PICKUP")
+    snapshot = _valid_offer_snapshot(inquiry_id=resolved_inquiry)
+    status, body, _h = _post(
+        _prepare_offer_url(base, resolved_inquiry), args={"snapshot": snapshot}
+    )
+    assert status == 201
+    offer_id = body["offer_id"]
+
+    # the raw endpoint really does emit reasons
+    raw_status, raw_body, _h = _post(
+        _offer_document_url(base, offer_id),
+        args={
+            "offer_version_id": body["offer_version_id"],
+            "offer_variant_id": snapshot["variants"][0]["variant_id"],  # type: ignore[index]
+            "created_by": "office-api-test",
+        },
+    )
+    assert raw_status == 422
+    assert raw_body["error"] == "offer_document_blocked"
+    assert raw_body["reasons"]
+
+    # and the client surfaces it as the business error, not 502
+    client = _remote_client(base)
+    with pytest.raises(RemoteCoreError) as exc:
+        client.command(
+            f"/office/v1/offers/{offer_id}/offer-document",
+            {
+                "offer_version_id": body["offer_version_id"],
+                "offer_variant_id": snapshot["variants"][0]["variant_id"],  # type: ignore[index]
+                "created_by": "office-api-test",
+            },
+            {},
+            expected={201},
+            result_keys={"offer_document_snapshot_id"},
+        )
+    assert (exc.value.status, exc.value.code) == (422, "offer_document_blocked")
+    assert not exc.value.unavailable
+
+
+def test_remote_client_preserves_confirmation_document_blocked_with_reasons(
+    api,
+) -> None:
+    """Real producer: confirmation document creation with no customer contact
+    returns 422 confirmation_document_blocked + reasons."""
+    base, ids, db = api
+    inquiry_id = ids["inquiry_offer_ready"]
+    order_id, order_version_id = _make_effective_offer_order(
+        api, inquiry_id=inquiry_id, ensure_recipient_email=False
+    )
+    _clear_inquiry_recipient_email(db, inquiry_id)
+    inquiries = SQLiteInquiryRepository(db)
+    inquiry = inquiries.get_by_id(inquiry_id)
+    assert inquiry is not None
+    contact = inquiry.customer_snapshot
+    inquiries.update(
+        replace(
+            inquiry,
+            customer_snapshot=InquiryCustomerSnapshot(
+                company_name=contact.company_name if contact else None,
+                contact_name=contact.contact_name if contact else None,
+                phone=None,
+                email=None,
+            ),
+        )
+    )
+    inquiries.close()
+
+    raw_status, raw_body, _h = _post(
+        _confirmation_document_url(base, order_id),
+        args={"created_by": "office-api-test"},
+        expect={"current_effective_order_version_id": order_version_id},
+    )
+    assert raw_status == 422
+    assert raw_body["error"] == "confirmation_document_blocked"
+    assert raw_body.get("reasons")
+
+    client = _remote_client(base)
+    with pytest.raises(RemoteCoreError) as exc:
+        client.command(
+            f"/office/v1/orders/{order_id}/confirmation-document",
+            {"created_by": "office-api-test"},
+            {"current_effective_order_version_id": order_version_id},
+            expected={201},
+            result_keys={"document_snapshot_id"},
+        )
+    assert (exc.value.status, exc.value.code) == (
+        422,
+        "confirmation_document_blocked",
+    )
+    assert not exc.value.unavailable
+
+
+def test_remote_client_preserves_order_not_ready_to_send_with_reasons(api) -> None:
+    """Real producer: confirmation send while the order is paused returns
+    422 order_not_ready_to_send + reasons."""
+    base, _ids, _db = api
+    order_id, order_version_id, snapshot_id = _prepare_confirmation_snapshot(api)
+    _pause_order_via_api(base, order_id)
+
+    raw_status, raw_body, _h = _post(
+        _confirmation_send_url(base, order_id),
+        args={"document_snapshot_id": snapshot_id, "requested_by": "office-api-test"},
+        expect={"current_effective_order_version_id": order_version_id},
+    )
+    assert raw_status == 422
+    assert raw_body == {
+        "error": "order_not_ready_to_send",
+        "reasons": ["operational_pause"],
+    }
+
+    client = _remote_client(base)
+    with pytest.raises(RemoteCoreError) as exc:
+        client.command(
+            f"/office/v1/orders/{order_id}/confirmation-document/send",
+            {
+                "document_snapshot_id": snapshot_id,
+                "requested_by": "office-api-test",
+            },
+            {"current_effective_order_version_id": order_version_id},
+            expected={200},
+            result_keys={"send_attempt_id"},
+        )
+    assert (exc.value.status, exc.value.code) == (422, "order_not_ready_to_send")
+    assert not exc.value.unavailable
