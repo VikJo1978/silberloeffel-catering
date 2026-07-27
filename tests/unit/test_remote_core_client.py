@@ -263,10 +263,19 @@ def test_known_error_code_on_wrong_status_is_invalid_response() -> None:
 
 # --- structured error bodies (issue #39) -------------------------------------
 #
-# Office API 422s from the document blockers carry an optional `reasons`
-# list next to `error`. Validating the body as an exact {"error"} key set
-# turned those valid responses into 502 invalid_response, and
-# `offer_document_blocked` was additionally missing from the 422 whitelist.
+# Three Office API 422 blocker contracts carry a `reasons` list next to
+# `error`. Validating every body as an exact {"error"} key set turned those
+# valid responses into 502 invalid_response, and all three codes were also
+# missing from the 422 whitelist.
+#
+# `reasons` belongs to those three contracts only — it is not a field any
+# error may carry, so its presence anywhere else stays a contract violation.
+
+_REASONS_CONTRACTS_422 = [
+    "offer_document_blocked",
+    "confirmation_document_blocked",
+    "order_not_ready_to_send",
+]
 
 
 def _error_body(**payload: object) -> bytes:
@@ -284,15 +293,18 @@ def _expect_error(status: int, body: bytes) -> RemoteCoreError:
         server.server_close()
 
 
-@pytest.mark.parametrize("code", ["validation_error", "offer_document_blocked"])
-def test_structured_422_without_reasons_keeps_status_and_code(code: str) -> None:
+@pytest.mark.parametrize("code", _REASONS_CONTRACTS_422)
+def test_blocker_422_without_reasons_keeps_status_and_code(code: str) -> None:
+    """All three blockers must survive as their real 422. The API has bare
+    paths for these codes too (notably confirmation_document_blocked), so
+    the absence of `reasons` must stay valid."""
     error = _expect_error(422, _error_body(error=code))
     assert (error.status, error.code) == (422, code)
     assert not error.unavailable
 
 
-@pytest.mark.parametrize("code", ["validation_error", "offer_document_blocked"])
-def test_structured_422_with_reasons_keeps_status_and_code(code: str) -> None:
+@pytest.mark.parametrize("code", _REASONS_CONTRACTS_422)
+def test_blocker_422_with_reasons_keeps_status_and_code(code: str) -> None:
     """The regression: a valid `reasons` list must not become a 502."""
     error = _expect_error(
         422, _error_body(error=code, reasons=["missing_address", "no_positions"])
@@ -301,9 +313,9 @@ def test_structured_422_with_reasons_keeps_status_and_code(code: str) -> None:
     assert not error.unavailable
 
 
-def test_structured_422_with_empty_reasons_is_accepted() -> None:
-    error = _expect_error(422, _error_body(error="validation_error", reasons=[]))
-    assert (error.status, error.code) == (422, "validation_error")
+def test_blocker_422_with_empty_reasons_is_accepted() -> None:
+    error = _expect_error(422, _error_body(error="offer_document_blocked", reasons=[]))
+    assert (error.status, error.code) == (422, "offer_document_blocked")
 
 
 @pytest.mark.parametrize(
@@ -321,10 +333,49 @@ def test_structured_422_with_empty_reasons_is_accepted() -> None:
 )
 def test_malformed_reasons_still_fails_closed(reasons: object) -> None:
     """A malformed `reasons` must never be carried along as trusted data —
-    it is refused exactly like any other contract violation."""
-    error = _expect_error(422, _error_body(error="validation_error", reasons=reasons))
+    it is refused exactly like any other contract violation, even on a
+    contract that is allowed to carry reasons at all."""
+    error = _expect_error(
+        422, _error_body(error="offer_document_blocked", reasons=reasons)
+    )
     assert error.code == "invalid_response"
     assert error.unavailable
+
+
+@pytest.mark.parametrize(
+    "status,code",
+    [
+        (404, "not_found"),
+        (409, "stale_state"),
+        (422, "validation_error"),
+        (400, "invalid_request"),
+    ],
+    ids=["404-not-found", "409-stale", "422-validation-error", "400-invalid-request"],
+)
+def test_reasons_on_an_unsupported_contract_is_rejected(status: int, code: str) -> None:
+    """`reasons` is accepted only for the three declared 422 blockers. On any
+    other status/code pair — including other perfectly valid codes — an
+    unexpected `reasons` is a contract violation, not something to tolerate."""
+    error = _expect_error(status, _error_body(error=code, reasons=["a"]))
+    assert error.code == "invalid_response"
+    assert error.unavailable
+
+
+@pytest.mark.parametrize(
+    "status,code",
+    [
+        (404, "not_found"),
+        (409, "stale_state"),
+        (422, "validation_error"),
+        (400, "invalid_request"),
+    ],
+    ids=["404-not-found", "409-stale", "422-validation-error", "400-invalid-request"],
+)
+def test_same_contracts_without_reasons_are_unaffected(status: int, code: str) -> None:
+    """The counterpart to the test above: without `reasons` these bodies keep
+    behaving exactly as before the fix."""
+    error = _expect_error(status, _error_body(error=code))
+    assert (error.status, error.code) == (status, code)
 
 
 def test_unknown_422_code_is_still_rejected() -> None:
@@ -341,8 +392,8 @@ def test_unknown_422_code_with_reasons_is_still_rejected() -> None:
 @pytest.mark.parametrize(
     "body",
     [
-        {"error": "validation_error", "detail": "extra"},
-        {"error": "validation_error", "reasons": ["a"], "detail": "extra"},
+        {"error": "offer_document_blocked", "detail": "extra"},
+        {"error": "offer_document_blocked", "reasons": ["a"], "detail": "extra"},
         {"reasons": ["a"]},
         {"error": 42},
         {},
@@ -356,22 +407,85 @@ def test_unknown_422_code_with_reasons_is_still_rejected() -> None:
     ],
 )
 def test_error_body_schema_stays_strict(body: dict) -> None:
-    """Only `error` (required) and `reasons` (optional) are tolerated — the
-    fix widens the contract by one declared field, not generally."""
+    """Only `error` (required) and `reasons` (optional, and only for the
+    declared contracts) are tolerated — the fix widens the contract by one
+    field on three codes, not generally."""
     error = _expect_error(422, json.dumps(body).encode())
     assert error.code == "invalid_response"
 
 
 def test_reasons_do_not_bypass_the_per_status_whitelist() -> None:
-    """`not_found` is valid for 404, not for 409 — attaching reasons must
-    not change which codes a status accepts."""
-    error = _expect_error(409, _error_body(error="not_found", reasons=["a"]))
+    """`offer_document_blocked` is declared for 422, not for 409 — attaching
+    reasons must not change which codes a status accepts."""
+    error = _expect_error(
+        409, _error_body(error="offer_document_blocked", reasons=["a"])
+    )
     assert error.code == "invalid_response"
 
 
-def test_other_statuses_still_accept_their_codes_with_reasons() -> None:
-    error = _expect_error(404, _error_body(error="not_found", reasons=["a"]))
+# --- get_bytes shares the same error-body parser (issue #39) -----------------
+#
+# get_bytes (offer-document PDF download) parses error bodies too, and it
+# deliberately degrades instead of raising invalid_response: the real HTTP
+# status always survives, the code falls back to unexpected_status when the
+# body cannot be read. Both halves need pinning.
+
+
+def _expect_bytes_error(status: int, body: bytes) -> RemoteCoreError:
+    url, server = _json_server(status, "application/json", body)
+    try:
+        with pytest.raises(RemoteCoreError) as exc:
+            RemoteCoreClient(url, _TOKEN).get_bytes("/office/v1/offer-document.pdf")
+        return exc.value
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize("code", _REASONS_CONTRACTS_422)
+def test_get_bytes_preserves_supported_structured_error(code: str) -> None:
+    error = _expect_bytes_error(
+        422, _error_body(error=code, reasons=["INVOICE_ADDRESS_REQUIRED"])
+    )
+    assert (error.status, error.code) == (422, code)
+
+
+def test_get_bytes_preserves_a_bare_error_body() -> None:
+    error = _expect_bytes_error(404, _error_body(error="not_found"))
     assert (error.status, error.code) == (404, "not_found")
+
+
+@pytest.mark.parametrize(
+    "status,body",
+    [
+        # reasons on a contract that does not declare them
+        (422, {"error": "validation_error", "reasons": ["a"]}),
+        (404, {"error": "not_found", "reasons": ["a"]}),
+        # malformed reasons on a contract that does
+        (422, {"error": "offer_document_blocked", "reasons": "not-a-list"}),
+        (422, {"error": "offer_document_blocked", "reasons": [1]}),
+        # unrelated schema violations
+        (422, {"error": "offer_document_blocked", "detail": "x"}),
+        (422, {"error": 42}),
+    ],
+    ids=[
+        "unsupported-contract-422",
+        "unsupported-contract-404",
+        "malformed-reasons-string",
+        "malformed-reasons-ints",
+        "extra-key",
+        "error-not-string",
+    ],
+)
+def test_get_bytes_keeps_its_fallback_for_unusable_bodies(
+    status: int, body: dict
+) -> None:
+    """get_bytes must not start raising invalid_response — its existing
+    contract is that the caller still learns the real HTTP status while the
+    code degrades to unexpected_status."""
+    error = _expect_bytes_error(status, json.dumps(body).encode())
+    assert error.status == status
+    assert error.code == "unexpected_status"
 
 
 def test_queue_view_rejects_unknown_response_field() -> None:
