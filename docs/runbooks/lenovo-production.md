@@ -220,6 +220,59 @@ journalctl -u catering-office-panel -u catering-kiosk \
 
 The intake smoke request should return `405`, not `200`.
 
+## PDF configuration (Offer/Confirmation documents)
+
+Office API and direct-mode Office Panel both require the `OFFICE_PDF_*`
+environment contract (issue #41) — see `.env.example` for the full list of
+required and optional variables. On Lenovo these live in the root-owned,
+mode-`600` `/etc/catering/office-api.env` and `/etc/catering/office-panel.env`
+— never print, paste, or `cat` those files. Both services validate this
+configuration before opening `core.db`: a missing or blank required variable,
+or an unreadable `OFFICE_PDF_LOGO_PATH`, refuses to start with no database
+side effect.
+
+**Verify presence without printing values** — list variable *names* only,
+never their contents:
+
+```bash
+sudo grep -o '^OFFICE_PDF_[A-Z_]*=' /etc/catering/office-panel.env
+```
+
+**Preflight verification** — proves the configuration actually loads,
+without ever echoing a value. A missing/blank required variable prints the
+variable name and exits non-zero; success prints nothing and exits `0`:
+
+```bash
+cd /home/viktor/projects/silberloeffel-catering
+sudo -u viktor env -i $(sudo grep -v '^#' /etc/catering/office-panel.env) \
+  PYTHONPATH=src python3 -c \
+  'from catering_system.ui.offer_pdf_static_content_env import offer_pdf_static_content_from_env as f; f()'
+echo "exit code: $?"
+```
+
+**PDF smoke test without emailing a customer** — download the PDF for an
+already-existing offer/confirmation via the authenticated, read-only Office
+Panel/API endpoint (a `GET`, never a "send" endpoint) and confirm it is a
+well-formed PDF, without composing or sending anything:
+
+```bash
+curl -s -u office:$OFFICE_PANEL_PASSWORD \
+  http://127.0.0.1:8081/offers/<offer_id>/document.pdf -o /tmp/pdf-smoke.pdf
+file /tmp/pdf-smoke.pdf   # expect: PDF document
+rm -f /tmp/pdf-smoke.pdf
+```
+
+**Rollback for this slice** — this is a pure code change: no schema change,
+no change to the `OFFICE_PDF_*` values already configured on production.
+Rollback is the standard [code-only rollback](#code-only-rollback) below
+(revert the commit, restart `catering-office-panel` only, re-run the smoke
+checks) — no database restore and no environment-file change is ever needed
+for this slice.
+
+Systemd `ExecStart`/interpreter and dependency-installation changes are
+tracked separately (`PDF_RUNTIME_VENV_AND_SYSTEMD_V1`) and are not part of
+this procedure.
+
 ## Unit files
 
 The live units are in `/etc/systemd/system/`. Always inspect the effective unit

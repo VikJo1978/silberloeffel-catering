@@ -3967,6 +3967,15 @@ def main() -> None:
                 "--db is required in direct mode (or set CORE_OFFICE_API_URL "
                 "and CORE_OFFICE_API_TOKEN for remote mode)"
             )
+        from catering_system.ui.offer_pdf_static_content_env import (
+            offer_pdf_static_content_from_env,
+        )
+
+        # Validated before core.db is ever opened (issue #41): an invalid
+        # PDF configuration must fail closed with no database side effect —
+        # no file created, no migration applied, no repository constructed.
+        offer_pdf_static_content = offer_pdf_static_content_from_env()
+
         from catering_system.repositories.core_transaction import (
             CoreCommandExecutor,
             open_core_connection,
@@ -4010,9 +4019,6 @@ def main() -> None:
         from catering_system.repositories.bootstrap_customer_identity_schema import (
             bootstrap_customer_identity_schema,
         )
-        from catering_system.ui.offer_pdf_static_content_env import (
-            offer_pdf_static_content_from_env,
-        )
 
         connection = open_core_connection(args.db)
         inquiry_repo = SQLiteInquiryRepository.from_connection(connection)
@@ -4026,7 +4032,6 @@ def main() -> None:
         offer_document_repo = SQLiteOfferDocumentSnapshotRepository.from_connection(
             connection
         )
-        offer_pdf_static_content = offer_pdf_static_content_from_env()
         payment_reminder_repo = SQLitePaymentReminderRepository.from_connection(
             connection
         )

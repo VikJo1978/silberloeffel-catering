@@ -39,8 +39,15 @@ def offer_pdf_static_content_from_env() -> OfferPdfStaticContent:
     logo_path = os.environ.get("OFFICE_PDF_LOGO_PATH", "").strip()
     logo_bytes = None
     if logo_path:
-        with open(logo_path, "rb") as logo_file:
-            logo_bytes = logo_file.read()
+        try:
+            with open(logo_path, "rb") as logo_file:
+                logo_bytes = logo_file.read()
+        except OSError as exc:
+            raise SystemExit(
+                "OFFICE_PDF_LOGO_PATH is set but the file could not be read: "
+                f"{logo_path} ({exc.strerror or 'unreadable'}) — refusing to "
+                "start with an unusable logo asset."
+            ) from exc
     return OfferPdfStaticContent(
         company_legal_name=legal_name,
         company_address_lines=address_lines,
