@@ -1,6 +1,10 @@
 # 6D-3 — Offer Snapshot V2 + Catalog Adapter (design pack)
 
-Status: **design proposal only — no production code authorized until approved**  
+Status: **implemented** — `185e75c Add catalog snapshot v2.` (adds the
+`offer_position_catalog_snapshot_fields` migration on `offer_positions`, i.e.
+`catalog_item_id`/`allergens_json`/`vegan`/`vegetarian`; sub-scope of 6D-3a
+vs 6D-3b and the 6E next slice not independently re-verified in this status
+pass)
 Prerequisite: `CATALOG_SCOPE_V1.md` (6D-0), **6D-1** (`c8662ad`), **6D-2** (`d91c84c Add catalog editing and price history`)  
 Scope owner: **Commercial snapshot boundary** — Catalog → OfferPosition freeze at `prepare-offer`  
 Next slice: **6E** Buffetschilder allergen badges (print reads snapshotted OfferPosition only)

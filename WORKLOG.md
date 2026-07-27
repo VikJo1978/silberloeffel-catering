@@ -2768,3 +2768,63 @@ Not included
 	  matching, dashboard queue or accepted-offer handoff
 	•	UI2B working-tree changes were preserved; neither UI2B nor this reminder
 	  slice is pushed or deployed
+
+
+Entry 069
+
+Date: 2026-07-27 — PR #38/#40 merge and deploy, PR #42 merge (not deployed)
+Scope: PR merges on `main`, one production deployment to `a67875d`, and the
+docs-only status-alignment update recorded here. No further production
+change in this entry.
+
+Meaning
+	•	PR #38 (catalog price-history response handling, closes #37) merged.
+	•	PR #40 (structured Offer/PDF error handling, closes #39) merged as a
+	  second commit on the same branch after an independent review found the
+	  `reasons` field was accepted too broadly; restricted to three declared
+	  422 contracts before merge.
+	•	Both PRs deployed to Lenovo production together via one fast-forward
+	  to `a67875d800deff7a954e9c83d42174c41b647326`. Pre-deploy backup taken
+	  and integrity-checked (`core.db.pre-a67875d-deploy.20260727-084522.bak`,
+	  471040 bytes, SHA-256
+	  `82afe9dd5c758279446ce426c49adf3673adfd52f5a45dea6f3f42e99ce1642e`).
+	  Only `catering-office-panel` restarted, per import-graph analysis; the
+	  other three services (`catering-office-api`, `catering-website-intake`,
+	  `catering-kiosk`) were confirmed untouched by PID/start-timestamp
+	  comparison.
+	•	Post-deploy HTTP checks matched contract (Office API `401`, Office
+	  Panel `401`, Kiosk `200`, Website Intake `405`); journals since restart
+	  showed no tracebacks or errors. A separate follow-up read-only
+	  observation pass classified the deployment **HEALTHY**; rollback not
+	  required.
+	•	During review, a startup-order defect was found: direct-mode Office
+	  Panel validated `OFFICE_PDF_*` configuration only after already opening
+	  `core.db` and applying migrations, so an invalid PDF configuration left
+	  a fully-migrated database file behind before failing. The fix was
+	  deliberately split into two independent slices rather than one PR:
+	  `PDF_STARTUP_ORDER_AND_DOCS_V1` (pure code/docs, no production infra
+	  touch) and `PDF_RUNTIME_VENV_AND_SYSTEMD_V1` (systemd interpreter
+	  reconciliation, venv reproducibility, dependency lock strategy — not
+	  implemented yet).
+	•	PR #42 (`PDF_STARTUP_ORDER_AND_DOCS_V1`, closes #41) merged into
+	  `main` as commit `03a3780e699357c30e36049f1293f5a93a214f6f`. **Not
+	  deployed** — production remains on `a67875d` and does not include this
+	  change; it will be deployed via a separate controlled deploy.
+
+Completed
+	•	PR #38: full suite green; APPROVE FOR MERGE verdict; merged.
+	•	PR #40: full suite green after the `reasons`-scope correction;
+	  APPROVE FOR MERGE verdict; merged.
+	•	Production deploy of `a67875d`: backup verified, fast-forward only,
+	  `catering-office-panel` restarted, HTTP/journal/service-state checks
+	  all passed, no rollback required.
+	•	PR #42: 6 new/extended characterization tests (3 failing before the
+	  fix, verified against the pre-fix code in isolation); full suite 2212
+	  passed, coverage 90.7%; independent review APPROVE FOR MERGE; merged.
+
+Not included
+	•	no deployment of PR #42 to production;
+	•	no systemd unit changes, venv changes, lock files, or dependency
+	  tooling — reserved for `PDF_RUNTIME_VENV_AND_SYSTEMD_V1`;
+	•	no service restart or production data/configuration change beyond the
+	  single `a67875d` deploy recorded above.
