@@ -147,6 +147,48 @@ The equivalent manual steps are retained below for recovery and audit:
    The kiosk's own refresher is the authenticated test client; an error-free
    journal alone proves nothing — the success line must actually appear.
 
+## Python dependencies (`uv`)
+
+`pyproject.toml` declares the dependencies; `uv.lock` pins the exact resolved
+versions, including transitive ones. `uv` is the only supported way to build
+the environment — `pip install` reproduces neither the transitive pins nor the
+runtime/development split.
+
+Install the **runtime** set (`reportlab` and its transitive dependencies only —
+no test or lint tooling):
+
+```bash
+cd /home/viktor/projects/silberloeffel-catering
+uv sync --no-dev
+```
+
+Install the **development** set as well (adds `pytest`, `mypy`, `ruff`,
+`coverage`, `pypdf`):
+
+```bash
+uv sync --dev
+```
+
+Both commands create or update `.venv` in the repository directory from
+`uv.lock`. `.venv` is disposable and git-ignored: deleting and re-syncing it is
+always safe.
+
+Verify the PDF dependency is importable by the interpreter that actually serves
+requests:
+
+```bash
+.venv/bin/python -c "import reportlab; print(reportlab.Version)"   # 5.0.0
+```
+
+> **Not yet applied to production.** The live host currently reaches `.venv`
+> through an untracked `systemd` drop-in override, and its `.venv` still
+> contains development tooling installed by hand. Aligning the tracked unit
+> files and rebuilding the production environment from `uv.lock` is a separate,
+> later slice (`PDF_RUNTIME_VENV_AND_SYSTEMD_V1`, slices B and D). Until that
+> slice runs, do **not** execute `uv sync --no-dev` on Lenovo: it would remove
+> the `pytest` and `mypy` that step 4 of the deployment below currently relies
+> on.
+
 ## Safe deployment
 
 ### 1. Record the starting point

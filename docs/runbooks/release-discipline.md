@@ -19,6 +19,7 @@ owner/admin verification of GitHub settings.**
 
 ## What `quality` runs
 
+- `uv lock --check` — fails if `uv.lock` does not match `pyproject.toml`
 - `ruff check src tests`
 - `ruff format --check src tests`
 - `mypy src/catering_system`
@@ -29,15 +30,22 @@ owner/admin verification of GitHub settings.**
 
 ```bash
 cd /home/viktor/projects/silberloeffel-catering
-source .venv/bin/activate
-coverage erase && coverage run -m pytest -q && coverage report
-ruff check src tests && ruff format --check src tests
-mypy src/catering_system
+uv sync --dev
+uv run coverage erase && uv run coverage run -m pytest -q && uv run coverage report
+uv run ruff check src tests && uv run ruff format --check src tests
+uv run mypy src/catering_system
+uv lock --check
 git diff --check
 ```
 
 Run on the commit you intend to push. Green local gates do not replace GitHub
 `quality` on the remote.
+
+`uv sync --dev` creates or updates `.venv` from `uv.lock`, so the local gate
+runs the same pinned versions as CI. If a dependency in `pyproject.toml`
+changed, `uv lock` regenerates the lock file and **the updated `uv.lock` must
+be committed with that change** — otherwise `quality` fails on `uv lock
+--check`.
 
 ## Target branch protection (owner action)
 
