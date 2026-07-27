@@ -553,6 +553,54 @@ def _catalog_dish_from_detail(detail: dict[str, object]) -> CatalogDish:
         _bad_response()
 
 
+_CATALOG_PRICE_HISTORY_KEYS = frozenset(
+    {
+        "entry_id",
+        "dish_id",
+        "old_unit_net_cents",
+        "new_unit_net_cents",
+        "old_price_display",
+        "new_price_display",
+        "changed_at",
+        "changed_by",
+        "effective_from",
+    }
+)
+
+
+def _catalog_price_history_entry(entry: dict[str, object], *, dish_id: str) -> None:
+    """REMOTE_CATALOG_PRICE_HISTORY_CONTRACT_FIX_V1 (issue #37).
+
+    The key set previously omitted `old_price_display`/`new_price_display`,
+    which `views._price_history_shape` has always emitted, so `_exact()`
+    rejected every dish that had ever had its price changed — a dish opened
+    fine until the first price edit, then returned 502 invalid_response.
+
+    The display strings are read, never recomputed: they are the Office
+    API's rendering (`format_catalog_price_eur`), and re-deriving them here
+    would put a second, silently diverging formatter in the client.
+
+    `old_unit_net_cents` and `old_price_display` are both nullable and null
+    *together* — the first entry of a dish that had no previous price. That
+    pairing is an invariant of the producer, so a response where only one of
+    the two is null is malformed and rejected rather than guessed at.
+    """
+    _exact(entry, _CATALOG_PRICE_HISTORY_KEYS)
+    _uuid4(entry["entry_id"])
+    if _uuid4(entry["dish_id"]) != dish_id:
+        _bad_response()
+    old_cents = _optional_int(entry["old_unit_net_cents"])
+    _nonnegative_int(entry["new_unit_net_cents"])
+    old_display = _optional_str(entry["old_price_display"])
+    if (old_cents is None) != (old_display is None):
+        _bad_response()
+    _str(entry["new_price_display"])
+    _datetime(entry["changed_at"])
+    _str(entry["changed_by"])
+    if entry["effective_from"] is not None:
+        _date(entry["effective_from"])
+
+
 def _guest_count(value: object) -> int | None:
     parsed = _optional_int(value)
     if parsed is not None and not 1 <= parsed <= 2000:
@@ -1197,7 +1245,14 @@ class RemoteCoreClient:
         result_keys: set[str],
         *,
         command_id: str | None = None,
+        optional_result_keys: frozenset[str] | set[str] = frozenset(),
     ) -> dict[str, object]:
+        """`result_keys` must all be present. `optional_result_keys` may be
+        present — for commands whose response carries a field only in some
+        outcomes (REMOTE_CATALOG_PRICE_HISTORY_CONTRACT_FIX_V1: the catalog
+        update returns `price_history_entry_id` only when the price actually
+        changed). Anything outside both sets is still rejected, so this
+        widens the contract by exactly the declared keys and no more."""
         command_id = command_id or self._id()
         result = self._request(
             "POST",
@@ -1209,7 +1264,9 @@ class RemoteCoreClient:
             },
             expected=expected,
         )
-        _exact(result, result_keys | {"command_id"})
+        required = result_keys | {"command_id"}
+        if not required <= set(result) <= required | set(optional_result_keys):
+            _bad_response()
         if _str(result["command_id"]) != command_id:
             _bad_response()
         self._order_details.clear()
@@ -1949,19 +2006,7 @@ class RemoteCoreClient:
         _optional_pricing_unit(body["pricing_unit"])
         _optional_int(body["vat_rate_percent"])
         for raw in _list(body["price_history"]):
-            entry = _dict(raw)
-            _exact(
-                entry,
-                {
-                    "entry_id",
-                    "dish_id",
-                    "old_unit_net_cents",
-                    "new_unit_net_cents",
-                    "changed_at",
-                    "changed_by",
-                    "effective_from",
-                },
-            )
+            _catalog_price_history_entry(_dict(raw), dish_id=dish_id)
         return body
 
     def list_allergen_codes(self) -> dict[str, object]:
@@ -1982,6 +2027,12 @@ class RemoteCoreClient:
         expected_updated_at: str,
         command_id: str | None = None,
     ) -> dict[str, object]:
+        # REMOTE_CATALOG_PRICE_HISTORY_CONTRACT_FIX_V1 (issue #37, second
+        # mismatch): the API appends `price_history_entry_id` only when the
+        # price actually changed. Declaring it optional is what makes the
+        # `in result` check below reachable at all — before this, `_exact`
+        # rejected the very responses that carried it, so every remote price
+        # edit failed with 502 even though Core had already committed it.
         result = self.command(
             f"/office/v1/catalog/dishes/{quote(dish_id, safe='')}/update",
             args,
@@ -1989,11 +2040,16 @@ class RemoteCoreClient:
             command_id=command_id,
             expected={200},
             result_keys={"dish_id", "updated_at", "price_changed"},
+            optional_result_keys={"price_history_entry_id"},
         )
         if _uuid4(result["dish_id"]) != dish_id:
             _bad_response()
         _datetime(result["updated_at"])
-        _bool(result["price_changed"])
+        price_changed = _bool(result["price_changed"])
+        # The id and the flag travel together: a price change records an
+        # entry, an unchanged price records none.
+        if price_changed != ("price_history_entry_id" in result):
+            _bad_response()
         if "price_history_entry_id" in result:
             _uuid4(result["price_history_entry_id"])
         return result
