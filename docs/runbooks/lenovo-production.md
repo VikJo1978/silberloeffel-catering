@@ -189,6 +189,51 @@ requests:
 > the `pytest` and `mypy` that step 4 of the deployment below currently relies
 > on.
 
+## PDF runtime verification (read-only)
+
+`infra/deploy/verify_pdf_runtime.py` cross-checks the PDF runtime and systemd
+alignment without changing anything: no package installation, no `uv sync`, no
+unit installation, no `daemon-reload`, no service restart, no override edit or
+removal, no application code change, no database write. It only reads
+git-tracked files, runs `uv lock --check`, queries systemd with `systemctl
+show`/`systemctl cat`, and reads `/proc/<pid>/cmdline` and `/proc/<pid>/
+environ` (variable **names** only — values are never printed).
+
+Two modes; one must be given explicitly:
+
+```bash
+# No systemd or production access needed — safe in CI or any checkout.
+uv run python infra/deploy/verify_pdf_runtime.py --repository-only
+
+# Real venv, reportlab, systemd and process checks. Run on Lenovo itself.
+python infra/deploy/verify_pdf_runtime.py --host-runtime
+```
+
+Add `--json` for machine-readable output alongside the human-readable report.
+
+Run `--host-runtime`:
+
+- **before** the Slice D migration below, to confirm the tracked units,
+  the venv, and `reportlab` are actually ready — a successful pre-migration
+  result may legitimately report `READY_WITH_COMPATIBLE_OVERRIDE` (the
+  existing drop-in override still applies and its resulting command matches
+  the tracked target);
+- **after** installing the tracked units and removing the overrides, to
+  confirm the migration landed — a successful post-migration result should
+  report `READY_WITHOUT_OVERRIDE` instead.
+
+`MISMATCHED_OVERRIDE`, `TRACKED_UNIT_MISMATCH`, `RUNTIME_INTERPRETER_MISSING`,
+`REPORTLAB_MISSING`, `REPORTLAB_VERSION_MISMATCH`, `PDF_CONFIG_MISSING`, and
+`LOCK_OUT_OF_DATE` are all failures (non-zero exit) and mean the runtime is
+not ready for that step of the migration — investigate before proceeding, do
+not work around them by installing anything by hand.
+
+`uv` is not installed on Lenovo as of this writing, so `--host-runtime` there
+will currently report `LOCK_OUT_OF_DATE` for the repository-state check (it
+cannot verify `uv.lock` without the `uv` binary); this is expected until a
+later slice installs `uv` on the host and is not itself a blocker for reading
+the rest of the report.
+
 ## Safe deployment
 
 ### 1. Record the starting point

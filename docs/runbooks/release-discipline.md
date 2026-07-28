@@ -20,10 +20,13 @@ owner/admin verification of GitHub settings.**
 ## What `quality` runs
 
 - `uv lock --check` — fails if `uv.lock` does not match `pyproject.toml`
-- `ruff check src tests`
-- `ruff format --check src tests`
+- `ruff check src tests infra`
+- `ruff format --check src tests infra`
 - `mypy src/catering_system`
 - `coverage run -m pytest -q` + `coverage report`
+- `infra/deploy/verify_pdf_runtime.py --repository-only` — read-only PDF
+  runtime/systemd static checks (`uv.lock` currency, tracked unit
+  `ExecStart` correctness); no systemd or production access required
 - Node tests for staging form and Cloudflare worker
 
 ## Local pre-push gate (documented; not a server substitute)
@@ -32,8 +35,9 @@ owner/admin verification of GitHub settings.**
 cd /home/viktor/projects/silberloeffel-catering
 uv sync --dev
 uv run coverage erase && uv run coverage run -m pytest -q && uv run coverage report
-uv run ruff check src tests && uv run ruff format --check src tests
+uv run ruff check src tests infra && uv run ruff format --check src tests infra
 uv run mypy src/catering_system
+uv run python infra/deploy/verify_pdf_runtime.py --repository-only
 uv lock --check
 git diff --check
 ```

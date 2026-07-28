@@ -30,14 +30,16 @@ jobs:
         run: uv sync --dev
       - name: Lint
         run: |
-          uv run ruff check src tests
-          uv run ruff format --check src tests
+          uv run ruff check src tests infra
+          uv run ruff format --check src tests infra
       - name: Type-check production code
         run: uv run mypy src/catering_system
       - name: Test Python and enforce coverage
         run: |
           uv run coverage run -m pytest -q
           uv run coverage report
+      - name: Verify PDF runtime and systemd alignment (repository-only)
+        run: uv run python infra/deploy/verify_pdf_runtime.py --repository-only
       - name: Test browser and Worker JavaScript
         run: |
           node --test infra/staging-form/app.test.cjs
