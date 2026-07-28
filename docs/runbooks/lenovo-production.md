@@ -189,6 +189,80 @@ requests:
 > the `pytest` and `mypy` that step 4 of the deployment below currently relies
 > on.
 
+## PDF runtime verification (read-only)
+
+`infra/deploy/verify_pdf_runtime.py` cross-checks the PDF runtime and systemd
+alignment without changing anything: no package installation, no `uv sync`, no
+unit installation, no `daemon-reload`, no service restart, no override edit or
+removal, no application code change, no database write. It only reads
+git-tracked files, runs `uv lock --check`, queries systemd with `systemctl
+show` (never `systemctl cat` — `show` alone reports the effective,
+drop-in-resolved property values this tool needs), and reads `/proc/<pid>/
+cmdline` and `/proc/<pid>/environ` (variable **names** only — values are
+never printed).
+
+Two modes; one must be given explicitly:
+
+```bash
+# No systemd or production access needed — safe in CI or any checkout.
+uv run python infra/deploy/verify_pdf_runtime.py --repository-only
+
+# Real venv, reportlab, systemd and process checks. Run on Lenovo itself.
+python infra/deploy/verify_pdf_runtime.py --host-runtime
+```
+
+Add `--json` for machine-readable output alongside the human-readable report.
+
+Run `--host-runtime`:
+
+- **before** the Slice D migration below, to see how close the host already
+  is to ready — some individual checks (venv, `reportlab`, the systemd
+  alignment classification) may already pass even though the overall exit
+  code is non-zero (see below), because the git checkout itself hasn't
+  received Slices A/B yet;
+- **after** installing the tracked units and removing the overrides, to
+  confirm the migration landed cleanly — a fully successful post-migration
+  run (exit `0`) should report `READY_WITHOUT_OVERRIDE` for both services and
+  no other failures.
+
+`MISMATCHED_OVERRIDE`, `TRACKED_UNIT_MISMATCH`, `RUNTIME_INTERPRETER_MISSING`,
+`REPORTLAB_MISSING`, `REPORTLAB_VERSION_MISMATCH`, `PDF_CONFIG_MISSING`,
+`LOCK_MISSING`, and `LOCK_OUT_OF_DATE` are all failures (non-zero exit) and
+mean the runtime is not ready for that step of the migration — investigate
+before proceeding, do not work around them by installing anything by hand.
+
+### What `--host-runtime` reports today, before Slices A/B reach the checkout
+
+Lenovo's checkout is still at the commit that predates both `uv.lock` (Slice
+A) and the tracked-unit venv alignment (Slice B). Running `--host-runtime`
+there today is expected to produce a **non-zero exit** with exactly:
+
+```
+LOCK_MISSING           — uv.lock does not exist on this checkout yet
+TRACKED_UNIT_MISMATCH  — catering-office-api.service   (tracked file still says /usr/bin/python3)
+TRACKED_UNIT_MISMATCH  — catering-office-panel.service  (same)
+```
+
+while the runtime-derived checks — which inspect the actually-running system,
+not the stale checkout — may still correctly report `READY_WITH_COMPATIBLE_
+OVERRIDE` for both services, since the existing untracked drop-in override
+already runs them under `.venv/bin/python3`.
+
+**`LOCK_MISSING` occurs first, before `uv` availability is ever tested**,
+because `check_repository_state` requires `uv.lock` to exist before it
+attempts `uv lock --check` at all. `uv` is also not installed on Lenovo as of
+this writing (`uv` is absent from `PATH`); once the checkout is fast-forwarded
+past Slice A so `uv.lock` exists, the failure at that step will shift to
+`LOCK_OUT_OF_DATE` instead (the file exists, but the check can't run without
+the `uv` binary) — that too is expected until a later slice installs `uv` on
+the host, not a script defect.
+
+Do **not** read a `--host-runtime` run against today's checkout as globally
+successful just because some checks pass: the overall exit code stays
+non-zero until the checkout has received Slices A/B and `uv` is installed.
+These specific, expected pre-migration failures prove the checkout hasn't
+received those slices yet — they are not evidence of a defect in this tool.
+
 ## Safe deployment
 
 ### 1. Record the starting point
