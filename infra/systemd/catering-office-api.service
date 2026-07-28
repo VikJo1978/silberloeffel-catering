@@ -15,7 +15,11 @@ Environment=PYTHONPATH=/home/viktor/projects/silberloeffel-catering/src
 # Root-owned, mode 600. Holds OFFICE_API_TOKEN (pack §5) — the token is
 # never an argument and never appears in the process list.
 EnvironmentFile=/etc/catering/office-api.env
-ExecStart=/usr/bin/python3 -m catering_system.ui.office_api --db /home/viktor/catering-runtime/core.db --host 100.109.6.74 --port 8084
+# The project venv, not the system interpreter: this service imports reportlab
+# (offer PDF rendering), which exists only in .venv. /usr/bin/python3 here has
+# already caused one crash-loop. Build the venv with `uv sync --no-dev` before
+# installing this unit — see docs/runbooks/lenovo-production.md.
+ExecStart=/home/viktor/projects/silberloeffel-catering/.venv/bin/python3 -m catering_system.ui.office_api --db /home/viktor/catering-runtime/core.db --host 100.109.6.74 --port 8084
 Restart=on-failure
 RestartSec=3
 
