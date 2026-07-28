@@ -11,7 +11,11 @@ User=viktor
 WorkingDirectory=/home/viktor/projects/silberloeffel-catering
 Environment=PYTHONPATH=/home/viktor/projects/silberloeffel-catering/src
 EnvironmentFile=/etc/catering/office-panel.env
-ExecStart=/usr/bin/python3 -m catering_system.ui.office_panel --db /home/viktor/catering-runtime/core.db --port 8081
+# The project venv, not the system interpreter: this service imports reportlab
+# (offer PDF rendering), which exists only in .venv. /usr/bin/python3 here has
+# already caused one crash-loop. Build the venv with `uv sync --no-dev` before
+# installing this unit — see docs/runbooks/lenovo-production.md.
+ExecStart=/home/viktor/projects/silberloeffel-catering/.venv/bin/python3 -m catering_system.ui.office_panel --db /home/viktor/catering-runtime/core.db --port 8081
 Restart=on-failure
 RestartSec=3
 
