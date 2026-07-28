@@ -1,7 +1,9 @@
 # Current status
 
-Operational truth last verified: **2026-07-27T11:32:00Z** (PR #42 merge and
-post-merge repository/production alignment check).
+Operational truth last verified: **2026-07-28T18:42:33Z** (PDF runtime
+production migration — see "Deployed and closed" below — and independent
+post-migration verification, including `infra/deploy/verify_pdf_runtime.py
+--host-runtime`).
 
 This document separates **repository state** (what is on `origin/main`) from
 **production state** (what is actually deployed and running on Lenovo
@@ -14,80 +16,121 @@ recorded. See `docs/runbooks/deployment-truth-checklist.md`.
 
 | Item | Value |
 |---|---|
-| `origin/main` HEAD | `8abb9b5ea3350ec71c66e87f0481be0b0823ccf7` (`8abb9b5`) |
-| Latest merged functional PR | [#42 — Fix PDF startup preflight ordering and document configuration contract](https://github.com/VikJo1978/silberloeffel-catering/pull/42) (merge commit `03a3780e699357c30e36049f1293f5a93a214f6f`, parents `a67875d8` + `5f4df5e6`) |
-| Latest merged PR (docs-only) | [#43 — Align project status documentation with main and production](https://github.com/VikJo1978/silberloeffel-catering/pull/43) (merge commit `8abb9b5ea3350ec71c66e87f0481be0b0823ccf7`) — this and the current follow-up correction are documentation-only; they do not change PR #42's merged/not-deployed status below |
-| CI on the latest functional merge (`03a3780`) | `quality` — **pass** (both required checks green at merge time) |
-| Full test suite at `03a3780` (locally verified during review) | **2212 passed**, coverage **90.7%** (≥90% threshold), Ruff/mypy clean |
+| `origin/main` HEAD | `ab0743f229b525b348ebdc6cfd71c2fac7ba153e` (`ab0743f`) |
+| Latest merged functional PRs | [#45 — Add reproducible runtime dependency locking](https://github.com/VikJo1978/silberloeffel-catering/pull/45), [#46 — Align tracked office units with the running venv interpreter](https://github.com/VikJo1978/silberloeffel-catering/pull/46), [#48 — Add read-only PDF runtime verification](https://github.com/VikJo1978/silberloeffel-catering/pull/48) |
+| Latest merged PR (docs-only) | this update (branch `docs/runtime-migration-status`, issue #49) — documentation-only; does not itself change production state |
+| CI on the latest functional merges | `quality` — **pass** (required check green at merge time for #45, #46, #48) |
 
 **Do not treat the SHA above as permanent:** query Git for the current value;
-repository HEAD advances with every merge. Docs-only commits (including PR
-#43 and this update) change repository HEAD but are **not** application
-deployments — production state below remains authoritative until services
-restart.
+repository HEAD advances with every merge. Docs-only commits change
+repository HEAD but are **not** application deployments — production state
+below remains authoritative until services restart.
 
 ## Production state
 
 | Item | Value |
 |---|---|
-| Deployed commit | `a67875d800deff7a954e9c83d42174c41b647326` (`a67875d`) |
-| Relationship to `origin/main` | **one merge behind** — production does not yet include PR #42 |
-| Merged-but-not-yet-deployed changes | **PR #42 only** — [Fix PDF startup preflight ordering and document configuration contract](https://github.com/VikJo1978/silberloeffel-catering/pull/42) (closes issue #41). Not deployed; do not treat it as running in production. |
+| Deployed commit | `ab0743f229b525b348ebdc6cfd71c2fac7ba153e` (`ab0743f`) |
+| Previous deployed commit | `a67875d800deff7a954e9c83d42174c41b647326` (`a67875d`) |
+| Relationship to `origin/main` | **matches** — production is a clean fast-forward of `origin/main`, including PR #42, #45, #46, #48 |
+| Merged-but-not-yet-deployed changes | none |
 | Release discipline (proven) | deployment user can direct-push to `main`; prior pushes were not blocked by required green `quality`; branch protection may be absent or the user may have bypass — exact settings require authenticated owner/admin verification (see `docs/runbooks/release-discipline.md`) |
 
 ## Production services
 
-Last verified observation: **2026-07-27**, immediately after the `a67875d`
-deploy and its post-deploy observation pass. **These are a point-in-time
-snapshot, not permanent expected values** — re-verify with `systemctl show`
-before relying on them.
+Last verified observation: **2026-07-28**, immediately after the PDF runtime
+production migration (see "Deployed and closed" below) and its independent
+post-migration verification pass. **These are a point-in-time snapshot, not
+permanent expected values** — re-verify with `systemctl show` before relying
+on them.
 
 | Service | PID | Started (CEST) |
 |---|---|---|
-| `catering-office-api` | 427823 | 2026-07-26 22:52:29 |
-| `catering-office-panel` | 435026 | 2026-07-27 08:49:50 |
+| `catering-office-api` | 458270 | 2026-07-28 20:42:33 |
+| `catering-office-panel` | 458277 | 2026-07-28 20:42:33 |
 | `catering-website-intake` | 362683 | 2026-07-22 22:50:09 |
 | `catering-kiosk` | 332509 | 2026-07-21 00:36:38 |
 
-Only `catering-office-panel` was restarted for the `a67875d` deploy (the only
-service whose import graph is affected by that commit's change); the other
-three retained their prior PID/start time, confirming they were not touched.
+Only `catering-office-api` and `catering-office-panel` were restarted for the
+PDF runtime migration; `catering-website-intake` and `catering-kiosk`
+retained their prior PID/start time, confirming they were not touched.
 
-## Deployment verification (`a67875d`)
+## Deployment verification (`ab0743f`)
 
 - HTTP checks: Office API `401`, Office Panel `401`, Kiosk `200`, Website
-  Intake `405` — all matched the expected/documented contract.
-- Database and backup integrity: `PRAGMA integrity_check` = `ok` on both the
-  live database and the pre-deploy backup.
-- Backup: `/home/viktor/catering-runtime/core.db.pre-a67875d-deploy.20260727-084522.bak`
+  Intake `GET /intake/website-form` `405`, unauthenticated
+  `POST /intake/website-form` `401` — all matched the expected/documented
+  contract (the GET/POST difference is expected; the two methods exercise
+  different validation paths).
+- Database integrity: `PRAGMA integrity_check` = `ok`.
+- Runtime verifier: `infra/deploy/verify_pdf_runtime.py --host-runtime`
+  (with `/home/viktor/.local/uv-bootstrap-venv/bin` on `PATH`) reported
+  `OVERALL: OK`, `READY_WITHOUT_OVERRIDE` for both `catering-office-api` and
+  `catering-office-panel`.
+- Pre-migration database backup:
+  `/home/viktor/catering-runtime/predeploy-backups/core-pre-runtime-migration-20260728-191432.db`
   — 471040 bytes, SHA-256
-  `82afe9dd5c758279446ce426c49adf3673adfd52f5a45dea6f3f42e99ce1642e`.
-- Rollback: **not required.**
+  `82afe9dd5c758279446ce426c49adf3673adfd52f5a45dea6f3f42e99ce1642e`,
+  `integrity_check: ok`.
+- Rollback: **not required.** Rollback assets (database backup above,
+  previous venv at `.venv.pre-runtime-migration.20260728-191831`, and the
+  removed systemd overrides archived at
+  `/home/viktor/catering-runtime/backups/systemd-runtime-migration.20260728-191449/`)
+  were retained, not deleted.
 
-## Current known risk — systemd interpreter mismatch
+## Resolved — systemd interpreter mismatch
 
-The tracked unit files (`infra/systemd/catering-office-api.service`,
-`infra/systemd/catering-office-panel.service`) still declare
-`ExecStart=/usr/bin/python3 ...`. Production actually runs
-`.venv/bin/python3 ...` through an **untracked** `systemd` drop-in override
-(`/etc/systemd/system/catering-office-*.service.d/override.conf`) that exists
-only on the host, not in this repository. Do not reinstall the tracked unit
-files as-is before this is resolved — doing so would silently revert
-production to the system interpreter, which lacks `reportlab` and has
-already caused one real crash-loop incident. This is tracked as the next
-slice below (`PDF_RUNTIME_VENV_AND_SYSTEMD_V1`), not fixed yet.
+The previously-tracked risk here (tracked units declaring
+`ExecStart=/usr/bin/python3 ...` while production ran `.venv/bin/python3`
+through an untracked drop-in override) is **resolved** as of the PDF runtime
+migration below. The tracked unit files now declare the venv interpreter
+directly (PR #46), production runtime is reproduced from a committed
+`uv.lock` (PR #45), and the untracked overrides have been removed —
+`DropInPaths` is empty for both office services, confirmed by
+`infra/deploy/verify_pdf_runtime.py --host-runtime` (PR #48). See "Deployed
+and closed" below for full detail.
 
 ## Next action
 
-1. Review and implement `PDF_RUNTIME_VENV_AND_SYSTEMD_V1` (tracked systemd
-   interpreter alignment, production venv/runtime reproducibility,
-   dependency lock strategy, non-mutating runtime verification tooling —
-   not implemented yet).
-2. Deploy PR #42 to production only through a controlled deploy, either
-   together with or before Slice 2.
-3. Then run the artificial end-to-end pre-launch validation.
+1. Run the artificial end-to-end pre-launch validation.
 
 ### Deployed and closed
+
+**PDF_RUNTIME_VENV_AND_SYSTEMD_MIGRATION_V1 — DEPLOYED, CLOSED**
+
+- Production fast-forwarded **2026-07-28** from `a67875d800deff7a954e9c83d42174c41b647326`
+  to `ab0743f229b525b348ebdc6cfd71c2fac7ba153e`, deploying PR #42 (PDF startup
+  ordering and error handling), PR #45 (committed `uv.lock` and uv-based
+  reproducibility), PR #46 (tracked office units use the project `.venv`),
+  and PR #48 (read-only PDF runtime/systemd verifier).
+- Runtime reproduced from the committed `uv.lock` via
+  `uv sync --frozen --no-dev` (Python `3.13.5`, `reportlab==5.0.0`); dev
+  dependencies are not required in the production runtime.
+- `uv 0.11.32` is installed separately in
+  `/home/viktor/.local/uv-bootstrap-venv` (an isolated bootstrap venv, not a
+  system-wide install); the host-runtime verifier requires that path on
+  `PATH`.
+- Tracked systemd units for both office services now declare
+  `/home/viktor/projects/silberloeffel-catering/.venv/bin/python3`; the
+  previously-installed compatible overrides were removed from the active
+  systemd configuration and archived (not deleted) — see "Deployment
+  verification" above.
+- Restart scope: `catering-office-api` and `catering-office-panel` only, at
+  `2026-07-28 20:42:33 CEST`; `catering-kiosk` and `catering-website-intake`
+  were **not** restarted.
+- Production now has repository-specific, read-only GitHub access
+  configured through repo-local `core.sshCommand`; the remote URL was not
+  changed.
+
+**PR #42 — PDF startup preflight ordering and configuration documentation —
+DEPLOYED, CLOSED**
+
+- Merged **2026-07-27** into `main` (merge commit `03a3780e699357c30e36049f1293f5a93a214f6f`); issue #41 closed.
+- Fixes direct-mode Office Panel validating `OFFICE_PDF_*` configuration
+  *after* opening `core.db` and applying migrations; hardens
+  `OFFICE_PDF_LOGO_PATH` error handling; documents the full `OFFICE_PDF_*`
+  contract in `.env.example` and the Lenovo runbook.
+- Deployed to production as part of the `ab0743f` fast-forward above.
 
 **PR #38 — catalog price-history response handling — DEPLOYED, CLOSED**
 
@@ -170,20 +213,6 @@ slice below (`PDF_RUNTIME_VENV_AND_SYSTEMD_V1`), not fixed yet.
 **Auerswald missed-board compatibility — CLOSED** (runtime stable; Office
 Rückruf pull path operational).
 
-### Merged, not yet deployed
-
-**PR #42 — PDF startup preflight ordering and configuration documentation —
-MERGED, NOT DEPLOYED**
-
-- Merged **2026-07-27** into `main` (merge commit `03a3780e699357c30e36049f1293f5a93a214f6f`); issue #41 closed.
-- Fixes direct-mode Office Panel validating `OFFICE_PDF_*` configuration
-  *after* opening `core.db` and applying migrations; hardens
-  `OFFICE_PDF_LOGO_PATH` error handling; documents the full `OFFICE_PDF_*`
-  contract in `.env.example` and the Lenovo runbook.
-- **Production is still on `a67875d` and does not include this change.** Do
-  not deploy without a controlled deploy per the runbook; see "Next action"
-  above.
-
 ## Production database (aggregate)
 
 | Item | Value |
@@ -228,9 +257,11 @@ Core HubSpot intake remains disabled.
 
 ## Quality baseline (repository)
 
-On `03a3780` (current `origin/main`) locally and in GitHub Actions: **2212
-passed**, coverage **90.7%** (≥90% threshold), Ruff and mypy clean.
-Documented pre-push gate in `docs/runbooks/release-discipline.md`.
+On `03a3780` (historical — see "Repository state" above for the current
+`origin/main` HEAD) locally and in GitHub Actions: **2212 passed**, coverage
+**90.7%** (≥90% threshold), Ruff and mypy clean. Not re-run at `ab0743f` as
+part of this documentation-only update. Documented pre-push gate in
+`docs/runbooks/release-discipline.md`.
 
 ## Operational risks (open)
 

@@ -165,6 +165,19 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
 - Fast-forwarded the Lenovo production checkout through final audit commit
   `08034ba` after successful CI; no service restart was needed because the
   running production modules were unchanged.
+- Added reproducible runtime dependency locking: a committed `uv.lock` and
+  `uv`-based CI, documenting the runtime/dev dependency split (PR #45).
+- Aligned the tracked `catering-office-api`/`catering-office-panel` systemd
+  units to declare the project `.venv` interpreter directly, matching what
+  production actually ran through an untracked drop-in override (PR #46).
+- Added a read-only PDF runtime/systemd verification tool
+  (`infra/deploy/verify_pdf_runtime.py`, `--repository-only`/`--host-runtime`
+  modes) with CI integration and a runbook section (closes #47, PR #48).
+- Deployed the reproducible `uv`-managed venv and tracked systemd units to
+  production (PRs #42, #45, #46, #48), removed the untracked systemd
+  overrides, and verified `READY_WITHOUT_OVERRIDE` for both office services
+  with the new verifier tool. Restarted `catering-office-api` and
+  `catering-office-panel` only; kiosk and website intake were not restarted.
 
 ### Fixed
 
@@ -177,11 +190,10 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
   to production.
 - Office Panel direct mode validates `OFFICE_PDF_*` configuration before
   opening `core.db`, instead of after already applying migrations and
-  constructing repositories (closes #41, PR #42). **Merged to `main`, not
-  yet deployed to production.**
+  constructing repositories (closes #41, PR #42). Deployed to production.
 - Unreadable or missing `OFFICE_PDF_LOGO_PATH` files now fail startup
   cleanly with a controlled message instead of an unhandled traceback
-  (PR #42). **Merged to `main`, not yet deployed to production.**
+  (PR #42). Deployed to production.
 
 ### Documentation
 
