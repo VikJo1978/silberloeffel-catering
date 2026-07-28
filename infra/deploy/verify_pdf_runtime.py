@@ -7,10 +7,12 @@ This tool never mutates anything: no package installation, no `uv sync`, no
 systemd unit installation, no `daemon-reload`, no service restart, no
 override edit/removal, no application code change, no database write. It
 only reads git-tracked files, runs `uv lock --check` (itself read-only),
-queries systemd with `systemctl show`/`systemctl cat`, reads `/proc/<pid>/
-cmdline` and `/proc/<pid>/environ` (variable *names* only — values are never
-printed), and runs the target interpreter with a side-effect-free `-c` probe
-to introspect `sys.prefix` and import `reportlab`.
+queries systemd with `systemctl show` (never `systemctl cat` — `show` alone
+is sufficient, since it already reports the effective, drop-in-resolved
+property values this tool needs), reads `/proc/<pid>/cmdline` and
+`/proc/<pid>/environ` (variable *names* only — values are never printed),
+and runs the target interpreter with a side-effect-free `-c` probe to
+introspect `sys.prefix` and import `reportlab`.
 
 Why not `/proc/<pid>/exe`: the project venv is a standard stdlib venv, so
 `.venv/bin/python3` is a *symlink* to the system interpreter. `/proc/<pid>/
@@ -49,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shlex
 import subprocess
 from dataclasses import dataclass, field
@@ -195,28 +198,53 @@ class Report:
 # --- subprocess plumbing (isolated for testability) ------------------------
 
 
-def _run(cmd: Sequence[str], timeout: float = _SUBPROCESS_TIMEOUT_SECONDS):
+def _run(
+    cmd: Sequence[str],
+    timeout: float = _SUBPROCESS_TIMEOUT_SECONDS,
+    cwd: Path | None = None,
+):
     """The only place that shells out. No shell=True, explicit timeout.
 
     Tests replace this function (module-level monkeypatch) to supply canned
     output instead of requiring a real systemd host or a real venv.
     """
     return subprocess.run(
-        list(cmd), check=False, capture_output=True, text=True, timeout=timeout
+        list(cmd),
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        cwd=cwd,
     )
 
 
 class CommandUnavailable(RuntimeError):
-    """Raised when the target binary does not exist on PATH."""
+    """Raised when the target command could not be launched at all — the
+    binary is missing, not executable, or the launch otherwise failed at the
+    OS level (covers FileNotFoundError, PermissionError, NotADirectoryError,
+    and similar subprocess-launch OSErrors uniformly)."""
 
 
-def _run_or_raise(cmd: Sequence[str], timeout: float = _SUBPROCESS_TIMEOUT_SECONDS):
+class ExecStartParseError(ValueError):
+    """Raised when an ExecStart value cannot be tokenized (e.g. unbalanced
+    quoting). Callers convert this into a clean failed CheckResult instead of
+    letting shlex's ValueError propagate as an uncaught traceback."""
+
+
+def _run_or_raise(
+    cmd: Sequence[str],
+    timeout: float = _SUBPROCESS_TIMEOUT_SECONDS,
+    cwd: Path | None = None,
+):
     try:
-        return _run(cmd, timeout=timeout)
-    except FileNotFoundError as exc:
-        raise CommandUnavailable(str(exc)) from exc
+        return _run(cmd, timeout=timeout, cwd=cwd)
     except subprocess.TimeoutExpired as exc:
         raise CommandUnavailable(f"timed out after {timeout}s: {exc}") from exc
+    except OSError as exc:
+        # FileNotFoundError (binary missing) is an OSError subclass, so this
+        # also covers PermissionError (exists but not executable) and other
+        # exec-time failures without needing a separate except clause.
+        raise CommandUnavailable(f"{type(exc).__name__}: {exc}") from exc
 
 
 # --- repository-state checks (safe in both modes) ---------------------------
@@ -258,7 +286,7 @@ def check_repository_state(report: Report, repo_root: Path) -> None:
         return
 
     try:
-        result = _run_or_raise(["uv", "lock", "--check"], timeout=60.0)
+        result = _run_or_raise(["uv", "lock", "--check"], timeout=60.0, cwd=repo_root)
     except CommandUnavailable as exc:
         report.record(
             "uv_lock_check",
@@ -284,13 +312,21 @@ def check_repository_state(report: Report, repo_root: Path) -> None:
 
 
 def _parse_exec_start(unit_text: str) -> list[str] | None:
+    """Returns None when no ExecStart line is present (or it's empty).
+    Raises ExecStartParseError — never a bare shlex ValueError — when a line
+    is present but its syntax can't be tokenized (e.g. unbalanced quoting)."""
     for line in unit_text.splitlines():
         stripped = line.strip()
         if stripped.startswith("ExecStart="):
             value = stripped[len("ExecStart=") :].strip()
             if not value:
                 return None
-            return shlex.split(value)
+            try:
+                return shlex.split(value)
+            except ValueError as exc:
+                raise ExecStartParseError(
+                    f"ExecStart has malformed syntax: {exc}"
+                ) from exc
     return None
 
 
@@ -306,7 +342,16 @@ def check_tracked_units(report: Report, repo_root: Path) -> None:
                 f"{unit_path} not found",
             )
             continue
-        argv = _parse_exec_start(unit_path.read_text(encoding="utf-8"))
+        try:
+            argv = _parse_exec_start(unit_path.read_text(encoding="utf-8"))
+        except ExecStartParseError as exc:
+            report.record(
+                name,
+                False,
+                "TRACKED_UNIT_MISMATCH",
+                f"{filename}: {exc}",
+            )
+            continue
         expected = EXPECTED_UNIT_ARGV[service]
         if argv == expected:
             report.record(
@@ -384,7 +429,20 @@ def check_python_runtime(report: Report, venv_path: Path) -> InterpreterProbe | 
             f"{python_path} is not a regular file or symlink",
         )
         return None
-    report.record("runtime_interpreter_present", True, "OK", f"{python_path} exists")
+    if not os.access(python_path, os.X_OK):
+        report.record(
+            "runtime_interpreter_present",
+            False,
+            "RUNTIME_INTERPRETER_MISSING",
+            f"{python_path} exists but is not executable",
+        )
+        return None
+    report.record(
+        "runtime_interpreter_present",
+        True,
+        "OK",
+        f"{python_path} exists and is executable",
+    )
 
     probe = probe_interpreter(python_path)
     if not probe.ok:
@@ -495,6 +553,9 @@ def _systemctl_show(service: str, *properties: str) -> dict[str, str] | None:
 
 
 def _extract_effective_argv(exec_start_value: str) -> list[str] | None:
+    """Returns None when no argv[]= segment is present. Raises
+    ExecStartParseError — never a bare shlex ValueError — when a segment is
+    present but its syntax can't be tokenized (e.g. unbalanced quoting)."""
     marker = "argv[]="
     start = exec_start_value.find(marker)
     if start == -1:
@@ -502,7 +563,12 @@ def _extract_effective_argv(exec_start_value: str) -> list[str] | None:
     start += len(marker)
     end = exec_start_value.find(" ;", start)
     segment = exec_start_value[start:end] if end != -1 else exec_start_value[start:]
-    return shlex.split(segment.strip())
+    try:
+        return shlex.split(segment.strip())
+    except ValueError as exc:
+        raise ExecStartParseError(
+            f"effective ExecStart has malformed syntax: {exc}"
+        ) from exc
 
 
 def check_effective_systemd(report: Report, service: str) -> dict[str, str] | None:
@@ -521,10 +587,16 @@ def check_effective_systemd(report: Report, service: str) -> dict[str, str] | No
         return None
 
     exec_start = props.get("ExecStart", "")
-    effective_argv = _extract_effective_argv(exec_start)
     expected_argv = EXPECTED_UNIT_ARGV.get(service)
     drop_in_paths = props.get("DropInPaths", "").strip()
     override_present = bool(drop_in_paths)
+
+    try:
+        effective_argv = _extract_effective_argv(exec_start)
+    except ExecStartParseError as exc:
+        code = "MISMATCHED_OVERRIDE" if override_present else "TRACKED_UNIT_MISMATCH"
+        report.record(name, False, code, f"{service}: {exc}")
+        return props
 
     if effective_argv is None:
         report.record(
@@ -595,15 +667,25 @@ def _read_cmdline(pid: str) -> list[str] | None:
 
 
 def check_pdf_config_and_process(
-    report: Report, service: str, main_pid: str | None
+    report: Report, service: str, props: dict[str, str] | None
 ) -> None:
+    """`props` is the dict returned by check_effective_systemd — this reuses
+    the already-fetched ActiveState/MainPID rather than re-querying. Both
+    ActiveState == 'active' and a non-zero MainPID are required: MainPID
+    alone is not sufficient evidence (a unit mid-'activating' can already
+    have a forked-but-not-yet-active MainPID), and ActiveState alone doesn't
+    tell us which PID to inspect."""
     active_name = f"service_active[{service}]"
-    if not main_pid or main_pid in ("0", ""):
+    active_state = props.get("ActiveState") if props else None
+    main_pid = props.get("MainPID") if props else None
+    has_pid = bool(main_pid) and main_pid not in ("0", "")
+    if active_state != "active" or not has_pid:
         report.record(
             active_name,
             False,
             "SERVICE_INACTIVE",
-            f"{service}: no running MainPID",
+            f"{service}: not active (ActiveState={active_state!r}, "
+            f"MainPID={main_pid!r})",
         )
         report.record(
             f"pdf_config[{service}]",
@@ -612,6 +694,7 @@ def check_pdf_config_and_process(
             f"{service}: cannot inspect environment, service is not active",
         )
         return
+    assert main_pid is not None  # narrowed by has_pid above
     report.record(active_name, True, "OK", f"{service}: active, MainPID={main_pid}")
 
     names = _read_environ_names(main_pid)
@@ -739,8 +822,7 @@ def run_host_runtime(repo_root: Path, venv_path: Path) -> Report:
 
     for service in SERVICES:
         props = check_effective_systemd(report, service)
-        main_pid = props.get("MainPID") if props else None
-        check_pdf_config_and_process(report, service, main_pid)
+        check_pdf_config_and_process(report, service, props)
 
     return report
 
