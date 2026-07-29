@@ -137,6 +137,18 @@ def _position_rows(variants: list[dict[str, object]]) -> str:
             unit_text = (
                 f"{int(unit_cents) / 100:.2f} €" if isinstance(unit_cents, int) else "–"
             )
+            description = position.get("description")
+            description_html = (
+                f"<p>{_e(str(description))}</p>"
+                if isinstance(description, str) and description
+                else ""
+            )
+            composition = position.get("composition")
+            composition_html = (
+                f"<p><strong>Zusammensetzung:</strong> {_e(str(composition))}</p>"
+                if isinstance(composition, str) and composition
+                else ""
+            )
             allergen_html = _allergen_block(
                 position.get("allergen_labels"),
                 unknown=bool(position.get("allergens_unknown")),
@@ -145,6 +157,8 @@ def _position_rows(variants: list[dict[str, object]]) -> str:
                 "<li>"
                 f"<strong>{name}</strong> "
                 f"<span>({_e(unit_text)} netto / Einheit)</span>"
+                f"{description_html}"
+                f"{composition_html}"
                 f"{allergen_html}"
                 "</li>"
             )

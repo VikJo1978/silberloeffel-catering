@@ -154,6 +154,8 @@ def _valid_offer_snapshot(
     variant_label: str = "Variante A",
     variant_id: str = _VARIANT_ID,
     position_id: str = _POSITION_ID,
+    position_description: str | None = "Frozen description",
+    position_composition: str | None = "Frozen composition",
 ) -> dict:
     payload: dict[str, object] = {
         "schema_version": "offer_snapshot_v1",
@@ -203,8 +205,8 @@ def _valid_offer_snapshot(
                         "kind": "catalog",
                         "catalog_item_id": "catalog-1",
                         "name": "Fingerfood Paket",
-                        "description": "Frozen description",
-                        "composition": "Frozen composition",
+                        "description": position_description,
+                        "composition": position_composition,
                         "quantity_mode": "total",
                         "quantity": "80",
                         "unit_label": "Stück",
@@ -261,6 +263,8 @@ def _prepare_offer(
     *,
     variant_id: str = _VARIANT_ID,
     position_id: str = _POSITION_ID,
+    position_description: str | None = "Frozen description",
+    position_composition: str | None = "Frozen composition",
 ) -> tuple[str, str]:
     status, body = _api_post(
         f"{api_url}/office/v1/inquiries/{inquiry_id}/prepare-offer",
@@ -269,6 +273,8 @@ def _prepare_offer(
                 inquiry_id=inquiry_id,
                 variant_id=variant_id,
                 position_id=position_id,
+                position_description=position_description,
+                position_composition=position_composition,
             )
         },
     )
@@ -491,6 +497,48 @@ def test_prepared_shows_mark_sent_form_only(direct_world) -> None:
     assert 'action="/offer/' in html and "/mark-sent" in html
     assert "Annahme erfassen" not in html
     assert "In Auftrag umwandeln" not in html
+
+
+def test_offer_detail_shows_position_description_and_composition(
+    direct_world,
+) -> None:
+    panel_url, api_url, ids, _db = direct_world
+    offer_id, _version_id = _prepare_offer(api_url, ids["inquiry_convertible"])
+    _status, html = _get(f"{panel_url}/offer/{offer_id}")
+    assert "Frozen description" in html
+    assert "Zusammensetzung:</strong> Frozen composition" in html
+
+
+def test_offer_detail_escapes_position_description_and_composition(
+    direct_world,
+) -> None:
+    panel_url, api_url, ids, _db = direct_world
+    offer_id, _version_id = _prepare_offer(
+        api_url,
+        ids["inquiry_convertible"],
+        position_description="<script>alert('xss')</script>",
+        position_composition="Nüsse & <b>Sesam</b>",
+    )
+    _status, html = _get(f"{panel_url}/offer/{offer_id}")
+    assert "<script>alert('xss')</script>" not in html
+    assert "&lt;script&gt;alert(&#x27;xss&#x27;)&lt;/script&gt;" in html
+    assert "Nüsse &amp; &lt;b&gt;Sesam&lt;/b&gt;" in html
+
+
+def test_offer_detail_omits_description_and_composition_when_absent(
+    direct_world,
+) -> None:
+    panel_url, api_url, ids, _db = direct_world
+    offer_id, _version_id = _prepare_offer(
+        api_url,
+        ids["inquiry_convertible"],
+        position_description=None,
+        position_composition=None,
+    )
+    _status, html = _get(f"{panel_url}/offer/{offer_id}")
+    assert "Frozen description" not in html
+    assert "Zusammensetzung:" not in html
+    assert "Fingerfood Paket" in html
 
 
 def test_sent_shows_sent_lifecycle_actions(direct_world) -> None:
