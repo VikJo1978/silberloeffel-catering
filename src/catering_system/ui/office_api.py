@@ -125,7 +125,10 @@ from catering_system.services.offer_pdf_renderer import (
     offer_document_pdf_filename,
     render_offer_document_pdf,
 )
-from catering_system.services.offer_service import OfferService
+from catering_system.services.offer_service import (
+    OfferPreparationBlockedError,
+    OfferService,
+)
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
 from catering_system.services.payment_reminder_service import PaymentReminderService
@@ -207,12 +210,14 @@ class ApiError(Exception):
         retry_after: bool = False,
         *,
         reasons: tuple[str, ...] | None = None,
+        offer_id: str | None = None,
     ) -> None:
         super().__init__(code)
         self.status = status
         self.code = code
         self.retry_after = retry_after
         self.reasons = reasons
+        self.offer_id = offer_id
 
 
 def _invalid() -> ApiError:
@@ -1282,20 +1287,39 @@ class OfficeApi:
             offer = self.offer_service.prepare_offer_version(path_ids["id"], snapshot)
         except KeyError as exc:
             raise ApiError(404, "not_found") from exc
+        except OfferPreparationBlockedError as exc:
+            reasons = set(exc.reasons)
+            if "inquiry_rejected" in reasons:
+                raise ApiError(422, "inquiry_rejected") from exc
+            if "inquiry_call_verification_unsatisfied" in reasons:
+                raise ApiError(422, "inquiry_call_verification_unsatisfied") from exc
+            if any(reason.startswith("inquiry_contact_missing_") for reason in reasons):
+                raise ApiError(422, "contact_information_incomplete") from exc
+            if "active_order_exists" in reasons:
+                raise ApiError(409, "active_order_exists") from exc
+            if "offer_already_exists" in reasons:
+                existing = self.offers.get_by_source_inquiry_id(path_ids["id"])
+                if existing is None:
+                    raise ApiError(409, "offer_already_exists") from exc
+                raise ApiError(
+                    409,
+                    "offer_already_exists",
+                    offer_id=existing.offer_id,
+                ) from exc
+            raise ApiError(422, "offer_preparation_blocked") from exc
         except ValueError as exc:
             message = str(exc)
             if "snapshot inquiry_id mismatch" in message:
                 raise ApiError(422, "inquiry_id_mismatch") from exc
-            if "active order blocks offer preparation" in message:
-                raise ApiError(409, "active_order_exists") from exc
-            if "offer already exists for inquiry" in message:
-                raise ApiError(409, "offer_already_exists") from exc
-            if "contact information incomplete" in message:
-                raise ApiError(422, "contact_information_incomplete") from exc
             raise ApiError(422, "invalid_snapshot") from exc
         except sqlite3.IntegrityError:
-            if self.offers.get_by_source_inquiry_id(path_ids["id"]) is not None:
-                raise ApiError(409, "offer_already_exists") from None
+            existing = self.offers.get_by_source_inquiry_id(path_ids["id"])
+            if existing is not None:
+                raise ApiError(
+                    409,
+                    "offer_already_exists",
+                    offer_id=existing.offer_id,
+                ) from None
             raise
         version = offer.versions[0]
         return 201, {
@@ -2733,10 +2757,13 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             *,
             retry_after: bool = False,
             reasons: tuple[str, ...] | None = None,
+            offer_id: str | None = None,
         ) -> None:
             body: dict[str, object] = {"error": code}
             if reasons is not None:
                 body["reasons"] = list(reasons)
+            if offer_id is not None:
+                body["offer_id"] = offer_id
             self._respond(status, body, retry_after=retry_after)
 
         def _authorized(self) -> bool:
@@ -2868,7 +2895,12 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
                 _log.info("command busy route=%s", template)
                 self._error(503, "core_busy", retry_after=True)
             except ApiError as exc:
-                self._error(exc.status, exc.code, reasons=exc.reasons)
+                self._error(
+                    exc.status,
+                    exc.code,
+                    reasons=exc.reasons,
+                    offer_id=exc.offer_id,
+                )
             except Exception:
                 _log.exception("internal error route=%s", template)
                 self._error(500, "internal")

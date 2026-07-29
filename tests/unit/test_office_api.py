@@ -315,11 +315,12 @@ def test_queue_view_attention_counts_and_tops(api) -> None:
         "auftraege_top",
         "pausiert_top",
     }
-    # seed world: 4 open inquiries plus 1 rejected inquiry without an order;
+    # seed world: 5 open inquiries incl. one with only a cancelled historical
+    # order, plus 1 rejected inquiry without an order;
     # 1 order without print;
     # 2 not effective (unprinted + none), 2 blocked, 1 cancelled
     assert body["attention"] == {
-        "neue_anfragen": 4,
+        "neue_anfragen": 5,
         "druck_fehlt": 1,
         "nicht_wirksam": 1,
         "versand_blockiert": 1,
@@ -802,6 +803,7 @@ def test_inquiry_detail_shape(api) -> None:
     assert status == 200
     assert body["allows_conversion"] is False
     assert body["next_action"] is None
+    assert body["offer_preparation_blockers"] == ["active_order_exists"]
     assert "offer" not in body
     assert body["orders"] == [{"order_id": ids["order_ready"], "cancelled_at": None}]
     assert body["orders_truncated"] is False
@@ -846,6 +848,7 @@ def test_prepared_offer_changes_queue_and_detail_projection(api) -> None:
     assert status == 200
     assert detail["allows_conversion"] is False
     assert detail["next_action"] == "offer-pending"
+    assert detail["offer_preparation_blockers"] == ["offer_already_exists"]
     assert detail["offer"]["commercial_state"] == "Prepared"
 
 
@@ -2126,7 +2129,90 @@ def test_prepare_offer_happy_path_and_replay(api) -> None:
     stored = offers.get_by_source_inquiry_id(inquiry_id)
     assert stored is not None
     assert stored.offer_id == body["offer_id"]
+    assert stored.conversion_link is None
+    assert stored.sent_evidence == ()
     offers.close()
+
+    conn = sqlite3.connect(db)
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM orders WHERE source_inquiry_id = ?",
+            (inquiry_id,),
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM offer_conversion_links WHERE offer_id = ?",
+            (body["offer_id"],),
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM offer_sent_evidence WHERE offer_id = ?",
+            (body["offer_id"],),
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM order_commercial_snapshots WHERE source_offer_id = ?",
+            (body["offer_id"],),
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM offer_document_snapshots WHERE offer_id = ?",
+            (body["offer_id"],),
+        ).fetchone()[0]
+        == 0
+    )
+    conn.close()
+
+
+def test_prepare_offer_concurrent_duplicate_returns_established_conflict(api) -> None:
+    base, ids, db = api
+    inquiry_id = ids["inquiry_cancelled_order"]
+    url = _prepare_offer_url(base, inquiry_id)
+    snapshot = _valid_offer_snapshot(inquiry_id=inquiry_id)
+    start = threading.Barrier(3)
+    results: queue.Queue[tuple[int, dict[str, object]]] = queue.Queue()
+
+    def submit() -> None:
+        start.wait()
+        status, body, _headers = _post(
+            url,
+            args={"snapshot": snapshot},
+            command_id=str(uuid.uuid4()),
+        )
+        results.put((status, body))
+
+    threads = [threading.Thread(target=submit) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    start.wait()
+    for thread in threads:
+        thread.join(timeout=5)
+        assert thread.is_alive() is False
+
+    outcomes = [results.get_nowait(), results.get_nowait()]
+    assert sorted(status for status, _body in outcomes) == [201, 409]
+    conflict = next(body for status, body in outcomes if status == 409)
+    assert conflict["error"] == "offer_already_exists"
+    created = next(body for status, body in outcomes if status == 201)
+    assert conflict["offer_id"] == created["offer_id"]
+
+    conn = sqlite3.connect(db)
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM offers WHERE source_inquiry_id = ?",
+            (inquiry_id,),
+        ).fetchone()[0]
+        == 1
+    )
+    conn.close()
 
 
 def test_prepare_offer_active_order_blocks(api) -> None:
@@ -2139,6 +2225,43 @@ def test_prepare_offer_active_order_blocks(api) -> None:
     assert (status, body["error"]) == (409, "active_order_exists")
 
 
+@pytest.mark.parametrize(
+    ("fixture_id", "error"),
+    [
+        ("inquiry_rejected", "inquiry_rejected"),
+        (
+            "inquiry_verify",
+            "inquiry_call_verification_unsatisfied",
+        ),
+    ],
+)
+def test_prepare_offer_enforces_inquiry_eligibility(
+    api,
+    fixture_id: str,
+    error: str,
+) -> None:
+    base, ids, db = api
+    inquiry_id = ids[fixture_id]
+    status, body, _h = _post(
+        _prepare_offer_url(base, inquiry_id),
+        args={"snapshot": _valid_offer_snapshot(inquiry_id=inquiry_id)},
+    )
+    assert (status, body["error"]) == (422, error)
+
+    conn = sqlite3.connect(db)
+    offer_count = conn.execute(
+        "SELECT COUNT(*) FROM offers WHERE source_inquiry_id = ?",
+        (inquiry_id,),
+    ).fetchone()[0]
+    order_count = conn.execute(
+        "SELECT COUNT(*) FROM orders WHERE source_inquiry_id = ?",
+        (inquiry_id,),
+    ).fetchone()[0]
+    conn.close()
+    assert offer_count == 0
+    assert order_count == 0
+
+
 def test_prepare_offer_existing_offer_blocks(api) -> None:
     base, ids, _db = api
     inquiry_id = ids["inquiry_convertible"]
@@ -2147,6 +2270,11 @@ def test_prepare_offer_existing_offer_blocks(api) -> None:
     assert _post(url, args={"snapshot": snapshot})[0] == 201
     status, body, _h = _post(url, args={"snapshot": snapshot})
     assert (status, body["error"]) == (409, "offer_already_exists")
+    offers = SQLiteOfferRepository(_db)
+    stored = offers.get_by_source_inquiry_id(inquiry_id)
+    assert stored is not None
+    assert body["offer_id"] == stored.offer_id
+    offers.close()
 
 
 def test_prepare_offer_invalid_snapshot_and_inquiry_mismatch(api) -> None:

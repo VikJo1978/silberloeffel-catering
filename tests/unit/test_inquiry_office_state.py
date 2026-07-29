@@ -213,15 +213,16 @@ def test_converted_inquiry_is_closed_and_active_order_blocks_action() -> None:
     assert state.next_action is None
 
 
-def test_cancelled_order_stays_out_of_queue_and_blocks_reconversion() -> None:
+def test_cancelled_historical_order_allows_first_offer_preparation() -> None:
     state = derive_inquiry_office_state(
         _inquiry(crm_stage="Bestätigt / Auftrag"),
         has_order=True,
         has_active_order=False,
         today=_TODAY,
     )
-    assert state.is_open is False
-    assert state.next_action is None
+    assert state.is_open is True
+    assert state.next_action == "prepare-offer"
+    assert state.offer_preparation_blockers == ()
 
 
 def test_prepared_offer_projects_offer_pending_not_legacy_convert() -> None:

@@ -7,6 +7,9 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
 
 if TYPE_CHECKING:
+    from catering_system.domain.inquiry_offer_preparation import (
+        InquiryOfferPreparationBlocker,
+    )
     from catering_system.domain.inquiry_customer_snapshot import (
         InquiryCustomerSnapshot,
     )
@@ -100,6 +103,7 @@ class InquiryOfficeState:
     is_open: bool
     next_action: InquiryOfficeNextAction | None
     offer: InquiryOfferProjection | None = None
+    offer_preparation_blockers: tuple[InquiryOfferPreparationBlocker, ...] = ()
 
 
 class CustomerLinkage(TypedDict, total=False):
@@ -283,23 +287,41 @@ def derive_inquiry_office_state(
         raise ValueError("an active order is also an existing order")
     if today is None:
         raise ValueError("today is required when deriving inquiry office state")
+    from catering_system.domain.inquiry_offer_preparation import (
+        evaluate_inquiry_offer_preparation,
+    )
+
     offer_projection = (
         derive_inquiry_offer_projection(offer, today=today)
         if offer is not None
         else None
     )
-    if inquiry.crm_stage == "Abgelehnt / verloren" or has_order:
+    preparation = evaluate_inquiry_offer_preparation(
+        inquiry,
+        has_active_order=has_active_order,
+        has_existing_offer=offer is not None,
+    )
+
+    def state(
+        *,
+        is_open: bool,
+        next_action: InquiryOfficeNextAction | None,
+    ) -> InquiryOfficeState:
         return InquiryOfficeState(
-            is_open=False, next_action=None, offer=offer_projection
+            is_open=is_open,
+            next_action=next_action,
+            offer=offer_projection,
+            offer_preparation_blockers=preparation.reasons,
         )
+
+    if inquiry.crm_stage == "Abgelehnt / verloren" or has_active_order:
+        return state(is_open=False, next_action=None)
     is_open = True
     if (
         inquiry.call_verification_required
         and inquiry.call_verification_status != "verified"
     ):
-        return InquiryOfficeState(
-            is_open=is_open, next_action="verify", offer=offer_projection
-        )
+        return state(is_open=is_open, next_action="verify")
     from catering_system.domain.inquiry_contact_completeness import (
         inquiry_contact_complete,
     )
@@ -313,45 +335,23 @@ def derive_inquiry_office_state(
             # missing. Converted offers below stay untouched — an existing
             # conversion link is never blocked retroactively.
             if not contact_complete:
-                return InquiryOfficeState(
-                    is_open=is_open, next_action=None, offer=offer_projection
-                )
-            return InquiryOfficeState(
-                is_open=is_open,
-                next_action="convert-accepted",
-                offer=offer_projection,
-            )
+                return state(is_open=is_open, next_action=None)
+            return state(is_open=is_open, next_action="convert-accepted")
         if commercial == "Converted":
+            if has_order and not has_active_order:
+                return state(is_open=False, next_action=None)
             if inquiry_allows_order_conversion(inquiry):
-                return InquiryOfficeState(
-                    is_open=False,
-                    next_action="convert-accepted",
-                    offer=offer_projection,
-                )
-            return InquiryOfficeState(
-                is_open=is_open, next_action=None, offer=offer_projection
-            )
+                return state(is_open=False, next_action="convert-accepted")
+            return state(is_open=is_open, next_action=None)
         if commercial in ("Prepared", "Sent"):
-            return InquiryOfficeState(
-                is_open=is_open,
-                next_action="offer-pending",
-                offer=offer_projection,
-            )
+            return state(is_open=is_open, next_action="offer-pending")
         if commercial in ("Expired", "Rejected", "Withdrawn"):
             if contact_complete:
-                return InquiryOfficeState(
-                    is_open=is_open,
-                    next_action="prepare-next-version",
-                    offer=offer_projection,
-                )
-            return InquiryOfficeState(
-                is_open=is_open, next_action=None, offer=offer_projection
-            )
-    if inquiry_allows_order_conversion(inquiry) and contact_complete:
-        return InquiryOfficeState(
-            is_open=is_open, next_action="prepare-offer", offer=offer_projection
-        )
-    return InquiryOfficeState(is_open=is_open, next_action=None, offer=offer_projection)
+                return state(is_open=is_open, next_action="prepare-next-version")
+            return state(is_open=is_open, next_action=None)
+    if not preparation.blocked:
+        return state(is_open=is_open, next_action="prepare-offer")
+    return state(is_open=is_open, next_action=None)
 
 
 def set_inquiry_fulfillment_mode(inquiry: Inquiry, mode: str) -> Inquiry:

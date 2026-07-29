@@ -453,6 +453,7 @@ def inquiry_detail(
     state = inquiry_office_state(inquiry, orders, offer=offer, today=today)
     detail["allows_conversion"] = False
     detail["next_action"] = state.next_action
+    detail["offer_preparation_blockers"] = list(state.offer_preparation_blockers)
     if state.offer is not None:
         detail["offer"] = inquiry_offer_projection_shape(state.offer)
     detail["orders"] = [

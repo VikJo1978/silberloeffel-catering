@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import base64
 import json
+from dataclasses import replace
 from datetime import date, datetime, timezone
 
 import pytest
 
-from catering_system.domain.inquiry import Inquiry
+from catering_system.domain.inquiry import (
+    Inquiry,
+    InquiryOfficeState,
+    InquiryOfferProjection,
+)
+from catering_system.domain.inquiry_customer_snapshot import (
+    InquiryCustomerSnapshot,
+)
 from catering_system.repositories.in_memory_inquiry_repository import (
     InMemoryInquiryRepository,
 )
@@ -14,6 +22,10 @@ from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
 )
 from catering_system.ui.office_panel import OfficePanel
+from catering_system.ui.office_panel_inquiry_detail import (
+    InquiryDetailFormFields,
+    render_inquiry_detail,
+)
 from catering_system.ui.office_panel_offer_prefill import (
     build_offer_prefill_url,
     normalize_configurator_url,
@@ -35,8 +47,8 @@ def _inquiry(*, guest_count: int | None = 42) -> Inquiry:
         location_text="Große Bleichen 1, Hamburg",
         guest_count_estimate=guest_count,
         planning_mode="caterer_suggestion",
-        call_verification_required=True,
-        call_verification_status="pending",
+        call_verification_required=False,
+        call_verification_status="not_required",
         intake_subject="Möbel & Mehr GmbH — Jubiläum",
         intake_message=(
             "Firma: Möbel & Mehr GmbH\n"
@@ -48,6 +60,10 @@ def _inquiry(*, guest_count: int | None = 42) -> Inquiry:
         ),
         intake_summary="Website-Anfrage — 42 Personen, 2026-10-03",
         intake_external_ref="web-test-42",
+        customer_snapshot=InquiryCustomerSnapshot(
+            email="joerg@example.test",
+            phone="040 12345",
+        ),
     )
 
 
@@ -66,6 +82,11 @@ def test_payload_maps_labelled_context_without_creating_core_records() -> None:
 
     assert page is not None
     assert "Angebot mit Anfragedaten vorbereiten" in page
+    assert 'href="http://127.0.0.1:5173/#core-inquiry=' in page
+    assert "Authorization" not in page
+    assert "CORE_OFFICE_API_TOKEN" not in page
+    assert "offer_snapshot_v" not in page
+    assert "snapshot_hash" not in page
     assert order_repo.list_orders() == []
 
     payload = offer_prefill_payload(inquiry)
@@ -125,3 +146,79 @@ def test_empty_configurator_url_keeps_handoff_dormant() -> None:
     )
     assert page is not None
     assert "Angebot mit Anfragedaten vorbereiten" not in page
+    assert "Der Angebotskonfigurator ist derzeit nicht verfügbar" in page
+
+
+@pytest.mark.parametrize(
+    ("configurator_url", "expected"),
+    [
+        ("https://angebote.example.test", "Angebot vorbereiten</a>"),
+        ("", "Der Angebotskonfigurator ist derzeit nicht verfügbar"),
+    ],
+)
+def test_v2_inquiry_detail_has_action_or_safe_unavailable_state(
+    configurator_url: str,
+    expected: str,
+) -> None:
+    inquiry_repo = InMemoryInquiryRepository()
+    inquiry = _inquiry()
+    inquiry_repo.save(inquiry)
+    page = OfficePanel(
+        inquiry_repo,
+        InMemoryOrderRepository(),
+        configurator_url=configurator_url,
+        ui_version="v2",
+    ).render_inquiry(inquiry.inquiry_id)
+
+    assert page is not None
+    assert expected in page
+
+
+def test_blocked_inquiry_never_renders_configurator_link() -> None:
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    inquiry = replace(
+        _inquiry(),
+        call_verification_required=True,
+        call_verification_status="pending",
+    )
+    inquiry_repo.save(inquiry)
+    page = OfficePanel(
+        inquiry_repo,
+        order_repo,
+        configurator_url="https://angebote.example.test",
+    ).render_inquiry(inquiry.inquiry_id)
+
+    assert page is not None
+    assert "https://angebote.example.test" not in page
+
+
+def test_existing_offer_links_to_core_detail_instead_of_configurator() -> None:
+    inquiry = _inquiry()
+    offer_id = "22222222-2222-4222-8222-222222222222"
+    state = InquiryOfficeState(
+        is_open=True,
+        next_action="offer-pending",
+        offer=InquiryOfferProjection(
+            offer_id=offer_id,
+            offer_version_id="33333333-3333-4333-8333-333333333333",
+            commercial_state="Prepared",
+        ),
+        offer_preparation_blockers=("offer_already_exists",),
+    )
+    detail = render_inquiry_detail(
+        inquiry,
+        [],
+        state,
+        state.offer_preparation_blockers,
+        forms=InquiryDetailFormFields(
+            csrf_input="",
+            primary_command_fields="",
+            update_command_fields="",
+        ),
+        offer_url="https://angebote.example.test#must-not-render",
+    )
+
+    assert f'href="/offer/{offer_id}"' in detail.body
+    assert "Angebot öffnen" in detail.body
+    assert "angebote.example.test" not in detail.body
