@@ -103,6 +103,66 @@ def test_payload_maps_labelled_context_without_creating_core_records() -> None:
     assert context["eventDate"] == "2026-10-03"
 
 
+def test_fragment_maps_structured_customer_snapshot_and_all_event_fields() -> None:
+    inquiry = replace(
+        _inquiry(),
+        intake_message=(
+            "Veranstaltungsart: Jubiläum\n"
+            "Wunsch: Vegetarisch & glutenfrei\n"
+            "Zusätzlicher Anfragekontext"
+        ),
+        customer_snapshot=InquiryCustomerSnapshot(
+            company_name="Strukturierte Firma GmbH",
+            contact_name="Strukturierter Kontakt",
+            email="structured@example.test",
+            phone="+49 40 98765",
+        ),
+    )
+
+    url = build_offer_prefill_url("https://angebote.example.test", inquiry)
+    request_url, fragment = url.split("#", 1)
+    encoded = fragment.split("=", 1)[1]
+    padded = encoded + "=" * (-len(encoded) % 4)
+    decoded = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
+
+    assert request_url == "https://angebote.example.test/"
+    assert decoded["transfer"]["orderContextPrefill"] == {
+        "companyName": "Strukturierte Firma GmbH",
+        "contactPerson": "Strukturierter Kontakt",
+        "email": "structured@example.test",
+        "phone": "+49 40 98765",
+        "eventDate": "2026-10-03",
+        "eventTime": "18:30–23:00",
+        "location": "Große Bleichen 1, Hamburg",
+        "billingAddress": "",
+        "remarks": (
+            "Betreff: Möbel & Mehr GmbH — Jubiläum\n\n"
+            "Wunsch: Vegetarisch & glutenfrei\n\n"
+            "Zusätzlicher Anfragekontext\n\n"
+            "Zusammenfassung: Website-Anfrage — 42 Personen, 2026-10-03"
+        ),
+    }
+
+
+def test_structured_customer_snapshot_precedes_legacy_labelled_contact() -> None:
+    inquiry = replace(
+        _inquiry(),
+        customer_snapshot=InquiryCustomerSnapshot(
+            company_name="Structured Company",
+            contact_name="Structured Contact",
+            email="structured@example.test",
+            phone="+49 40 98765",
+        ),
+    )
+
+    context = offer_prefill_payload(inquiry)["transfer"]["orderContextPrefill"]
+
+    assert context["companyName"] == "Structured Company"
+    assert context["contactPerson"] == "Structured Contact"
+    assert context["email"] == "structured@example.test"
+    assert context["phone"] == "+49 40 98765"
+
+
 def test_fragment_round_trip_preserves_unicode_and_stays_out_of_request_url() -> None:
     url = build_offer_prefill_url("https://angebote.example.test/app/", _inquiry())
     request_url, fragment = url.split("#", 1)
