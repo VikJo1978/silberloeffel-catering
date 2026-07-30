@@ -2188,7 +2188,7 @@ def test_prepare_offer_happy_path_and_replay(api) -> None:
     conn.close()
 
 
-def test_prepare_offer_concurrent_duplicate_returns_established_conflict(
+def test_prepare_offer_concurrent_writers_serialize_to_create_and_duplicate(
     api,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2201,20 +2201,26 @@ def test_prepare_offer_concurrent_duplicate_returns_established_conflict(
     command_start = threading.Barrier(2)
     client_start = threading.Barrier(3)
     results: queue.Queue[tuple[int, dict[str, object]]] = queue.Queue()
+    command_ids = (str(uuid.uuid4()), str(uuid.uuid4()))
+    assert command_ids[0] != command_ids[1]
     original_run = CoreCommandExecutor.run
 
     def synchronized_run(self, work):  # noqa: ANN001, ANN202
+        # Align the two transaction attempts. BEGIN IMMEDIATE then serializes
+        # SQLite writers, so this test covers the real create/duplicate
+        # behavior and intentionally makes no claim about the IntegrityError
+        # fallback.
         command_start.wait(timeout=5)
         return original_run(self, work)
 
     monkeypatch.setattr(CoreCommandExecutor, "run", synchronized_run)
 
-    def submit(url: str) -> None:
+    def submit(url: str, command_id: str) -> None:
         client_start.wait()
         status, body, _headers = _post(
             url,
             args={"snapshot": snapshot},
-            command_id=str(uuid.uuid4()),
+            command_id=command_id,
         )
         results.put((status, body))
 
@@ -2222,7 +2228,10 @@ def test_prepare_offer_concurrent_duplicate_returns_established_conflict(
         _prepare_offer_url(base, inquiry_id),
         _prepare_offer_url(second_base, inquiry_id),
     )
-    clients = [threading.Thread(target=submit, args=(url,)) for url in urls]
+    clients = [
+        threading.Thread(target=submit, args=(url, command_id))
+        for url, command_id in zip(urls, command_ids, strict=True)
+    ]
     try:
         for client in clients:
             client.start()
@@ -2251,6 +2260,152 @@ def test_prepare_offer_concurrent_duplicate_returns_established_conflict(
         ).fetchone()[0]
         == 1
     )
+    conn.close()
+
+
+def test_prepare_offer_integrity_error_fallback_returns_canonical_winner(
+    api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base, ids, db = api
+    inquiry_id = ids["inquiry_convertible"]
+    url = _prepare_offer_url(base, inquiry_id)
+    snapshot = _valid_offer_snapshot(inquiry_id=inquiry_id)
+    winner_command_id = str(uuid.uuid4())
+    loser_command_id = str(uuid.uuid4())
+
+    winner_status, winner_body, _headers = _post(
+        url,
+        args={"snapshot": snapshot},
+        command_id=winner_command_id,
+    )
+    assert winner_status == 201
+    winner_offer_id = winner_body["offer_id"]
+
+    original_lookup = SQLiteOfferRepository.get_by_source_inquiry_id
+    lookup_count = 0
+
+    def miss_initial_lookup_then_return_winner(
+        repository: SQLiteOfferRepository,
+        requested_inquiry_id: str,
+    ):  # noqa: ANN202
+        nonlocal lookup_count
+        lookup_count += 1
+        if lookup_count == 1:
+            return None
+        return original_lookup(repository, requested_inquiry_id)
+
+    # The first lookup models a loser that did not observe the winner yet.
+    # The real repository save then hits uq_offers_source_inquiry and raises
+    # sqlite3.IntegrityError; the fallback lookup must resolve the winner.
+    monkeypatch.setattr(
+        SQLiteOfferRepository,
+        "get_by_source_inquiry_id",
+        miss_initial_lookup_then_return_winner,
+    )
+
+    loser_status, loser_body, _headers = _post(
+        url,
+        args={"snapshot": snapshot},
+        command_id=loser_command_id,
+    )
+
+    assert lookup_count == 2
+    assert loser_status == 409
+    assert loser_body["error"] == "offer_already_exists"
+    assert loser_body["offer_id"] == winner_offer_id
+
+    conn = sqlite3.connect(db)
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM offers WHERE source_inquiry_id = ?",
+            (inquiry_id,),
+        ).fetchone()[0]
+        == 1
+    )
+    assert (
+        conn.execute(
+            "SELECT offer_id FROM offers WHERE source_inquiry_id = ?",
+            (inquiry_id,),
+        ).fetchone()[0]
+        == winner_offer_id
+    )
+
+    # Successful commands are committed atomically with their ledger row.
+    # The losing ApiError rolls its transaction back, so it is not ledgered.
+    winner_ledger = conn.execute(
+        "SELECT result_status, result_body FROM office_api_commands "
+        "WHERE command_id = ?",
+        (winner_command_id,),
+    ).fetchone()
+    assert winner_ledger is not None
+    assert winner_ledger[0] == 201
+    assert json.loads(winner_ledger[1]) == winner_body
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM office_api_commands WHERE command_id = ?",
+            (loser_command_id,),
+        ).fetchone()[0]
+        == 0
+    )
+
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM orders WHERE source_inquiry_id = ?",
+            (inquiry_id,),
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM order_commercial_snapshots WHERE source_offer_id = ?",
+            (winner_offer_id,),
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM offer_conversion_links WHERE offer_id = ?",
+            (winner_offer_id,),
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM offer_sent_evidence WHERE offer_id = ?",
+            (winner_offer_id,),
+        ).fetchone()[0]
+        == 0
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM offer_document_snapshots WHERE offer_id = ?",
+            (winner_offer_id,),
+        ).fetchone()[0]
+        == 0
+    )
+    for table in (
+        "order_confirmation_document_snapshots",
+        "order_confirmation_send_attempts",
+        "order_confirmation_fake_outbox_messages",
+        "order_confirmation_send_evidence",
+        "kitchen_print_jobs",
+    ):
+        table_exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table,),
+        ).fetchone()
+        if table_exists is not None:
+            assert (
+                conn.execute(
+                    f"SELECT COUNT(*) FROM {table} "
+                    "WHERE order_id IN ("
+                    "SELECT order_id FROM orders WHERE source_inquiry_id = ?"
+                    ")",
+                    (inquiry_id,),
+                ).fetchone()[0]
+                == 0
+            )
     conn.close()
 
 
