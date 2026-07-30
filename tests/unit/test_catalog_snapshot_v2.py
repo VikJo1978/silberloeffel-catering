@@ -159,6 +159,7 @@ def _sqlite_world(tmp_path: Path) -> tuple[OfferService, SQLiteOfferRepository, 
         inquiry_repo,
         InMemoryOrderRepository(),
         now=lambda: _NOW,
+        today=lambda: date(2026, 7, 15),
     )
     return service, offer_repo, db
 
@@ -232,6 +233,7 @@ def test_catalog_change_isolation_between_offers(tmp_path: Path) -> None:
             inquiry_repo,
             InMemoryOrderRepository(),
             now=lambda: _NOW,
+            today=lambda: date(2026, 7, 15),
         )
 
         first = service.prepare_offer_version(

@@ -72,6 +72,14 @@ _RECORD_ACCEPTANCE_ARGS = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _fixed_business_date(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "catering_system.ui.office_api_views.berlin_today",
+        lambda: date(2026, 7, 15),
+    )
+
+
 def _seed(db_path: Path) -> dict[str, str]:
     inquiries = SQLiteInquiryRepository(db_path)
     orders = SQLiteOrderRepository(db_path)

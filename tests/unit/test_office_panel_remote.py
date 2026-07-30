@@ -72,6 +72,14 @@ _HIDDEN_REMOTE_FIELD = re.compile(
 )
 
 
+@pytest.fixture(autouse=True)
+def _fixed_business_date(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "catering_system.ui.office_api_views.berlin_today",
+        lambda: date(2026, 7, 15),
+    )
+
+
 def _strip_remote_fields(html: str) -> str:
     return _HIDDEN_REMOTE_FIELD.sub("", html)
 

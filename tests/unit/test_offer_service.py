@@ -296,7 +296,12 @@ def _world(
     offer_repo = offers or InMemoryOfferRepository()
     if inquiry is not None:
         inquiries.save(inquiry)
-    service = OfferService(offer_repo, inquiries, orders)
+    service = OfferService(
+        offer_repo,
+        inquiries,
+        orders,
+        today=lambda: date(2026, 7, 15),
+    )
     return inquiries, orders, offer_repo, service
 
 
@@ -1296,6 +1301,7 @@ def test_order_and_snapshot_remain_when_offer_repo_later_unavailable() -> None:
         inquiries,
         orders,
         service._commercial_snapshots,
+        today=lambda: date(2026, 7, 15),
     )
     with pytest.raises(RuntimeError, match="unavailable"):
         broken.convert_accepted_offer(
@@ -1614,7 +1620,12 @@ def test_prepare_next_missing_inquiry() -> None:
     service.record_sent_evidence(
         offer.offer_id, offer.versions[0].offer_version_id, **_record_args()
     )
-    orphan = OfferService(offers, InMemoryInquiryRepository(), orders)
+    orphan = OfferService(
+        offers,
+        InMemoryInquiryRepository(),
+        orders,
+        today=lambda: date(2026, 7, 15),
+    )
     with pytest.raises(KeyError, match=_INQUIRY_ID):
         orphan.prepare_next_offer_version(
             offer.offer_id,

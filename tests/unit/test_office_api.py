@@ -17,6 +17,7 @@ import urllib.request
 import uuid
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
+from http.server import HTTPServer
 from pathlib import Path
 
 import pytest
@@ -146,11 +147,8 @@ def _seed(db_path: Path) -> dict[str, str]:
     return ids
 
 
-@pytest.fixture()
-def api(tmp_path: Path):
-    db = tmp_path / "core.db"
-    ids = _seed(db)
-    ready: queue.Queue = queue.Queue()
+def _start_api_server(db: Path) -> tuple[HTTPServer, threading.Thread, str]:
+    ready: queue.Queue[HTTPServer] = queue.Queue()
 
     def run() -> None:
         from catering_system.ui.office_api import create_office_api_server
@@ -165,12 +163,30 @@ def api(tmp_path: Path):
         ready.put(server)
         server.serve_forever()
 
-    threading.Thread(target=run, daemon=True).start()
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
     server = ready.get(timeout=5)
     host, port = server.server_address[:2]
-    yield f"http://{host}:{port}", ids, db
+    return server, thread, f"http://{host}:{port}"
+
+
+@pytest.fixture()
+def api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    from catering_system.ui import office_api_views
+
+    monkeypatch.setattr(
+        office_api_views,
+        "berlin_today",
+        lambda: date(2026, 7, 15),
+    )
+    db = tmp_path / "core.db"
+    ids = _seed(db)
+    server, thread, base = _start_api_server(db)
+    yield base, ids, db
     server.shutdown()
     server.server_close()
+    thread.join(timeout=5)
+    assert thread.is_alive() is False
 
 
 def _get(url: str, headers: dict | None = None) -> tuple[int, dict, dict]:
@@ -2172,16 +2188,29 @@ def test_prepare_offer_happy_path_and_replay(api) -> None:
     conn.close()
 
 
-def test_prepare_offer_concurrent_duplicate_returns_established_conflict(api) -> None:
+def test_prepare_offer_concurrent_duplicate_returns_established_conflict(
+    api,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from catering_system.repositories.core_transaction import CoreCommandExecutor
+
     base, ids, db = api
     inquiry_id = ids["inquiry_cancelled_order"]
-    url = _prepare_offer_url(base, inquiry_id)
+    second_server, second_server_thread, second_base = _start_api_server(db)
     snapshot = _valid_offer_snapshot(inquiry_id=inquiry_id)
-    start = threading.Barrier(3)
+    command_start = threading.Barrier(2)
+    client_start = threading.Barrier(3)
     results: queue.Queue[tuple[int, dict[str, object]]] = queue.Queue()
+    original_run = CoreCommandExecutor.run
 
-    def submit() -> None:
-        start.wait()
+    def synchronized_run(self, work):  # noqa: ANN001, ANN202
+        command_start.wait(timeout=5)
+        return original_run(self, work)
+
+    monkeypatch.setattr(CoreCommandExecutor, "run", synchronized_run)
+
+    def submit(url: str) -> None:
+        client_start.wait()
         status, body, _headers = _post(
             url,
             args={"snapshot": snapshot},
@@ -2189,13 +2218,23 @@ def test_prepare_offer_concurrent_duplicate_returns_established_conflict(api) ->
         )
         results.put((status, body))
 
-    threads = [threading.Thread(target=submit) for _ in range(2)]
-    for thread in threads:
-        thread.start()
-    start.wait()
-    for thread in threads:
-        thread.join(timeout=5)
-        assert thread.is_alive() is False
+    urls = (
+        _prepare_offer_url(base, inquiry_id),
+        _prepare_offer_url(second_base, inquiry_id),
+    )
+    clients = [threading.Thread(target=submit, args=(url,)) for url in urls]
+    try:
+        for client in clients:
+            client.start()
+        client_start.wait()
+        for client in clients:
+            client.join(timeout=10)
+            assert client.is_alive() is False
+    finally:
+        second_server.shutdown()
+        second_server.server_close()
+        second_server_thread.join(timeout=5)
+        assert second_server_thread.is_alive() is False
 
     outcomes = [results.get_nowait(), results.get_nowait()]
     assert sorted(status for status, _body in outcomes) == [201, 409]
