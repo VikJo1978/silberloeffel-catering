@@ -35,9 +35,17 @@ def _clip(value: str | None, limit: int = _MAX_SHORT_TEXT) -> str:
     return (value or "").strip()[:limit]
 
 
+def _contact_prefill_value(
+    structured_value: str | None, labelled_fallback: str | None
+) -> str:
+    """Prefer the Inquiry's structured customer fact; retain legacy intake fallback."""
+    return _clip(structured_value) or _clip(labelled_fallback)
+
+
 def offer_prefill_payload(inquiry: Inquiry) -> dict[str, object]:
     """Build proposal-phase copy only; this performs no Core write."""
     labelled, remaining = labelled_intake_context(inquiry.intake_message)
+    customer = inquiry.customer_snapshot
     context_parts = []
     if inquiry.intake_subject:
         context_parts.append(f"Betreff: {_clip(inquiry.intake_subject, 1000)}")
@@ -64,10 +72,22 @@ def offer_prefill_payload(inquiry: Inquiry) -> dict[str, object]:
                 "serviceStyle": "",
             },
             "orderContextPrefill": {
-                "companyName": _clip(labelled.get("Firma")),
-                "contactPerson": _clip(labelled.get("Name")),
-                "email": _clip(labelled.get("E-Mail")),
-                "phone": _clip(labelled.get("Telefon")),
+                "companyName": _contact_prefill_value(
+                    customer.company_name if customer is not None else None,
+                    labelled.get("Firma"),
+                ),
+                "contactPerson": _contact_prefill_value(
+                    customer.contact_name if customer is not None else None,
+                    labelled.get("Name"),
+                ),
+                "email": _contact_prefill_value(
+                    customer.email if customer is not None else None,
+                    labelled.get("E-Mail"),
+                ),
+                "phone": _contact_prefill_value(
+                    customer.phone if customer is not None else None,
+                    labelled.get("Telefon"),
+                ),
                 "eventDate": inquiry.event_date.isoformat(),
                 "eventTime": _clip(inquiry.time_window_text),
                 "location": _clip(inquiry.location_text),
