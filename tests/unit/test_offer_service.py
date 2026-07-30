@@ -39,7 +39,10 @@ from catering_system.repositories.in_memory_offer_repository import (
 from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
 )
-from catering_system.services.offer_service import OfferService
+from catering_system.services.offer_service import (
+    OfferPreparationBlockedError,
+    OfferService,
+)
 from catering_system.services.operational_core_service import OperationalCoreService
 
 from catering_system.domain.inquiry_customer_snapshot import (
@@ -293,7 +296,12 @@ def _world(
     offer_repo = offers or InMemoryOfferRepository()
     if inquiry is not None:
         inquiries.save(inquiry)
-    service = OfferService(offer_repo, inquiries, orders)
+    service = OfferService(
+        offer_repo,
+        inquiries,
+        orders,
+        today=lambda: date(2026, 7, 15),
+    )
     return inquiries, orders, offer_repo, service
 
 
@@ -437,6 +445,74 @@ def test_prepare_offer_version_active_order_blocks() -> None:
         service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
 
     assert offers.save_calls == 0
+
+
+@pytest.mark.parametrize(
+    ("inquiry", "reason"),
+    [
+        (
+            replace(_sample_inquiry(), crm_stage="Abgelehnt / verloren"),
+            "inquiry_rejected",
+        ),
+        (
+            replace(
+                _sample_inquiry(),
+                call_verification_required=True,
+                call_verification_status="pending",
+            ),
+            "inquiry_call_verification_unsatisfied",
+        ),
+    ],
+)
+def test_prepare_offer_version_enforces_inquiry_eligibility(
+    inquiry: Inquiry,
+    reason: str,
+) -> None:
+    offers = _CountingOfferRepository()
+    _inquiries, orders, _offers, service = _world(
+        inquiry=inquiry,
+        offers=offers,
+    )
+
+    with pytest.raises(OfferPreparationBlockedError) as exc_info:
+        service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
+
+    assert exc_info.value.reasons == (reason,)
+    assert offers.save_calls == 0
+    assert orders.list_orders() == []
+
+
+def test_prepare_offer_version_allows_cancelled_historical_order() -> None:
+    offers = _CountingOfferRepository()
+    _inquiries, orders, _offers, service = _world(
+        inquiry=_sample_inquiry(),
+        offers=offers,
+    )
+    order = Order(
+        order_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        source_inquiry_id=_INQUIRY_ID,
+        created_at=_NOW,
+        updated_at=_NOW,
+        cancelled_at=_NOW,
+    )
+    version = OrderVersion(
+        order_version_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        order_id=order.order_id,
+        version_number=1,
+        created_at=_NOW,
+        event_date=date(2026, 8, 20),
+        time_window_text="18:00–22:00",
+        location_text="Hamburg",
+        guest_count_estimate=80,
+        planning_mode=PLANNING_MODES[0],
+    )
+    orders.save_order_with_initial_version(order, version)
+
+    offer = service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
+
+    assert offer.source_inquiry_id == _INQUIRY_ID
+    assert offers.save_calls == 1
+    assert len(orders.list_orders()) == 1
 
 
 def test_prepare_offer_version_existing_offer_blocks() -> None:
@@ -1225,6 +1301,7 @@ def test_order_and_snapshot_remain_when_offer_repo_later_unavailable() -> None:
         inquiries,
         orders,
         service._commercial_snapshots,
+        today=lambda: date(2026, 7, 15),
     )
     with pytest.raises(RuntimeError, match="unavailable"):
         broken.convert_accepted_offer(
@@ -1543,7 +1620,12 @@ def test_prepare_next_missing_inquiry() -> None:
     service.record_sent_evidence(
         offer.offer_id, offer.versions[0].offer_version_id, **_record_args()
     )
-    orphan = OfferService(offers, InMemoryInquiryRepository(), orders)
+    orphan = OfferService(
+        offers,
+        InMemoryInquiryRepository(),
+        orders,
+        today=lambda: date(2026, 7, 15),
+    )
     with pytest.raises(KeyError, match=_INQUIRY_ID):
         orphan.prepare_next_offer_version(
             offer.offer_id,

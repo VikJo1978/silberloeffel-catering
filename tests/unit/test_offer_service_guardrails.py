@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from tests.helpers.order_seed import seed_order
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -35,7 +35,16 @@ def _service() -> tuple[
     inquiries = InMemoryInquiryRepository()
     orders = InMemoryOrderRepository()
     inquiries.save(_sample_inquiry())
-    return OfferService(offers, inquiries, orders), offers, inquiries
+    return (
+        OfferService(
+            offers,
+            inquiries,
+            orders,
+            today=lambda: date(2026, 7, 15),
+        ),
+        offers,
+        inquiries,
+    )
 
 
 def test_prepare_offer_rejects_snapshot_inquiry_mismatch() -> None:
@@ -63,7 +72,12 @@ def test_prepare_offer_rejects_when_active_order_exists() -> None:
     inquiry = _sample_inquiry()
     inquiries.save(inquiry)
     seed_order(orders, inquiry)
-    service = OfferService(offers, inquiries, orders)
+    service = OfferService(
+        offers,
+        inquiries,
+        orders,
+        today=lambda: date(2026, 7, 15),
+    )
     with pytest.raises(ValueError, match="active order blocks offer preparation"):
         service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
 

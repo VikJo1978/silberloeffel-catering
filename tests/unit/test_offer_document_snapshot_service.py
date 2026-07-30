@@ -77,7 +77,12 @@ def _world(
     )
     inquiries.save(inquiry)
 
-    offer_service = OfferService(offers, inquiries, orders)
+    offer_service = OfferService(
+        offers,
+        inquiries,
+        orders,
+        today=lambda: _TODAY,
+    )
     offer = offer_service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
     doc_service = OfferDocumentSnapshotService(
         offers, inquiries, documents, now=lambda: _NOW, today=lambda: _TODAY
@@ -301,7 +306,12 @@ def test_replay_works_after_offer_becomes_sent() -> None:
         version.variants[0].variant_id,
         "office",
     )
-    offer_service = OfferService(offers, inquiries, InMemoryOrderRepository())
+    offer_service = OfferService(
+        offers,
+        inquiries,
+        InMemoryOrderRepository(),
+        today=lambda: _TODAY,
+    )
     offer_service.record_sent_evidence(
         offer.offer_id,
         version.offer_version_id,
@@ -367,7 +377,12 @@ def test_replay_rejects_mismatched_offer_id() -> None:
         fulfillment_mode="DELIVERY",
     )
     inquiries.save(other_inquiry)
-    offer_service = OfferService(offers, inquiries, InMemoryOrderRepository())
+    offer_service = OfferService(
+        offers,
+        inquiries,
+        InMemoryOrderRepository(),
+        today=lambda: _TODAY,
+    )
     offer_b = offer_service.prepare_offer_version(
         other_inquiry_id, _valid_snapshot(inquiry_id=other_inquiry_id)
     )
@@ -425,7 +440,12 @@ def test_new_offer_version_does_not_alter_old_snapshot() -> None:
         version.variants[0].variant_id,
         "office",
     )
-    offer_service = OfferService(offers, inquiries, InMemoryOrderRepository())
+    offer_service = OfferService(
+        offers,
+        inquiries,
+        InMemoryOrderRepository(),
+        today=lambda: _TODAY,
+    )
     offer_service.record_sent_evidence(
         offer.offer_id,
         version.offer_version_id,

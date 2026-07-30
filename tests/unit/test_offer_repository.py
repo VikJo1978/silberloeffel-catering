@@ -639,7 +639,12 @@ def test_prepare_offer_document_after_sqlite_reload_gets_frozen_narrative(
     inquiries.save(inquiry)
 
     offers = SQLiteOfferRepository(db)
-    offer_service = OfferService(offers, inquiries, InMemoryOrderRepository())
+    offer_service = OfferService(
+        offers,
+        inquiries,
+        InMemoryOrderRepository(),
+        today=lambda: date(2026, 7, 15),
+    )
     # _valid_snapshot()'s customer_text carries fixed narrative values
     # ("Sommerfest" / "Customer-visible introduction" / "...notes").
     snapshot_in = _valid_snapshot()

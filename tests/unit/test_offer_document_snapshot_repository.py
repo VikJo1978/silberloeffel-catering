@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -57,7 +58,12 @@ def _prepared_offer(db: Path):
         _sample_inquiry(), customer_snapshot=snapshot, fulfillment_mode="DELIVERY"
     )
     inquiries_repo.save(inquiry)
-    offer_service = OfferService(offers, inquiries_repo, InMemoryOrderRepository())
+    offer_service = OfferService(
+        offers,
+        inquiries_repo,
+        InMemoryOrderRepository(),
+        today=lambda: date(2026, 7, 15),
+    )
     offer = offer_service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
     offers.close()
     return offer, inquiries_repo

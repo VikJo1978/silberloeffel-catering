@@ -1802,7 +1802,11 @@ class OfficePanel:
         inquiry_id = inquiry_id or inquiry.inquiry_id
         if self._remote is not None:
             meta = self._remote.inquiry_detail_meta(inquiry_id)
-            if meta.next_action is not None or meta.offer is not None:
+            if (
+                meta.next_action is not None
+                or meta.offer is not None
+                or meta.offer_preparation_blockers
+            ):
                 from catering_system.domain.inquiry import InquiryOfferProjection
 
                 offer_projection = None
@@ -1832,11 +1836,12 @@ class OfficePanel:
                 if inquiry.crm_stage == "Abgelehnt / verloren" or has_active_order:
                     is_open = False
                 else:
-                    is_open = not has_order
+                    is_open = True
                 return InquiryOfficeState(
                     is_open=is_open,
                     next_action=meta.next_action,
                     offer=offer_projection,
+                    offer_preparation_blockers=meta.offer_preparation_blockers,
                 )
         offer = self._offers.get_by_source_inquiry_id(inquiry_id)
         return api_views.inquiry_office_state(
@@ -2765,14 +2770,14 @@ class OfficePanel:
         if self._ui_version == "v2":
             offer_url = (
                 build_offer_prefill_url(self.configurator_url, inq)
-                if self.configurator_url
+                if self.configurator_url and state.next_action == "prepare-offer"
                 else None
             )
             detail = render_inquiry_detail(
                 inq,
                 existing,
                 state,
-                ev.reasons,
+                state.offer_preparation_blockers,
                 forms=InquiryDetailFormFields(
                     csrf_input=_csrf_input(context),
                     primary_command_fields=(
@@ -2799,8 +2804,13 @@ class OfficePanel:
                 context=context,
                 show_title=False,
             )
-        if existing:
+        if has_active_order:
             prog = '<p class="ok">Bereits in Auftrag umgewandelt.</p>'
+        elif existing and state.next_action == "prepare-offer":
+            prog = (
+                '<p class="ok">Der historische Auftrag ist storniert. '
+                "Ein Angebot kann vorbereitet werden.</p>"
+            )
         elif ev.blocked:
             reasons = "".join(
                 f"<li>{_e(_progression_blocker_label(r))}</li>" for r in ev.reasons
@@ -2877,7 +2887,13 @@ class OfficePanel:
             else ""
         )
         offer_prefill = ""
-        if self.configurator_url:
+        if state.offer is not None:
+            offer_prefill = (
+                "<h2>Angebot</h2>"
+                f'<p><a href="/offer/{_e(state.offer.offer_id)}"><strong>'
+                "Angebot öffnen →</strong></a></p>"
+            )
+        elif self.configurator_url and state.next_action == "prepare-offer":
             offer_url = build_offer_prefill_url(self.configurator_url, inq)
             offer_prefill = (
                 "<h2>Angebot</h2>"
@@ -2886,6 +2902,12 @@ class OfficePanel:
                 '<p class="subtitle">Füllt nur einen bearbeitbaren '
                 "Angebotsentwurf vor. Kein Auftrag, keine Freigabe und keine "
                 "Nachricht an den Kunden.</p>"
+            )
+        elif state.next_action == "prepare-offer":
+            offer_prefill = (
+                "<h2>Angebot</h2>"
+                '<p class="blocked">Der Angebotskonfigurator ist derzeit '
+                "nicht verfügbar.</p>"
             )
         crm_stage_field = (
             f'{_e(ACTIVE_ORDER_CRM_STAGE)}<input type="hidden" name="crm_stage" '

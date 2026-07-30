@@ -13,6 +13,12 @@ from catering_system.domain.inquiry import inquiry_allows_order_conversion
 from catering_system.domain.inquiry_contact_completeness import (
     inquiry_contact_complete,
 )
+from catering_system.domain.inquiry_offer_preparation import (
+    InquiryOfferPreparationBlocker,
+    REASON_ACTIVE_ORDER_EXISTS,
+    REASON_OFFER_ALREADY_EXISTS,
+    evaluate_inquiry_offer_preparation,
+)
 from catering_system.domain.offer import (
     AcceptanceChannel,
     AcceptanceEvidence,
@@ -57,6 +63,31 @@ from catering_system.domain.order_commercial_snapshot import (
 )
 
 _log = logging.getLogger(__name__)
+
+
+class OfferPreparationBlockedError(ValueError):
+    """First-Offer creation rejected by the shared Inquiry eligibility gate."""
+
+    def __init__(
+        self,
+        inquiry_id: str,
+        reasons: tuple[InquiryOfferPreparationBlocker, ...],
+    ) -> None:
+        self.inquiry_id = inquiry_id
+        self.reasons = reasons
+        if "inquiry_rejected" in reasons:
+            message = "inquiry rejected blocks offer preparation"
+        elif "inquiry_call_verification_unsatisfied" in reasons:
+            message = "inquiry call verification unsatisfied"
+        elif any(reason.startswith("inquiry_contact_missing_") for reason in reasons):
+            message = "inquiry contact information incomplete"
+        elif REASON_ACTIVE_ORDER_EXISTS in reasons:
+            message = "active order blocks offer preparation"
+        elif REASON_OFFER_ALREADY_EXISTS in reasons:
+            message = "offer already exists for inquiry"
+        else:
+            message = "offer preparation blocked"
+        super().__init__(f"{message} (inquiry_id={inquiry_id!r})")
 
 
 class OfferService:
@@ -104,19 +135,17 @@ class OfferService:
         if inquiry is None:
             raise KeyError(inquiry_id)
 
-        if not inquiry_contact_complete(inquiry):
-            raise ValueError(
-                f"inquiry contact information incomplete (inquiry_id={inquiry_id!r})"
-            )
-
-        if self._has_active_order(inquiry_id):
-            raise ValueError(
-                f"active order blocks offer preparation (inquiry_id={inquiry_id!r})"
-            )
-
-        if self._offer_repository.get_by_source_inquiry_id(inquiry_id) is not None:
-            raise ValueError(
-                f"offer already exists for inquiry (inquiry_id={inquiry_id!r})"
+        eligibility = evaluate_inquiry_offer_preparation(
+            inquiry,
+            has_active_order=self._has_active_order(inquiry_id),
+            has_existing_offer=(
+                self._offer_repository.get_by_source_inquiry_id(inquiry_id) is not None
+            ),
+        )
+        if eligibility.blocked:
+            raise OfferPreparationBlockedError(
+                inquiry_id,
+                eligibility.reasons,
             )
 
         offer = _build_offer_from_snapshot(validated)

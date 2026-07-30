@@ -9,7 +9,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from http.server import HTTPServer
 from pathlib import Path
 
@@ -187,7 +187,13 @@ def _seed_order_world(tmp_path: Path) -> tuple[Path, str, str]:
         ),
     )
     inquiries.save(inquiry)
-    offer_service = OfferService(offers, inquiries, orders, commercial)
+    offer_service = OfferService(
+        offers,
+        inquiries,
+        orders,
+        commercial,
+        today=lambda: date(2026, 7, 15),
+    )
     offer = offer_service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
     version_id = offer.versions[0].offer_version_id
     offer_service.record_sent_evidence(offer.offer_id, version_id, **_record_args())

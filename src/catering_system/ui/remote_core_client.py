@@ -48,6 +48,9 @@ from catering_system.domain.inquiry import (
     validate_fulfillment_mode,
     validate_planning_mode,
 )
+from catering_system.domain.inquiry_offer_preparation import (
+    InquiryOfferPreparationBlocker,
+)
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.inquiry_contact_completeness import (
     complete_inquiry_contact_information,
@@ -145,12 +148,24 @@ _INQUIRY_DETAIL_OPTIONAL_KEYS = frozenset(
         "contact_completeness",
         "missing_contact_fields",
         "contact_completion_allowed",
+        "offer_preparation_blockers",
     }
 )
 _CONTACT_COMPLETENESS_VALUES = frozenset(
     {"complete", "missing_email", "missing_phone", "missing_email_and_phone"}
 )
 _CONTACT_FIELD_VALUES = frozenset({"email", "phone"})
+_INQUIRY_OFFER_PREPARATION_BLOCKERS = frozenset(
+    {
+        "inquiry_rejected",
+        "inquiry_call_verification_unsatisfied",
+        "inquiry_contact_missing_email",
+        "inquiry_contact_missing_phone",
+        "inquiry_contact_missing_email_and_phone",
+        "active_order_exists",
+        "offer_already_exists",
+    }
+)
 _INQUIRY_OFFER_KEYS = frozenset({"offer_id", "offer_version_id", "commercial_state"})
 _INQUIRY_OFFER_OPTIONAL_KEYS = frozenset({"accepted_variant_id", "acceptance_id"})
 _INQUIRY_NEXT_ACTIONS = frozenset(
@@ -330,6 +345,7 @@ class InquiryDetailMeta:
     orders_truncated: bool
     next_action: InquiryOfficeNextAction | None = None
     offer: dict[str, object] | None = None
+    offer_preparation_blockers: tuple[InquiryOfferPreparationBlocker, ...] = ()
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -364,6 +380,21 @@ def _optional_inquiry_next_action(value: object) -> InquiryOfficeNextAction | No
     if action not in _INQUIRY_NEXT_ACTIONS:
         _bad_response()
     return cast(InquiryOfficeNextAction, action)
+
+
+def _offer_preparation_blockers(
+    value: object,
+) -> tuple[InquiryOfferPreparationBlocker, ...]:
+    reasons: list[InquiryOfferPreparationBlocker] = []
+    for raw_reason in _list(value):
+        if (
+            not isinstance(raw_reason, str)
+            or raw_reason not in _INQUIRY_OFFER_PREPARATION_BLOCKERS
+            or raw_reason in reasons
+        ):
+            _bad_response()
+        reasons.append(cast(InquiryOfferPreparationBlocker, raw_reason))
+    return tuple(reasons)
 
 
 def _inquiry_offer_projection(value: object) -> dict[str, object]:
@@ -2494,6 +2525,11 @@ class RemoteCoreClient:
             if "contact_completion_allowed" in detail:
                 _bool(detail["contact_completion_allowed"])
             next_action = _optional_inquiry_next_action(detail.get("next_action"))
+            offer_preparation_blockers = (
+                _offer_preparation_blockers(detail["offer_preparation_blockers"])
+                if "offer_preparation_blockers" in detail
+                else ()
+            )
             offer = (
                 _inquiry_offer_projection(detail["offer"])
                 if "offer" in detail
@@ -2507,6 +2543,7 @@ class RemoteCoreClient:
                 orders_truncated=truncated,
                 next_action=next_action,
                 offer=offer,
+                offer_preparation_blockers=offer_preparation_blockers,
             )
             return inquiry
         except RemoteCoreError as exc:

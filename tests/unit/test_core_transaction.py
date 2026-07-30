@@ -388,7 +388,12 @@ def test_prepare_offer_write_and_ledger_commit_atomically(shared) -> None:
     executor = CoreCommandExecutor(connection)
     inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
-    service = OfferService(offers, inquiries, orders)
+    service = OfferService(
+        offers,
+        inquiries,
+        orders,
+        today=lambda: date(2026, 7, 15),
+    )
     snapshot = _valid_offer_snapshot(inquiry_id=inquiry.inquiry_id)
 
     def work() -> str:
@@ -407,7 +412,12 @@ def test_prepare_offer_save_failure_leaves_no_ledger(shared) -> None:
     executor = CoreCommandExecutor(connection)
     inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
-    service = OfferService(offers, inquiries, orders)
+    service = OfferService(
+        offers,
+        inquiries,
+        orders,
+        today=lambda: date(2026, 7, 15),
+    )
     snapshot = _valid_offer_snapshot(inquiry_id=inquiry.inquiry_id)
 
     def failing_save(offer):  # noqa: ANN001
@@ -431,7 +441,12 @@ def test_prepare_offer_ledger_failure_rolls_back_offer(shared) -> None:
     executor = CoreCommandExecutor(connection)
     inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
-    service = OfferService(offers, inquiries, orders)
+    service = OfferService(
+        offers,
+        inquiries,
+        orders,
+        today=lambda: date(2026, 7, 15),
+    )
     snapshot = _valid_offer_snapshot(inquiry_id=inquiry.inquiry_id)
 
     def work() -> None:
@@ -450,7 +465,12 @@ def test_record_sent_evidence_and_ledger_commit_atomically(shared) -> None:
     executor = CoreCommandExecutor(connection)
     inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
-    service = OfferService(offers, inquiries, orders)
+    service = OfferService(
+        offers,
+        inquiries,
+        orders,
+        today=lambda: date(2026, 7, 15),
+    )
     offer = executor.run(
         lambda: service.prepare_offer_version(
             inquiry.inquiry_id,
@@ -486,7 +506,12 @@ def test_record_sent_evidence_append_failure_leaves_no_ledger(shared) -> None:
     executor = CoreCommandExecutor(connection)
     inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
-    service = OfferService(offers, inquiries, orders)
+    service = OfferService(
+        offers,
+        inquiries,
+        orders,
+        today=lambda: date(2026, 7, 15),
+    )
     offer = executor.run(
         lambda: service.prepare_offer_version(
             inquiry.inquiry_id,
@@ -527,7 +552,12 @@ def test_record_acceptance_evidence_and_ledger_commit_atomically(shared) -> None
     executor = CoreCommandExecutor(connection)
     inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
-    service = OfferService(offers, inquiries, orders)
+    service = OfferService(
+        offers,
+        inquiries,
+        orders,
+        today=lambda: date(2026, 7, 15),
+    )
     offer = executor.run(
         lambda: service.prepare_offer_version(
             inquiry.inquiry_id,
@@ -575,7 +605,12 @@ def test_record_acceptance_evidence_append_failure_leaves_no_ledger(shared) -> N
     executor = CoreCommandExecutor(connection)
     inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
-    service = OfferService(offers, inquiries, orders)
+    service = OfferService(
+        offers,
+        inquiries,
+        orders,
+        today=lambda: date(2026, 7, 15),
+    )
     offer = executor.run(
         lambda: service.prepare_offer_version(
             inquiry.inquiry_id,
@@ -630,7 +665,13 @@ def test_convert_accepted_offer_and_ledger_commit_atomically(shared) -> None:
     executor = CoreCommandExecutor(connection)
     inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
-    service = OfferService(offers, inquiries, orders, snapshots)
+    service = OfferService(
+        offers,
+        inquiries,
+        orders,
+        snapshots,
+        today=lambda: date(2026, 7, 15),
+    )
     offer = executor.run(
         lambda: service.prepare_offer_version(
             inquiry.inquiry_id,
@@ -712,7 +753,13 @@ def test_convert_accepted_offer_append_failure_leaves_no_ledger(shared) -> None:
     executor = CoreCommandExecutor(connection)
     inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
-    service = OfferService(offers, inquiries, orders, snapshots)
+    service = OfferService(
+        offers,
+        inquiries,
+        orders,
+        snapshots,
+        today=lambda: date(2026, 7, 15),
+    )
     offer = executor.run(
         lambda: service.prepare_offer_version(
             inquiry.inquiry_id,
@@ -782,7 +829,13 @@ def test_convert_accepted_offer_crm_failure_rolls_back(shared) -> None:
     executor = CoreCommandExecutor(connection)
     inquiry = replace(_inquiry(), inquiry_id="22222222-2222-4222-8222-222222222222")
     executor.run(lambda: inquiries.save(inquiry))
-    service = OfferService(offers, inquiries, orders, snapshots)
+    service = OfferService(
+        offers,
+        inquiries,
+        orders,
+        snapshots,
+        today=lambda: date(2026, 7, 15),
+    )
     offer = executor.run(
         lambda: service.prepare_offer_version(
             inquiry.inquiry_id,

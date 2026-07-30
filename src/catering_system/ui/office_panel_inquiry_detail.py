@@ -50,6 +50,8 @@ _BLOCKER_LABELS = {
     "inquiry_contact_missing_email_and_phone": (
         "E-Mail-Adresse und Telefonnummer fehlen"
     ),
+    "active_order_exists": "Ein aktiver Auftrag ist bereits vorhanden",
+    "offer_already_exists": "Ein Angebot ist bereits vorhanden",
 }
 
 
@@ -483,7 +485,16 @@ def render_inquiry_detail(
             + "</dl></section>"
         )
     offer = ""
-    if offer_url:
+    if state.offer is not None:
+        offer = (
+            '<section class="inquiry-card inquiry-content-card">'
+            "<h2>Angebot</h2>"
+            '<p class="inquiry-section-note">Für diese Anfrage existiert bereits '
+            "ein Angebot.</p>"
+            f'<a class="inquiry-button secondary" href="/offer/{_e(state.offer.offer_id)}">'
+            "Angebot öffnen</a></section>"
+        )
+    elif state.next_action == "prepare-offer" and offer_url:
         offer = (
             '<section class="inquiry-card inquiry-content-card">'
             "<h2>Angebot</h2>"
@@ -491,6 +502,13 @@ def render_inquiry_detail(
             "Es wird noch kein Auftrag erzeugt.</p>"
             f'<a class="inquiry-button secondary" href="{_e(offer_url)}">'
             "Angebot vorbereiten</a></section>"
+        )
+    elif state.next_action == "prepare-offer":
+        offer = (
+            '<section class="inquiry-card inquiry-content-card">'
+            "<h2>Angebot</h2>"
+            '<p class="inquiry-section-note">Der Angebotskonfigurator ist '
+            "derzeit nicht verfügbar.</p></section>"
         )
     blocker_card = (
         '<section class="inquiry-card inquiry-content-card">'
