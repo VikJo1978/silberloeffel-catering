@@ -10,6 +10,12 @@ from typing import Literal, cast
 
 from catering_system.domain.catalog import validate_allergen_codes
 from catering_system.domain.inquiry import validate_planning_mode
+from catering_system.domain.offer_budget_definition import (
+    OfferBudgetDefinition,
+    validate_offer_budget_cost_scope,
+    validate_offer_budget_tax_basis,
+    validate_offer_budget_type,
+)
 from catering_system.domain.offer_snapshot import (
     CURRENCY,
     MAX_EMAIL_LEN,
@@ -61,8 +67,10 @@ _ENVELOPE_KEYS = frozenset(
         "payment_terms",
         "calculator",
         "variants",
+        "budget_definition",
     }
 )
+_BUDGET_DEFINITION_KEYS = frozenset({"amount_cents", "type", "tax_basis", "cost_scope"})
 _RECIPIENT_KEYS = frozenset({"company_name", "contact_name", "email", "postal_address"})
 _EVENT_KEYS = frozenset(
     {
@@ -166,6 +174,7 @@ def validate_offer_snapshot(
     source_draft_id = _optional_short_text(
         payload.get("source_draft_id"), "source_draft_id"
     )
+    budget_definition = _parse_budget_definition(payload.get("budget_definition"))
 
     computed_hash = compute_snapshot_hash(payload)
     if snapshot_hash != computed_hash:
@@ -187,6 +196,7 @@ def validate_offer_snapshot(
         payment_terms=payment_terms,
         calculator=calculator,
         variants=variants,
+        budget_definition=budget_definition,
     )
     if v2:
         return snapshot
@@ -206,6 +216,7 @@ def validate_offer_snapshot(
         payment_terms=snapshot.payment_terms,
         calculator=snapshot.calculator,
         variants=snapshot.variants,
+        budget_definition=snapshot.budget_definition,
     )
 
 
@@ -423,6 +434,42 @@ def _parse_payment_terms(payload: dict[str, object]) -> OfferSnapshotPaymentTerm
         customer_visible_text=_require_long_text(
             payload.get("customer_visible_text"), "payment_terms.customer_visible_text"
         ),
+    )
+
+
+def _parse_budget_definition(
+    value: object,
+) -> OfferBudgetDefinition | None:
+    """OFFER_BUDGET_DEFINITION_V1: optional, strictly validated when present.
+
+    Absent entirely on older snapshots and on snapshots where the operator
+    never enabled budget tracking — that is not an error, it simply means
+    ``budget_definition`` stays ``None``. When present, every field is
+    required and strictly checked; there is no partial/legacy shape accepted
+    at this boundary (legacy defaulting is a Configurator-side concern for
+    its own local drafts, not something Core reinterprets on write).
+    """
+    if value is None:
+        return None
+    payload = _require_object(value, "budget_definition")
+    _reject_unknown_keys(payload, _BUDGET_DEFINITION_KEYS, "budget_definition")
+    amount_cents = _require_cents(
+        payload.get("amount_cents"), "budget_definition.amount_cents"
+    )
+    budget_type = validate_offer_budget_type(
+        _require_exact_str(payload.get("type"), "budget_definition.type")
+    )
+    tax_basis = validate_offer_budget_tax_basis(
+        _require_exact_str(payload.get("tax_basis"), "budget_definition.tax_basis")
+    )
+    cost_scope = validate_offer_budget_cost_scope(
+        _require_exact_str(payload.get("cost_scope"), "budget_definition.cost_scope")
+    )
+    return OfferBudgetDefinition(
+        amount_cents=amount_cents,
+        type=budget_type,
+        tax_basis=tax_basis,
+        cost_scope=cost_scope,
     )
 
 

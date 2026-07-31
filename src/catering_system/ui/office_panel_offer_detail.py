@@ -165,6 +165,60 @@ def _position_rows(variants: list[dict[str, object]]) -> str:
     return "".join(rows) or "<li>Keine Positionen</li>"
 
 
+_BUDGET_TAX_BASIS_LABELS = {"GROSS": "brutto", "NET": "netto"}
+_BUDGET_COST_SCOPE_LABELS = {
+    "FULL_OFFER": "mit allen Kosten",
+    "POSITIONS_ONLY": "nur Positionen",
+}
+
+
+def _budget_cents(cents: object) -> str:
+    if not isinstance(cents, int) or isinstance(cents, bool):
+        return "–"
+    return f"{cents / 100:.2f} €".replace(".", ",")
+
+
+def _budget_block(surface: dict[str, object]) -> str:
+    """OFFER_BUDGET_DEFINITION_V1 — compact internal-only planning block.
+
+    Office Panel only, never the customer document. Omitted entirely (no
+    empty section) when this OfferVersion has no budget_definition — covers
+    both "operator never enabled budget tracking" and "Offer predates this
+    feature" the same way.
+    """
+    budget = surface.get("budget_definition")
+    if not isinstance(budget, dict):
+        return ""
+    per_person = budget.get("type") == "PER_PERSON"
+    suffix = " / Person" if per_person else ""
+    amount_line = f"<p><span>Budget</span><strong>{_e(_budget_cents(budget.get('amount_cents')))}{suffix}</strong></p>"
+    basis_label = _BUDGET_TAX_BASIS_LABELS.get(str(budget.get("tax_basis")), "–")
+    scope_label = _BUDGET_COST_SCOPE_LABELS.get(str(budget.get("cost_scope")), "–")
+    basis_line = f"<p><span>Basis</span><strong>{_e(basis_label)} · {_e(scope_label)}</strong></p>"
+    comparison = budget.get("comparison_amount_cents")
+    if comparison is None:
+        comparison_line = (
+            "<p><span>Aktuell</span><strong>Gästezahl noch offen</strong></p>"
+        )
+        remaining_line = ""
+    else:
+        comparison_line = f"<p><span>Aktuell</span><strong>{_e(_budget_cents(comparison))}{suffix}</strong></p>"
+        remaining = budget.get("remaining_cents")
+        over = bool(budget.get("over"))
+        remaining_abs = abs(remaining) if isinstance(remaining, int) else None
+        remaining_label = "Überschritten" if over else "Verfügbar"
+        remaining_line = (
+            f"<p><span>{remaining_label}</span>"
+            f"<strong>{_e(_budget_cents(remaining_abs))}{suffix}</strong></p>"
+        )
+    return (
+        '<section class="offer-detail-section offer-budget-section">'
+        "<h2>Budget (intern)</h2>"
+        f"{amount_line}{basis_line}{comparison_line}{remaining_line}"
+        "</section>"
+    )
+
+
 def _select_options(
     values: tuple[str, ...],
     labels: dict[str, str],
@@ -414,8 +468,7 @@ def render_offer_detail(
         f"<p><span>Gäste</span><strong>{_e(guest_text)}</strong></p>"
         f"<p><span>Zeitfenster</span><strong>{_e(str(surface['time_window_text']))}</strong></p>"
         f"<p><span>Planung</span><strong>{_e(planning)}</strong></p>"
-        "</section>"
-        '<section class="offer-detail-section">'
+        "</section>" + _budget_block(surface) + '<section class="offer-detail-section">'
         "<h2>Positionen (Snapshot)</h2>"
         f'<ul class="offer-position-list">{_position_rows(variants)}</ul>'
         "</section>"

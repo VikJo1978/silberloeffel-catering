@@ -43,7 +43,11 @@ from catering_system.domain.offer import (
     Offer,
     OfferPosition,
     OfferState,
+    OfferVersion,
     derive_offer_state,
+)
+from catering_system.services.offer_budget_presentation import (
+    compute_offer_budget_presentation,
 )
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjection,
@@ -318,6 +322,66 @@ def _position_detail(position: OfferPosition) -> dict[str, object]:
     return row
 
 
+def _budget_definition_detail(version: OfferVersion) -> dict[str, object] | None:
+    """OFFER_BUDGET_DEFINITION_V1 — internal-only, never in customer-facing
+    output. Omitted entirely (not an empty object) when the version has no
+    budget_definition, so old Offers render exactly as before."""
+    if version.budget_definition is None:
+        return None
+    positions = [
+        position for variant in version.variants for position in variant.positions
+    ]
+    presentation = compute_offer_budget_presentation(
+        version.budget_definition,
+        positions=positions,
+        guest_count=version.guest_count,
+    )
+    assert presentation is not None  # budget_definition is not None above
+    return {
+        "amount_cents": presentation.amount_cents,
+        "type": presentation.type,
+        "tax_basis": presentation.tax_basis,
+        "cost_scope": presentation.cost_scope,
+        "comparison_amount_cents": presentation.comparison_amount_cents,
+        "remaining_cents": presentation.remaining_cents,
+        "over": presentation.over,
+    }
+
+
+def _version_detail(
+    offer: Offer, version: OfferVersion, *, operating_today: date
+) -> dict[str, object]:
+    row: dict[str, object] = {
+        "offer_version_id": version.offer_version_id,
+        "version": version.version_number,
+        "state": derive_offer_state(
+            offer, version.offer_version_id, today=operating_today
+        ),
+        "created_at": version.created_at.isoformat(),
+        "sent_at": _version_sent_at(offer, version.offer_version_id),
+        "event_date": version.event_date.isoformat(),
+        "valid_until": version.valid_until.isoformat(),
+        "time_window_text": version.time_window_text,
+        "location_text": version.location_text,
+        "guest_count": version.guest_count,
+        "planning_mode": version.planning_mode,
+        "variants": [
+            {
+                "variant_id": variant.variant_id,
+                "name": variant.label,
+                "positions": [
+                    _position_detail(position) for position in variant.positions
+                ],
+            }
+            for variant in version.variants
+        ],
+    }
+    budget_definition = _budget_definition_detail(version)
+    if budget_definition is not None:
+        row["budget_definition"] = budget_definition
+    return row
+
+
 def offer_detail(offer: Offer, *, today: date | None = None) -> dict[str, object]:
     operating_today = today or berlin_today()
     projection = derive_inquiry_offer_projection(offer, today=operating_today)
@@ -329,31 +393,7 @@ def offer_detail(offer: Offer, *, today: date | None = None) -> dict[str, object
         "commercial_state": projection.commercial_state,
         "acceptance_id": projection.acceptance_id,
         "versions": [
-            {
-                "offer_version_id": version.offer_version_id,
-                "version": version.version_number,
-                "state": derive_offer_state(
-                    offer, version.offer_version_id, today=operating_today
-                ),
-                "created_at": version.created_at.isoformat(),
-                "sent_at": _version_sent_at(offer, version.offer_version_id),
-                "event_date": version.event_date.isoformat(),
-                "valid_until": version.valid_until.isoformat(),
-                "time_window_text": version.time_window_text,
-                "location_text": version.location_text,
-                "guest_count": version.guest_count,
-                "planning_mode": version.planning_mode,
-                "variants": [
-                    {
-                        "variant_id": variant.variant_id,
-                        "name": variant.label,
-                        "positions": [
-                            _position_detail(position) for position in variant.positions
-                        ],
-                    }
-                    for variant in version.variants
-                ],
-            }
+            _version_detail(offer, version, operating_today=operating_today)
             for version in versions
         ],
         "sent_evidence": _surface_sent_evidence(offer, projection.offer_version_id),
