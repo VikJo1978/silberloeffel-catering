@@ -11,6 +11,7 @@ from typing import Literal
 
 from catering_system.domain.inquiry import PlanningMode
 from catering_system.domain.offer_budget_definition import OfferBudgetDefinition
+from catering_system.domain.offer_charges import OfferChargesDefinition
 from catering_system.domain.order_payment_reminder import PaymentMethod
 
 SCHEMA_VERSION = "offer_snapshot_v1"
@@ -28,10 +29,17 @@ MAX_EMAIL_LEN = 320
 MAX_SHORT_TEXT_LEN = 500
 MAX_LONG_TEXT_LEN = 20_000
 
-SnapshotPositionKind = Literal["catalog", "surcharge", "fee", "custom"]
+SnapshotPositionKind = Literal[
+    "catalog", "surcharge", "fee", "custom", "delivery", "dishware", "buffet_fee"
+]
 SnapshotQuantityMode = Literal["total", "per_person"]
 
-_POSITION_KINDS: frozenset[str] = frozenset({"catalog", "surcharge", "fee", "custom"})
+# CONFIGURABLE_OFFER_CHARGES_V1: "delivery"/"dishware"/"buffet_fee" are new,
+# explicit kinds; legacy "fee" positions keep working unchanged (see
+# domain/offer.py PositionKind for the full rationale).
+_POSITION_KINDS: frozenset[str] = frozenset(
+    {"catalog", "surcharge", "fee", "custom", "delivery", "dishware", "buffet_fee"}
+)
 _QUANTITY_MODES: frozenset[str] = frozenset({"total", "per_person"})
 _VAT_RATES: frozenset[int] = frozenset({7, 19})
 _QUANTITY_RE = re.compile(r"^(?:0|[1-9]\d*)(?:\.\d{1,3})?\Z")
@@ -140,6 +148,11 @@ class OfferSnapshotEnvelope:
     # OFFER_BUDGET_DEFINITION_V1: optional internal-only operator planning
     # metadata — never customer-facing (see domain/offer_budget_definition.py).
     budget_definition: OfferBudgetDefinition | None = None
+    # CONFIGURABLE_OFFER_CHARGES_V1: optional structured delivery/dishware/
+    # buffet definition (see domain/offer_charges.py). Absent means legacy —
+    # the snapshot's positions (historically kind="fee") are trusted as-is,
+    # never reinterpreted from this field.
+    charges_definition: OfferChargesDefinition | None = None
 
 
 @dataclass(frozen=True)

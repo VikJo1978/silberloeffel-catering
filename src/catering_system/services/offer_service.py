@@ -694,6 +694,7 @@ def _build_version_from_snapshot(
         customer_introduction=_normalize_narrative(snapshot.customer_text.introduction),
         customer_notes=_normalize_narrative(snapshot.customer_text.notes),
         budget_definition=snapshot.budget_definition,
+        charges_definition=snapshot.charges_definition,
     )
 
 
