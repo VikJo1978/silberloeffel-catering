@@ -38,6 +38,13 @@ from catering_system.domain.offer import (
     WithdrawalEvidence,
 )
 from catering_system.domain.offer_budget_definition import OfferBudgetDefinition
+from catering_system.domain.offer_charges import (
+    BuffetChargeDefinition,
+    DeliveryChargeDefinition,
+    DishwareAdditionalLineDefinition,
+    DishwareChargeDefinition,
+    OfferChargesDefinition,
+)
 from catering_system.domain.order_payment_reminder import validate_payment_method
 from catering_system.repositories.sqlite_migrations import apply_migrations
 
@@ -304,6 +311,18 @@ def _migration_8_offer_version_budget_definition(
         )
 
 
+def _migration_9_offer_version_charges_definition(
+    connection: sqlite3.Connection,
+) -> None:
+    existing = {
+        row[1] for row in connection.execute("PRAGMA table_info(offer_versions)")
+    }
+    if "charges_definition_json" not in existing:
+        connection.execute(
+            "ALTER TABLE offer_versions ADD COLUMN charges_definition_json TEXT"
+        )
+
+
 _MIGRATIONS = (
     (1, "create_offer_tables", _migration_1_create_tables),
     (2, "unique_source_inquiry", _migration_2_unique_source_inquiry),
@@ -332,6 +351,11 @@ _MIGRATIONS = (
         8,
         "offer_version_budget_definition",
         _migration_8_offer_version_budget_definition,
+    ),
+    (
+        9,
+        "offer_version_charges_definition",
+        _migration_9_offer_version_charges_definition,
     ),
 )
 
@@ -396,6 +420,73 @@ def _stored_budget_definition(value: str | None) -> OfferBudgetDefinition | None
         )
     except KeyError as exc:
         raise ValueError("budget_definition_json missing required field") from exc
+
+
+def _charges_definition_storage(value: OfferChargesDefinition | None) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(
+        {
+            "delivery": {"amount_cents": value.delivery.amount_cents},
+            "dishware": {
+                "base_mode": value.dishware.base_mode,
+                "pauschale_per_person_cents": value.dishware.pauschale_per_person_cents,
+                "additional_lines": [
+                    {
+                        "description": line.description,
+                        "quantity": line.quantity,
+                        "unit_net_cents": line.unit_net_cents,
+                    }
+                    for line in value.dishware.additional_lines
+                ],
+            },
+            "buffet": {
+                "base_mode": value.buffet.base_mode,
+                "pauschale_per_person_cents": value.buffet.pauschale_per_person_cents,
+            },
+        },
+        ensure_ascii=False,
+    )
+
+
+def _stored_charges_definition(value: str | None) -> OfferChargesDefinition | None:
+    """Reject malformed stored payloads rather than silently drop them —
+    this column is only ever written by ``_charges_definition_storage`` above,
+    so a decode/shape failure here means on-disk corruption, not a normal
+    "no charges" case (that's represented by SQL NULL / Python None)."""
+    if value is None:
+        return None
+    parsed = json.loads(value)
+    if not isinstance(parsed, dict):
+        raise ValueError("charges_definition_json must decode to an object")
+    try:
+        delivery_raw = parsed["delivery"]
+        dishware_raw = parsed["dishware"]
+        buffet_raw = parsed["buffet"]
+        additional_lines = tuple(
+            DishwareAdditionalLineDefinition(
+                description=line["description"],
+                quantity=line["quantity"],
+                unit_net_cents=line["unit_net_cents"],
+            )
+            for line in dishware_raw["additional_lines"]
+        )
+        return OfferChargesDefinition(
+            delivery=DeliveryChargeDefinition(
+                amount_cents=delivery_raw["amount_cents"]
+            ),
+            dishware=DishwareChargeDefinition(
+                base_mode=dishware_raw["base_mode"],
+                pauschale_per_person_cents=dishware_raw["pauschale_per_person_cents"],
+                additional_lines=additional_lines,
+            ),
+            buffet=BuffetChargeDefinition(
+                base_mode=buffet_raw["base_mode"],
+                pauschale_per_person_cents=buffet_raw["pauschale_per_person_cents"],
+            ),
+        )
+    except (KeyError, TypeError) as exc:
+        raise ValueError("charges_definition_json missing required field") from exc
 
 
 def _dt(value: str) -> datetime:
@@ -676,8 +767,9 @@ class SQLiteOfferRepository:
                 snapshot_id, snapshot_hash, event_date, time_window_text,
                 location_text, guest_count, planning_mode, payment_method,
                 payment_customer_visible_text, customer_title,
-                customer_introduction, customer_notes, budget_definition_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                customer_introduction, customer_notes, budget_definition_json,
+                charges_definition_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 version.offer_version_id,
@@ -698,6 +790,7 @@ class SQLiteOfferRepository:
                 version.customer_introduction,
                 version.customer_notes,
                 _budget_definition_storage(version.budget_definition),
+                _charges_definition_storage(version.charges_definition),
             ),
         )
         for sort_order, variant in enumerate(version.variants):
@@ -830,7 +923,8 @@ class SQLiteOfferRepository:
                    snapshot_id, snapshot_hash, event_date, time_window_text,
                    location_text, guest_count, planning_mode, payment_method,
                    payment_customer_visible_text, customer_title,
-                   customer_introduction, customer_notes, budget_definition_json
+                   customer_introduction, customer_notes, budget_definition_json,
+                   charges_definition_json
             FROM offer_versions
             WHERE offer_id = ?
             ORDER BY version_number
@@ -878,6 +972,7 @@ class SQLiteOfferRepository:
                     customer_introduction=row[14],
                     customer_notes=row[15],
                     budget_definition=_stored_budget_definition(row[16]),
+                    charges_definition=_stored_charges_definition(row[17]),
                 )
             )
         return tuple(versions)

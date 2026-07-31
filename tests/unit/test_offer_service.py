@@ -7,6 +7,7 @@ from tests.helpers.order_seed import seed_order
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from typing import cast
 
 import pytest
 
@@ -175,6 +176,75 @@ def _budget_definition_payload(
         "tax_basis": tax_basis,
         "cost_scope": cost_scope,
     }
+
+
+_DELIVERY_POSITION_ID = "88888888-8888-4888-8888-888888888891"
+
+
+def _delivery_position(amount_cents: int = 3500) -> dict[str, object]:
+    vat_amount_cents = round(amount_cents * 0.19)
+    return {
+        "position_id": _DELIVERY_POSITION_ID,
+        "kind": "delivery",
+        "catalog_item_id": None,
+        "name": "Anlieferung",
+        "description": None,
+        "composition": None,
+        "quantity_mode": "total",
+        "quantity": "1",
+        "unit_label": "Pauschale",
+        "unit_net_cents": amount_cents,
+        "net_total_cents": amount_cents,
+        "vat_rate_percent": 19,
+        "vat_amount_cents": vat_amount_cents,
+        "gross_total_cents": amount_cents + vat_amount_cents,
+        "notes": None,
+        "related_position_id": None,
+    }
+
+
+def _charges_definition_payload(
+    *, delivery_amount_cents: int = 3500
+) -> dict[str, object]:
+    """CONFIGURABLE_OFFER_CHARGES_V1: delivery-only shape (dishware/buffet
+    NONE) so no extra materialized positions are required beyond delivery —
+    the full cross-product of consistency-check scenarios is already
+    covered by tests/unit/test_offer_charges_validation.py."""
+    return {
+        "delivery": {"amount_cents": delivery_amount_cents},
+        "dishware": {
+            "base_mode": "NONE",
+            "pauschale_per_person_cents": 200,
+            "additional_lines": [],
+        },
+        "buffet": {"base_mode": "NONE", "pauschale_per_person_cents": 50},
+    }
+
+
+def _snapshot_with_charges_definition(
+    *, delivery_amount_cents: int = 3500
+) -> dict[str, object]:
+    payload = _valid_snapshot()
+    variant = cast(dict[str, object], cast(list[object], payload["variants"])[0])
+    positions = cast(list[dict[str, object]], variant["positions"])
+    positions.append(_delivery_position(delivery_amount_cents))
+    totals = cast(dict[str, object], variant["totals"])
+    totals["net_cents"] = cast(int, totals["net_cents"]) + delivery_amount_cents
+    vat_amount_cents = round(delivery_amount_cents * 0.19)
+    totals["vat_19_base_cents"] = (
+        cast(int, totals["vat_19_base_cents"]) + delivery_amount_cents
+    )
+    totals["vat_19_amount_cents"] = (
+        cast(int, totals["vat_19_amount_cents"]) + vat_amount_cents
+    )
+    totals["gross_cents"] = (
+        cast(int, totals["gross_cents"]) + delivery_amount_cents + vat_amount_cents
+    )
+    payload["charges_definition"] = _charges_definition_payload(
+        delivery_amount_cents=delivery_amount_cents
+    )
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+    return payload
 
 
 def _sample_inquiry(*, inquiry_id: str = _INQUIRY_ID) -> Inquiry:
@@ -409,6 +479,53 @@ def test_prepare_offer_version_duplicate_preserves_original_budget_definition() 
     assert stored is not None
     assert stored.versions[0].budget_definition is not None
     assert stored.versions[0].budget_definition.amount_cents == 3500
+
+
+def test_prepare_offer_version_persists_charges_definition() -> None:
+    """CONFIGURABLE_OFFER_CHARGES_V1: preserved through Offer preparation."""
+    _inquiries, _orders, offers, service = _world(inquiry=_sample_inquiry())
+    payload = _snapshot_with_charges_definition()
+
+    offer = service.prepare_offer_version(_INQUIRY_ID, payload)
+
+    version = offer.versions[0]
+    assert version.charges_definition is not None
+    assert version.charges_definition.delivery.amount_cents == 3500
+    assert version.charges_definition.dishware.base_mode == "NONE"
+    assert version.charges_definition.buffet.base_mode == "NONE"
+    stored = offers.get(offer.offer_id)
+    assert stored is not None
+    assert stored.versions[0].charges_definition == version.charges_definition
+
+
+def test_prepare_offer_version_without_charges_definition_stays_none() -> None:
+    """Legacy snapshot — no charges_definition — no default is invented."""
+    _inquiries, _orders, _offers, service = _world(inquiry=_sample_inquiry())
+
+    offer = service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
+
+    assert offer.versions[0].charges_definition is None
+
+
+def test_prepare_offer_version_duplicate_preserves_original_charges_definition() -> (
+    None
+):
+    """Duplicate protection (offer_already_exists) must not touch the
+    already-persisted Offer — its charges_definition is untouched by the
+    rejected second prepare attempt, even when the retry carries a
+    different charges_definition."""
+    _inquiries, _orders, offers, service = _world(inquiry=_sample_inquiry())
+    first_payload = _snapshot_with_charges_definition(delivery_amount_cents=3500)
+    original = service.prepare_offer_version(_INQUIRY_ID, first_payload)
+
+    second_payload = _snapshot_with_charges_definition(delivery_amount_cents=9999)
+    with pytest.raises(OfferPreparationBlockedError):
+        service.prepare_offer_version(_INQUIRY_ID, second_payload)
+
+    stored = offers.get(original.offer_id)
+    assert stored is not None
+    assert stored.versions[0].charges_definition is not None
+    assert stored.versions[0].charges_definition.delivery.amount_cents == 3500
 
 
 def test_prepare_offer_version_narrative_normalization() -> None:
@@ -1526,6 +1643,16 @@ def _revision_snapshot(*, inquiry_id: str = _INQUIRY_ID) -> dict[str, object]:
     return payload
 
 
+def _revision_snapshot_with_charges_definition() -> dict[str, object]:
+    payload = _snapshot_with_charges_definition()
+    payload["snapshot_id"] = _SNAPSHOT_ID_V2
+    payload["source_draft_id"] = "draft-2"
+    payload["snapshot_created_at"] = "2026-07-16T08:30:00+00:00"
+    payload["valid_until"] = "2026-08-05"
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+    return payload
+
+
 def test_prepare_next_offer_version_after_sent() -> None:
     offers = _CountingOfferRepository()
     _inquiries, _orders, _offers, service = _world(
@@ -1553,6 +1680,33 @@ def test_prepare_next_offer_version_after_sent() -> None:
         )
         == "Prepared"
     )
+
+
+def test_prepare_next_offer_version_preserves_charges_definition() -> None:
+    """CONFIGURABLE_OFFER_CHARGES_V1: preserved through prepare_next_offer_version
+    (the replay/revision path shares `_build_version_from_snapshot` with
+    prepare_offer_version, so this is the same one-line wiring — verified
+    end to end rather than assumed)."""
+    offers = _CountingOfferRepository()
+    _inquiries, _orders, _offers, service = _world(
+        inquiry=_sample_inquiry(), offers=offers
+    )
+    offer = service.prepare_offer_version(
+        _INQUIRY_ID, _snapshot_with_charges_definition(delivery_amount_cents=3500)
+    )
+    version_id = offer.versions[0].offer_version_id
+    service.record_sent_evidence(offer.offer_id, version_id, **_record_args())
+
+    updated = service.prepare_next_offer_version(
+        offer.offer_id,
+        _revision_snapshot_with_charges_definition(),
+        expected_latest_version_number=1,
+    )
+
+    assert updated.versions[1].charges_definition is not None
+    assert updated.versions[1].charges_definition.delivery.amount_cents == 3500
+    assert updated.versions[0].charges_definition is not None
+    assert updated.versions[0].charges_definition.delivery.amount_cents == 3500
 
 
 def test_prepare_next_blocked_while_prepared() -> None:

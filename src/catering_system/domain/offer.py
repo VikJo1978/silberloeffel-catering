@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from catering_system.domain.catalog import AllergenCode, validate_allergen_codes
 from catering_system.domain.inquiry import PlanningMode, validate_planning_mode
 from catering_system.domain.offer_budget_definition import OfferBudgetDefinition
+from catering_system.domain.offer_charges import OfferChargesDefinition
 from catering_system.domain.order_payment_reminder import (
     PaymentMethod,
     validate_payment_method,
@@ -31,12 +32,28 @@ OfferState = Literal[
     "Superseded",
     "Expired",
 ]
-PositionKind = Literal["catalog", "surcharge", "fee", "custom"]
+PositionKind = Literal[
+    "catalog", "surcharge", "fee", "custom", "delivery", "dishware", "buffet_fee"
+]
 PositionQuantityMode = Literal["total", "per_person"]
 VatRatePercent = Literal[7, 19]
 SentChannel = Literal["email", "postal", "in_person", "other"]
 AcceptanceChannel = Literal["email", "phone", "signed_document", "in_person", "other"]
-POSITION_KINDS: tuple[PositionKind, ...] = ("catalog", "surcharge", "fee", "custom")
+# CONFIGURABLE_OFFER_CHARGES_V1: "delivery"/"dishware"/"buffet_fee" are new,
+# explicit kinds for the structured charges this slice introduces. Legacy
+# snapshots keep using "fee" for the same conceptual charges (Anlieferung/
+# Geschirrpauschale/Büffetpauschale materialized unconditionally by the
+# pre-this-slice Configurator) — "fee" is not removed or reinterpreted, it
+# simply stops being what *new* charges_definition-bearing snapshots use.
+POSITION_KINDS: tuple[PositionKind, ...] = (
+    "catalog",
+    "surcharge",
+    "fee",
+    "custom",
+    "delivery",
+    "dishware",
+    "buffet_fee",
+)
 POSITION_QUANTITY_MODES: tuple[PositionQuantityMode, ...] = ("total", "per_person")
 VAT_RATES: tuple[VatRatePercent, ...] = (7, 19)
 SENT_CHANNELS: tuple[SentChannel, ...] = ("email", "postal", "in_person", "other")
@@ -214,6 +231,16 @@ class OfferVersion:
     # frozen from the source OfferSnapshot's budget_definition (if any).
     # Never surfaced in customer-facing documents/wording.
     budget_definition: OfferBudgetDefinition | None = None
+    # CONFIGURABLE_OFFER_CHARGES_V1: the structured delivery/dishware/buffet
+    # definition this version's charges were derived from, frozen from the
+    # source OfferSnapshot (if any). Unlike budget_definition, this *is*
+    # customer-facing in effect — it's the input behind real delivery/
+    # dishware/buffet_fee positions already in variants[].positions — but the
+    # definition object itself is only ever surfaced in internal views
+    # (Office Panel), never printed verbatim into a customer document. None
+    # on legacy snapshots that never sent one; their positions (historically
+    # always kind="fee") are untouched and not reinterpreted.
+    charges_definition: OfferChargesDefinition | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.offer_version_id, "offer_version_id")

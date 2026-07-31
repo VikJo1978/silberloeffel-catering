@@ -16,6 +16,14 @@ from catering_system.domain.offer_budget_definition import (
     validate_offer_budget_tax_basis,
     validate_offer_budget_type,
 )
+from catering_system.domain.offer_charges import (
+    BuffetChargeDefinition,
+    DeliveryChargeDefinition,
+    DishwareAdditionalLineDefinition,
+    DishwareChargeDefinition,
+    OfferChargesDefinition,
+    validate_charge_base_mode,
+)
 from catering_system.domain.offer_snapshot import (
     CURRENCY,
     MAX_EMAIL_LEN,
@@ -68,9 +76,17 @@ _ENVELOPE_KEYS = frozenset(
         "calculator",
         "variants",
         "budget_definition",
+        "charges_definition",
     }
 )
 _BUDGET_DEFINITION_KEYS = frozenset({"amount_cents", "type", "tax_basis", "cost_scope"})
+_CHARGES_DEFINITION_KEYS = frozenset({"delivery", "dishware", "buffet"})
+_DELIVERY_CHARGE_KEYS = frozenset({"amount_cents"})
+_DISHWARE_CHARGE_KEYS = frozenset(
+    {"base_mode", "pauschale_per_person_cents", "additional_lines"}
+)
+_DISHWARE_LINE_KEYS = frozenset({"description", "quantity", "unit_net_cents"})
+_BUFFET_CHARGE_KEYS = frozenset({"base_mode", "pauschale_per_person_cents"})
 _RECIPIENT_KEYS = frozenset({"company_name", "contact_name", "email", "postal_address"})
 _EVENT_KEYS = frozenset(
     {
@@ -175,6 +191,8 @@ def validate_offer_snapshot(
         payload.get("source_draft_id"), "source_draft_id"
     )
     budget_definition = _parse_budget_definition(payload.get("budget_definition"))
+    charges_definition = _parse_charges_definition(payload.get("charges_definition"))
+    _validate_charges_consistency(charges_definition, variants, event)
 
     computed_hash = compute_snapshot_hash(payload)
     if snapshot_hash != computed_hash:
@@ -197,6 +215,7 @@ def validate_offer_snapshot(
         calculator=calculator,
         variants=variants,
         budget_definition=budget_definition,
+        charges_definition=charges_definition,
     )
     if v2:
         return snapshot
@@ -217,6 +236,7 @@ def validate_offer_snapshot(
         calculator=snapshot.calculator,
         variants=snapshot.variants,
         budget_definition=snapshot.budget_definition,
+        charges_definition=snapshot.charges_definition,
     )
 
 
@@ -473,6 +493,118 @@ def _parse_budget_definition(
     )
 
 
+def _require_positive_int(value: object, field: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"{field} must be a whole number")
+    if value < 1:
+        raise ValueError(f"{field} must be a positive integer")
+    return value
+
+
+def _parse_delivery_charge(payload: dict[str, object]) -> DeliveryChargeDefinition:
+    _reject_unknown_keys(payload, _DELIVERY_CHARGE_KEYS, "charges_definition.delivery")
+    return DeliveryChargeDefinition(
+        amount_cents=_require_cents(
+            payload.get("amount_cents"), "charges_definition.delivery.amount_cents"
+        )
+    )
+
+
+def _parse_dishware_line(
+    value: object, *, label: str
+) -> DishwareAdditionalLineDefinition:
+    if not isinstance(value, dict):
+        raise ValueError(f"{label} must be an object")
+    payload = value
+    _reject_unknown_keys(payload, _DISHWARE_LINE_KEYS, label)
+    # Deliberately not `_require_short_text` — that helper trims before
+    # returning, which would silently swallow untrimmed input instead of
+    # rejecting it. Only the length cap is enforced here; trim/non-empty
+    # rejection is delegated to DishwareAdditionalLineDefinition itself
+    # (the single source of truth for that rule, already covered by
+    # tests/unit/test_offer_charges_domain.py).
+    description = _require_exact_str(payload.get("description"), f"{label}.description")
+    if len(description) > MAX_SHORT_TEXT_LEN:
+        raise ValueError(f"{label}.description exceeds length limit")
+    return DishwareAdditionalLineDefinition(
+        description=description,
+        quantity=_require_positive_int(payload.get("quantity"), f"{label}.quantity"),
+        unit_net_cents=_require_cents(
+            payload.get("unit_net_cents"), f"{label}.unit_net_cents"
+        ),
+    )
+
+
+def _parse_dishware_charge(payload: dict[str, object]) -> DishwareChargeDefinition:
+    _reject_unknown_keys(payload, _DISHWARE_CHARGE_KEYS, "charges_definition.dishware")
+    base_mode = validate_charge_base_mode(
+        _require_exact_str(
+            payload.get("base_mode"), "charges_definition.dishware.base_mode"
+        )
+    )
+    pauschale_per_person_cents = _require_cents(
+        payload.get("pauschale_per_person_cents"),
+        "charges_definition.dishware.pauschale_per_person_cents",
+    )
+    lines_raw = payload.get("additional_lines", [])
+    lines_list = _require_list(
+        lines_raw, "charges_definition.dishware.additional_lines"
+    )
+    if len(lines_list) > MAX_POSITIONS_PER_VARIANT:
+        raise ValueError("charges_definition.dishware.additional_lines exceeds limit")
+    additional_lines = tuple(
+        _parse_dishware_line(
+            item, label=f"charges_definition.dishware.additional_lines[{index}]"
+        )
+        for index, item in enumerate(lines_list)
+    )
+    return DishwareChargeDefinition(
+        base_mode=base_mode,
+        pauschale_per_person_cents=pauschale_per_person_cents,
+        additional_lines=additional_lines,
+    )
+
+
+def _parse_buffet_charge(payload: dict[str, object]) -> BuffetChargeDefinition:
+    _reject_unknown_keys(payload, _BUFFET_CHARGE_KEYS, "charges_definition.buffet")
+    base_mode = validate_charge_base_mode(
+        _require_exact_str(
+            payload.get("base_mode"), "charges_definition.buffet.base_mode"
+        )
+    )
+    pauschale_per_person_cents = _require_cents(
+        payload.get("pauschale_per_person_cents"),
+        "charges_definition.buffet.pauschale_per_person_cents",
+    )
+    return BuffetChargeDefinition(
+        base_mode=base_mode, pauschale_per_person_cents=pauschale_per_person_cents
+    )
+
+
+def _parse_charges_definition(value: object) -> OfferChargesDefinition | None:
+    """CONFIGURABLE_OFFER_CHARGES_V1: optional, strictly validated when present.
+
+    Absent entirely means legacy — the snapshot's already-materialized
+    positions (historically ``kind="fee"``) are trusted as-is, never
+    reinterpreted from this field. When present, delivery/dishware/buffet
+    are all required — there is no partial shape.
+    """
+    if value is None:
+        return None
+    payload = _require_object(value, "charges_definition")
+    _reject_unknown_keys(payload, _CHARGES_DEFINITION_KEYS, "charges_definition")
+    delivery = _parse_delivery_charge(
+        _require_object(payload.get("delivery"), "charges_definition.delivery")
+    )
+    dishware = _parse_dishware_charge(
+        _require_object(payload.get("dishware"), "charges_definition.dishware")
+    )
+    buffet = _parse_buffet_charge(
+        _require_object(payload.get("buffet"), "charges_definition.buffet")
+    )
+    return OfferChargesDefinition(delivery=delivery, dishware=dishware, buffet=buffet)
+
+
 def _parse_calculator(payload: dict[str, object]) -> OfferSnapshotCalculator:
     _reject_unknown_keys(payload, _CALCULATOR_KEYS, "calculator")
     return OfferSnapshotCalculator(
@@ -665,6 +797,137 @@ def _validate_variant_arithmetic(
         != totals.net_cents + totals.vat_7_amount_cents + totals.vat_19_amount_cents
     ):
         raise ValueError("offer snapshot gross arithmetic mismatch")
+
+
+def _validate_charges_consistency(
+    charges_definition: OfferChargesDefinition | None,
+    variants: tuple[OfferSnapshotVariant, ...],
+    event: OfferSnapshotEvent,
+) -> None:
+    """CONFIGURABLE_OFFER_CHARGES_V1: cross-check the declared charges
+    definition against the positions actually materialized in every variant.
+
+    Only runs when ``charges_definition`` is present on the incoming
+    snapshot — legacy snapshots (no ``charges_definition``) are never
+    subject to this check; their fee positions are trusted as-is (see
+    ``domain/offer_charges.py`` module docstring).
+
+    Basic per-position/per-variant net/VAT/gross arithmetic is already
+    enforced unconditionally by ``_validate_position_arithmetic`` and
+    ``_validate_variant_arithmetic`` above for every position regardless of
+    ``kind`` — this function only checks that delivery/dishware/buffet_fee
+    positions *correspond* to what ``charges_definition`` declares, not the
+    arithmetic itself.
+
+    Assumption (undocumented by the spec, made explicit here): every
+    variant is checked independently against the same, single
+    ``charges_definition`` — a snapshot has one delivery/dishware/buffet
+    configuration shared across all its variants.
+    """
+    if charges_definition is None:
+        return
+    for index, variant in enumerate(variants):
+        _validate_variant_charges_consistency(
+            charges_definition, variant, event, label=f"variants[{index}]"
+        )
+
+
+def _validate_variant_charges_consistency(
+    charges: OfferChargesDefinition,
+    variant: OfferSnapshotVariant,
+    event: OfferSnapshotEvent,
+    *,
+    label: str,
+) -> None:
+    _validate_delivery_consistency(charges.delivery, variant, label=label)
+    _validate_dishware_consistency(charges.dishware, variant, event, label=label)
+    _validate_buffet_consistency(charges.buffet, variant, event, label=label)
+
+
+def _validate_delivery_consistency(
+    delivery: DeliveryChargeDefinition, variant: OfferSnapshotVariant, *, label: str
+) -> None:
+    positions = [p for p in variant.positions if p.kind == "delivery"]
+    if len(positions) != 1:
+        raise ValueError(
+            f"{label}: charges_definition.delivery requires exactly one "
+            'kind="delivery" position'
+        )
+    if positions[0].net_total_cents != delivery.amount_cents:
+        raise ValueError(
+            f"{label}: delivery position does not match charges_definition"
+        )
+
+
+def _validate_dishware_consistency(
+    dishware: DishwareChargeDefinition,
+    variant: OfferSnapshotVariant,
+    event: OfferSnapshotEvent,
+    *,
+    label: str,
+) -> None:
+    """Correspondence contract for additional lines: each ``additional_lines``
+    entry matches exactly one ``kind="dishware"`` position whose ``name``
+    equals the line's ``description`` and whose ``net_total_cents`` equals
+    the line's derived ``quantity * unit_net_cents``. Any ``kind="dishware"``
+    position left over after matching all lines is treated as the Pauschale
+    row (there may be at most one).
+    """
+    remaining = [p for p in variant.positions if p.kind == "dishware"]
+    for line_index, line in enumerate(dishware.additional_lines):
+        match = next(
+            (
+                position
+                for position in remaining
+                if position.name == line.description
+                and position.net_total_cents == line.net_total_cents
+            ),
+            None,
+        )
+        if match is None:
+            raise ValueError(
+                f"{label}: charges_definition.dishware.additional_lines[{line_index}]"
+                " has no matching dishware position"
+            )
+        remaining.remove(match)
+    if dishware.base_mode == "PAUSCHALE":
+        if event.guest_count is None:
+            raise ValueError(
+                f"{label}: dishware base_mode=PAUSCHALE requires event.guest_count"
+            )
+        expected = event.guest_count * dishware.pauschale_per_person_cents
+        if len(remaining) != 1:
+            raise ValueError(f"{label}: dishware Pauschale position not found")
+        if remaining[0].net_total_cents != expected:
+            raise ValueError(f"{label}: dishware Pauschale position amount mismatch")
+    elif remaining:
+        raise ValueError(
+            f"{label}: unexplained dishware position present for base_mode=NONE"
+        )
+
+
+def _validate_buffet_consistency(
+    buffet: BuffetChargeDefinition,
+    variant: OfferSnapshotVariant,
+    event: OfferSnapshotEvent,
+    *,
+    label: str,
+) -> None:
+    positions = [p for p in variant.positions if p.kind == "buffet_fee"]
+    if buffet.base_mode == "PAUSCHALE":
+        if event.guest_count is None:
+            raise ValueError(
+                f"{label}: buffet base_mode=PAUSCHALE requires event.guest_count"
+            )
+        expected = event.guest_count * buffet.pauschale_per_person_cents
+        if len(positions) != 1:
+            raise ValueError(f"{label}: buffet_fee position not found")
+        if positions[0].net_total_cents != expected:
+            raise ValueError(f"{label}: buffet_fee position amount mismatch")
+    elif positions:
+        raise ValueError(
+            f"{label}: unexplained buffet_fee position present for base_mode=NONE"
+        )
 
 
 def _parse_position(

@@ -486,6 +486,65 @@ yet reconnected to `core.db` since deploy (migrations apply on first
 connection) — restart the affected service and re-check, don't attempt any
 manual `ALTER TABLE`.
 
+### Migration 9 — `offer_versions.charges_definition_json` (CONFIGURABLE_OFFER_CHARGES_V1)
+
+Migration 9 (component `offers`, `_migration_9_offer_version_charges_definition`
+in `sqlite_offer_repository.py`) is the same additive pattern as migration 8,
+one statement:
+
+```sql
+ALTER TABLE offer_versions ADD COLUMN charges_definition_json TEXT
+```
+
+- **Additive and nullable.** Adds exactly one column, no `NOT NULL`
+  constraint, no default beyond SQLite's implicit `NULL`. Every
+  pre-migration row reads back with `charges_definition_json = NULL` — no
+  backfill, no data rewrite.
+- **Existing rows are untouched**, for the same reason as migration 8:
+  `ALTER TABLE ... ADD COLUMN` in SQLite only changes the schema definition
+  applied going forward, it does not rewrite existing rows.
+- **Old code safely ignores the added column** — same reasoning as
+  migration 8: pre-migration Core code never selects
+  `charges_definition_json` by name, and row mapping elsewhere maps by
+  explicit column name, not position. This is what makes the standard
+  [code-only rollback](#code-only-rollback) sufficient here too.
+- **Absence of `charges_definition` does not change existing behaviour.**
+  `delivery`/`dishware`/`buffet_fee` positions were already being
+  materialized as `kind="fee"` positions by the Configurator before this
+  slice, and already rendered normally in the Office Panel and customer
+  PDF (both are, and remain, kind-agnostic — see
+  `tests/unit/test_offer_charges_rendering.py`). This migration only adds
+  a place to persist the *structured, editable* charges definition
+  alongside those positions; it does not change what gets billed or
+  printed for any Offer that doesn't send one.
+- **Routine rollback never drops the column** — same reasoning and same
+  process as migration 8: revert the commit, restart the affected
+  services, leave `offer_versions.charges_definition_json` in place. No
+  down-migration is provided for this column, consistent with every other
+  migration in this runner.
+- **Database restore is the only way to actually remove the column**, and
+  is routine-rollback overkill for this slice specifically, exactly as
+  documented for migration 8 above — only use it if a full restore is
+  independently justified for some other reason.
+
+**Verify the migration applied and the column exists**, read-only, no
+service restart required:
+
+```bash
+sqlite3 /home/viktor/catering-runtime/core.db \
+  "SELECT component, version, name, applied_at FROM schema_migrations \
+   WHERE component = 'offers' ORDER BY version;"
+sqlite3 /home/viktor/catering-runtime/core.db \
+  "PRAGMA table_info(offer_versions);" | grep charges_definition_json
+```
+
+The first command's last row should read
+`offers|9|offer_version_charges_definition|<timestamp>`; the second should
+print one line for the new `TEXT` column. Absence of the column with the
+service otherwise healthy means the code deployed but the process has not
+yet reconnected to `core.db` since deploy — restart the affected service
+and re-check, don't attempt any manual `ALTER TABLE`.
+
 ## Common failures
 
 | Symptom | Check | Typical cause |
