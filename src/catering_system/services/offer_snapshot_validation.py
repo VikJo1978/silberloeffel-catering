@@ -859,6 +859,30 @@ def _validate_delivery_consistency(
         )
 
 
+def _verify_matched_position_vat_arithmetic(
+    position: OfferSnapshotPosition, *, label: str
+) -> None:
+    """Re-verify VAT/gross arithmetic explicitly, scoped to this consistency
+    check, rather than relying solely on the earlier, separate
+    ``_validate_position_arithmetic`` pass (already unconditionally run for
+    every position — see that function's docstring). Defense in depth: a
+    matched dishware position's ``vat_amount_cents``/``gross_total_cents``
+    must be self-consistent no matter how this function is later refactored
+    or reordered relative to the generic arithmetic pass."""
+    expected_vat = _round_half_up(
+        Decimal(position.net_total_cents)
+        * Decimal(position.vat_rate_percent)
+        / Decimal(100)
+    )
+    if position.vat_amount_cents != expected_vat:
+        raise ValueError(f"{label}: matched dishware position VAT amount mismatch")
+    if (
+        position.gross_total_cents
+        != position.net_total_cents + position.vat_amount_cents
+    ):
+        raise ValueError(f"{label}: matched dishware position gross total mismatch")
+
+
 def _validate_dishware_consistency(
     dishware: DishwareChargeDefinition,
     variant: OfferSnapshotVariant,
@@ -866,41 +890,92 @@ def _validate_dishware_consistency(
     *,
     label: str,
 ) -> None:
-    """Correspondence contract for additional lines: each ``additional_lines``
-    entry matches exactly one ``kind="dishware"`` position whose ``name``
-    equals the line's ``description`` and whose ``net_total_cents`` equals
-    the line's derived ``quantity * unit_net_cents``. Any ``kind="dishware"``
-    position left over after matching all lines is treated as the Pauschale
-    row (there may be at most one).
+    """Deterministic correspondence contract — the Pauschale position is
+    never inferred as "whatever is left over".
+
+    Canonical identity, by construction (this is the wire contract Stage 2B
+    must produce, not an inference over ambiguous data):
+
+    - an ``additional_lines`` entry corresponds to a ``kind="dishware"``
+      position with ``quantity_mode="total"`` — a fixed, non-guest-count
+      quantity, matching the line's own fixed integer quantity;
+    - the Pauschale row is the ``kind="dishware"`` position with
+      ``quantity_mode="per_person"`` — the guest-count-based quantity
+      semantics that distinguish it structurally from every line, not by
+      elimination.
+
+    Each line is matched against its position on the full field set
+    (description/name, quantity, unit_net_cents, derived net_total_cents,
+    vat_rate_percent-derived vat_amount_cents/gross_total_cents) so a
+    position with the same total but a different quantity/unit price is
+    rejected rather than silently accepted. Ambiguous matches (more than
+    one candidate position satisfying a single line) are rejected, as is a
+    single position satisfying more than one line (structurally impossible
+    here since a matched position is removed from the candidate pool, but
+    the ambiguity check below still catches the case where two lines could
+    each independently claim the same still-unconsumed position).
     """
-    remaining = [p for p in variant.positions if p.kind == "dishware"]
+    dishware_positions = [p for p in variant.positions if p.kind == "dishware"]
+    pauschale_candidates = [
+        p for p in dishware_positions if p.quantity_mode == "per_person"
+    ]
+    remaining_lines = [p for p in dishware_positions if p.quantity_mode == "total"]
+
     for line_index, line in enumerate(dishware.additional_lines):
-        match = next(
-            (
-                position
-                for position in remaining
-                if position.name == line.description
-                and position.net_total_cents == line.net_total_cents
-            ),
-            None,
+        line_label = (
+            f"{label}: charges_definition.dishware.additional_lines[{line_index}]"
         )
-        if match is None:
-            raise ValueError(
-                f"{label}: charges_definition.dishware.additional_lines[{line_index}]"
-                " has no matching dishware position"
-            )
-        remaining.remove(match)
+        matches = [
+            position
+            for position in remaining_lines
+            if position.name == line.description
+            and position.quantity == str(line.quantity)
+            and position.unit_net_cents == line.unit_net_cents
+            and position.net_total_cents == line.net_total_cents
+        ]
+        if not matches:
+            raise ValueError(f"{line_label} has no matching dishware position")
+        if len(matches) > 1:
+            raise ValueError(f"{line_label} matches multiple dishware positions")
+        match = matches[0]
+        _verify_matched_position_vat_arithmetic(match, label=line_label)
+        remaining_lines.remove(match)
+
+    if remaining_lines:
+        raise ValueError(
+            f"{label}: unexplained dishware position present for additional_lines"
+        )
+
     if dishware.base_mode == "PAUSCHALE":
         if event.guest_count is None:
             raise ValueError(
                 f"{label}: dishware base_mode=PAUSCHALE requires event.guest_count"
             )
-        expected = event.guest_count * dishware.pauschale_per_person_cents
-        if len(remaining) != 1:
+        if not pauschale_candidates:
             raise ValueError(f"{label}: dishware Pauschale position not found")
-        if remaining[0].net_total_cents != expected:
+        if len(pauschale_candidates) > 1:
+            raise ValueError(f"{label}: multiple dishware Pauschale positions present")
+        pauschale = pauschale_candidates[0]
+        if pauschale.quantity != "1":
+            raise ValueError(
+                f"{label}: dishware Pauschale position quantity must be 1 (per person)"
+            )
+        if pauschale.unit_net_cents != dishware.pauschale_per_person_cents:
+            raise ValueError(
+                f"{label}: dishware Pauschale position unit_net_cents mismatch"
+            )
+        # Given quantity=="1" and unit_net_cents==pauschale_per_person_cents
+        # (both just checked above) plus the unconditional generic
+        # per-position arithmetic pass that already ran for every position
+        # (net_total_cents == unit_net_cents * effective_quantity), this is
+        # mathematically implied — kept as an explicit, self-contained
+        # check anyway (defense in depth against reordering/refactoring),
+        # not because it can independently fail today.
+        expected_net = event.guest_count * dishware.pauschale_per_person_cents
+        if pauschale.net_total_cents != expected_net:
             raise ValueError(f"{label}: dishware Pauschale position amount mismatch")
-    elif remaining:
+        _verify_matched_position_vat_arithmetic(pauschale, label=label)
+    elif pauschale_candidates:
         raise ValueError(
             f"{label}: unexplained dishware position present for base_mode=NONE"
         )

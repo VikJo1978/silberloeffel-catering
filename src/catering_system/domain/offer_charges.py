@@ -15,6 +15,13 @@ backend) are trusted as-is, never reinterpreted or synthesized from this
 module. See ``services/offer_snapshot_validation.py`` for the consistency
 check that only ever applies when a ``charges_definition`` is actually
 present on the incoming snapshot.
+
+Default posture for new Offers (binding on Stage 2B, the Configurator side
+that will build these definitions): ``dishware.base_mode`` and
+``buffet.base_mode`` both default to ``"NONE"``. Neither Geschirrpauschale
+nor Büffetpauschale is added automatically — both must be explicitly
+selected by the office user. This replaces the pre-this-slice behaviour
+where both were always-on, unconditional fee positions.
 """
 
 from __future__ import annotations
@@ -121,7 +128,11 @@ class DishwareChargeDefinition:
 @dataclass(frozen=True)
 class BuffetChargeDefinition:
     """Büffetpauschale charge — same NONE/PAUSCHALE shape as dishware's base
-    mode, no additional lines. Existing canonical rate: 50 cents/person."""
+    mode, no additional lines. Existing canonical rate: 50 cents/person.
+
+    New Offers default to ``base_mode="NONE"`` — Büffetpauschale must be
+    explicitly selected by the office user, it is never added automatically
+    (this replaces the pre-this-slice unconditional behaviour)."""
 
     base_mode: ChargeBaseMode
     pauschale_per_person_cents: int

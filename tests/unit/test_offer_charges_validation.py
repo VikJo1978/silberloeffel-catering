@@ -552,20 +552,6 @@ def test_consistency_rejects_missing_pauschale_position_when_enabled() -> None:
         )
 
 
-def test_consistency_rejects_pauschale_amount_mismatch() -> None:
-    positions = [
-        _catalog_position(),
-        _delivery_position(),
-        _dishware_pauschale_position(per_person_cents=250),
-        _buffet_position(),
-    ]
-    charges = _charges_definition(dishware_base_mode="PAUSCHALE", dishware_lines=[])
-    with pytest.raises(ValueError, match="dishware Pauschale position amount mismatch"):
-        validate_offer_snapshot(
-            _snapshot(positions=positions, charges_definition=charges)
-        )
-
-
 def test_consistency_rejects_unmatched_additional_line() -> None:
     positions = [
         _catalog_position(),
@@ -593,6 +579,153 @@ def test_consistency_dishware_pauschale_requires_guest_count() -> None:
     ):
         validate_offer_snapshot(
             _snapshot(guest_count=None, positions=positions, charges_definition=charges)
+        )
+
+
+# --- consistency: dishware — stricter deterministic matching -------------------------
+
+
+def test_consistency_rejects_line_position_with_same_total_but_different_quantity() -> (
+    None
+):
+    """A position with the same net total but a different quantity/unit
+    price must not be accepted as a match — the composite key requires
+    quantity and unit_net_cents to match too, not just the derived total."""
+    decoy = _charge_position(
+        position_id="88888888-8888-4888-8888-888888888895",
+        kind="dishware",
+        name="Weinglas",
+        quantity_mode="total",
+        quantity="40",
+        unit_net_cents=40,
+        net_total_cents=1600,  # same total as the real line (20 * 80), different shape
+    )
+    positions = [_catalog_position(), _delivery_position(), decoy, _buffet_position()]
+    charges = _charges_definition(
+        dishware_base_mode="NONE", dishware_lines=[_dishware_line_def()]
+    )
+    with pytest.raises(ValueError, match="has no matching dishware position"):
+        validate_offer_snapshot(
+            _snapshot(positions=positions, charges_definition=charges)
+        )
+
+
+def test_consistency_rejects_duplicate_matching_positions_for_one_line() -> None:
+    line_pos_1 = _dishware_line_position(
+        position_id="88888888-8888-4888-8888-888888888893"
+    )
+    line_pos_2 = _dishware_line_position(
+        position_id="88888888-8888-4888-8888-888888888895"
+    )
+    positions = [
+        _catalog_position(),
+        _delivery_position(),
+        line_pos_1,
+        line_pos_2,
+        _buffet_position(),
+    ]
+    charges = _charges_definition(
+        dishware_base_mode="NONE", dishware_lines=[_dishware_line_def()]
+    )
+    with pytest.raises(ValueError, match="matches multiple dishware positions"):
+        validate_offer_snapshot(
+            _snapshot(positions=positions, charges_definition=charges)
+        )
+
+
+def test_consistency_does_not_treat_total_mode_position_as_pauschale() -> None:
+    """The Pauschale is identified by quantity_mode="per_person", never by
+    elimination — a quantity_mode="total" position whose amount happens to
+    equal guest_count * pauschale_per_person_cents is not the Pauschale."""
+    decoy = _charge_position(
+        position_id="88888888-8888-4888-8888-888888888895",
+        kind="dishware",
+        name="Zufällig gleicher Betrag",
+        quantity_mode="total",
+        quantity="1",
+        unit_net_cents=16000,
+        net_total_cents=16000,  # == 80 guests * 200 cents/person, by coincidence
+    )
+    positions = [_catalog_position(), _delivery_position(), decoy, _buffet_position()]
+    charges = _charges_definition(dishware_base_mode="PAUSCHALE", dishware_lines=[])
+    with pytest.raises(
+        ValueError, match="unexplained dishware position present for additional_lines"
+    ):
+        validate_offer_snapshot(
+            _snapshot(positions=positions, charges_definition=charges)
+        )
+
+
+def test_consistency_rejects_multiple_pauschale_candidates() -> None:
+    pauschale_1 = _dishware_pauschale_position(
+        position_id="88888888-8888-4888-8888-888888888892"
+    )
+    pauschale_2 = _dishware_pauschale_position(
+        position_id="88888888-8888-4888-8888-888888888895"
+    )
+    positions = [
+        _catalog_position(),
+        _delivery_position(),
+        pauschale_1,
+        pauschale_2,
+        _buffet_position(),
+    ]
+    charges = _charges_definition(dishware_base_mode="PAUSCHALE", dishware_lines=[])
+    with pytest.raises(
+        ValueError, match="multiple dishware Pauschale positions present"
+    ):
+        validate_offer_snapshot(
+            _snapshot(positions=positions, charges_definition=charges)
+        )
+
+
+def test_consistency_rejects_pauschale_position_with_wrong_quantity() -> None:
+    bad_pauschale = _charge_position(
+        position_id="88888888-8888-4888-8888-888888888892",
+        kind="dishware",
+        name="Geschirrpauschale",
+        quantity_mode="per_person",
+        quantity="2",
+        unit_net_cents=200,
+        net_total_cents=200 * 2 * _GUEST_COUNT,
+    )
+    positions = [
+        _catalog_position(),
+        _delivery_position(),
+        bad_pauschale,
+        _buffet_position(),
+    ]
+    charges = _charges_definition(dishware_base_mode="PAUSCHALE", dishware_lines=[])
+    with pytest.raises(
+        ValueError, match="dishware Pauschale position quantity must be 1"
+    ):
+        validate_offer_snapshot(
+            _snapshot(positions=positions, charges_definition=charges)
+        )
+
+
+def test_consistency_rejects_pauschale_position_unit_net_cents_mismatch() -> None:
+    bad_pauschale = _charge_position(
+        position_id="88888888-8888-4888-8888-888888888892",
+        kind="dishware",
+        name="Geschirrpauschale",
+        quantity_mode="per_person",
+        quantity="1",
+        unit_net_cents=250,
+        net_total_cents=250 * _GUEST_COUNT,
+    )
+    positions = [
+        _catalog_position(),
+        _delivery_position(),
+        bad_pauschale,
+        _buffet_position(),
+    ]
+    charges = _charges_definition(dishware_base_mode="PAUSCHALE", dishware_lines=[])
+    with pytest.raises(
+        ValueError, match="dishware Pauschale position unit_net_cents mismatch"
+    ):
+        validate_offer_snapshot(
+            _snapshot(positions=positions, charges_definition=charges)
         )
 
 
@@ -640,3 +773,41 @@ def test_consistency_rejects_buffet_amount_mismatch() -> None:
         validate_offer_snapshot(
             _snapshot(positions=positions, charges_definition=charges)
         )
+
+
+def test_buffet_default_none_never_auto_materializes_a_fee_position() -> None:
+    """Operator confirmation: Büffetpauschale must be explicitly selected by
+    the office user. A charges_definition with buffet.base_mode="NONE"
+    (the default for new Offers) requires — and permits — zero buffet_fee
+    positions; nothing is added automatically."""
+    positions = [
+        _catalog_position(),
+        _delivery_position(),
+        _dishware_pauschale_position(),
+    ]
+    charges = _charges_definition(buffet_base_mode="NONE", dishware_lines=[])
+    snapshot = validate_offer_snapshot(
+        _snapshot(positions=positions, charges_definition=charges)
+    )
+    assert snapshot.charges_definition is not None
+    assert snapshot.charges_definition.buffet.base_mode == "NONE"
+    kinds = {
+        position.kind for variant in snapshot.variants for position in variant.positions
+    }
+    assert "buffet_fee" not in kinds
+
+
+def test_legacy_snapshot_without_charges_definition_never_synthesizes_buffet_fee() -> (
+    None
+):
+    """Absence of charges_definition is the legacy path — Core trusts
+    whatever positions arrived and never invents a Büffetpauschale on its
+    own, regardless of whether the operator's snapshot includes one."""
+    snapshot = validate_offer_snapshot(
+        _snapshot(positions=[_catalog_position()], charges_definition=None)
+    )
+    kinds = {
+        position.kind for variant in snapshot.variants for position in variant.positions
+    }
+    assert "buffet_fee" not in kinds
+    assert snapshot.charges_definition is None
