@@ -100,10 +100,28 @@ def _variant(*, positions: list[dict[str, object]] | None = None) -> dict[str, o
     }
 
 
-def _snapshot_body(
-    *, guest_count: int | None = 80, variants: list[dict[str, object]] | None = None
+def _budget_definition(
+    *,
+    amount_cents: int = 3500,
+    type: str = "PER_PERSON",
+    tax_basis: str = "GROSS",
+    cost_scope: str = "FULL_OFFER",
 ) -> dict[str, object]:
     return {
+        "amount_cents": amount_cents,
+        "type": type,
+        "tax_basis": tax_basis,
+        "cost_scope": cost_scope,
+    }
+
+
+def _snapshot_body(
+    *,
+    guest_count: int | None = 80,
+    variants: list[dict[str, object]] | None = None,
+    budget_definition: dict[str, object] | None = None,
+) -> dict[str, object]:
+    body: dict[str, object] = {
         "schema_version": "offer_snapshot_v1",
         "source": "fingerfood-configurator-backend",
         "source_draft_id": "draft-1",
@@ -142,14 +160,20 @@ def _snapshot_body(
         },
         "variants": variants or [_variant()],
     }
+    if budget_definition is not None:
+        body["budget_definition"] = budget_definition
+    return body
 
 
 def _valid_snapshot(
     *,
     guest_count: int | None = 80,
     variants: list[dict[str, object]] | None = None,
+    budget_definition: dict[str, object] | None = None,
 ) -> dict[str, object]:
-    payload = _snapshot_body(guest_count=guest_count, variants=variants)
+    payload = _snapshot_body(
+        guest_count=guest_count, variants=variants, budget_definition=budget_definition
+    )
     payload["snapshot_hash"] = compute_snapshot_hash(payload)
     return payload
 
@@ -457,6 +481,97 @@ def test_v2_empty_allergens_list_is_valid() -> None:
     assert snapshot.schema_version == SCHEMA_VERSION_V2
     assert snapshot.variants[0].positions[0].allergens == ()
     assert snapshot.variants[0].positions[0].catalog_item_id == dish_id
+
+
+def test_budget_definition_absent_is_valid() -> None:
+    """OFFER_BUDGET_DEFINITION_V1 backward compatibility: older/plain
+    snapshots without budget tracking must validate exactly as before."""
+    snapshot = validate_offer_snapshot(_valid_snapshot())
+    assert snapshot.budget_definition is None
+
+
+def test_budget_definition_valid_roundtrips() -> None:
+    payload = _valid_snapshot(budget_definition=_budget_definition())
+    snapshot = validate_offer_snapshot(payload)
+    assert snapshot.budget_definition is not None
+    assert snapshot.budget_definition.amount_cents == 3500
+    assert snapshot.budget_definition.type == "PER_PERSON"
+    assert snapshot.budget_definition.tax_basis == "GROSS"
+    assert snapshot.budget_definition.cost_scope == "FULL_OFFER"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"type": "TOTAL", "tax_basis": "NET", "cost_scope": "POSITIONS_ONLY"},
+        {"type": "TOTAL", "tax_basis": "GROSS", "cost_scope": "FULL_OFFER"},
+        {"type": "PER_PERSON", "tax_basis": "NET", "cost_scope": "FULL_OFFER"},
+        {"type": "PER_PERSON", "tax_basis": "GROSS", "cost_scope": "POSITIONS_ONLY"},
+    ],
+)
+def test_budget_definition_every_combination_is_valid(
+    overrides: dict[str, object],
+) -> None:
+    payload = _valid_snapshot(budget_definition=_budget_definition(**overrides))
+    snapshot = validate_offer_snapshot(payload)
+    assert snapshot.budget_definition is not None
+    assert snapshot.budget_definition.type == overrides["type"]
+    assert snapshot.budget_definition.tax_basis == overrides["tax_basis"]
+    assert snapshot.budget_definition.cost_scope == overrides["cost_scope"]
+
+
+def test_budget_definition_rejects_unknown_field() -> None:
+    definition = _budget_definition()
+    definition["extra"] = "nope"
+    with pytest.raises(ValueError, match="unknown budget_definition field"):
+        validate_offer_snapshot(_valid_snapshot(budget_definition=definition))
+
+
+@pytest.mark.parametrize("field", ["amount_cents", "type", "tax_basis", "cost_scope"])
+def test_budget_definition_rejects_missing_field(field: str) -> None:
+    definition = _budget_definition()
+    del definition[field]
+    with pytest.raises(ValueError):
+        validate_offer_snapshot(_valid_snapshot(budget_definition=definition))
+
+
+def test_budget_definition_rejects_invalid_type_enum() -> None:
+    definition = _budget_definition(type="TOTAL_BUDGET")
+    with pytest.raises(ValueError, match="invalid budget_definition.type"):
+        validate_offer_snapshot(_valid_snapshot(budget_definition=definition))
+
+
+def test_budget_definition_rejects_invalid_tax_basis_enum() -> None:
+    definition = _budget_definition(tax_basis="brutto")
+    with pytest.raises(ValueError, match="invalid budget_definition.tax_basis"):
+        validate_offer_snapshot(_valid_snapshot(budget_definition=definition))
+
+
+def test_budget_definition_rejects_invalid_cost_scope_enum() -> None:
+    definition = _budget_definition(cost_scope="EVERYTHING")
+    with pytest.raises(ValueError, match="invalid budget_definition.cost_scope"):
+        validate_offer_snapshot(_valid_snapshot(budget_definition=definition))
+
+
+def test_budget_definition_rejects_negative_amount() -> None:
+    definition = _budget_definition(amount_cents=-100)
+    with pytest.raises(ValueError):
+        validate_offer_snapshot(_valid_snapshot(budget_definition=definition))
+
+
+def test_budget_definition_rejects_float_amount() -> None:
+    # budget_definition is parsed before the snapshot_hash is even checked
+    # (see validate_offer_snapshot), so the float is caught first — a stale
+    # hash from the float mutation never gets evaluated.
+    payload = _valid_snapshot(budget_definition=_budget_definition())
+    payload["budget_definition"]["amount_cents"] = 35.0
+    with pytest.raises(ValueError, match="amount_cents must be integer euro cents"):
+        validate_offer_snapshot(payload)
+
+
+def test_budget_definition_rejects_non_object() -> None:
+    with pytest.raises(ValueError, match="budget_definition must be an object"):
+        validate_offer_snapshot(_valid_snapshot(budget_definition="not-an-object"))  # type: ignore[arg-type]
 
 
 def test_domain_module_has_no_repository_or_api_imports() -> None:

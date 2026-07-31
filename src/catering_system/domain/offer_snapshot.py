@@ -10,6 +10,7 @@ from datetime import date, datetime
 from typing import Literal
 
 from catering_system.domain.inquiry import PlanningMode
+from catering_system.domain.offer_budget_definition import OfferBudgetDefinition
 from catering_system.domain.order_payment_reminder import PaymentMethod
 
 SCHEMA_VERSION = "offer_snapshot_v1"
@@ -136,6 +137,9 @@ class OfferSnapshotEnvelope:
     calculator: OfferSnapshotCalculator
     variants: tuple[OfferSnapshotVariant, ...]
     source_draft_id: str | None = None
+    # OFFER_BUDGET_DEFINITION_V1: optional internal-only operator planning
+    # metadata — never customer-facing (see domain/offer_budget_definition.py).
+    budget_definition: OfferBudgetDefinition | None = None
 
 
 @dataclass(frozen=True)

@@ -20,6 +20,7 @@ from catering_system.domain.offer import (
     WithdrawalEvidence,
     derive_offer_state,
 )
+from catering_system.domain.offer_budget_definition import OfferBudgetDefinition
 from catering_system.repositories.in_memory_offer_repository import (
     InMemoryOfferRepository,
 )
@@ -95,6 +96,7 @@ def _version(
     valid_until: date = date(2026, 7, 31),
     snapshot_hash: str = _HASH_V1,
     variant_ids: tuple[str, ...] | None = None,
+    budget_definition: OfferBudgetDefinition | None = None,
 ) -> OfferVersion:
     version_id = _V1_ID if number == 1 else _V2_ID
     ids = variant_ids or ((_A_ID, _B_ID) if number == 1 else (_C_ID,))
@@ -117,6 +119,7 @@ def _version(
             )
             for index, variant_id in enumerate(ids, start=1)
         ),
+        budget_definition=budget_definition,
     )
 
 
@@ -588,6 +591,116 @@ def test_pre_migration_7_rows_load_with_narrative_fields_none(
     assert v1.customer_notes is None
 
 
+def test_sqlite_offer_roundtrip_preserves_budget_definition(tmp_path: Path) -> None:
+    repo = SQLiteOfferRepository(tmp_path / "offer.db")
+    budget = OfferBudgetDefinition(
+        amount_cents=3500,
+        type="PER_PERSON",
+        tax_basis="GROSS",
+        cost_scope="FULL_OFFER",
+    )
+    offer = _offer(versions=(_version(budget_definition=budget),))
+    repo.save(offer)
+    loaded = repo.get(_OFFER_ID)
+    assert loaded is not None
+    assert loaded.versions[0].budget_definition == budget
+    assert loaded == offer
+
+
+def test_sqlite_offer_roundtrip_preserves_absent_budget_definition(
+    tmp_path: Path,
+) -> None:
+    repo = SQLiteOfferRepository(tmp_path / "offer.db")
+    offer = _offer(versions=(_version(budget_definition=None),))
+    repo.save(offer)
+    loaded = repo.get(_OFFER_ID)
+    assert loaded is not None
+    assert loaded.versions[0].budget_definition is None
+
+
+def test_pre_migration_8_rows_load_with_budget_definition_none(
+    tmp_path: Path,
+) -> None:
+    """Migration/backward-compat: rows persisted before
+    OFFER_BUDGET_DEFINITION_V1 load with budget_definition=None rather than
+    failing or inventing a default."""
+    db = tmp_path / "pre_migration.db"
+    conn = sqlite3.connect(db)
+    apply_migrations(conn, "offers", _MIGRATIONS[:7])
+    conn.execute(
+        "INSERT INTO offers (offer_id, source_inquiry_id, created_at) VALUES (?, ?, ?)",
+        (_OFFER_ID, _INQUIRY_ID, _NOW.isoformat()),
+    )
+    conn.execute(
+        """
+        INSERT INTO offer_versions (
+            offer_version_id, offer_id, version_number, created_at, valid_until,
+            snapshot_id, snapshot_hash, event_date, time_window_text,
+            location_text, guest_count, planning_mode, payment_method,
+            payment_customer_visible_text, customer_title,
+            customer_introduction, customer_notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            _V1_ID,
+            _OFFER_ID,
+            1,
+            _NOW.isoformat(),
+            date(2026, 7, 31).isoformat(),
+            "77777777-7777-7777-7777-777777777771",
+            _HASH_V1,
+            _EVENT_DATE.isoformat(),
+            "18:00–22:00",
+            "Hamburg",
+            80,
+            "caterer_suggestion",
+            "RECHNUNG",
+            "Zahlung per Rechnung",
+            None,
+            None,
+            None,
+        ),
+    )
+    conn.execute(
+        "INSERT INTO offer_variants "
+        "(variant_id, offer_version_id, offer_id, label, sort_order) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (_A_ID, _V1_ID, _OFFER_ID, "Variante A", 0),
+    )
+    conn.execute(
+        """
+        INSERT INTO offer_positions (
+            position_id, variant_id, offer_version_id, kind, name,
+            unit_net_cents, net_total_cents, vat_rate_percent,
+            vat_amount_cents, gross_total_cents, related_position_id,
+            sort_order
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            _POS_A,
+            _A_ID,
+            _V1_ID,
+            "catalog",
+            "Fingerfood Paket",
+            290,
+            23200,
+            7,
+            1624,
+            24824,
+            None,
+            0,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    repo = SQLiteOfferRepository(db)  # migration 8 runs defensively on open
+    loaded = repo.get(_OFFER_ID)
+    repo.close()
+    assert loaded is not None
+    assert loaded.versions[0].budget_definition is None
+
+
 def test_prepare_offer_document_after_sqlite_reload_gets_frozen_narrative(
     tmp_path: Path,
 ) -> None:
@@ -707,6 +820,7 @@ def test_offer_component_migrations_are_recorded_once(tmp_path: Path) -> None:
         (5, "offer_variant_and_position_print_fields"),
         (6, "offer_position_catalog_snapshot_fields"),
         (7, "offer_version_customer_narrative"),
+        (8, "offer_version_budget_definition"),
     ]
     conn = sqlite3.connect(db)
     apply_migrations(conn, "offers", _MIGRATIONS)
@@ -714,4 +828,4 @@ def test_offer_component_migrations_are_recorded_once(tmp_path: Path) -> None:
         "SELECT COUNT(*) FROM schema_migrations WHERE component = 'offers'"
     ).fetchone()
     conn.close()
-    assert rows_after == (7,)
+    assert rows_after == (8,)

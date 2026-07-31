@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from catering_system.domain.catalog import AllergenCode, validate_allergen_codes
 from catering_system.domain.inquiry import PlanningMode, validate_planning_mode
+from catering_system.domain.offer_budget_definition import OfferBudgetDefinition
 from catering_system.domain.order_payment_reminder import (
     PaymentMethod,
     validate_payment_method,
@@ -209,6 +210,10 @@ class OfferVersion:
     customer_title: str | None = None
     customer_introduction: str | None = None
     customer_notes: str | None = None
+    # OFFER_BUDGET_DEFINITION_V1: internal-only operator planning metadata,
+    # frozen from the source OfferSnapshot's budget_definition (if any).
+    # Never surfaced in customer-facing documents/wording.
+    budget_definition: OfferBudgetDefinition | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.offer_version_id, "offer_version_id")

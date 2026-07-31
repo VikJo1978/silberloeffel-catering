@@ -162,6 +162,21 @@ def _valid_snapshot(*, inquiry_id: str = _INQUIRY_ID) -> dict[str, object]:
     return payload
 
 
+def _budget_definition_payload(
+    *,
+    amount_cents: int = 3500,
+    type: str = "PER_PERSON",
+    tax_basis: str = "GROSS",
+    cost_scope: str = "FULL_OFFER",
+) -> dict[str, object]:
+    return {
+        "amount_cents": amount_cents,
+        "type": type,
+        "tax_basis": tax_basis,
+        "cost_scope": cost_scope,
+    }
+
+
 def _sample_inquiry(*, inquiry_id: str = _INQUIRY_ID) -> Inquiry:
     return Inquiry(
         inquiry_id=inquiry_id,
@@ -341,6 +356,59 @@ def test_prepare_offer_version_happy_path() -> None:
     stored = offers.get(offer.offer_id)
     assert stored == offer
     assert offers.get_by_source_inquiry_id(_INQUIRY_ID) == offer
+
+
+def test_prepare_offer_version_persists_budget_definition() -> None:
+    """OFFER_BUDGET_DEFINITION_V1: preserved through Offer preparation."""
+    _inquiries, _orders, offers, service = _world(inquiry=_sample_inquiry())
+    payload = _valid_snapshot()
+    payload["budget_definition"] = _budget_definition_payload()
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+
+    offer = service.prepare_offer_version(_INQUIRY_ID, payload)
+
+    version = offer.versions[0]
+    assert version.budget_definition is not None
+    assert version.budget_definition.amount_cents == 3500
+    assert version.budget_definition.type == "PER_PERSON"
+    assert version.budget_definition.tax_basis == "GROSS"
+    assert version.budget_definition.cost_scope == "FULL_OFFER"
+    stored = offers.get(offer.offer_id)
+    assert stored is not None
+    assert stored.versions[0].budget_definition == version.budget_definition
+
+
+def test_prepare_offer_version_without_budget_definition_stays_none() -> None:
+    """Budget tracking disabled — omit the field entirely, no default is
+    silently invented."""
+    _inquiries, _orders, _offers, service = _world(inquiry=_sample_inquiry())
+
+    offer = service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
+
+    assert offer.versions[0].budget_definition is None
+
+
+def test_prepare_offer_version_duplicate_preserves_original_budget_definition() -> None:
+    """Duplicate protection (offer_already_exists) must not touch the
+    already-persisted Offer — its budget_definition is untouched by the
+    rejected second prepare attempt, even when the retry carries a
+    different budget_definition."""
+    _inquiries, _orders, offers, service = _world(inquiry=_sample_inquiry())
+    first_payload = _valid_snapshot()
+    first_payload["budget_definition"] = _budget_definition_payload(amount_cents=3500)
+    first_payload["snapshot_hash"] = compute_snapshot_hash(first_payload)
+    original = service.prepare_offer_version(_INQUIRY_ID, first_payload)
+
+    second_payload = _valid_snapshot()
+    second_payload["budget_definition"] = _budget_definition_payload(amount_cents=9999)
+    second_payload["snapshot_hash"] = compute_snapshot_hash(second_payload)
+    with pytest.raises(OfferPreparationBlockedError):
+        service.prepare_offer_version(_INQUIRY_ID, second_payload)
+
+    stored = offers.get(original.offer_id)
+    assert stored is not None
+    assert stored.versions[0].budget_definition is not None
+    assert stored.versions[0].budget_definition.amount_cents == 3500
 
 
 def test_prepare_offer_version_narrative_normalization() -> None:

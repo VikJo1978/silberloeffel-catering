@@ -428,6 +428,64 @@ Restoring the database discards later production writes. Use it only after the
 owner explicitly accepts that data loss window. Follow the stop-copy-verify
 procedure in [Backup and restore](backup-restore.md#restore-production).
 
+### Migration 8 — `offer_versions.budget_definition_json` (OFFER_BUDGET_DEFINITION_V1)
+
+Migration 8 (component `offers`, `_migration_8_offer_version_budget_definition`
+in `sqlite_offer_repository.py`) is a single additive statement:
+
+```sql
+ALTER TABLE offer_versions ADD COLUMN budget_definition_json TEXT
+```
+
+- **Additive and nullable.** It adds exactly one column, no others. The
+  column has no `NOT NULL` constraint and no default beyond SQLite's implicit
+  `NULL`, so every pre-migration row reads back with
+  `budget_definition_json = NULL` — no backfill, no data rewrite.
+- **Existing rows are untouched.** `ALTER TABLE ... ADD COLUMN` in SQLite
+  does not rewrite the table; it only changes the schema definition applied
+  when reading/writing rows going forward.
+- **Old code safely ignores the added column.** Pre-migration Core code
+  never selects `budget_definition_json` by name (it doesn't know the
+  column exists), and `SELECT *`-style row mapping elsewhere in this
+  codebase maps by explicit column name, not position — so old code
+  running against a post-migration database behaves exactly as it did
+  before. This is the same reasoning that makes the standard
+  [code-only rollback](#code-only-rollback) sufficient here.
+- **Routine rollback never drops the column.** If a rollback of this
+  feature is needed, use the standard code-only rollback above (revert the
+  commit, restart the affected services). Leave
+  `offer_versions.budget_definition_json` in place — dropping it is a
+  destructive schema change with no operational benefit, since old code
+  simply never reads it. This project deliberately does not ship an
+  automatic down-migration for this column (or any migration) — a down
+  migration is not part of the `apply_migrations` runner in
+  `sqlite_migrations.py`, and none should be added for this slice.
+- **Database restore is the only way to actually remove the column**, and
+  is routine-rollback overkill for this slice specifically: it would also
+  discard every other production write since the backup. Follow
+  [Database restore](#database-restore) above only if a full restore is
+  independently justified for some other reason — never solely to undo
+  this column.
+
+**Verify the migration applied and the column exists**, read-only, no
+service restart required:
+
+```bash
+sqlite3 /home/viktor/catering-runtime/core.db \
+  "SELECT component, version, name, applied_at FROM schema_migrations \
+   WHERE component = 'offers' ORDER BY version;"
+sqlite3 /home/viktor/catering-runtime/core.db \
+  "PRAGMA table_info(offer_versions);" | grep budget_definition_json
+```
+
+The first command's last row should read
+`offers|8|offer_version_budget_definition|<timestamp>`; the second should
+print one line for the new `TEXT` column. Absence of the column with the
+service otherwise healthy means the code deployed but the process has not
+yet reconnected to `core.db` since deploy (migrations apply on first
+connection) — restart the affected service and re-check, don't attempt any
+manual `ALTER TABLE`.
+
 ## Common failures
 
 | Symptom | Check | Typical cause |

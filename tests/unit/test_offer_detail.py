@@ -13,6 +13,7 @@ from catering_system.domain.offer import (
     OfferVersion,
     SentEvidence,
 )
+from catering_system.domain.offer_budget_definition import OfferBudgetDefinition
 from catering_system.services.inquiry_service import InquiryService
 from catering_system.repositories.in_memory_inquiry_repository import (
     InMemoryInquiryRepository,
@@ -55,6 +56,8 @@ def _version(
     created_at: datetime | None = None,
     label: str = "Variante A",
     snapshot_id: str = "77777777-7777-4777-8777-777777777771",
+    guest_count: int | None = 80,
+    budget_definition: OfferBudgetDefinition | None = None,
 ) -> OfferVersion:
     return OfferVersion(
         offer_version_id=offer_version_id,
@@ -67,10 +70,11 @@ def _version(
         event_date=date(2026, 8, 1),
         time_window_text="18:00–22:00",
         location_text="Hamburg",
-        guest_count=80,
+        guest_count=guest_count,
         planning_mode="caterer_suggestion",
         payment_method="RECHNUNG",
         payment_customer_visible_text="Zahlung per Rechnung",
+        budget_definition=budget_definition,
         variants=(
             OfferVariant(
                 variant_id=_VARIANT_ID,
@@ -100,6 +104,8 @@ def _offer(
     accepted: bool = False,
     converted: bool = False,
     valid_until: date | None = None,
+    guest_count: int | None = 80,
+    budget_definition: OfferBudgetDefinition | None = None,
 ) -> Offer:
     sent_evidence = (
         (
@@ -148,7 +154,13 @@ def _offer(
         offer_id=_OFFER_ID,
         source_inquiry_id=inquiry_id,
         created_at=_NOW,
-        versions=(_version(valid_until=valid_until),),
+        versions=(
+            _version(
+                valid_until=valid_until,
+                guest_count=guest_count,
+                budget_definition=budget_definition,
+            ),
+        ),
         sent_evidence=sent_evidence,
         acceptance_evidence=acceptance,
         rejection_evidence=(),
@@ -256,6 +268,98 @@ def test_history_sorted_chronologically() -> None:
     history = offer_detail(offer, today=_TODAY)["history"]
     timestamps = [entry["at"] for entry in history]
     assert timestamps == sorted(timestamps)
+
+
+def test_offer_detail_omits_budget_definition_when_absent() -> None:
+    """OFFER_BUDGET_DEFINITION_V1 backward compatibility: old Offers must
+    render without an empty/placeholder section — the key itself is
+    omitted, not present with a null/empty value."""
+    inquiry = _inquiry()
+    detail = offer_detail(_offer(inquiry.inquiry_id), today=_TODAY)
+    assert "budget_definition" not in detail["versions"][0]
+
+
+def test_offer_detail_includes_budget_definition_total_gross_full_offer() -> None:
+    inquiry = _inquiry()
+    budget = OfferBudgetDefinition(
+        amount_cents=30000, type="TOTAL", tax_basis="GROSS", cost_scope="FULL_OFFER"
+    )
+    detail = offer_detail(
+        _offer(inquiry.inquiry_id, budget_definition=budget), today=_TODAY
+    )
+    view = detail["versions"][0]["budget_definition"]
+    assert view == {
+        "amount_cents": 30000,
+        "type": "TOTAL",
+        "tax_basis": "GROSS",
+        "cost_scope": "FULL_OFFER",
+        "comparison_amount_cents": 24824,
+        "remaining_cents": 5176,
+        "over": False,
+    }
+
+
+def test_offer_detail_includes_budget_definition_per_person_rounds_half_up() -> None:
+    inquiry = _inquiry()
+    budget = OfferBudgetDefinition(
+        amount_cents=350, type="PER_PERSON", tax_basis="GROSS", cost_scope="FULL_OFFER"
+    )
+    detail = offer_detail(
+        _offer(inquiry.inquiry_id, guest_count=80, budget_definition=budget),
+        today=_TODAY,
+    )
+    view = detail["versions"][0]["budget_definition"]
+    # 24824 / 80 = 310.3 -> ROUND_HALF_UP -> 310
+    assert view["comparison_amount_cents"] == 310
+    assert view["remaining_cents"] == 40
+    assert view["over"] is False
+
+
+def test_offer_detail_budget_definition_over_budget() -> None:
+    inquiry = _inquiry()
+    budget = OfferBudgetDefinition(
+        amount_cents=20000, type="TOTAL", tax_basis="GROSS", cost_scope="FULL_OFFER"
+    )
+    detail = offer_detail(
+        _offer(inquiry.inquiry_id, budget_definition=budget), today=_TODAY
+    )
+    view = detail["versions"][0]["budget_definition"]
+    assert view["remaining_cents"] == 20000 - 24824
+    assert view["over"] is True
+
+
+def test_offer_detail_budget_definition_per_person_with_unknown_guest_count() -> None:
+    """PER_PERSON budget with no guest_count on the OfferVersion — no
+    comparison can be computed; never crashes, never divides by zero."""
+    inquiry = _inquiry()
+    budget = OfferBudgetDefinition(
+        amount_cents=350, type="PER_PERSON", tax_basis="GROSS", cost_scope="FULL_OFFER"
+    )
+    detail = offer_detail(
+        _offer(inquiry.inquiry_id, guest_count=None, budget_definition=budget),
+        today=_TODAY,
+    )
+    view = detail["versions"][0]["budget_definition"]
+    assert view["comparison_amount_cents"] is None
+    assert view["remaining_cents"] is None
+    assert view["over"] is None
+
+
+def test_offer_detail_budget_definition_positions_only_net() -> None:
+    inquiry = _inquiry()
+    budget = OfferBudgetDefinition(
+        amount_cents=20000,
+        type="TOTAL",
+        tax_basis="NET",
+        cost_scope="POSITIONS_ONLY",
+    )
+    detail = offer_detail(
+        _offer(inquiry.inquiry_id, budget_definition=budget), today=_TODAY
+    )
+    view = detail["versions"][0]["budget_definition"]
+    # Single catalog position: net_total_cents=23200.
+    assert view["comparison_amount_cents"] == 23200
+    assert view["remaining_cents"] == 20000 - 23200
 
 
 def test_second_version_history_label() -> None:

@@ -37,6 +37,7 @@ from catering_system.domain.offer import (
     VatRatePercent,
     WithdrawalEvidence,
 )
+from catering_system.domain.offer_budget_definition import OfferBudgetDefinition
 from catering_system.domain.order_payment_reminder import validate_payment_method
 from catering_system.repositories.sqlite_migrations import apply_migrations
 
@@ -291,6 +292,18 @@ def _migration_7_offer_version_customer_narrative(
             connection.execute(f"ALTER TABLE offer_versions ADD COLUMN {name} TEXT")
 
 
+def _migration_8_offer_version_budget_definition(
+    connection: sqlite3.Connection,
+) -> None:
+    existing = {
+        row[1] for row in connection.execute("PRAGMA table_info(offer_versions)")
+    }
+    if "budget_definition_json" not in existing:
+        connection.execute(
+            "ALTER TABLE offer_versions ADD COLUMN budget_definition_json TEXT"
+        )
+
+
 _MIGRATIONS = (
     (1, "create_offer_tables", _migration_1_create_tables),
     (2, "unique_source_inquiry", _migration_2_unique_source_inquiry),
@@ -314,6 +327,11 @@ _MIGRATIONS = (
         7,
         "offer_version_customer_narrative",
         _migration_7_offer_version_customer_narrative,
+    ),
+    (
+        8,
+        "offer_version_budget_definition",
+        _migration_8_offer_version_budget_definition,
     ),
 )
 
@@ -343,6 +361,41 @@ def _optional_allergens(value: str | None) -> tuple[AllergenCode, ...] | None:
     if not isinstance(parsed, list):
         raise ValueError("allergens_json must decode to a list")
     return validate_allergen_codes([str(item) for item in parsed])
+
+
+def _budget_definition_storage(value: OfferBudgetDefinition | None) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(
+        {
+            "amount_cents": value.amount_cents,
+            "type": value.type,
+            "tax_basis": value.tax_basis,
+            "cost_scope": value.cost_scope,
+        },
+        ensure_ascii=False,
+    )
+
+
+def _stored_budget_definition(value: str | None) -> OfferBudgetDefinition | None:
+    """Reject malformed stored payloads rather than silently drop them —
+    this column is only ever written by ``_budget_definition_storage`` above,
+    so a decode/shape failure here means on-disk corruption, not a normal
+    "no budget" case (that's represented by SQL NULL / Python None)."""
+    if value is None:
+        return None
+    parsed = json.loads(value)
+    if not isinstance(parsed, dict):
+        raise ValueError("budget_definition_json must decode to an object")
+    try:
+        return OfferBudgetDefinition(
+            amount_cents=parsed["amount_cents"],
+            type=parsed["type"],
+            tax_basis=parsed["tax_basis"],
+            cost_scope=parsed["cost_scope"],
+        )
+    except KeyError as exc:
+        raise ValueError("budget_definition_json missing required field") from exc
 
 
 def _dt(value: str) -> datetime:
@@ -623,8 +676,8 @@ class SQLiteOfferRepository:
                 snapshot_id, snapshot_hash, event_date, time_window_text,
                 location_text, guest_count, planning_mode, payment_method,
                 payment_customer_visible_text, customer_title,
-                customer_introduction, customer_notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                customer_introduction, customer_notes, budget_definition_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 version.offer_version_id,
@@ -644,6 +697,7 @@ class SQLiteOfferRepository:
                 version.customer_title,
                 version.customer_introduction,
                 version.customer_notes,
+                _budget_definition_storage(version.budget_definition),
             ),
         )
         for sort_order, variant in enumerate(version.variants):
@@ -776,7 +830,7 @@ class SQLiteOfferRepository:
                    snapshot_id, snapshot_hash, event_date, time_window_text,
                    location_text, guest_count, planning_mode, payment_method,
                    payment_customer_visible_text, customer_title,
-                   customer_introduction, customer_notes
+                   customer_introduction, customer_notes, budget_definition_json
             FROM offer_versions
             WHERE offer_id = ?
             ORDER BY version_number
@@ -823,6 +877,7 @@ class SQLiteOfferRepository:
                     customer_title=row[13],
                     customer_introduction=row[14],
                     customer_notes=row[15],
+                    budget_definition=_stored_budget_definition(row[16]),
                 )
             )
         return tuple(versions)
