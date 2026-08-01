@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING, Literal, cast
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from catering_system.domain.employee_auth import AuthenticatedEmployee
+from catering_system.domain.employee_auth import AuthenticatedEmployee, validate_role
 from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.repositories.offer_repository import OfferRepository
 from catering_system.repositories.catalog_repository import CatalogRepository
@@ -80,11 +80,26 @@ from catering_system.services.order_confirmation_document_service import (
 )
 from catering_system.services.buffet_cards_service import BuffetCardsService
 from catering_system.services.employee_auth_service import (
+    AccountConflictError,
+    AccountNotFoundError,
     AuthenticationError,
+    AuthorizationError,
     CsrfValidationError,
     EmployeeAuthService,
+    LastActiveSuperadminError,
 )
 from catering_system.ui.remote_core_client import RemoteCoreError
+from catering_system.ui.office_panel_settings_users import (
+    SettingsUsersAccessDenied,
+    parse_selected_permissions,
+    permission_matrix_state,
+    render_user_deactivate_confirm,
+    render_user_detail,
+    render_user_new,
+    render_users_list,
+    settings_users_error_message,
+    show_users_nav_for,
+)
 from catering_system.ui.employee_auth_http import (
     CSRF_COOKIE_NAME,
     SESSION_COOKIE_NAME,
@@ -517,6 +532,14 @@ def make_office_panel_handler(
                 resolved_rueckruf_count = rueckruf_count
             else:
                 resolved_rueckruf_count = None
+            show_users_nav = False
+            if (
+                auth is not None
+                and auth.kind == "employee"
+                and auth.employee is not None
+                and not auth.legacy_shared_access
+            ):
+                show_users_nav = show_users_nav_for(auth.employee)
             return OfficePageContext(
                 rueckruf_count=resolved_rueckruf_count,
                 csrf_token=auth.csrf_token if auth is not None else "",
@@ -534,7 +557,54 @@ def make_office_panel_handler(
                 legacy_shared_access=auth.legacy_shared_access
                 if auth is not None
                 else False,
+                show_users_nav=show_users_nav,
             )
+
+        def _require_settings_users_actor(
+            self, auth: OfficePanelRequestAuth | None
+        ) -> AuthenticatedEmployee:
+            if auth is None:
+                raise SettingsUsersAccessDenied()
+            if auth.kind != "employee" or auth.employee is None:
+                raise SettingsUsersAccessDenied()
+            if auth.legacy_shared_access:
+                raise SettingsUsersAccessDenied()
+            if not auth.employee.application_access_allowed:
+                raise SettingsUsersAccessDenied()
+            if "users.view" not in auth.employee.effective_permissions:
+                raise SettingsUsersAccessDenied()
+            return auth.employee
+
+        def _settings_users_forbidden(self) -> None:
+            self._html(
+                _page(
+                    "Zugriff verweigert",
+                    '<p class="blocked">Ihre Berechtigung reicht für diese Aktion nicht aus.</p>',
+                    active_section="settings",
+                    context=self._page_context(),
+                ),
+                403,
+            )
+
+        def _settings_users_actor_or_forbidden(
+            self, auth: OfficePanelRequestAuth | None
+        ) -> AuthenticatedEmployee | None:
+            try:
+                return self._require_settings_users_actor(auth)
+            except SettingsUsersAccessDenied:
+                self._settings_users_forbidden()
+                return None
+
+        def _settings_users_audit(
+            self, actor: AuthenticatedEmployee, account_id: str
+        ) -> list:
+            assert auth_service is not None
+            if "audit.view" not in actor.effective_permissions:
+                return []
+            try:
+                return auth_service.list_account_audit_events(actor, account_id)
+            except AuthorizationError:
+                return []
 
         def _security_headers(self) -> None:
             self.send_header("Cache-Control", "no-store")
@@ -648,12 +718,16 @@ def make_office_panel_handler(
             if length > _MAX_FORM_BODY_BYTES:
                 raise FormBodyTooLargeError("form body too large")
             raw = self.rfile.read(length).decode("utf-8")
-            parsed = {
-                key: values[0]
-                for key, values in parse_qs(raw, keep_blank_values=True).items()
-            }
+            parsed_lists = parse_qs(raw, keep_blank_values=True)
+            parsed = {key: values[0] for key, values in parsed_lists.items()}
             self._form_cache = parsed
+            self._form_lists_cache = parsed_lists
             return parsed
+
+        def _form_list(self, key: str) -> list[str]:
+            self._form()
+            lists = getattr(self, "_form_lists_cache", {})
+            return lists.get(key, [])
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
             pass
@@ -723,6 +797,7 @@ def make_office_panel_handler(
         def _route_get(self) -> None:
             parsed = urlparse(self.path)
             parts = [part for part in parsed.path.split("/") if part]
+            auth = self._request_auth
             if parts == ["rueckruf"]:
                 if remote is not None and not auerswald_url:
                     self._html(
@@ -746,6 +821,7 @@ def make_office_panel_handler(
                     logout_path=context.logout_path,
                     show_transition_banner=context.show_transition_banner,
                     legacy_shared_access=context.legacy_shared_access,
+                    show_users_nav=context.show_users_nav,
                 )
                 self._html(render_rueckruf(items, error, context=context))
                 return
@@ -763,6 +839,7 @@ def make_office_panel_handler(
                     logout_path=context.logout_path,
                     show_transition_banner=context.show_transition_banner,
                     legacy_shared_access=context.legacy_shared_access,
+                    show_users_nav=context.show_users_nav,
                 )
                 kalender_view = parse_qs(parsed.query).get("kalender", ["woche"])[0]
                 self._html(
@@ -876,6 +953,79 @@ def make_office_panel_handler(
                 and parts[3] == "fake-outbox"
             ):
                 self._confirmation_fake_outbox(parts[1])
+            elif parts == ["settings", "users"]:
+                actor = self._settings_users_actor_or_forbidden(auth)
+                if actor is None:
+                    return
+                assert auth_service is not None
+                query = parse_qs(parsed.query)
+                self._html(
+                    render_users_list(
+                        auth_service.list_accounts(actor),
+                        status_filter=query.get("status", ["all"])[0],
+                        role_filter=query.get("role", ["all"])[0],
+                        flash=query.get("msg", [""])[0],
+                        context=self._page_context(),
+                    )
+                )
+            elif parts == ["settings", "users", "new"]:
+                actor = self._settings_users_actor_or_forbidden(auth)
+                if actor is None:
+                    return
+                self._html(
+                    render_user_new(
+                        actor=actor,
+                        form={},
+                        context=self._page_context(),
+                    )
+                )
+            elif (
+                len(parts) == 4
+                and parts[0] == "settings"
+                and parts[1] == "users"
+                and parts[3] == "deactivate"
+            ):
+                actor = self._settings_users_actor_or_forbidden(auth)
+                if actor is None:
+                    return
+                assert auth_service is not None
+                account_id = unquote(parts[2])
+                try:
+                    detail = auth_service.get_account(actor, account_id)
+                except (AuthorizationError, AccountNotFoundError):
+                    self._settings_users_forbidden()
+                    return
+                self._html(
+                    render_user_deactivate_confirm(
+                        detail=detail,
+                        context=self._page_context(),
+                    )
+                )
+            elif len(parts) == 3 and parts[0] == "settings" and parts[1] == "users":
+                actor = self._settings_users_actor_or_forbidden(auth)
+                if actor is None:
+                    return
+                assert auth_service is not None
+                account_id = unquote(parts[2])
+                query = parse_qs(parsed.query)
+                removed = [
+                    item for item in query.get("removed", [""])[0].split(",") if item
+                ]
+                try:
+                    detail = auth_service.get_account(actor, account_id)
+                except (AuthorizationError, AccountNotFoundError):
+                    self._settings_users_forbidden()
+                    return
+                self._html(
+                    render_user_detail(
+                        actor=actor,
+                        detail=detail,
+                        audit_events=self._settings_users_audit(actor, account_id),
+                        flash=query.get("msg", [""])[0],
+                        role_change_removed=removed or None,
+                        context=self._page_context(),
+                    )
+                )
             else:
                 self.send_error(404)
 
@@ -1159,6 +1309,7 @@ def make_office_panel_handler(
                 self._error_page(inquiry_command_error_message(str(exc)))
 
         def _route_post(self, parts: list[str]) -> None:
+            auth = self._request_auth
             if parts == ["inquiry", "new"]:
                 inquiry = panel.create_inquiry(self._form())
                 self._redirect(f"/inquiry/{inquiry.inquiry_id}")
@@ -1230,8 +1381,351 @@ def make_office_panel_handler(
                 contact_key = unquote(parts[1])
                 panel.add_contact_note(contact_key, self._form())
                 self._redirect(f"/kontakt/{quote(contact_key, safe='')}")
+            elif parts == ["settings", "users"]:
+                self._settings_users_create(auth)
+            elif (
+                len(parts) == 4
+                and parts[0] == "settings"
+                and parts[1] == "users"
+                and parts[3] == "profile"
+            ):
+                self._settings_users_profile(auth, unquote(parts[2]))
+            elif (
+                len(parts) == 4
+                and parts[0] == "settings"
+                and parts[1] == "users"
+                and parts[3] == "role"
+            ):
+                self._settings_users_role(auth, unquote(parts[2]))
+            elif (
+                len(parts) == 4
+                and parts[0] == "settings"
+                and parts[1] == "users"
+                and parts[3] == "permissions"
+            ):
+                self._settings_users_permissions(auth, unquote(parts[2]))
+            elif (
+                len(parts) == 4
+                and parts[0] == "settings"
+                and parts[1] == "users"
+                and parts[3] == "deactivate"
+            ):
+                self._settings_users_deactivate(auth, unquote(parts[2]))
+            elif (
+                len(parts) == 4
+                and parts[0] == "settings"
+                and parts[1] == "users"
+                and parts[3] == "reactivate"
+            ):
+                self._settings_users_reactivate(auth, unquote(parts[2]))
+            elif (
+                len(parts) == 4
+                and parts[0] == "settings"
+                and parts[1] == "users"
+                and parts[3] == "reset-password"
+            ):
+                self._settings_users_reset_password(auth, unquote(parts[2]))
             else:
                 self.send_error(404)
+
+        def _settings_users_create(self, auth: OfficePanelRequestAuth | None) -> None:
+            actor = self._settings_users_actor_or_forbidden(auth)
+            if actor is None:
+                return
+            assert auth_service is not None
+            form = self._form()
+            selected = self._form_list("permission")
+            role = form.get("role", "USER")
+            selectable, _disabled = permission_matrix_state(
+                actor,
+                target_role=validate_role(role),
+                target_read_only=False,
+                explicit_permissions=set(),
+                effective_permissions=set(),
+            )
+            permissions = parse_selected_permissions(selected, selectable)
+            try:
+                account = auth_service.create_account(
+                    actor,
+                    username=form.get("username", ""),
+                    display_name=form.get("display_name", ""),
+                    password=form.get("temporary_password", ""),
+                    role=role,
+                    email=form.get("email") or None,
+                    explicit_permissions=permissions if permissions else None,
+                    must_change_password=True,
+                )
+            except (
+                AccountConflictError,
+                AuthorizationError,
+                LastActiveSuperadminError,
+                ValueError,
+            ) as exc:
+                self._html(
+                    render_user_new(
+                        actor=actor,
+                        form=form,
+                        selected_permissions=selected,
+                        error_message=settings_users_error_message(exc),
+                        context=self._page_context(),
+                    ),
+                    403
+                    if isinstance(exc, AuthorizationError)
+                    else 400
+                    if isinstance(exc, ValueError)
+                    else 409,
+                )
+                return
+            if form.get("is_active", "1") != "1":
+                auth_service.deactivate_account(actor, account.id)
+            self._redirect(f"/settings/users/{quote(account.id, safe='')}?msg=created")
+
+        def _settings_users_profile(
+            self, auth: OfficePanelRequestAuth | None, account_id: str
+        ) -> None:
+            actor = self._settings_users_actor_or_forbidden(auth)
+            if actor is None:
+                return
+            assert auth_service is not None
+            form = self._form()
+            try:
+                auth_service.update_account_profile(
+                    actor,
+                    account_id,
+                    username=form.get("username"),
+                    display_name=form.get("display_name"),
+                    email=form.get("email", ""),
+                )
+            except (
+                AccountConflictError,
+                AuthorizationError,
+                AccountNotFoundError,
+                ValueError,
+            ) as exc:
+                try:
+                    detail = auth_service.get_account(actor, account_id)
+                except (AuthorizationError, AccountNotFoundError):
+                    self._settings_users_forbidden()
+                    return
+                self._html(
+                    render_user_detail(
+                        actor=actor,
+                        detail=detail,
+                        audit_events=self._settings_users_audit(actor, account_id),
+                        error_message=settings_users_error_message(exc),
+                        context=self._page_context(),
+                    ),
+                    409 if isinstance(exc, AccountConflictError) else 400,
+                )
+                return
+            self._redirect(f"/settings/users/{quote(account_id, safe='')}?msg=saved")
+
+        def _settings_users_role(
+            self, auth: OfficePanelRequestAuth | None, account_id: str
+        ) -> None:
+            actor = self._settings_users_actor_or_forbidden(auth)
+            if actor is None:
+                return
+            assert auth_service is not None
+            form = self._form()
+            new_role = form.get("role", "")
+            try:
+                before = auth_service.get_account(actor, account_id)
+                auth_service.change_account_role(actor, account_id, new_role)
+                after = auth_service.get_account(actor, account_id)
+            except (
+                AuthorizationError,
+                LastActiveSuperadminError,
+                AccountNotFoundError,
+                ValueError,
+            ) as exc:
+                try:
+                    detail = auth_service.get_account(actor, account_id)
+                except (AuthorizationError, AccountNotFoundError):
+                    self._settings_users_forbidden()
+                    return
+                self._html(
+                    render_user_detail(
+                        actor=actor,
+                        detail=detail,
+                        audit_events=self._settings_users_audit(actor, account_id),
+                        error_message=settings_users_error_message(exc),
+                        context=self._page_context(),
+                    ),
+                    400,
+                )
+                return
+            removed = sorted(
+                set(before.explicit_permissions).difference(after.explicit_permissions)
+            )
+            removed_query = ""
+            if removed:
+                removed_query = "&removed=" + quote(",".join(removed), safe="")
+            self._redirect(
+                f"/settings/users/{quote(account_id, safe='')}?msg=role_changed{removed_query}"
+            )
+
+        def _settings_users_permissions(
+            self, auth: OfficePanelRequestAuth | None, account_id: str
+        ) -> None:
+            actor = self._settings_users_actor_or_forbidden(auth)
+            if actor is None:
+                return
+            assert auth_service is not None
+            selected = self._form_list("permission")
+            try:
+                detail = auth_service.get_account(actor, account_id)
+                selectable, _disabled = permission_matrix_state(
+                    actor,
+                    target_role=detail.role,
+                    target_read_only=detail.read_only,
+                    explicit_permissions=set(detail.explicit_permissions),
+                    effective_permissions=set(detail.effective_permissions),
+                )
+                permissions = parse_selected_permissions(selected, selectable)
+                auth_service.set_account_permissions(actor, account_id, permissions)
+            except (
+                AuthorizationError,
+                AccountNotFoundError,
+                ValueError,
+            ) as exc:
+                try:
+                    detail = auth_service.get_account(actor, account_id)
+                except (AuthorizationError, AccountNotFoundError):
+                    self._settings_users_forbidden()
+                    return
+                self._html(
+                    render_user_detail(
+                        actor=actor,
+                        detail=detail,
+                        audit_events=self._settings_users_audit(actor, account_id),
+                        error_message=settings_users_error_message(exc),
+                        context=self._page_context(),
+                    ),
+                    400,
+                )
+                return
+            self._redirect(
+                f"/settings/users/{quote(account_id, safe='')}?msg=permissions_saved"
+            )
+
+        def _settings_users_deactivate(
+            self, auth: OfficePanelRequestAuth | None, account_id: str
+        ) -> None:
+            actor = self._settings_users_actor_or_forbidden(auth)
+            if actor is None:
+                return
+            assert auth_service is not None
+            try:
+                auth_service.deactivate_account(actor, account_id)
+            except (
+                AuthorizationError,
+                LastActiveSuperadminError,
+                AccountNotFoundError,
+            ) as exc:
+                try:
+                    detail = auth_service.get_account(actor, account_id)
+                except (AuthorizationError, AccountNotFoundError):
+                    self._settings_users_forbidden()
+                    return
+                self._html(
+                    render_user_deactivate_confirm(
+                        detail=detail,
+                        error_message=settings_users_error_message(exc),
+                        context=self._page_context(),
+                    ),
+                    400,
+                )
+                return
+            self._redirect("/settings/users?msg=deactivated")
+
+        def _settings_users_reactivate(
+            self, auth: OfficePanelRequestAuth | None, account_id: str
+        ) -> None:
+            actor = self._settings_users_actor_or_forbidden(auth)
+            if actor is None:
+                return
+            assert auth_service is not None
+            try:
+                auth_service.reactivate_account(actor, account_id)
+            except (AuthorizationError, AccountNotFoundError) as exc:
+                try:
+                    detail = auth_service.get_account(actor, account_id)
+                except (AuthorizationError, AccountNotFoundError):
+                    self._settings_users_forbidden()
+                    return
+                self._html(
+                    render_user_detail(
+                        actor=actor,
+                        detail=detail,
+                        audit_events=self._settings_users_audit(actor, account_id),
+                        error_message=settings_users_error_message(exc),
+                        context=self._page_context(),
+                    ),
+                    400,
+                )
+                return
+            self._redirect(
+                f"/settings/users/{quote(account_id, safe='')}?msg=reactivated"
+            )
+
+        def _settings_users_reset_password(
+            self, auth: OfficePanelRequestAuth | None, account_id: str
+        ) -> None:
+            actor = self._settings_users_actor_or_forbidden(auth)
+            if actor is None:
+                return
+            assert auth_service is not None
+            form = self._form()
+            password = form.get("temporary_password", "")
+            confirm = form.get("temporary_password_confirm", "")
+            if password != confirm:
+                try:
+                    detail = auth_service.get_account(actor, account_id)
+                except (AuthorizationError, AccountNotFoundError):
+                    self._settings_users_forbidden()
+                    return
+                self._html(
+                    render_user_detail(
+                        actor=actor,
+                        detail=detail,
+                        audit_events=self._settings_users_audit(actor, account_id),
+                        error_message="Die Passwortbestätigung stimmt nicht überein.",
+                        context=self._page_context(),
+                    ),
+                    400,
+                )
+                return
+            try:
+                auth_service.reset_account_password(
+                    actor,
+                    account_id,
+                    temporary_password=password,
+                )
+            except (
+                AuthorizationError,
+                AccountNotFoundError,
+                ValueError,
+            ) as exc:
+                try:
+                    detail = auth_service.get_account(actor, account_id)
+                except (AuthorizationError, AccountNotFoundError):
+                    self._settings_users_forbidden()
+                    return
+                self._html(
+                    render_user_detail(
+                        actor=actor,
+                        detail=detail,
+                        audit_events=self._settings_users_audit(actor, account_id),
+                        error_message=settings_users_error_message(exc),
+                        context=self._page_context(),
+                    ),
+                    400,
+                )
+                return
+            self._redirect(
+                f"/settings/users/{quote(account_id, safe='')}?msg=password_reset"
+            )
 
         def _create_catalog_dish(self) -> None:
             """CATALOG_ADMIN_PANEL_V1: a rejected create re-renders the form

@@ -17,6 +17,7 @@ OfficeSection = Literal[
     "callbacks",
     "proposal",
     "catalog",
+    "settings",
 ]
 
 OFFICE_PANEL_ICON_SPRITE = """<svg xmlns="http://www.w3.org/2000/svg"
