@@ -79,9 +79,7 @@ def test_payload_maps_labelled_context_without_creating_core_records() -> None:
         order_repo,
         configurator_url="http://127.0.0.1:5173",
     )
-    page = panel.render_inquiry(
-        inquiry.inquiry_id, context=legacy_office_context()
-    )
+    page = panel.render_inquiry(inquiry.inquiry_id, context=legacy_office_context())
 
     assert page is not None
     assert "Angebot mit Anfragedaten vorbereiten" in page

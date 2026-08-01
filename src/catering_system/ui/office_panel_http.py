@@ -584,7 +584,9 @@ def make_office_panel_handler(
                 raise SettingsUsersAccessDenied()
             return auth.employee
 
-        def _business_forbidden(self, *, active_section: OfficeSection = "home") -> None:
+        def _business_forbidden(
+            self, *, active_section: OfficeSection = "home"
+        ) -> None:
             self._html(
                 _page(
                     "Zugriff verweigert",
