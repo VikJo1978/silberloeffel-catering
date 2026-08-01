@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from datetime import datetime
 from urllib.parse import quote
 
@@ -151,8 +152,12 @@ def settings_users_error_message(exc: Exception) -> str:
         return "Ihre Berechtigung reicht für diese Aktion nicht aus."
     if isinstance(exc, AccountNotFoundError):
         return "Benutzerkonto wurde nicht gefunden."
+    if isinstance(exc, sqlite3.Error):
+        return "Die Aktion konnte nicht ausgeführt werden."
     if isinstance(exc, ValueError):
         message = str(exc)
+        if message.startswith("role must be one of"):
+            return "Die ausgewählte Rolle ist nicht zulässig."
         if "temporary_password" in message or "password must be at least" in message:
             return "Das temporäre Passwort muss mindestens 8 Zeichen haben."
         if "permissions exceed" in message:
@@ -416,11 +421,7 @@ def render_user_new(
         "</label><br>"
         "<label>Temporäres Passwort<br>"
         '<input name="temporary_password" type="password" autocomplete="new-password" required>'
-        "</label><br>"
-        "<label>"
-        '<input type="checkbox" name="is_active" value="1" '
-        + ("checked" if form.get("is_active", "1") == "1" else "")
-        + "> Konto ist aktiv</label>"
+        "</label>"
         "</fieldset>" + matrix + '<p><button type="submit">Benutzer anlegen</button> '
         '<a href="/settings/users">Abbrechen</a></p>'
         "</form>"

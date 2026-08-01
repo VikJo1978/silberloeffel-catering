@@ -349,7 +349,6 @@ def test_create_user_succeeds(employee_panel: PanelHarness) -> None:
             "email": "new@example.com",
             "role": "USER",
             "temporary_password": "WorkerTemp1!",
-            "is_active": "1",
         },
         jar=jar,
     )
@@ -402,7 +401,6 @@ def test_admin_cannot_select_admin_role_on_create(employee_panel: PanelHarness) 
             "display_name": "Blocked Admin",
             "role": "ADMIN",
             "temporary_password": "AdminTemp1!",
-            "is_active": "1",
         },
         jar=admin_jar,
     )
@@ -418,7 +416,6 @@ def test_username_conflict_renders_german_error(employee_panel: PanelHarness) ->
         "display_name": "Dup User",
         "role": "USER",
         "temporary_password": "WorkerTemp1!",
-        "is_active": "1",
     }
     _request(
         employee_panel.base,

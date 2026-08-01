@@ -3985,26 +3985,19 @@ def main() -> None:
             "(remote mode) or both left empty (direct mode)"
         )
 
+    auth_runtime = None
     auth_service = None
     if auth_mode in {"migration", "employee"}:
         if not args.db:
             raise SystemExit(
                 "--db is required when OFFICE_PANEL_AUTH_MODE is migration or employee"
             )
-        from catering_system.repositories.bootstrap_employee_auth_schema import (
-            bootstrap_employee_auth_schema,
+        from catering_system.repositories.employee_auth_runtime import (
+            open_managed_employee_auth_runtime,
         )
-        from catering_system.repositories.core_transaction import open_core_connection
-        from catering_system.repositories.sqlite_employee_auth_repository import (
-            SQLiteEmployeeAuthRepository,
-        )
-        from catering_system.services.employee_auth_service import EmployeeAuthService
 
-        auth_connection = open_core_connection(args.db)
-        bootstrap_employee_auth_schema(auth_connection)
-        auth_service = EmployeeAuthService(
-            SQLiteEmployeeAuthRepository.from_connection(auth_connection)
-        )
+        auth_runtime = open_managed_employee_auth_runtime(args.db)
+        auth_service = auth_runtime.service
 
     if core_api_url:
         from catering_system.ui.remote_core_client import RemoteCoreClient
@@ -4157,7 +4150,11 @@ def main() -> None:
             f"(auth_mode={auth_mode}, secure_cookie={secure_cookie}, "
             f"basic_fallback_active={auth_mode in {'basic', 'migration'}})"
         )
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        if auth_runtime is not None:
+            auth_runtime.close()
 
 
 if __name__ == "__main__":

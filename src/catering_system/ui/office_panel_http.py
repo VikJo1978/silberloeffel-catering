@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import sqlite3
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING, Literal, cast
@@ -1436,9 +1437,23 @@ def make_office_panel_handler(
             form = self._form()
             selected = self._form_list("permission")
             role = form.get("role", "USER")
+            try:
+                target_role = validate_role(role)
+            except ValueError as exc:
+                self._html(
+                    render_user_new(
+                        actor=actor,
+                        form=form,
+                        selected_permissions=selected,
+                        error_message=settings_users_error_message(exc),
+                        context=self._page_context(),
+                    ),
+                    400,
+                )
+                return
             selectable, _disabled = permission_matrix_state(
                 actor,
-                target_role=validate_role(role),
+                target_role=target_role,
                 target_read_only=False,
                 explicit_permissions=set(),
                 effective_permissions=set(),
@@ -1450,7 +1465,7 @@ def make_office_panel_handler(
                     username=form.get("username", ""),
                     display_name=form.get("display_name", ""),
                     password=form.get("temporary_password", ""),
-                    role=role,
+                    role=target_role,
                     email=form.get("email") or None,
                     explicit_permissions=permissions if permissions else None,
                     must_change_password=True,
@@ -1476,8 +1491,6 @@ def make_office_panel_handler(
                     else 409,
                 )
                 return
-            if form.get("is_active", "1") != "1":
-                auth_service.deactivate_account(actor, account.id)
             self._redirect(f"/settings/users/{quote(account.id, safe='')}?msg=created")
 
         def _settings_users_profile(
@@ -1501,6 +1514,7 @@ def make_office_panel_handler(
                 AuthorizationError,
                 AccountNotFoundError,
                 ValueError,
+                sqlite3.Error,
             ) as exc:
                 try:
                     detail = auth_service.get_account(actor, account_id)
@@ -1515,7 +1529,9 @@ def make_office_panel_handler(
                         error_message=settings_users_error_message(exc),
                         context=self._page_context(),
                     ),
-                    409 if isinstance(exc, AccountConflictError) else 400,
+                    500
+                    if isinstance(exc, sqlite3.Error)
+                    else (409 if isinstance(exc, AccountConflictError) else 400),
                 )
                 return
             self._redirect(f"/settings/users/{quote(account_id, safe='')}?msg=saved")
@@ -1622,6 +1638,7 @@ def make_office_panel_handler(
                 AuthorizationError,
                 LastActiveSuperadminError,
                 AccountNotFoundError,
+                sqlite3.Error,
             ) as exc:
                 try:
                     detail = auth_service.get_account(actor, account_id)
@@ -1634,7 +1651,7 @@ def make_office_panel_handler(
                         error_message=settings_users_error_message(exc),
                         context=self._page_context(),
                     ),
-                    400,
+                    500 if isinstance(exc, sqlite3.Error) else 400,
                 )
                 return
             self._redirect("/settings/users?msg=deactivated")
@@ -1706,6 +1723,7 @@ def make_office_panel_handler(
                 AuthorizationError,
                 AccountNotFoundError,
                 ValueError,
+                sqlite3.Error,
             ) as exc:
                 try:
                     detail = auth_service.get_account(actor, account_id)
@@ -1720,7 +1738,7 @@ def make_office_panel_handler(
                         error_message=settings_users_error_message(exc),
                         context=self._page_context(),
                     ),
-                    400,
+                    500 if isinstance(exc, sqlite3.Error) else 400,
                 )
                 return
             self._redirect(
