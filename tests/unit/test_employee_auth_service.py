@@ -17,6 +17,7 @@ from catering_system.repositories.sqlite_employee_auth_repository import (
     SQLiteEmployeeAuthRepository,
 )
 from catering_system.services.employee_auth_service import (
+    AccountConflictError,
     AuthenticationError,
     AuthorizationError,
     EmployeeAuthService,
@@ -103,7 +104,7 @@ def test_username_uniqueness_is_case_insensitive(auth) -> None:
         password="AnotherTemp1!",
         role="USER",
     )
-    with pytest.raises(sqlite3.IntegrityError):
+    with pytest.raises(AccountConflictError):
         service.create_account(
             employee,
             username="Worker.One",
