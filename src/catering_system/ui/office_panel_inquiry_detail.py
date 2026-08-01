@@ -19,6 +19,7 @@ from catering_system.domain.inquiry_contact_completeness import (
     missing_contact_fields,
 )
 from catering_system.domain.order import Order
+from catering_system.ui.office_panel_views import OfficePageContext
 
 _SOURCE_LABELS = {
     "website_form": "Website-Anfrage",
@@ -154,8 +155,12 @@ def _primary_action(
     inquiry: Inquiry,
     state: InquiryOfficeState,
     forms: InquiryDetailFormFields,
+    *,
+    context: OfficePageContext,
 ) -> str:
     if state.next_action == "verify":
+        if not context.can("inquiries.verify"):
+            return ""
         heading = "Angaben telefonisch bestätigen"
         explanation = (
             "Datum, Ort und Gästezahl gemeinsam prüfen. Erst nach dem Gespräch "
@@ -164,6 +169,8 @@ def _primary_action(
         path = "verify"
         label = "Telefonisch verifiziert"
     elif state.next_action == "prepare-offer":
+        if not context.can("offers.prepare"):
+            return ""
         return (
             '<section class="inquiry-next-step">'
             '<div class="inquiry-eyebrow">Nächster Schritt</div>'
@@ -173,6 +180,8 @@ def _primary_action(
             "</section>"
         )
     elif state.next_action == "prepare-next-version":
+        if not context.can("offers.version.create"):
+            return ""
         return (
             '<section class="inquiry-next-step">'
             '<div class="inquiry-eyebrow">Nächster Schritt</div>'
@@ -383,7 +392,10 @@ def _edit_form(
     forms: InquiryDetailFormFields,
     *,
     has_active_order: bool,
+    context: OfficePageContext,
 ) -> str:
+    if not context.can("inquiries.edit"):
+        return ""
     guests = (
         str(inquiry.guest_count_estimate)
         if inquiry.guest_count_estimate is not None
@@ -435,8 +447,10 @@ def render_inquiry_detail(
     linked_orders_total_count: int | None = None,
     linked_orders_truncated: bool = False,
     offer_url: str | None = None,
+    context: OfficePageContext | None = None,
 ) -> InquiryDetailPage:
     """Render existing Inquiry facts and actions without performing any reads."""
+    page_context = context or OfficePageContext()
 
     subject = (inquiry.intake_subject or "").strip()
     title = subject or f"Anfrage vom {_date_text(inquiry)}"
@@ -495,14 +509,15 @@ def render_inquiry_detail(
             "Angebot öffnen</a></section>"
         )
     elif state.next_action == "prepare-offer" and offer_url:
-        offer = (
-            '<section class="inquiry-card inquiry-content-card">'
-            "<h2>Angebot</h2>"
-            '<p class="inquiry-section-note">Öffnet einen bearbeitbaren Entwurf. '
-            "Es wird noch kein Auftrag erzeugt.</p>"
-            f'<a class="inquiry-button secondary" href="{_e(offer_url)}">'
-            "Angebot vorbereiten</a></section>"
-        )
+        if page_context.can("offers.prepare"):
+            offer = (
+                '<section class="inquiry-card inquiry-content-card">'
+                "<h2>Angebot</h2>"
+                '<p class="inquiry-section-note">Öffnet einen bearbeitbaren Entwurf. '
+                "Es wird noch kein Auftrag erzeugt.</p>"
+                f'<a class="inquiry-button secondary" href="{_e(offer_url)}">'
+                "Angebot vorbereiten</a></section>"
+            )
     elif state.next_action == "prepare-offer":
         offer = (
             '<section class="inquiry-card inquiry-content-card">'
@@ -544,11 +559,13 @@ def render_inquiry_detail(
         f"<div><dt>Arbeitsstand</dt><dd>{_e(inquiry.crm_stage)}</dd></div>"
         "</dl></section>" + summary + "</div>"
         '<aside class="inquiry-detail-side">'
-        + _primary_action(inquiry, state, forms)
+        + _primary_action(inquiry, state, forms, context=page_context)
         + _linked_orders(linked_orders)
         + blocker_card
         + offer
         + "</aside></div>"
-        + _edit_form(inquiry, forms, has_active_order=has_active_order)
+        + _edit_form(
+            inquiry, forms, has_active_order=has_active_order, context=page_context
+        )
     )
     return InquiryDetailPage(title=title, body=body)

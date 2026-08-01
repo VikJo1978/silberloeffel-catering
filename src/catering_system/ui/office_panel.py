@@ -762,13 +762,16 @@ class OfficePanel:
     ) -> str:
         operating_today = api_views.berlin_today()
         snapshot = self.build_work_center_snapshot(missed_calls_open)
+        calendar_entries = (
+            self._calendar_list_rows() if context.can("calendar.view") else []
+        )
         return render_arbeitszentrale(
             ArbeitszentraleData(
                 context=context,
                 today=operating_today,
                 snapshot=snapshot,
                 tasks=self._task_list_rows(),
-                calendar_entries=self._calendar_list_rows(),
+                calendar_entries=calendar_entries,
                 contact_check_open=self._contact_check_open_count(),
                 open_inquiries_open=self._open_inquiries_count(),
                 kalender_view=kalender_view,
@@ -839,11 +842,19 @@ class OfficePanel:
                 )
         version_id = surface_version_id(detail)
         pdf_download_url: str | None = None
-        if version_id and self.offer_document_exists(offer_id, version_id):
+        if (
+            version_id
+            and context.can("offers.pdf.generate")
+            and self.offer_document_exists(offer_id, version_id)
+        ):
             pdf_download_url = (
                 f"/offer/{quote(offer_id, safe='')}/offer-document/pdf"
                 f"?{urlencode({'offer_version_id': version_id})}"
             )
+        if revision_prefill_url is not None and not context.can(
+            "offers.version.create"
+        ):
+            revision_prefill_url = None
         return render_offer_detail(
             detail,
             context=context,
@@ -1776,8 +1787,12 @@ class OfficePanel:
             version = max(versions, key=lambda v: v.version_number)
         expect: dict[str, str] = {}
         if version.kitchen_print_confirmed_at is None:
+            if not context.can("orders.print.confirm"):
+                return ""
             label, action = "Druck bestätigen", "print-confirm"
         elif version.order_version_id != order.effective_order_version_id:
+            if not context.can("orders.effective.set"):
+                return ""
             label, action = "Wirksam machen", "effective"
             expect = {
                 "effective_version_id": order.effective_order_version_id or "",
@@ -1859,14 +1874,20 @@ class OfficePanel:
         context: OfficePageContext,
     ) -> str:
         if state.next_action == "verify":
+            if not context.can("inquiries.verify"):
+                return ""
             return (
                 f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/verify">'
                 f"{_csrf_input(context)}{self._command_fields()}"
                 "<button>Telefonisch verifiziert</button></form>"
             )
         if state.next_action == "prepare-offer":
+            if not context.can("offers.prepare"):
+                return ""
             return '<span class="muted">Angebot vorbereiten</span>'
         if state.next_action == "prepare-next-version":
+            if not context.can("offers.version.create"):
+                return ""
             return '<span class="muted">Neue Version vorbereiten</span>'
         if state.next_action == "offer-pending":
             return '<span class="muted">Angebot ausstehend</span>'
@@ -1994,18 +2015,20 @@ class OfficePanel:
             if self.kiosk_url
             else ""
         )
-        diese_woche = (
-            f'<h2 id="diese-woche">Diese Woche (KW {iso.week}/{iso.year})</h2>'
-            "<table><tr><th>Datum</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th><th>Auftrag</th></tr>"
-            + "".join(
-                week_rows
-                or [
-                    '<tr><td colspan="5">keine wirksamen Aufträge diese Woche</td></tr>'
-                ]
+        diese_woche = ""
+        if context.can("calendar.view"):
+            diese_woche = (
+                f'<h2 id="diese-woche">Diese Woche (KW {iso.week}/{iso.year})</h2>'
+                "<table><tr><th>Datum</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th><th>Auftrag</th></tr>"
+                + "".join(
+                    week_rows
+                    or [
+                        '<tr><td colspan="5">keine wirksamen Aufträge diese Woche</td></tr>'
+                    ]
+                )
+                + "</table>"
+                + kiosk_link
             )
-            + "</table>"
-            + kiosk_link
-        )
 
         # -- three action queues (§11 addendum): top 5 rows each, one
         # primary action per row, full lists live at /rueckruf, /anfragen,
@@ -2083,7 +2106,11 @@ class OfficePanel:
             + rueckruf_section
             + offene_anfragen_section
             + auftraege_section
-            + '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a></p>'
+            + (
+                '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a></p>'
+                if context.can("inquiries.create")
+                else ""
+            )
         )
         return _page("Büro-Übersicht", body, active_section="home", context=context)
 
@@ -2796,6 +2823,7 @@ class OfficePanel:
                 linked_orders_total_count=linked_orders_total_count,
                 linked_orders_truncated=linked_orders_truncated,
                 offer_url=offer_url,
+                context=context,
             )
             return _page(
                 detail.title,
@@ -3173,6 +3201,7 @@ class OfficePanel:
                         target is not None
                         and version.order_version_id == target.order_version_id
                         and version.kitchen_print_confirmed_at is None
+                        and context.can("orders.print.confirm")
                     ):
                         print_confirm_fields[version.order_version_id] = (
                             self._command_fields()
@@ -3182,6 +3211,7 @@ class OfficePanel:
                         and version.order_version_id == target.order_version_id
                         and version.kitchen_print_confirmed_at is not None
                         and version.order_version_id != order.effective_order_version_id
+                        and context.can("orders.effective.set")
                     ):
                         effective_fields[version.order_version_id] = (
                             self._command_fields(
@@ -3214,13 +3244,15 @@ class OfficePanel:
                     print_confirm_command_fields=print_confirm_fields,
                     effective_command_fields=effective_fields,
                     ready_command_fields=(
-                        self._command_fields() if not cancelled else ""
+                        self._command_fields()
+                        if not cancelled and context.can("orders.ready.release")
+                        else ""
                     ),
                     cancel_command_fields=(
                         self._command_fields(
                             {"updated_at": order.updated_at.isoformat()}
                         )
-                        if not cancelled
+                        if not cancelled and context.can("orders.cancel")
                         else ""
                     ),
                     version_command_fields=(
@@ -3235,7 +3267,7 @@ class OfficePanel:
                                 ),
                             }
                         )
-                        if not cancelled
+                        if not cancelled and context.can("orders.version.create")
                         else ""
                     ),
                     payment_command_fields=(
@@ -3275,12 +3307,20 @@ class OfficePanel:
                     ),
                     pause_command_fields=(
                         self._command_fields(self._pause_expect_fields(pause_view))
-                        if not cancelled and not pause_view.get("active")
+                        if (
+                            not cancelled
+                            and not pause_view.get("active")
+                            and context.can("orders.pause")
+                        )
                         else ""
                     ),
                     resume_command_fields=(
                         self._command_fields(self._resume_expect_fields(pause_view))
-                        if not cancelled and pause_view.get("active")
+                        if (
+                            not cancelled
+                            and pause_view.get("active")
+                            and context.can("orders.pause")
+                        )
                         else ""
                     ),
                     customer_addresses_command_fields=(

@@ -107,7 +107,11 @@ def render_gericht_detail(
         + _allergen_block(detail.get("allergen_labels"))
         + f"<p><strong>Preis:</strong> {_e(str(detail.get('price_display', '–')))}</p>"
         + _price_history_block(detail.get("price_history"))
-        + f'<p><a href="/gerichte/{_e(dish_id)}/edit">Bearbeiten</a></p>'
+        + (
+            f'<p><a href="/gerichte/{_e(dish_id)}/edit">Bearbeiten</a></p>'
+            if context.can("catalog.edit")
+            else ""
+        )
         + '<p><a href="/gerichte">← Zurück zu Gerichte</a></p>'
     )
     return _page(name, body, active_section="catalog", context=context)

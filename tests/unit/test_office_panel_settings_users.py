@@ -252,7 +252,7 @@ def test_users_nav_hidden_without_users_view(employee_panel: PanelHarness) -> No
         new_password="ViewerChanged1!",
     )
     jar = _login(employee_panel, username=viewer.username, password="ViewerChanged1!")
-    status, _url, body, _headers = _request(employee_panel.base, "/", jar=jar)
+    status, _url, body, _headers = _request(employee_panel.base, "/anfragen", jar=jar)
     assert status == 200
     assert "/settings/users" not in body
 
