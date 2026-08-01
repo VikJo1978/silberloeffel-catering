@@ -362,6 +362,17 @@ def _version_detail(
         "event_date": version.event_date.isoformat(),
         "valid_until": version.valid_until.isoformat(),
         "time_window_text": version.time_window_text,
+        "delivery_date_local": version.delivery_date_local,
+        "delivery_window_start_local": version.delivery_window_start_local,
+        "delivery_window_end_local": version.delivery_window_end_local,
+        "event_start_local": version.event_start_local,
+        "legacy_time_window_text": version.legacy_time_window_text,
+        "time_review_acknowledged_at": (
+            version.time_review_acknowledged_at.isoformat()
+            if version.time_review_acknowledged_at is not None
+            else None
+        ),
+        "time_review_acknowledged_by": version.time_review_acknowledged_by,
         "location_text": version.location_text,
         "guest_count": version.guest_count,
         "planning_mode": version.planning_mode,
@@ -417,6 +428,17 @@ def inquiry_summary(inquiry: Inquiry) -> dict[str, object]:
         "inquiry_source": inquiry.inquiry_source,
         "crm_stage": inquiry.crm_stage,
         "time_window_text": inquiry.time_window_text,
+        "delivery_date_local": inquiry.delivery_date_local,
+        "delivery_window_start_local": inquiry.delivery_window_start_local,
+        "delivery_window_end_local": inquiry.delivery_window_end_local,
+        "event_start_local": inquiry.event_start_local,
+        "legacy_time_window_text": inquiry.legacy_time_window_text,
+        "time_review_acknowledged_at": (
+            inquiry.time_review_acknowledged_at.isoformat()
+            if inquiry.time_review_acknowledged_at is not None
+            else None
+        ),
+        "time_review_acknowledged_by": inquiry.time_review_acknowledged_by,
         "location_text": inquiry.location_text,
         "guest_count_estimate": inquiry.guest_count_estimate,
         "planning_mode": inquiry.planning_mode,

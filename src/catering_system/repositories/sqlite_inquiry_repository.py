@@ -22,6 +22,12 @@ from catering_system.domain.inquiry import (
     validate_fulfillment_mode,
     validate_planning_mode,
 )
+from catering_system.domain.inquiry_timing import (
+    normalize_legacy_time_window_text,
+    validate_local_date_text,
+    validate_local_time_text,
+    validate_optional_acknowledged_by,
+)
 from catering_system.repositories.inquiry_repository import (
     DuplicateExternalReferenceError,
 )
@@ -47,6 +53,13 @@ CREATE TABLE IF NOT EXISTS inquiries (
     planning_mode TEXT NOT NULL,
     call_verification_required INTEGER NOT NULL,
     call_verification_status TEXT NOT NULL,
+    delivery_date_local TEXT,
+    delivery_window_start_local TEXT,
+    delivery_window_end_local TEXT,
+    event_start_local TEXT,
+    legacy_time_window_text TEXT,
+    time_review_acknowledged_at TEXT,
+    time_review_acknowledged_by TEXT,
     intake_subject TEXT,
     intake_message TEXT,
     intake_summary TEXT,
@@ -82,6 +95,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_inquiries_website_external_ref
       AND intake_external_ref IS NOT NULL
       AND intake_external_ref <> '';
 """
+
+_SELECT_COLUMNS = (
+    "inquiry_id, event_date, created_at, updated_at, inquiry_source, crm_stage, "
+    "customer_linkage, time_window_text, location_text, guest_count_estimate, "
+    "planning_mode, call_verification_required, call_verification_status, "
+    "delivery_date_local, delivery_window_start_local, delivery_window_end_local, "
+    "event_start_local, legacy_time_window_text, time_review_acknowledged_at, "
+    "time_review_acknowledged_by, intake_subject, intake_message, intake_summary, "
+    "intake_external_ref, customer_id, snapshot_company_name, "
+    "snapshot_contact_name, snapshot_email, snapshot_phone, "
+    "snapshot_delivery_address_mode, snapshot_invoice_address_json, "
+    "snapshot_delivery_address_json, fulfillment_mode"
+)
 
 
 def _migration_1_create_table(connection: sqlite3.Connection) -> None:
@@ -143,6 +169,31 @@ def _migration_6_add_fulfillment_mode(connection: sqlite3.Connection) -> None:
         )
 
 
+def _migration_7_add_canonical_timing_fields(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(inquiries)").fetchall()
+    }
+    for column in (
+        "delivery_date_local",
+        "delivery_window_start_local",
+        "delivery_window_end_local",
+        "event_start_local",
+        "legacy_time_window_text",
+        "time_review_acknowledged_at",
+        "time_review_acknowledged_by",
+    ):
+        if column not in columns:
+            connection.execute(f"ALTER TABLE inquiries ADD COLUMN {column} TEXT")
+    connection.execute(
+        """
+        UPDATE inquiries
+           SET legacy_time_window_text = time_window_text
+         WHERE legacy_time_window_text IS NULL
+           AND trim(time_window_text) <> ''
+        """
+    )
+
+
 _MIGRATIONS = (
     (1, "create_inquiries", _migration_1_create_table),
     (2, "add_intake_context", _migration_2_add_intake_context),
@@ -150,6 +201,7 @@ _MIGRATIONS = (
     (4, "add_customer_reference", _migration_4_add_customer_reference),
     (5, "add_customer_addresses", _migration_5_add_customer_addresses),
     (6, "add_fulfillment_mode", _migration_6_add_fulfillment_mode),
+    (7, "add_canonical_timing_fields", _migration_7_add_canonical_timing_fields),
 )
 
 
@@ -189,13 +241,16 @@ class SQLiteInquiryRepository:
                     "INSERT INTO inquiries (inquiry_id, event_date, created_at, updated_at, "
                     "inquiry_source, crm_stage, customer_linkage, time_window_text, "
                     "location_text, guest_count_estimate, planning_mode, "
-                    "call_verification_required, call_verification_status, intake_subject, "
-                    "intake_message, intake_summary, intake_external_ref, customer_id, "
+                    "call_verification_required, call_verification_status, delivery_date_local, "
+                    "delivery_window_start_local, delivery_window_end_local, event_start_local, "
+                    "legacy_time_window_text, time_review_acknowledged_at, "
+                    "time_review_acknowledged_by, intake_subject, intake_message, "
+                    "intake_summary, intake_external_ref, customer_id, "
                     "snapshot_company_name, snapshot_contact_name, snapshot_email, "
                     "snapshot_phone, snapshot_delivery_address_mode, "
                     "snapshot_invoice_address_json, snapshot_delivery_address_json, "
                     "fulfillment_mode) VALUES "
-                    "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     self._values(inquiry),
                 )
         except sqlite3.IntegrityError as exc:
@@ -204,7 +259,8 @@ class SQLiteInquiryRepository:
 
     def get_by_id(self, inquiry_id: str) -> Inquiry | None:
         row = self._conn.execute(
-            "SELECT * FROM inquiries WHERE inquiry_id = ?", (inquiry_id,)
+            f"SELECT {_SELECT_COLUMNS} FROM inquiries WHERE inquiry_id = ?",
+            (inquiry_id,),
         ).fetchone()
         if row is None:
             return None
@@ -212,7 +268,7 @@ class SQLiteInquiryRepository:
 
     def list_all(self) -> list[Inquiry]:
         rows = self._conn.execute(
-            "SELECT * FROM inquiries ORDER BY event_date, inquiry_id"
+            f"SELECT {_SELECT_COLUMNS} FROM inquiries ORDER BY event_date, inquiry_id"
         ).fetchall()
         return [self._row_to_inquiry(r) for r in rows]
 
@@ -232,26 +288,55 @@ class SQLiteInquiryRepository:
             planning_mode=validate_planning_mode(row[10]),
             call_verification_required=bool(row[11]),
             call_verification_status=validate_call_verification_status(row[12]),
-            intake_subject=row[13],
-            intake_message=row[14],
-            intake_summary=row[15],
-            intake_external_ref=row[16],
-            customer_id=row[17],
+            delivery_date_local=(
+                validate_local_date_text(row[13], "delivery_date_local")
+                if row[13] is not None
+                else None
+            ),
+            delivery_window_start_local=(
+                validate_local_time_text(row[14], "delivery_window_start_local")
+                if row[14] is not None
+                else None
+            ),
+            delivery_window_end_local=(
+                validate_local_time_text(row[15], "delivery_window_end_local")
+                if row[15] is not None
+                else None
+            ),
+            event_start_local=(
+                validate_local_time_text(row[16], "event_start_local")
+                if row[16] is not None
+                else None
+            ),
+            legacy_time_window_text=normalize_legacy_time_window_text(
+                row[17], "legacy_time_window_text"
+            ),
+            time_review_acknowledged_at=(
+                datetime.fromisoformat(row[18]) if row[18] is not None else None
+            ),
+            time_review_acknowledged_by=validate_optional_acknowledged_by(
+                row[19], "time_review_acknowledged_by"
+            ),
+            intake_subject=row[20],
+            intake_message=row[21],
+            intake_summary=row[22],
+            intake_external_ref=row[23],
+            customer_id=row[24],
             customer_snapshot=snapshot,
             fulfillment_mode=validate_fulfillment_mode(
-                row[25] if len(row) > 25 and row[25] is not None else "UNKNOWN"
+                row[32] if len(row) > 32 and row[32] is not None else "UNKNOWN"
             ),
         )
 
     @staticmethod
     def _snapshot_from_row(row: tuple) -> InquiryCustomerSnapshot | None:
-        company_name = row[18]
-        contact_name = row[19]
-        email = row[20]
-        phone = row[21]
-        mode = row[22] if len(row) > 22 else None
-        invoice_json = row[23] if len(row) > 23 else None
-        delivery_json = row[24] if len(row) > 24 else None
+        company_name = row[25]
+        contact_name = row[26]
+        email = row[27]
+        phone = row[28]
+        mode = row[29] if len(row) > 29 else None
+        invoice_json = row[30] if len(row) > 30 else None
+        delivery_json = row[31] if len(row) > 31 else None
         if (
             company_name is None
             and contact_name is None
@@ -291,7 +376,11 @@ class SQLiteInquiryRepository:
                         time_window_text = ?, location_text = ?,
                         guest_count_estimate = ?, planning_mode = ?,
                         call_verification_required = ?, call_verification_status = ?,
-                        intake_subject = ?, intake_message = ?, intake_summary = ?,
+                        delivery_date_local = ?, delivery_window_start_local = ?,
+                        delivery_window_end_local = ?, event_start_local = ?,
+                        legacy_time_window_text = ?, time_review_acknowledged_at = ?,
+                        time_review_acknowledged_by = ?, intake_subject = ?,
+                        intake_message = ?, intake_summary = ?,
                         intake_external_ref = ?, customer_id = ?,
                         snapshot_company_name = ?, snapshot_contact_name = ?,
                         snapshot_email = ?, snapshot_phone = ?,
@@ -340,6 +429,15 @@ class SQLiteInquiryRepository:
                 inquiry.planning_mode,
                 1 if inquiry.call_verification_required else 0,
                 inquiry.call_verification_status,
+                inquiry.delivery_date_local,
+                inquiry.delivery_window_start_local,
+                inquiry.delivery_window_end_local,
+                inquiry.event_start_local,
+                inquiry.legacy_time_window_text,
+                inquiry.time_review_acknowledged_at.isoformat()
+                if inquiry.time_review_acknowledged_at is not None
+                else None,
+                inquiry.time_review_acknowledged_by,
                 inquiry.intake_subject,
                 inquiry.intake_message,
                 inquiry.intake_summary,
@@ -376,6 +474,15 @@ class SQLiteInquiryRepository:
             inquiry.planning_mode,
             1 if inquiry.call_verification_required else 0,
             inquiry.call_verification_status,
+            inquiry.delivery_date_local,
+            inquiry.delivery_window_start_local,
+            inquiry.delivery_window_end_local,
+            inquiry.event_start_local,
+            inquiry.legacy_time_window_text,
+            inquiry.time_review_acknowledged_at.isoformat()
+            if inquiry.time_review_acknowledged_at is not None
+            else None,
+            inquiry.time_review_acknowledged_by,
             inquiry.intake_subject,
             inquiry.intake_message,
             inquiry.intake_summary,
@@ -400,7 +507,8 @@ class SQLiteInquiryRepository:
         # ref-only lookup could match across unrelated channels. No index:
         # not needed at this table's expected V1 row count (§5/§8).
         row = self._conn.execute(
-            "SELECT * FROM inquiries WHERE inquiry_source = ? AND intake_external_ref = ? LIMIT 1",
+            f"SELECT {_SELECT_COLUMNS} FROM inquiries "
+            "WHERE inquiry_source = ? AND intake_external_ref = ? LIMIT 1",
             (inquiry_source, intake_external_ref),
         ).fetchone()
         if row is None:

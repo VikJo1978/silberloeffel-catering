@@ -187,6 +187,13 @@ class Inquiry:
     planning_mode: PlanningMode
     call_verification_required: bool
     call_verification_status: CallVerificationStatus
+    delivery_date_local: str | None = None
+    delivery_window_start_local: str | None = None
+    delivery_window_end_local: str | None = None
+    event_start_local: str | None = None
+    legacy_time_window_text: str | None = None
+    time_review_acknowledged_at: datetime | None = None
+    time_review_acknowledged_by: str | None = None
     # Intake context (INQUIRY_INTAKE_CONTEXT_FIELDS_PACK_V1): freeform,
     # channel-agnostic notes about how/why the inquiry arrived. Not operational
     # truth — never read by progression/READY_TO_SEND/kiosk/Wochenübersicht,

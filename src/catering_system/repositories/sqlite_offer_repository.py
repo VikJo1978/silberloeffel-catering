@@ -16,6 +16,12 @@ from pathlib import Path
 
 from catering_system.domain.catalog import AllergenCode, validate_allergen_codes
 from catering_system.domain.inquiry import validate_planning_mode
+from catering_system.domain.inquiry_timing import (
+    normalize_legacy_time_window_text,
+    validate_local_date_text,
+    validate_local_time_text,
+    validate_optional_acknowledged_by,
+)
 from catering_system.domain.offer import (
     ACCEPTANCE_CHANNELS,
     POSITION_KINDS,
@@ -323,6 +329,39 @@ def _migration_9_offer_version_charges_definition(
         )
 
 
+def _migration_10_offer_version_canonical_timing_fields(
+    connection: sqlite3.Connection,
+) -> None:
+    existing = {
+        row[1] for row in connection.execute("PRAGMA table_info(offer_versions)")
+    }
+    for name in (
+        "delivery_date_local",
+        "delivery_window_start_local",
+        "delivery_window_end_local",
+        "event_start_local",
+        "legacy_time_window_text",
+        "time_review_acknowledged_at",
+        "time_review_acknowledged_by",
+    ):
+        if name not in existing:
+            connection.execute(f"ALTER TABLE offer_versions ADD COLUMN {name} TEXT")
+    connection.execute("DROP TRIGGER IF EXISTS trg_offer_versions_immutable_update")
+    connection.execute(
+        """
+        UPDATE offer_versions
+           SET legacy_time_window_text = time_window_text
+         WHERE legacy_time_window_text IS NULL
+           AND trim(time_window_text) <> ''
+        """
+    )
+    connection.execute(
+        """CREATE TRIGGER IF NOT EXISTS trg_offer_versions_immutable_update
+        BEFORE UPDATE ON offer_versions
+        BEGIN SELECT RAISE(ABORT, 'offer_versions is immutable'); END"""
+    )
+
+
 _MIGRATIONS = (
     (1, "create_offer_tables", _migration_1_create_tables),
     (2, "unique_source_inquiry", _migration_2_unique_source_inquiry),
@@ -356,6 +395,11 @@ _MIGRATIONS = (
         9,
         "offer_version_charges_definition",
         _migration_9_offer_version_charges_definition,
+    ),
+    (
+        10,
+        "offer_version_canonical_timing_fields",
+        _migration_10_offer_version_canonical_timing_fields,
     ),
 )
 
@@ -768,8 +812,11 @@ class SQLiteOfferRepository:
                 location_text, guest_count, planning_mode, payment_method,
                 payment_customer_visible_text, customer_title,
                 customer_introduction, customer_notes, budget_definition_json,
-                charges_definition_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                charges_definition_json, delivery_date_local,
+                delivery_window_start_local, delivery_window_end_local,
+                event_start_local, legacy_time_window_text,
+                time_review_acknowledged_at, time_review_acknowledged_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 version.offer_version_id,
@@ -791,6 +838,15 @@ class SQLiteOfferRepository:
                 version.customer_notes,
                 _budget_definition_storage(version.budget_definition),
                 _charges_definition_storage(version.charges_definition),
+                version.delivery_date_local,
+                version.delivery_window_start_local,
+                version.delivery_window_end_local,
+                version.event_start_local,
+                version.legacy_time_window_text,
+                version.time_review_acknowledged_at.isoformat()
+                if version.time_review_acknowledged_at is not None
+                else None,
+                version.time_review_acknowledged_by,
             ),
         )
         for sort_order, variant in enumerate(version.variants):
@@ -924,7 +980,10 @@ class SQLiteOfferRepository:
                    location_text, guest_count, planning_mode, payment_method,
                    payment_customer_visible_text, customer_title,
                    customer_introduction, customer_notes, budget_definition_json,
-                   charges_definition_json
+                   charges_definition_json, delivery_date_local,
+                   delivery_window_start_local, delivery_window_end_local,
+                   event_start_local, legacy_time_window_text,
+                   time_review_acknowledged_at, time_review_acknowledged_by
             FROM offer_versions
             WHERE offer_id = ?
             ORDER BY version_number
@@ -973,6 +1032,35 @@ class SQLiteOfferRepository:
                     customer_notes=row[15],
                     budget_definition=_stored_budget_definition(row[16]),
                     charges_definition=_stored_charges_definition(row[17]),
+                    delivery_date_local=(
+                        validate_local_date_text(row[18], "delivery_date_local")
+                        if row[18] is not None
+                        else None
+                    ),
+                    delivery_window_start_local=(
+                        validate_local_time_text(row[19], "delivery_window_start_local")
+                        if row[19] is not None
+                        else None
+                    ),
+                    delivery_window_end_local=(
+                        validate_local_time_text(row[20], "delivery_window_end_local")
+                        if row[20] is not None
+                        else None
+                    ),
+                    event_start_local=(
+                        validate_local_time_text(row[21], "event_start_local")
+                        if row[21] is not None
+                        else None
+                    ),
+                    legacy_time_window_text=normalize_legacy_time_window_text(
+                        row[22], "legacy_time_window_text"
+                    ),
+                    time_review_acknowledged_at=(
+                        _dt(row[23]) if row[23] is not None else None
+                    ),
+                    time_review_acknowledged_by=validate_optional_acknowledged_by(
+                        row[24], "time_review_acknowledged_by"
+                    ),
                 )
             )
         return tuple(versions)

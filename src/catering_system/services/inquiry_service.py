@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import date, datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 from catering_system.domain.inquiry import (
     apply_inquiry_customer_reference,
@@ -40,6 +40,13 @@ from catering_system.domain.inquiry_customer_snapshot import (
     set_inquiry_customer_addresses,
     snapshot_from_structured_contact,
 )
+from catering_system.domain.inquiry_timing import (
+    normalize_legacy_time_window_text,
+    timing_fields_changed,
+    validate_local_date_text,
+    validate_local_time_text,
+    validate_optional_acknowledged_by,
+)
 from catering_system.domain.customer_document_projection import CustomerAddress
 from catering_system.repositories.inquiry_repository import InquiryRepository
 
@@ -58,6 +65,7 @@ _ALLOWED_SOURCES: frozenset[str] = frozenset(
 )
 
 _UNSET = object()
+_LEGACY_TIME_WINDOW_MAX_LEN = 500
 
 # Public customer-facing channels must arrive contact-complete
 # (INQUIRY_CONTACT_COMPLETENESS_V1 §5). Enforced here in the canonical
@@ -101,6 +109,54 @@ def _normalize_intake_update(
     return _normalize_intake(value)
 
 
+def _normalize_optional_local_date(
+    value: str | None | object, field: str
+) -> str | None:
+    if value is _UNSET:
+        return _UNSET  # type: ignore[return-value]
+    if value is None:
+        return None
+    return validate_local_date_text(value, field)
+
+
+def _normalize_optional_local_time(
+    value: str | None | object, field: str
+) -> str | None:
+    if value is _UNSET:
+        return _UNSET  # type: ignore[return-value]
+    if value is None:
+        return None
+    return validate_local_time_text(value, field)
+
+
+def _mirror_legacy_time_window_text(
+    *,
+    time_window_text: str,
+    delivery_date_local: str | None,
+    delivery_window_start_local: str | None,
+    delivery_window_end_local: str | None,
+    event_start_local: str | None,
+    legacy_time_window_text: str | None,
+) -> str | None:
+    mirrored_time_window_text = time_window_text.strip()
+    if len(mirrored_time_window_text) > _LEGACY_TIME_WINDOW_MAX_LEN:
+        mirrored_time_window_text = mirrored_time_window_text[
+            :_LEGACY_TIME_WINDOW_MAX_LEN
+        ]
+    if (
+        delivery_date_local is None
+        and delivery_window_start_local is None
+        and delivery_window_end_local is None
+        and event_start_local is None
+    ):
+        return normalize_legacy_time_window_text(
+            mirrored_time_window_text, "legacy_time_window_text"
+        )
+    if legacy_time_window_text is not None:
+        return legacy_time_window_text
+    return None
+
+
 class InquiryService:
     def __init__(
         self,
@@ -128,6 +184,13 @@ class InquiryService:
         planning_mode: str,
         call_verification_required: bool,
         call_verification_status: str,
+        delivery_date_local: str | None = None,
+        delivery_window_start_local: str | None = None,
+        delivery_window_end_local: str | None = None,
+        event_start_local: str | None = None,
+        legacy_time_window_text: str | None = None,
+        time_review_acknowledged_at: datetime | None = None,
+        time_review_acknowledged_by: str | None = None,
         intake_subject: str | None = None,
         intake_message: str | None = None,
         intake_summary: str | None = None,
@@ -147,6 +210,49 @@ class InquiryService:
             linkage = validate_customer_linkage(customer_linkage)
             pm = validate_planning_mode(planning_mode)
             cvs = validate_call_verification_status(call_verification_status)
+            delivery_date_local_value = (
+                validate_local_date_text(delivery_date_local, "delivery_date_local")
+                if delivery_date_local is not None
+                else None
+            )
+            delivery_window_start_local_value = (
+                validate_local_time_text(
+                    delivery_window_start_local, "delivery_window_start_local"
+                )
+                if delivery_window_start_local is not None
+                else None
+            )
+            delivery_window_end_local_value = (
+                validate_local_time_text(
+                    delivery_window_end_local, "delivery_window_end_local"
+                )
+                if delivery_window_end_local is not None
+                else None
+            )
+            event_start_local_value = (
+                validate_local_time_text(event_start_local, "event_start_local")
+                if event_start_local is not None
+                else None
+            )
+            legacy_time_window_text_value = _mirror_legacy_time_window_text(
+                time_window_text=time_window_text,
+                delivery_date_local=delivery_date_local_value,
+                delivery_window_start_local=delivery_window_start_local_value,
+                delivery_window_end_local=delivery_window_end_local_value,
+                event_start_local=event_start_local_value,
+                legacy_time_window_text=normalize_legacy_time_window_text(
+                    legacy_time_window_text, "legacy_time_window_text"
+                ),
+            )
+            time_review_acknowledged_by_value = validate_optional_acknowledged_by(
+                time_review_acknowledged_by, "time_review_acknowledged_by"
+            )
+            if (time_review_acknowledged_at is None) != (
+                time_review_acknowledged_by_value is None
+            ):
+                raise ValueError(
+                    "time review acknowledgement requires both timestamp and actor"
+                )
             # FULFILLMENT_SOURCE_V1: structured, optional, never inferred —
             # every channel that omits it gets UNKNOWN (the default above).
             fm = validate_fulfillment_mode(fulfillment_mode)
@@ -183,6 +289,13 @@ class InquiryService:
             planning_mode=pm,
             call_verification_required=call_verification_required,
             call_verification_status=cvs,
+            delivery_date_local=delivery_date_local_value,
+            delivery_window_start_local=delivery_window_start_local_value,
+            delivery_window_end_local=delivery_window_end_local_value,
+            event_start_local=event_start_local_value,
+            legacy_time_window_text=legacy_time_window_text_value,
+            time_review_acknowledged_at=time_review_acknowledged_at,
+            time_review_acknowledged_by=time_review_acknowledged_by_value,
             intake_subject=intake_subject_norm,
             intake_message=intake_message_norm,
             intake_summary=_normalize_intake(intake_summary),
@@ -210,6 +323,13 @@ class InquiryService:
         planning_mode: str | object = _UNSET,
         call_verification_required: bool | object = _UNSET,
         call_verification_status: str | object = _UNSET,
+        delivery_date_local: str | None | object = _UNSET,
+        delivery_window_start_local: str | None | object = _UNSET,
+        delivery_window_end_local: str | None | object = _UNSET,
+        event_start_local: str | None | object = _UNSET,
+        legacy_time_window_text: str | None | object = _UNSET,
+        time_review_acknowledged_at: datetime | None | object = _UNSET,
+        time_review_acknowledged_by: str | None | object = _UNSET,
         intake_subject: str | None | object = _UNSET,
         intake_message: str | None | object = _UNSET,
         intake_summary: str | None | object = _UNSET,
@@ -245,9 +365,89 @@ class InquiryService:
                 next_cvs = validate_call_verification_status(
                     call_verification_status  # type: ignore[arg-type]
                 )
+            next_time_window_text = (
+                time_window_text
+                if time_window_text is not _UNSET
+                else current.time_window_text
+            )
+            next_delivery_date_local = _normalize_optional_local_date(
+                delivery_date_local, "delivery_date_local"
+            )
+            if next_delivery_date_local is _UNSET:
+                next_delivery_date_local = current.delivery_date_local
+            next_delivery_window_start_local = _normalize_optional_local_time(
+                delivery_window_start_local, "delivery_window_start_local"
+            )
+            if next_delivery_window_start_local is _UNSET:
+                next_delivery_window_start_local = current.delivery_window_start_local
+            next_delivery_window_end_local = _normalize_optional_local_time(
+                delivery_window_end_local, "delivery_window_end_local"
+            )
+            if next_delivery_window_end_local is _UNSET:
+                next_delivery_window_end_local = current.delivery_window_end_local
+            next_event_start_local = _normalize_optional_local_time(
+                event_start_local, "event_start_local"
+            )
+            if next_event_start_local is _UNSET:
+                next_event_start_local = current.event_start_local
+            next_legacy_time_window_text_raw = (
+                normalize_legacy_time_window_text(
+                    legacy_time_window_text, "legacy_time_window_text"
+                )
+                if legacy_time_window_text is not _UNSET
+                else current.legacy_time_window_text
+            )
+            next_legacy_time_window_text = _mirror_legacy_time_window_text(
+                time_window_text=next_time_window_text,  # type: ignore[arg-type]
+                delivery_date_local=next_delivery_date_local,
+                delivery_window_start_local=next_delivery_window_start_local,
+                delivery_window_end_local=next_delivery_window_end_local,
+                event_start_local=next_event_start_local,
+                legacy_time_window_text=next_legacy_time_window_text_raw,
+            )
+            next_time_review_acknowledged_by = (
+                validate_optional_acknowledged_by(
+                    time_review_acknowledged_by, "time_review_acknowledged_by"
+                )
+                if time_review_acknowledged_by is not _UNSET
+                else current.time_review_acknowledged_by
+            )
+            next_time_review_acknowledged_at = (
+                time_review_acknowledged_at
+                if time_review_acknowledged_at is not _UNSET
+                else current.time_review_acknowledged_at
+            )
+            if next_time_review_acknowledged_at is _UNSET:
+                raise AssertionError("time review acknowledgement timestamp unresolved")
+            next_time_review_acknowledged_at = cast(
+                datetime | None, next_time_review_acknowledged_at
+            )
+            if (next_time_review_acknowledged_at is None) != (
+                next_time_review_acknowledged_by is None
+            ):
+                raise ValueError(
+                    "time review acknowledgement requires both timestamp and actor"
+                )
         except (ValueError, TypeError):
             _log.warning("update_inquiry validation failed inquiry_id=%s", inquiry_id)
             raise
+
+        if timing_fields_changed(
+            time_window_text_before=current.time_window_text,
+            time_window_text_after=next_time_window_text,  # type: ignore[arg-type]
+            delivery_date_local_before=current.delivery_date_local,
+            delivery_date_local_after=next_delivery_date_local,
+            delivery_window_start_local_before=current.delivery_window_start_local,
+            delivery_window_start_local_after=next_delivery_window_start_local,
+            delivery_window_end_local_before=current.delivery_window_end_local,
+            delivery_window_end_local_after=next_delivery_window_end_local,
+            event_start_local_before=current.event_start_local,
+            event_start_local_after=next_event_start_local,
+            legacy_time_window_text_before=current.legacy_time_window_text,
+            legacy_time_window_text_after=next_legacy_time_window_text,
+        ):
+            next_time_review_acknowledged_at = None
+            next_time_review_acknowledged_by = None
 
         updated = replace(
             current,
@@ -256,9 +456,7 @@ class InquiryService:
             inquiry_source=next_source,
             crm_stage=next_crm,
             customer_linkage=next_linkage,
-            time_window_text=time_window_text
-            if time_window_text is not _UNSET
-            else current.time_window_text,  # type: ignore[arg-type]
+            time_window_text=next_time_window_text,  # type: ignore[arg-type]
             location_text=location_text
             if location_text is not _UNSET
             else current.location_text,  # type: ignore[arg-type]
@@ -270,6 +468,13 @@ class InquiryService:
             if call_verification_required is not _UNSET
             else current.call_verification_required,  # type: ignore[arg-type]
             call_verification_status=next_cvs,
+            delivery_date_local=next_delivery_date_local,
+            delivery_window_start_local=next_delivery_window_start_local,
+            delivery_window_end_local=next_delivery_window_end_local,
+            event_start_local=next_event_start_local,
+            legacy_time_window_text=next_legacy_time_window_text,
+            time_review_acknowledged_at=next_time_review_acknowledged_at,
+            time_review_acknowledged_by=next_time_review_acknowledged_by,
             intake_subject=_normalize_intake_update(
                 intake_subject, current.intake_subject
             ),

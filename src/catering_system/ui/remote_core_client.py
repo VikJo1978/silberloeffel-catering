@@ -51,6 +51,11 @@ from catering_system.domain.inquiry import (
 from catering_system.domain.inquiry_offer_preparation import (
     InquiryOfferPreparationBlocker,
 )
+from catering_system.domain.inquiry_timing import (
+    validate_local_date_text,
+    validate_local_time_text,
+    validate_optional_acknowledged_by,
+)
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.inquiry_contact_completeness import (
     complete_inquiry_contact_information,
@@ -94,6 +99,7 @@ from catering_system.services.order_print_projection_service import (
     PrintEventBlock,
     PrintFlagsBlock,
     PrintPositionLine,
+    PrintWatermark,
 )
 from catering_system.services.buffet_cards_service import BuffetCard, BuffetCardsView
 
@@ -111,6 +117,13 @@ _INQUIRY_SUMMARY_KEYS = frozenset(
         "inquiry_source",
         "crm_stage",
         "time_window_text",
+        "delivery_date_local",
+        "delivery_window_start_local",
+        "delivery_window_end_local",
+        "event_start_local",
+        "legacy_time_window_text",
+        "time_review_acknowledged_at",
+        "time_review_acknowledged_by",
         "location_text",
         "guest_count_estimate",
         "planning_mode",
@@ -698,6 +711,37 @@ def _inquiry(
         crm_stage=crm_stage,
         customer_linkage=linkage,
         time_window_text=_str(data.get("time_window_text")),
+        delivery_date_local=(
+            validate_local_date_text(data["delivery_date_local"], "delivery_date_local")
+            if data.get("delivery_date_local") is not None
+            else None
+        ),
+        delivery_window_start_local=(
+            validate_local_time_text(
+                data["delivery_window_start_local"], "delivery_window_start_local"
+            )
+            if data.get("delivery_window_start_local") is not None
+            else None
+        ),
+        delivery_window_end_local=(
+            validate_local_time_text(
+                data["delivery_window_end_local"], "delivery_window_end_local"
+            )
+            if data.get("delivery_window_end_local") is not None
+            else None
+        ),
+        event_start_local=(
+            validate_local_time_text(data["event_start_local"], "event_start_local")
+            if data.get("event_start_local") is not None
+            else None
+        ),
+        legacy_time_window_text=_optional_str(data.get("legacy_time_window_text")),
+        time_review_acknowledged_at=_optional_datetime(
+            data.get("time_review_acknowledged_at")
+        ),
+        time_review_acknowledged_by=validate_optional_acknowledged_by(
+            data.get("time_review_acknowledged_by"), "time_review_acknowledged_by"
+        ),
         location_text=_str(data.get("location_text")),
         guest_count_estimate=_guest_count(data.get("guest_count_estimate")),
         planning_mode=planning_mode,
@@ -857,6 +901,16 @@ def _print_projection(data: Mapping[str, object]) -> OrderPrintProjection:
         "ÄNDERUNG – NOCH NICHT WIRKSAM",
     }:
         _bad_response()
+    if watermark is None:
+        typed_watermark: PrintWatermark | None = None
+    elif watermark == "ENTWURF":
+        typed_watermark = "ENTWURF"
+    elif watermark == "VERALTET":
+        typed_watermark = "VERALTET"
+    elif watermark == "ÄNDERUNG – NOCH NICHT WIRKSAM":
+        typed_watermark = "ÄNDERUNG – NOCH NICHT WIRKSAM"
+    else:
+        _bad_response()
     try:
         planning_mode = validate_planning_mode(_str(event_data["planning_mode"]))
     except ValueError:
@@ -900,7 +954,7 @@ def _print_projection(data: Mapping[str, object]) -> OrderPrintProjection:
             is_preview=_bool(flags_data["is_preview"]),
             is_final_allowed=_bool(flags_data["is_final_allowed"]),
             is_stale=_bool(flags_data["is_stale"]),
-            watermark=watermark,  # type: ignore[arg-type]
+            watermark=typed_watermark,
         ),
     )
 
@@ -1809,6 +1863,13 @@ class RemoteCoreClient:
                     "event_date",
                     "valid_until",
                     "time_window_text",
+                    "delivery_date_local",
+                    "delivery_window_start_local",
+                    "delivery_window_end_local",
+                    "event_start_local",
+                    "legacy_time_window_text",
+                    "time_review_acknowledged_at",
+                    "time_review_acknowledged_by",
                     "location_text",
                     "guest_count",
                     "planning_mode",
@@ -1826,6 +1887,31 @@ class RemoteCoreClient:
             _date(version["event_date"])
             _date(version["valid_until"])
             _str(version["time_window_text"])
+            if version["delivery_date_local"] is not None:
+                validate_local_date_text(
+                    version["delivery_date_local"], "delivery_date_local"
+                )
+            if version["delivery_window_start_local"] is not None:
+                validate_local_time_text(
+                    version["delivery_window_start_local"],
+                    "delivery_window_start_local",
+                )
+            if version["delivery_window_end_local"] is not None:
+                validate_local_time_text(
+                    version["delivery_window_end_local"],
+                    "delivery_window_end_local",
+                )
+            if version["event_start_local"] is not None:
+                validate_local_time_text(
+                    version["event_start_local"], "event_start_local"
+                )
+            _optional_str(version["legacy_time_window_text"])
+            if version["time_review_acknowledged_at"] is not None:
+                _datetime(version["time_review_acknowledged_at"])
+            validate_optional_acknowledged_by(
+                version["time_review_acknowledged_by"],
+                "time_review_acknowledged_by",
+            )
             _str(version["location_text"])
             if version["guest_count"] is not None:
                 _nonnegative_int(version["guest_count"])

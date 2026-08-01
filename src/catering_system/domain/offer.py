@@ -11,6 +11,12 @@ from zoneinfo import ZoneInfo
 
 from catering_system.domain.catalog import AllergenCode, validate_allergen_codes
 from catering_system.domain.inquiry import PlanningMode, validate_planning_mode
+from catering_system.domain.inquiry_timing import (
+    normalize_legacy_time_window_text,
+    validate_local_date_text,
+    validate_local_time_text,
+    validate_optional_acknowledged_by,
+)
 from catering_system.domain.offer_budget_definition import OfferBudgetDefinition
 from catering_system.domain.offer_charges import OfferChargesDefinition
 from catering_system.domain.order_payment_reminder import (
@@ -221,6 +227,13 @@ class OfferVersion:
     payment_method: PaymentMethod
     payment_customer_visible_text: str
     variants: tuple[OfferVariant, ...]
+    delivery_date_local: str | None = None
+    delivery_window_start_local: str | None = None
+    delivery_window_end_local: str | None = None
+    event_start_local: str | None = None
+    legacy_time_window_text: str | None = None
+    time_review_acknowledged_at: datetime | None = None
+    time_review_acknowledged_by: str | None = None
     # OFFER_DOCUMENT_SNAPSHOT_V1: customer-facing narrative frozen from the
     # source OfferSnapshot's customer_text. Blank/whitespace-only input is
     # normalized to None before construction (never stored as "").
@@ -257,6 +270,30 @@ class OfferVersion:
         _require_bounded_text(
             self.location_text, "location_text", max_len=_MAX_EVENT_TEXT_LEN
         )
+        if self.delivery_date_local is not None:
+            validate_local_date_text(self.delivery_date_local, "delivery_date_local")
+        if self.delivery_window_start_local is not None:
+            validate_local_time_text(
+                self.delivery_window_start_local, "delivery_window_start_local"
+            )
+        if self.delivery_window_end_local is not None:
+            validate_local_time_text(
+                self.delivery_window_end_local, "delivery_window_end_local"
+            )
+        if self.event_start_local is not None:
+            validate_local_time_text(self.event_start_local, "event_start_local")
+        legacy_time_window_text = normalize_legacy_time_window_text(
+            self.legacy_time_window_text, "legacy_time_window_text"
+        )
+        object.__setattr__(self, "legacy_time_window_text", legacy_time_window_text)
+        acknowledged_by = validate_optional_acknowledged_by(
+            self.time_review_acknowledged_by, "time_review_acknowledged_by"
+        )
+        object.__setattr__(self, "time_review_acknowledged_by", acknowledged_by)
+        if (self.time_review_acknowledged_at is None) != (acknowledged_by is None):
+            raise ValueError(
+                "time review acknowledgement requires both timestamp and actor"
+            )
         if self.guest_count is not None and self.guest_count < 1:
             raise ValueError("guest_count must be a positive integer")
         validate_planning_mode(self.planning_mode)

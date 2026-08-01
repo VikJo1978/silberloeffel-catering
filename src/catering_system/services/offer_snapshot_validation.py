@@ -56,6 +56,12 @@ from catering_system.domain.offer_snapshot import (
     _VAT_RATES,
     compute_snapshot_hash,
 )
+from catering_system.domain.inquiry_timing import (
+    normalize_legacy_time_window_text,
+    validate_local_date_text,
+    validate_local_time_text,
+    validate_optional_acknowledged_by,
+)
 from catering_system.domain.order_payment_reminder import validate_payment_method
 
 _ENVELOPE_KEYS = frozenset(
@@ -95,6 +101,13 @@ _EVENT_KEYS = frozenset(
         "location_text",
         "guest_count",
         "planning_mode",
+        "delivery_date_local",
+        "delivery_window_start_local",
+        "delivery_window_end_local",
+        "event_start_local",
+        "legacy_time_window_text",
+        "time_review_acknowledged_at",
+        "time_review_acknowledged_by",
     }
 )
 _CUSTOMER_TEXT_KEYS = frozenset({"title", "introduction", "notes"})
@@ -432,6 +445,50 @@ def _parse_event(payload: dict[str, object]) -> OfferSnapshotEvent:
         guest_count=guest_count,
         planning_mode=validate_planning_mode(
             _require_exact_str(payload.get("planning_mode"), "planning_mode")
+        ),
+        delivery_date_local=(
+            validate_local_date_text(
+                payload.get("delivery_date_local"), "delivery_date_local"
+            )
+            if payload.get("delivery_date_local") is not None
+            else None
+        ),
+        delivery_window_start_local=(
+            validate_local_time_text(
+                payload.get("delivery_window_start_local"),
+                "delivery_window_start_local",
+            )
+            if payload.get("delivery_window_start_local") is not None
+            else None
+        ),
+        delivery_window_end_local=(
+            validate_local_time_text(
+                payload.get("delivery_window_end_local"), "delivery_window_end_local"
+            )
+            if payload.get("delivery_window_end_local") is not None
+            else None
+        ),
+        event_start_local=(
+            validate_local_time_text(
+                payload.get("event_start_local"), "event_start_local"
+            )
+            if payload.get("event_start_local") is not None
+            else None
+        ),
+        legacy_time_window_text=normalize_legacy_time_window_text(
+            payload.get("legacy_time_window_text"), "legacy_time_window_text"
+        ),
+        time_review_acknowledged_at=(
+            _require_utc_datetime(
+                payload.get("time_review_acknowledged_at"),
+                "time_review_acknowledged_at",
+            )
+            if payload.get("time_review_acknowledged_at") is not None
+            else None
+        ),
+        time_review_acknowledged_by=validate_optional_acknowledged_by(
+            payload.get("time_review_acknowledged_by"),
+            "time_review_acknowledged_by",
         ),
     )
 

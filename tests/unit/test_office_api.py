@@ -70,6 +70,10 @@ def _seed(db_path: Path) -> dict[str, str]:
             crm_stage="Neue Anfrage",
             customer_linkage={},
             time_window_text="mittags",
+            delivery_date_local="2026-10-01",
+            delivery_window_start_local="11:30",
+            delivery_window_end_local="12:00",
+            event_start_local="12:45",
             location_text="Hamburg",
             guest_count_estimate=25,
             planning_mode="caterer_suggestion",
@@ -512,12 +516,21 @@ def test_offer_detail_schema_prepared(api) -> None:
         "event_date",
         "valid_until",
         "time_window_text",
+        "delivery_date_local",
+        "delivery_window_start_local",
+        "delivery_window_end_local",
+        "event_start_local",
+        "legacy_time_window_text",
+        "time_review_acknowledged_at",
+        "time_review_acknowledged_by",
         "location_text",
         "guest_count",
         "planning_mode",
         "variants",
     }
     assert version["sent_at"] is None
+    assert version["delivery_date_local"] == "2026-08-20"
+    assert version["delivery_window_end_local"] == "18:00"
     assert version["variants"][0]["name"] == "Variante A"
     assert "positions" in version["variants"][0]
     position = version["variants"][0]["positions"][0]
@@ -1943,6 +1956,10 @@ def _valid_offer_snapshot(*, inquiry_id: str) -> dict[str, object]:
         "event": {
             "event_date": "2026-08-20",
             "time_window_text": "18:00–22:00",
+            "delivery_date_local": "2026-08-20",
+            "delivery_window_start_local": "17:30",
+            "delivery_window_end_local": "18:00",
+            "event_start_local": "18:45",
             "location_text": "Hamburg",
             "guest_count": 80,
             "planning_mode": "caterer_suggestion",
@@ -2026,6 +2043,10 @@ def _valid_offer_snapshot_v2(
         "event": {
             "event_date": "2026-08-20",
             "time_window_text": "18:00–22:00",
+            "delivery_date_local": "2026-08-20",
+            "delivery_window_start_local": "17:30",
+            "delivery_window_end_local": "18:00",
+            "event_start_local": "18:45",
             "location_text": "Hamburg",
             "guest_count": 80,
             "planning_mode": "caterer_suggestion",

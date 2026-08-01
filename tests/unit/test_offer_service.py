@@ -141,6 +141,10 @@ def _valid_snapshot(*, inquiry_id: str = _INQUIRY_ID) -> dict[str, object]:
             "location_text": "Hamburg",
             "guest_count": 80,
             "planning_mode": "caterer_suggestion",
+            "delivery_date_local": "2026-08-20",
+            "delivery_window_start_local": "17:30",
+            "delivery_window_end_local": "18:00",
+            "event_start_local": "18:45",
         },
         "customer_text": {
             "title": "Sommerfest",
@@ -262,6 +266,10 @@ def _sample_inquiry(*, inquiry_id: str = _INQUIRY_ID) -> Inquiry:
         planning_mode=PLANNING_MODES[0],
         call_verification_required=False,
         call_verification_status=CALL_VERIFICATION_STATUSES[0],
+        delivery_date_local="2026-08-20",
+        delivery_window_start_local="17:30",
+        delivery_window_end_local="18:00",
+        event_start_local="18:45",
         customer_snapshot=_CONTACT_COMPLETE_SNAPSHOT,
     )
 

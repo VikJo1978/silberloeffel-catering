@@ -127,6 +127,7 @@ from catering_system.services.offer_pdf_renderer import (
 )
 from catering_system.services.offer_service import (
     OfferPreparationBlockedError,
+    OfferTimingReviewRequiredError,
     OfferService,
 )
 from catering_system.services.operational_core_service import OperationalCoreService
@@ -1089,6 +1090,25 @@ class OfficeApi:
     ) -> tuple[int, dict[str, object]]:
         required = _v_bool(args["call_verification_required"])
         try:
+            delivery_date_local = _v_optional_str(args.get("delivery_date_local"), 10)
+            delivery_window_start_local = _v_optional_str(
+                args.get("delivery_window_start_local"), 5
+            )
+            delivery_window_end_local = _v_optional_str(
+                args.get("delivery_window_end_local"), 5
+            )
+            event_start_local = _v_optional_str(args.get("event_start_local"), 5)
+            legacy_time_window_text = _v_optional_str(
+                args.get("legacy_time_window_text"), 500
+            )
+            time_review_acknowledged_at = (
+                _v_datetime(args["time_review_acknowledged_at"])
+                if args.get("time_review_acknowledged_at") is not None
+                else None
+            )
+            time_review_acknowledged_by = _v_optional_str(
+                args.get("time_review_acknowledged_by"), 200
+            )
             inquiry = self.inquiry_service.create_inquiry(
                 event_date=_v_date(args["event_date"]),
                 inquiry_source=_v_enum(args["inquiry_source"], validate_inquiry_source),
@@ -1108,6 +1128,13 @@ class OfficeApi:
                 contact_phone=_v_optional_str(args.get("contact_phone"), 100),
                 contact_name=_v_optional_str(args.get("contact_name"), 200),
                 company_name=_v_optional_str(args.get("company_name"), 200),
+                delivery_date_local=delivery_date_local,
+                delivery_window_start_local=delivery_window_start_local,
+                delivery_window_end_local=delivery_window_end_local,
+                event_start_local=event_start_local,
+                legacy_time_window_text=legacy_time_window_text,
+                time_review_acknowledged_at=time_review_acknowledged_at,
+                time_review_acknowledged_by=time_review_acknowledged_by,
             )
         except DuplicateExternalReferenceError as exc:
             raise ApiError(409, "external_ref_conflict") from exc
@@ -1218,6 +1245,23 @@ class OfficeApi:
         ):
             raise ApiError(422, "active_order_crm_stage_conflict")
         try:
+            timing_kwargs: dict[str, object] = {}
+            for key, max_len in (
+                ("delivery_date_local", 10),
+                ("delivery_window_start_local", 5),
+                ("delivery_window_end_local", 5),
+                ("event_start_local", 5),
+                ("legacy_time_window_text", 500),
+                ("time_review_acknowledged_by", 200),
+            ):
+                if key in args:
+                    timing_kwargs[key] = _v_optional_str(args.get(key), max_len)
+            if "time_review_acknowledged_at" in args:
+                timing_kwargs["time_review_acknowledged_at"] = (
+                    _v_datetime(args["time_review_acknowledged_at"])
+                    if args.get("time_review_acknowledged_at") is not None
+                    else None
+                )
             updated = self.inquiry_service.update_inquiry(
                 current.inquiry_id,
                 event_date=_v_date(args["event_date"]),
@@ -1238,6 +1282,7 @@ class OfficeApi:
                 intake_external_ref=_v_intake(
                     args, "intake_external_ref", 200, current.intake_external_ref
                 ),
+                **timing_kwargs,
             )
         except DuplicateExternalReferenceError as exc:
             raise ApiError(409, "external_ref_conflict") from exc
@@ -1307,6 +1352,12 @@ class OfficeApi:
                     offer_id=existing.offer_id,
                 ) from exc
             raise ApiError(422, "offer_preparation_blocked") from exc
+        except OfferTimingReviewRequiredError as exc:
+            raise ApiError(
+                422,
+                "offer_timing_review_required",
+                reasons=exc.findings,
+            ) from exc
         except ValueError as exc:
             message = str(exc)
             if "snapshot inquiry_id mismatch" in message:
@@ -1412,6 +1463,12 @@ class OfficeApi:
                 snapshot,
                 expected_latest_version_number=_v_int(expect["latest_version_number"]),
             )
+        except OfferTimingReviewRequiredError as exc:
+            raise ApiError(
+                422,
+                "offer_timing_review_required",
+                reasons=exc.findings,
+            ) from exc
         except KeyError as exc:
             raise ApiError(404, "not_found") from exc
         except ValueError as exc:
@@ -2144,6 +2201,17 @@ _INTAKE_OPTIONAL = frozenset(
 _STRUCTURED_CONTACT_OPTIONAL = frozenset(
     {"contact_email", "contact_phone", "contact_name", "company_name"}
 )
+_TIMING_OPTIONAL = frozenset(
+    {
+        "delivery_date_local",
+        "delivery_window_start_local",
+        "delivery_window_end_local",
+        "event_start_local",
+        "legacy_time_window_text",
+        "time_review_acknowledged_at",
+        "time_review_acknowledged_by",
+    }
+)
 _CREATE_ARGS = _ArgKeys(
     required=frozenset(
         {
@@ -2156,7 +2224,7 @@ _CREATE_ARGS = _ArgKeys(
             "call_verification_required",
         }
     ),
-    optional=_INTAKE_OPTIONAL | _STRUCTURED_CONTACT_OPTIONAL,
+    optional=_INTAKE_OPTIONAL | _STRUCTURED_CONTACT_OPTIONAL | _TIMING_OPTIONAL,
 )
 _CONTACT_COMPLETION_ARGS = _ArgKeys(
     required=frozenset(),
@@ -2185,7 +2253,7 @@ _UPDATE_ARGS = _ArgKeys(
             "planning_mode",
         }
     ),
-    optional=_INTAKE_OPTIONAL,
+    optional=_INTAKE_OPTIONAL | _TIMING_OPTIONAL,
 )
 _VERSION_ARGS = _ArgKeys(
     required=frozenset(

@@ -61,6 +61,13 @@ class OfferSnapshotEvent:
     location_text: str
     guest_count: int | None
     planning_mode: PlanningMode
+    delivery_date_local: str | None = None
+    delivery_window_start_local: str | None = None
+    delivery_window_end_local: str | None = None
+    event_start_local: str | None = None
+    legacy_time_window_text: str | None = None
+    time_review_acknowledged_at: datetime | None = None
+    time_review_acknowledged_by: str | None = None
 
 
 @dataclass(frozen=True)

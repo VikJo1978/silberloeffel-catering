@@ -13,6 +13,11 @@ from catering_system.domain.inquiry import inquiry_allows_order_conversion
 from catering_system.domain.inquiry_contact_completeness import (
     inquiry_contact_complete,
 )
+from catering_system.domain.inquiry_timing import (
+    TimingEvaluation,
+    evaluate_timing,
+    timing_acknowledgement_is_valid,
+)
 from catering_system.domain.inquiry_offer_preparation import (
     InquiryOfferPreparationBlocker,
     REASON_ACTIVE_ORDER_EXISTS,
@@ -90,6 +95,25 @@ class OfferPreparationBlockedError(ValueError):
         super().__init__(f"{message} (inquiry_id={inquiry_id!r})")
 
 
+class OfferTimingReviewRequiredError(ValueError):
+    def __init__(
+        self,
+        *,
+        inquiry_id: str,
+        findings: tuple[str, ...],
+        invalid_window: bool,
+    ) -> None:
+        self.inquiry_id = inquiry_id
+        self.findings = findings
+        self.invalid_window = invalid_window
+        message = (
+            "delivery window invalid"
+            if invalid_window
+            else "time review acknowledgement required"
+        )
+        super().__init__(f"{message} (inquiry_id={inquiry_id!r})")
+
+
 class OfferService:
     """Core-owned Offer lifecycle: preparation and commercial evidence recording."""
 
@@ -148,7 +172,9 @@ class OfferService:
                 eligibility.reasons,
             )
 
-        offer = _build_offer_from_snapshot(validated)
+        resolved_event = _resolved_event_timing(validated, inquiry)
+        _require_offer_timing_ready(inquiry_id, resolved_event)
+        offer = _build_offer_from_snapshot(validated, resolved_event=resolved_event)
         self._offer_repository.save(offer)
         _log.info(
             "prepare_offer_version inquiry_id=%s offer_id=%s version=%s snapshot_id=%s",
@@ -212,8 +238,13 @@ class OfferService:
                 f"{derive_offer_state(offer, max(offer.versions, key=lambda v: v.version_number).offer_version_id, today=self._today())!r})"
             )
 
+        resolved_event = _resolved_event_timing(validated, inquiry)
+        _require_offer_timing_ready(inquiry.inquiry_id, resolved_event)
         next_version = _build_next_version_from_snapshot(
-            offer, validated, version_number=latest + 1
+            offer,
+            validated,
+            version_number=latest + 1,
+            resolved_event=resolved_event,
         )
         updated = self._offer_repository.append_offer_version(offer_id, next_version)
         _log.info(
@@ -641,10 +672,17 @@ class OfferService:
         )
 
 
-def _build_offer_from_snapshot(snapshot: OfferSnapshotV1 | OfferSnapshotV2) -> Offer:
+def _build_offer_from_snapshot(
+    snapshot: OfferSnapshotV1 | OfferSnapshotV2,
+    *,
+    resolved_event: ResolvedSnapshotEvent,
+) -> Offer:
     offer_id = str(uuid.uuid4())
     version = _build_version_from_snapshot(
-        snapshot, offer_id=offer_id, version_number=1
+        snapshot,
+        offer_id=offer_id,
+        version_number=1,
+        resolved_event=resolved_event,
     )
     return Offer(
         offer_id=offer_id,
@@ -659,9 +697,13 @@ def _build_next_version_from_snapshot(
     snapshot: OfferSnapshotV1 | OfferSnapshotV2,
     *,
     version_number: int,
+    resolved_event: ResolvedSnapshotEvent,
 ) -> OfferVersion:
     return _build_version_from_snapshot(
-        snapshot, offer_id=offer.offer_id, version_number=version_number
+        snapshot,
+        offer_id=offer.offer_id,
+        version_number=version_number,
+        resolved_event=resolved_event,
     )
 
 
@@ -670,6 +712,7 @@ def _build_version_from_snapshot(
     *,
     offer_id: str,
     version_number: int,
+    resolved_event: ResolvedSnapshotEvent,
 ) -> OfferVersion:
     offer_version_id = str(uuid.uuid4())
     return OfferVersion(
@@ -687,6 +730,13 @@ def _build_version_from_snapshot(
         planning_mode=snapshot.event.planning_mode,
         payment_method=snapshot.payment_terms.method,
         payment_customer_visible_text=snapshot.payment_terms.customer_visible_text,
+        delivery_date_local=resolved_event.delivery_date_local,
+        delivery_window_start_local=resolved_event.delivery_window_start_local,
+        delivery_window_end_local=resolved_event.delivery_window_end_local,
+        event_start_local=resolved_event.event_start_local,
+        legacy_time_window_text=resolved_event.legacy_time_window_text,
+        time_review_acknowledged_at=resolved_event.time_review_acknowledged_at,
+        time_review_acknowledged_by=resolved_event.time_review_acknowledged_by,
         variants=tuple(
             _map_variant(variant, offer_version_id) for variant in snapshot.variants
         ),
@@ -711,6 +761,97 @@ def _normalize_narrative(value: str | None) -> str | None:
         return None
     trimmed = value.strip()
     return trimmed or None
+
+
+class ResolvedSnapshotEvent:
+    def __init__(
+        self,
+        *,
+        delivery_date_local: str | None,
+        delivery_window_start_local: str | None,
+        delivery_window_end_local: str | None,
+        event_start_local: str | None,
+        legacy_time_window_text: str | None,
+        time_review_acknowledged_at: datetime | None,
+        time_review_acknowledged_by: str | None,
+        evaluation: TimingEvaluation,
+    ) -> None:
+        self.delivery_date_local = delivery_date_local
+        self.delivery_window_start_local = delivery_window_start_local
+        self.delivery_window_end_local = delivery_window_end_local
+        self.event_start_local = event_start_local
+        self.legacy_time_window_text = legacy_time_window_text
+        self.time_review_acknowledged_at = time_review_acknowledged_at
+        self.time_review_acknowledged_by = time_review_acknowledged_by
+        self.evaluation = evaluation
+
+
+def _resolved_event_timing(
+    snapshot: OfferSnapshotV1 | OfferSnapshotV2,
+    inquiry,
+) -> ResolvedSnapshotEvent:
+    delivery_date_local = snapshot.event.delivery_date_local
+    delivery_window_start_local = snapshot.event.delivery_window_start_local
+    delivery_window_end_local = snapshot.event.delivery_window_end_local
+    event_start_local = snapshot.event.event_start_local
+    legacy_time_window_text = snapshot.event.legacy_time_window_text
+    acknowledged_at = snapshot.event.time_review_acknowledged_at
+    acknowledged_by = snapshot.event.time_review_acknowledged_by
+    if (
+        delivery_date_local is None
+        and delivery_window_start_local is None
+        and delivery_window_end_local is None
+        and event_start_local is None
+        and legacy_time_window_text is None
+        and acknowledged_at is None
+        and acknowledged_by is None
+    ):
+        delivery_date_local = inquiry.delivery_date_local
+        delivery_window_start_local = inquiry.delivery_window_start_local
+        delivery_window_end_local = inquiry.delivery_window_end_local
+        event_start_local = inquiry.event_start_local
+        legacy_time_window_text = inquiry.legacy_time_window_text
+        acknowledged_at = inquiry.time_review_acknowledged_at
+        acknowledged_by = inquiry.time_review_acknowledged_by
+    evaluation = evaluate_timing(
+        event_date=snapshot.event.event_date,
+        delivery_date_local=delivery_date_local,
+        delivery_window_start_local=delivery_window_start_local,
+        delivery_window_end_local=delivery_window_end_local,
+        event_start_local=event_start_local,
+        legacy_time_window_text=legacy_time_window_text,
+    )
+    return ResolvedSnapshotEvent(
+        delivery_date_local=delivery_date_local,
+        delivery_window_start_local=delivery_window_start_local,
+        delivery_window_end_local=delivery_window_end_local,
+        event_start_local=event_start_local,
+        legacy_time_window_text=legacy_time_window_text,
+        time_review_acknowledged_at=acknowledged_at,
+        time_review_acknowledged_by=acknowledged_by,
+        evaluation=evaluation,
+    )
+
+
+def _require_offer_timing_ready(
+    inquiry_id: str, resolved_event: ResolvedSnapshotEvent
+) -> None:
+    if resolved_event.evaluation.has_invalid_window:
+        raise OfferTimingReviewRequiredError(
+            inquiry_id=inquiry_id,
+            findings=resolved_event.evaluation.findings,
+            invalid_window=True,
+        )
+    if not timing_acknowledgement_is_valid(
+        resolved_event.evaluation,
+        acknowledged_at=resolved_event.time_review_acknowledged_at,
+        acknowledged_by=resolved_event.time_review_acknowledged_by,
+    ):
+        raise OfferTimingReviewRequiredError(
+            inquiry_id=inquiry_id,
+            findings=resolved_event.evaluation.findings,
+            invalid_window=False,
+        )
 
 
 def _map_variant(variant: OfferSnapshotVariant, offer_version_id: str) -> OfferVariant:

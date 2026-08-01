@@ -545,6 +545,72 @@ service otherwise healthy means the code deployed but the process has not
 yet reconnected to `core.db` since deploy — restart the affected service
 and re-check, don't attempt any manual `ALTER TABLE`.
 
+### Migration 10 — canonical delivery/event timing fields (DELIVERY_EVENT_TIMES_V1)
+
+Migration 10 adds the canonical nullable timing columns for Inquiry/Offer
+review without removing the legacy `time_window_text` columns:
+
+- `inquiries.delivery_date_local`
+- `inquiries.delivery_window_start_local`
+- `inquiries.delivery_window_end_local`
+- `inquiries.event_start_local`
+- `inquiries.legacy_time_window_text`
+- `inquiries.time_review_acknowledged_at`
+- `inquiries.time_review_acknowledged_by`
+- `offer_versions.delivery_date_local`
+- `offer_versions.delivery_window_start_local`
+- `offer_versions.delivery_window_end_local`
+- `offer_versions.event_start_local`
+- `offer_versions.legacy_time_window_text`
+- `offer_versions.time_review_acknowledged_at`
+- `offer_versions.time_review_acknowledged_by`
+
+This slice is still additive:
+
+- **No legacy column is dropped or renamed.**
+- **All new columns are nullable `TEXT`.**
+- **Canonical delivery/event fields are not backfilled from legacy text.**
+- **Only `legacy_time_window_text` is backfilled**, and only where it is still
+  `NULL` and the legacy `time_window_text` contains non-blank text.
+- **Routine code rollback remains code-only.** Revert the commit, restart the
+  services, and leave the additive columns in place.
+
+The `offer_versions` backfill temporarily recreates the existing immutability
+trigger inside the same migration transaction so the one-time `UPDATE` can run
+without weakening runtime immutability after startup.
+
+Read-only post-deploy verification:
+
+```bash
+sqlite3 /home/viktor/catering-runtime/core.db \
+  "SELECT component, version, name, applied_at FROM schema_migrations \
+   WHERE component IN ('inquiries', 'offers') ORDER BY component, version;"
+sqlite3 /home/viktor/catering-runtime/core.db \
+  "PRAGMA table_info(inquiries);"
+sqlite3 /home/viktor/catering-runtime/core.db \
+  "PRAGMA table_info(offer_versions);"
+sqlite3 /home/viktor/catering-runtime/core.db \
+  "SELECT COUNT(*) FROM inquiries WHERE legacy_time_window_text IS NOT NULL;"
+sqlite3 /home/viktor/catering-runtime/core.db \
+  "SELECT COUNT(*) FROM offer_versions WHERE legacy_time_window_text IS NOT NULL;"
+```
+
+Expected results:
+
+- latest `inquiries` migration row: `7|add_canonical_timing_fields`
+- latest `offers` migration row: `10|offer_version_canonical_timing_fields`
+- both tables show the new timing columns as nullable `TEXT`
+- legacy rows keep their original counts; only `legacy_time_window_text`
+  becomes populated where `time_window_text` already existed
+
+Rollback verification after a code-only revert:
+
+- startup must still succeed with the additive columns present
+- Inquiry and Offer reads must still work on pre-existing rows
+- no manual schema rollback is attempted
+- if the database itself must be rolled back, use the standard predeploy
+  backup/restore procedure; do not hand-edit the live schema
+
 ## Common failures
 
 | Symptom | Check | Typical cause |

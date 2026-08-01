@@ -183,6 +183,10 @@ def _valid_offer_snapshot(
         "event": {
             "event_date": "2026-08-20",
             "time_window_text": "18:00–22:00",
+            "delivery_date_local": "2026-08-20",
+            "delivery_window_start_local": "17:30",
+            "delivery_window_end_local": "18:00",
+            "event_start_local": "18:30",
             "location_text": "Hamburg",
             "guest_count": 80,
             "planning_mode": "caterer_suggestion",
