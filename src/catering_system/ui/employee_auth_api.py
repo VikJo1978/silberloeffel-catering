@@ -21,8 +21,13 @@ from catering_system.repositories.sqlite_employee_auth_repository import (
 )
 from catering_system.services.employee_auth_service import (
     AuthenticationError,
+    AuthorizationError,
     CsrfValidationError,
     EmployeeAuthService,
+)
+from catering_system.ui.employee_auth_account_api import (
+    dispatch_account_route,
+    parse_accounts_route,
 )
 from catering_system.ui.employee_auth_http import (
     bearer_token_from_headers,
@@ -118,11 +123,49 @@ def make_employee_auth_handler(
                 raise AuthenticationError("missing session")
             return service.authenticate_session(session_token)
 
+        def _employee_with_access(self):
+            employee = self._employee()
+            if not employee.application_access_allowed:
+                raise AuthorizationError("password change required")
+            return employee
+
         def _csrf(self, employee) -> None:
             token = self.headers.get("X-CSRF-Token", "")
             service.validate_csrf(employee.session, token)
 
+        def _dispatch_accounts(self, *, method: str, body: dict[str, object] | None):
+            try:
+                employee = self._employee_with_access()
+            except CsrfValidationError:
+                self._json(403, {"error": "forbidden"})
+                return
+            except AuthorizationError:
+                self._json(403, {"error": "forbidden"})
+                return
+            except AuthenticationError:
+                self._json(401, {"error": "unauthorized"})
+                return
+            if method != "GET":
+                try:
+                    self._csrf(employee)
+                except CsrfValidationError:
+                    self._json(403, {"error": "forbidden"})
+                    return
+            handled = dispatch_account_route(
+                service,
+                method=method,
+                path=self.path.split("?", 1)[0],
+                employee=employee,
+                body=body,
+                respond=lambda status, payload: self._json(status, payload),
+            )
+            if not handled:
+                self.send_error(404)
+
         def do_GET(self) -> None:  # noqa: N802
+            if parse_accounts_route(self.path.split("?", 1)[0])[0]:
+                self._dispatch_accounts(method="GET", body=None)
+                return
             if self.path == "/auth/me":
                 try:
                     employee = self._employee()
@@ -181,6 +224,14 @@ def make_employee_auth_handler(
             self.send_error(404)
 
         def do_POST(self) -> None:  # noqa: N802
+            if parse_accounts_route(self.path.split("?", 1)[0])[0]:
+                try:
+                    body = self._read_json_body()
+                except ValueError:
+                    self._json(400, {"error": "invalid_request"})
+                    return
+                self._dispatch_accounts(method="POST", body=body)
+                return
             if self.path == "/auth/login":
                 try:
                     body = self._read_json_body()
@@ -269,8 +320,27 @@ def make_employee_auth_handler(
                 return
             self.send_error(404)
 
-        do_PUT = do_POST
-        do_PATCH = do_POST
+        def do_PUT(self) -> None:  # noqa: N802
+            if parse_accounts_route(self.path.split("?", 1)[0])[0]:
+                try:
+                    body = self._read_json_body()
+                except ValueError:
+                    self._json(400, {"error": "invalid_request"})
+                    return
+                self._dispatch_accounts(method="PUT", body=body)
+                return
+            self.send_error(404)
+
+        def do_PATCH(self) -> None:  # noqa: N802
+            if parse_accounts_route(self.path.split("?", 1)[0])[0]:
+                try:
+                    body = self._read_json_body()
+                except ValueError:
+                    self._json(400, {"error": "invalid_request"})
+                    return
+                self._dispatch_accounts(method="PATCH", body=body)
+                return
+            self.send_error(404)
 
     return EmployeeAuthHandler
 

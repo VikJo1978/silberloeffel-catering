@@ -354,3 +354,58 @@ class AuthIntrospection:
     account: EmployeeAccount | None = None
     effective_permissions: frozenset[str] = frozenset()
     service_id: str | None = None
+
+
+@dataclass(frozen=True)
+class EmployeeAccountSummary:
+    id: str
+    username: str
+    email: str | None
+    display_name: str
+    role: EmployeeRole
+    is_active: bool
+    must_change_password: bool
+    created_at: datetime
+    updated_at: datetime
+    deactivated_at: datetime | None
+    last_login_at: datetime | None
+    read_only: bool = False
+
+
+@dataclass(frozen=True)
+class EmployeeAccountDetail:
+    id: str
+    username: str
+    email: str | None
+    display_name: str
+    role: EmployeeRole
+    is_active: bool
+    must_change_password: bool
+    created_at: datetime
+    updated_at: datetime
+    deactivated_at: datetime | None
+    last_login_at: datetime | None
+    read_only: bool
+    explicit_permissions: frozenset[str]
+    effective_permissions: frozenset[str]
+
+
+@dataclass(frozen=True)
+class SecurityAuditEventView:
+    event_id: str
+    occurred_at: datetime
+    actor_account_id: str | None
+    actor_display_name_snapshot: str | None
+    actor_role_snapshot: EmployeeRole | None
+    action: str
+    target_type: str
+    target_id: str | None
+    permission_code: str | None
+    outcome: AuditOutcome
+    metadata: dict[str, object]
+
+
+@dataclass(frozen=True)
+class PasswordResetResult:
+    account: EmployeeAccount
+    temporary_password: str | None = None

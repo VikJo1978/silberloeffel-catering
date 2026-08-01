@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from contextlib import nullcontext
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
+from typing import Iterator
 
 from catering_system.domain.employee_auth import (
     EmployeeAccount,
@@ -123,6 +124,10 @@ _AUDIT_INDEXES = (
     CREATE INDEX IF NOT EXISTS idx_security_audit_events_actor
     ON security_audit_events (actor_account_id, occurred_at);
     """,
+    """
+    CREATE INDEX IF NOT EXISTS idx_security_audit_events_target
+    ON security_audit_events (target_id, occurred_at);
+    """,
 )
 
 _AUDIT_APPEND_ONLY_TRIGGERS = (
@@ -168,25 +173,20 @@ def _migration_4_create_security_audit_events(connection: sqlite3.Connection) ->
         connection.execute(statement)
 
 
+def _migration_5_audit_target_index(connection: sqlite3.Connection) -> None:
+    connection.execute(_AUDIT_INDEXES[2])
+
+
 _MIGRATIONS = (
     (1, "create_employee_accounts", _migration_1_create_employee_accounts),
     (2, "create_account_permissions", _migration_2_create_account_permissions),
     (3, "create_employee_sessions", _migration_3_create_employee_sessions),
     (4, "create_security_audit_events", _migration_4_create_security_audit_events),
+    (5, "audit_target_index", _migration_5_audit_target_index),
 )
 
 
 class SQLiteEmployeeAuthRepository:
-    def __init__(self, db_path: str | Path) -> None:
-        self._conn = sqlite3.connect(str(db_path))
-        self._conn.execute("PRAGMA foreign_keys = ON")
-        self._manage_transactions = True
-        try:
-            apply_migrations(self._conn, "employee_auth", _MIGRATIONS)
-        except Exception:
-            self._conn.close()
-            raise
-
     @classmethod
     def from_connection(
         cls, connection: sqlite3.Connection
@@ -195,11 +195,42 @@ class SQLiteEmployeeAuthRepository:
         repo._conn = connection
         repo._conn.execute("PRAGMA foreign_keys = ON")
         repo._manage_transactions = False
+        repo._transaction_depth = 0
         apply_migrations(connection, "employee_auth", _MIGRATIONS)
         return repo
 
+    def __init__(self, db_path: str | Path) -> None:
+        self._conn = sqlite3.connect(str(db_path))
+        self._conn.execute("PRAGMA foreign_keys = ON")
+        self._manage_transactions = True
+        self._transaction_depth = 0
+        try:
+            apply_migrations(self._conn, "employee_auth", _MIGRATIONS)
+        except Exception:
+            self._conn.close()
+            raise
+
+    @contextmanager
+    def immediate_transaction(self) -> Iterator[sqlite3.Connection]:
+        if not self._manage_transactions:
+            yield self._conn
+            return
+        self._transaction_depth += 1
+        if self._transaction_depth == 1:
+            self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield self._conn
+            if self._transaction_depth == 1:
+                self._conn.commit()
+        except Exception:
+            if self._transaction_depth == 1:
+                self._conn.rollback()
+            raise
+        finally:
+            self._transaction_depth -= 1
+
     def _write_scope(self):  # noqa: ANN202
-        return self._conn if self._manage_transactions else nullcontext()
+        return self.immediate_transaction()
 
     def close(self) -> None:
         self._conn.close()
@@ -424,6 +455,46 @@ class SQLiteEmployeeAuthRepository:
                     event.metadata_json,
                 ),
             )
+
+    def list_accounts(self) -> list[EmployeeAccount]:
+        rows = self._conn.execute(
+            """
+            SELECT * FROM employee_accounts
+            ORDER BY username COLLATE NOCASE, account_id
+            """
+        ).fetchall()
+        return [self._row_to_account(row) for row in rows]
+
+    def list_audit_events_for_account(
+        self, account_id: str
+    ) -> list[SecurityAuditEvent]:
+        rows = self._conn.execute(
+            """
+            SELECT * FROM security_audit_events
+            WHERE target_id = ?
+            ORDER BY occurred_at, event_id
+            """,
+            (account_id,),
+        ).fetchall()
+        return [self._row_to_audit_event(row) for row in rows]
+
+    def replace_explicit_permissions(
+        self, account_id: str, permissions: set[str]
+    ) -> None:
+        for permission in permissions:
+            validate_permission_code(permission)
+        with self._write_scope():
+            self._conn.execute(
+                "DELETE FROM account_permissions WHERE account_id = ?", (account_id,)
+            )
+            if permissions:
+                self._conn.executemany(
+                    """
+                    INSERT INTO account_permissions (account_id, permission_code)
+                    VALUES (?, ?)
+                    """,
+                    [(account_id, permission) for permission in sorted(permissions)],
+                )
 
     def list_audit_events(self) -> list[SecurityAuditEvent]:
         rows = self._conn.execute(

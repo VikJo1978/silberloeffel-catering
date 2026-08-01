@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import sqlite3
 import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -18,9 +19,13 @@ from catering_system.domain.employee_auth import (
     AuthIntrospection,
     AuthenticatedEmployee,
     EmployeeAccount,
+    EmployeeAccountDetail,
+    EmployeeAccountSummary,
     EmployeeRole,
     EmployeeSession,
+    PasswordResetResult,
     SecurityAuditEvent,
+    SecurityAuditEventView,
     SessionLoginResult,
     effective_permissions,
     ensure_permissions_within_role,
@@ -45,6 +50,7 @@ _SCRYPT_MAXMEM = 128 * 1024 * 1024
 _SESSION_TOKEN_BYTES = 32
 _CSRF_TOKEN_BYTES = 32
 _LAST_SEEN_WRITE_INTERVAL = timedelta(minutes=5)
+_UNSET = object()
 
 
 class AuthenticationError(Exception):
@@ -61,6 +67,17 @@ class AuthorizationError(Exception):
 
 class LastActiveSuperadminError(Exception):
     pass
+
+
+class AccountNotFoundError(Exception):
+    pass
+
+
+class AccountConflictError(Exception):
+    pass
+
+
+_TEMPORARY_PASSWORD_BYTES = 12
 
 
 def _utc_now() -> datetime:
@@ -239,8 +256,12 @@ class EmployeeAuthService:
                 raise AuthorizationError(
                     f"ADMIN may grant only own effective permissions: {sorted(overflow)}"
                 )
-        self.repository.add_account(account)
-        self.repository.set_explicit_permissions(account.id, permissions)
+        try:
+            with self.repository.immediate_transaction():
+                self.repository.add_account(account)
+                self.repository.set_explicit_permissions(account.id, permissions)
+        except sqlite3.IntegrityError as exc:
+            raise AccountConflictError("username or email already exists") from exc
         self._append_audit(
             actor_type="employee",
             actor_account=actor.account,
@@ -254,6 +275,135 @@ class EmployeeAuthService:
         )
         return account
 
+    def list_accounts(
+        self, actor: AuthenticatedEmployee
+    ) -> list[EmployeeAccountSummary]:
+        self._assert_permission(actor, "users.view")
+        return [
+            self._account_summary(actor, account)
+            for account in self.repository.list_accounts()
+        ]
+
+    def get_account(
+        self, actor: AuthenticatedEmployee, target_account_id: str
+    ) -> EmployeeAccountDetail:
+        self._assert_permission(actor, "users.view")
+        target = self._require_visible_account(target_account_id)
+        explicit = self.repository.get_explicit_permissions(target.id)
+        return self._account_detail(actor, target, explicit)
+
+    def update_account_profile(
+        self,
+        actor: AuthenticatedEmployee,
+        target_account_id: str,
+        *,
+        username: str | None = None,
+        display_name: str | None = None,
+        email: object | None = _UNSET,
+    ) -> EmployeeAccountDetail:
+        self._assert_permission(actor, "users.edit")
+        target = self._require_visible_account(target_account_id)
+        self._assert_can_mutate_account(actor, target)
+        changes: dict[str, object] = {}
+        updated = target
+        if username is not None:
+            next_username = normalize_username(username)
+            if next_username != target.username:
+                changes["username"] = {"old": target.username, "new": next_username}
+                updated = replace(updated, username=next_username)
+        if display_name is not None:
+            next_display_name = validate_display_name(display_name)
+            if next_display_name != target.display_name:
+                changes["display_name"] = {
+                    "old": target.display_name,
+                    "new": next_display_name,
+                }
+                updated = replace(updated, display_name=next_display_name)
+        if email is not _UNSET:
+            next_email = normalize_optional_email(email)
+            if next_email != target.email:
+                changes["email"] = {"old": target.email, "new": next_email}
+                updated = replace(updated, email=next_email)
+        if not changes:
+            explicit = self.repository.get_explicit_permissions(target.id)
+            return self._account_detail(actor, target, explicit)
+        updated = replace(updated, updated_at=self._now())
+        try:
+            with self.repository.immediate_transaction():
+                self.repository.update_account(updated)
+        except sqlite3.IntegrityError as exc:
+            raise AccountConflictError("username or email already exists") from exc
+        self._append_audit(
+            actor_type="employee",
+            actor_account=actor.account,
+            session_id=actor.session.id,
+            action="auth.account_profile_updated",
+            target_type="employee_account",
+            target_id=target.id,
+            permission_code=None,
+            outcome="success",
+            metadata={"changes": changes},
+        )
+        explicit = self.repository.get_explicit_permissions(updated.id)
+        return self._account_detail(actor, updated, explicit)
+
+    def list_account_audit_events(
+        self, actor: AuthenticatedEmployee, target_account_id: str
+    ) -> list[SecurityAuditEventView]:
+        self._assert_permission(actor, "audit.view")
+        target = self._require_visible_account(target_account_id)
+        return [
+            self._audit_event_view(event)
+            for event in self.repository.list_audit_events_for_account(target.id)
+        ]
+
+    def reset_account_password(
+        self,
+        actor: AuthenticatedEmployee,
+        target_account_id: str,
+        *,
+        temporary_password: str | None = None,
+    ) -> PasswordResetResult:
+        self._assert_permission(actor, "users.password.reset")
+        target = self._require_visible_account(target_account_id)
+        self._assert_can_mutate_account(actor, target)
+        generated = temporary_password is None
+        resolved_password = (
+            secrets.token_urlsafe(_TEMPORARY_PASSWORD_BYTES)
+            if generated
+            else temporary_password
+        )
+        if not isinstance(resolved_password, str) or len(resolved_password) < 8:
+            raise ValueError("temporary_password must be at least 8 characters")
+        now = self._now()
+        updated = replace(
+            target,
+            password_hash=_hash_password(resolved_password),
+            must_change_password=True,
+            updated_at=now,
+            auth_version=target.auth_version + 1,
+        )
+        with self.repository.immediate_transaction():
+            self.repository.update_account(updated)
+            self.repository.revoke_sessions_for_account(
+                target.id, revoked_at=now, reason="password_reset"
+            )
+        self._append_audit(
+            actor_type="employee",
+            actor_account=actor.account,
+            session_id=actor.session.id,
+            action="auth.password_reset",
+            target_type="employee_account",
+            target_id=target.id,
+            permission_code=None,
+            outcome="success",
+            metadata={"username": target.username, "generated": generated},
+        )
+        return PasswordResetResult(
+            account=updated,
+            temporary_password=resolved_password if generated else None,
+        )
+
     def set_account_permissions(
         self,
         actor: AuthenticatedEmployee,
@@ -262,7 +412,8 @@ class EmployeeAuthService:
     ) -> EmployeeAccount:
         self._assert_permission(actor, "users.permissions.assign")
         target = self._require_account(target_account_id)
-        self._assert_can_manage_existing_account(actor, target)
+        self._assert_can_mutate_account(actor, target)
+        permissions = set(permissions)
         ensure_permissions_within_role(target.role, permissions)
         if actor.account.role == "ADMIN":
             overflow = permissions.difference(actor.effective_permissions)
@@ -270,7 +421,11 @@ class EmployeeAuthService:
                 raise AuthorizationError(
                     f"ADMIN may grant only own effective permissions: {sorted(overflow)}"
                 )
-        self.repository.set_explicit_permissions(target.id, permissions)
+        previous = self.repository.get_explicit_permissions(target.id)
+        added = sorted(permissions.difference(previous))
+        removed = sorted(previous.difference(permissions))
+        with self.repository.immediate_transaction():
+            self.repository.replace_explicit_permissions(target.id, permissions)
         self._append_audit(
             actor_type="employee",
             actor_account=actor.account,
@@ -280,7 +435,7 @@ class EmployeeAuthService:
             target_id=target.id,
             permission_code=None,
             outcome="success",
-            metadata={"permissions": sorted(permissions)},
+            metadata={"added": added, "removed": removed},
         )
         return target
 
@@ -291,19 +446,19 @@ class EmployeeAuthService:
         target = self._require_account(target_account_id)
         next_role = validate_role(new_role)
         self._assert_can_manage_role(actor, next_role)
-        self._assert_can_manage_existing_account(actor, target)
-        if target.role == "SUPERADMIN" and next_role != "SUPERADMIN":
-            self._assert_not_last_active_superadmin(target)
+        self._assert_can_mutate_account(actor, target)
         updated = replace(
             target,
             role=next_role,
             updated_at=self._now(),
         )
-        self.repository.update_account(updated)
         current_permissions = self.repository.get_explicit_permissions(target.id)
-        self.repository.set_explicit_permissions(
-            target.id, set(effective_permissions(next_role, current_permissions))
-        )
+        pruned_permissions = set(effective_permissions(next_role, current_permissions))
+        with self.repository.immediate_transaction():
+            if target.role == "SUPERADMIN" and next_role != "SUPERADMIN":
+                self._assert_not_last_active_superadmin(target)
+            self.repository.update_account(updated)
+            self.repository.replace_explicit_permissions(target.id, pruned_permissions)
         self._append_audit(
             actor_type="employee",
             actor_account=actor.account,
@@ -322,9 +477,7 @@ class EmployeeAuthService:
     ) -> EmployeeAccount:
         self._assert_permission(actor, "users.deactivate")
         target = self._require_account(target_account_id)
-        self._assert_can_manage_existing_account(actor, target)
-        if target.role == "SUPERADMIN":
-            self._assert_not_last_active_superadmin(target)
+        self._assert_can_mutate_account(actor, target)
         now = self._now()
         updated = replace(
             target,
@@ -333,10 +486,13 @@ class EmployeeAuthService:
             deactivated_at=now,
             auth_version=target.auth_version + 1,
         )
-        self.repository.update_account(updated)
-        self.repository.revoke_sessions_for_account(
-            target.id, revoked_at=now, reason="account_deactivated"
-        )
+        with self.repository.immediate_transaction():
+            if target.role == "SUPERADMIN":
+                self._assert_not_last_active_superadmin(target)
+            self.repository.update_account(updated)
+            self.repository.revoke_sessions_for_account(
+                target.id, revoked_at=now, reason="account_deactivated"
+            )
         self._append_audit(
             actor_type="employee",
             actor_account=actor.account,
@@ -355,7 +511,7 @@ class EmployeeAuthService:
     ) -> EmployeeAccount:
         self._assert_permission(actor, "users.reactivate")
         target = self._require_account(target_account_id)
-        self._assert_can_manage_existing_account(actor, target)
+        self._assert_can_mutate_account(actor, target)
         updated = replace(
             target,
             is_active=True,
@@ -563,7 +719,7 @@ class EmployeeAuthService:
         actor_type: ActorType
         if actor is not None:
             self._assert_permission(actor, "users.password.reset")
-            self._assert_can_manage_existing_account(actor, target)
+            self._assert_can_mutate_account(actor, target)
             actor_type = "employee"
             actor_account = actor.account
             session_id = actor.session.id
@@ -655,8 +811,84 @@ class EmployeeAuthService:
     def _require_account(self, account_id: str) -> EmployeeAccount:
         account = self.repository.get_account_by_id(account_id)
         if account is None:
-            raise ValueError(f"unknown account_id {account_id!r}")
+            raise AccountNotFoundError(f"unknown account_id {account_id!r}")
         return account
+
+    def _require_visible_account(self, account_id: str) -> EmployeeAccount:
+        account = self._require_account(account_id)
+        return account
+
+    def _account_is_read_only(
+        self, actor: AuthenticatedEmployee, target: EmployeeAccount
+    ) -> bool:
+        return actor.account.role == "ADMIN" and target.role in ("ADMIN", "SUPERADMIN")
+
+    def _account_summary(
+        self, actor: AuthenticatedEmployee, account: EmployeeAccount
+    ) -> EmployeeAccountSummary:
+        return EmployeeAccountSummary(
+            id=account.id,
+            username=account.username,
+            email=account.email,
+            display_name=account.display_name,
+            role=account.role,
+            is_active=account.is_active,
+            must_change_password=account.must_change_password,
+            created_at=account.created_at,
+            updated_at=account.updated_at,
+            deactivated_at=account.deactivated_at,
+            last_login_at=account.last_login_at,
+            read_only=self._account_is_read_only(actor, account),
+        )
+
+    def _account_detail(
+        self,
+        actor: AuthenticatedEmployee,
+        account: EmployeeAccount,
+        explicit_permissions: set[str],
+    ) -> EmployeeAccountDetail:
+        summary = self._account_summary(actor, account)
+        return EmployeeAccountDetail(
+            id=summary.id,
+            username=summary.username,
+            email=summary.email,
+            display_name=summary.display_name,
+            role=summary.role,
+            is_active=summary.is_active,
+            must_change_password=summary.must_change_password,
+            created_at=summary.created_at,
+            updated_at=summary.updated_at,
+            deactivated_at=summary.deactivated_at,
+            last_login_at=summary.last_login_at,
+            read_only=summary.read_only,
+            explicit_permissions=frozenset(explicit_permissions),
+            effective_permissions=effective_permissions(
+                account.role, explicit_permissions
+            ),
+        )
+
+    def _audit_event_view(self, event: SecurityAuditEvent) -> SecurityAuditEventView:
+        metadata = json.loads(event.metadata_json)
+        return SecurityAuditEventView(
+            event_id=event.event_id,
+            occurred_at=event.occurred_at,
+            actor_account_id=event.actor_account_id,
+            actor_display_name_snapshot=event.actor_display_name_snapshot,
+            actor_role_snapshot=event.actor_role_snapshot,
+            action=event.action,
+            target_type=event.target_type,
+            target_id=event.target_id,
+            permission_code=event.permission_code,
+            outcome=event.outcome,
+            metadata=metadata,
+        )
+
+    def _assert_can_mutate_account(
+        self, actor: AuthenticatedEmployee, target: EmployeeAccount
+    ) -> None:
+        if self._account_is_read_only(actor, target):
+            raise AuthorizationError(f"ADMIN may not manage {target.role} accounts")
+        self._assert_can_manage_existing_account(actor, target)
 
     def _require_account_by_username(self, username: str) -> EmployeeAccount:
         account = self.repository.get_account_by_username(normalize_username(username))
@@ -675,9 +907,9 @@ class EmployeeAuthService:
     def _assert_can_manage_existing_account(
         self, actor: AuthenticatedEmployee, target: EmployeeAccount
     ) -> None:
+        if actor.account.role == "ADMIN" and target.role in ("ADMIN", "SUPERADMIN"):
+            raise AuthorizationError(f"ADMIN may not manage {target.role} accounts")
         self._assert_can_manage_role(actor, target.role)
-        if actor.account.role == "ADMIN" and target.role == "SUPERADMIN":
-            raise AuthorizationError("ADMIN may not manage SUPERADMIN accounts")
 
     def _assert_permission(
         self, actor: AuthenticatedEmployee, permission_code: str
