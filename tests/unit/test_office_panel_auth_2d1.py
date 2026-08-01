@@ -564,3 +564,167 @@ def test_office_page_context_can_matches_authz_helper() -> None:
     assert context.can("orders.view") is False
     assert context.can("unknown.permission") is False
     assert can_access(None, "inquiries.view") is False
+
+
+def test_denied_anfragen_does_not_fetch_rueckruf_count(
+    employee_panel: PanelHarness,
+) -> None:
+    super_jar = _ready_superadmin(employee_panel)
+    _create_employee(
+        employee_panel,
+        super_jar,
+        username="orders.only",
+        password="ReaderTemp1!",
+        role="USER",
+        permissions=frozenset({"orders.view"}),
+    )
+    jar = _login(employee_panel, username="orders.only", password="ReaderTemp1!")
+    with patch(
+        "catering_system.ui.office_panel_http.fetch_rueckruf_count",
+        autospec=True,
+    ) as count_mock:
+        status, _url, body, _headers = _request(
+            employee_panel.base, "/anfragen", jar=jar
+        )
+    assert status == 403
+    assert "Ihre Berechtigung reicht" in body
+    count_mock.assert_not_called()
+
+
+def test_denied_offer_detail_does_not_fetch_rueckruf_count(
+    employee_panel: PanelHarness,
+) -> None:
+    super_jar = _ready_superadmin(employee_panel)
+    _create_employee(
+        employee_panel,
+        super_jar,
+        username="orders.only.offer",
+        password="ReaderTemp1!",
+        role="USER",
+        permissions=frozenset({"orders.view"}),
+    )
+    jar = _login(employee_panel, username="orders.only.offer", password="ReaderTemp1!")
+    with patch(
+        "catering_system.ui.office_panel_http.fetch_rueckruf_count",
+        autospec=True,
+    ) as count_mock:
+        status, _url, body, _headers = _request(
+            employee_panel.base, "/offer/test-offer", jar=jar
+        )
+    assert status == 403
+    count_mock.assert_not_called()
+
+
+def test_denied_pdf_does_not_fetch_rueckruf_count_or_renderer(
+    employee_panel: PanelHarness,
+) -> None:
+    super_jar = _ready_superadmin(employee_panel)
+    _create_employee(
+        employee_panel,
+        super_jar,
+        username="offers.view.only",
+        password="ReaderTemp1!",
+        role="USER",
+        permissions=frozenset({"offers.view"}),
+    )
+    jar = _login(employee_panel, username="offers.view.only", password="ReaderTemp1!")
+    with (
+        patch(
+            "catering_system.ui.office_panel_http.fetch_rueckruf_count",
+            autospec=True,
+        ) as count_mock,
+        patch.object(
+            OfficePanel,
+            "offer_document_pdf",
+            autospec=True,
+        ) as pdf_mock,
+    ):
+        status, _url, body, _headers = _request(
+            employee_panel.base,
+            "/offer/test-offer/offer-document/pdf?offer_version_id=v1",
+            jar=jar,
+        )
+    assert status == 403
+    count_mock.assert_not_called()
+    pdf_mock.assert_not_called()
+
+
+def test_allowed_anfragen_still_fetches_rueckruf_count_for_badge(
+    employee_panel: PanelHarness,
+) -> None:
+    super_jar = _ready_superadmin(employee_panel)
+    _create_employee(
+        employee_panel,
+        super_jar,
+        username="inquiry.reader.badge",
+        password="ReaderTemp1!",
+        role="USER",
+        permissions=frozenset({"inquiries.view"}),
+    )
+    jar = _login(
+        employee_panel, username="inquiry.reader.badge", password="ReaderTemp1!"
+    )
+    with patch(
+        "catering_system.ui.office_panel_http.fetch_rueckruf_count",
+        autospec=True,
+        return_value=3,
+    ) as count_mock:
+        status, _url, body, _headers = _request(
+            employee_panel.base, "/anfragen", jar=jar
+        )
+    assert status == 200
+    count_mock.assert_called_once()
+
+
+def test_aufgaben_hidden_without_queue_view(employee_panel: PanelHarness) -> None:
+    super_jar = _ready_superadmin(employee_panel)
+    _create_employee(
+        employee_panel,
+        super_jar,
+        username="inquiry.only.tasks",
+        password="ReaderTemp1!",
+        role="USER",
+        permissions=frozenset({"inquiries.view"}),
+    )
+    jar = _login(employee_panel, username="inquiry.only.tasks", password="ReaderTemp1!")
+    status, _url, body, _headers = _request(employee_panel.base, "/anfragen", jar=jar)
+    assert status == 200
+    assert 'href="/aufgaben"' not in body
+
+
+def test_aufgaben_visible_with_queue_view_without_inquiries_view(
+    employee_panel: PanelHarness,
+) -> None:
+    super_jar = _ready_superadmin(employee_panel)
+    _create_employee(
+        employee_panel,
+        super_jar,
+        username="queue.only.tasks",
+        password="ReaderTemp1!",
+        role="USER",
+        permissions=frozenset({"queue.view"}),
+    )
+    jar = _login(employee_panel, username="queue.only.tasks", password="ReaderTemp1!")
+    status, _url, body, _headers = _request(employee_panel.base, "/", jar=jar)
+    assert status == 200
+    assert 'href="/aufgaben"' in body
+    assert 'href="/anfragen"' not in body
+
+
+def test_aufgaben_direct_url_requires_queue_view(
+    employee_panel: PanelHarness,
+) -> None:
+    super_jar = _ready_superadmin(employee_panel)
+    _create_employee(
+        employee_panel,
+        super_jar,
+        username="inquiry.only.tasks.direct",
+        password="ReaderTemp1!",
+        role="USER",
+        permissions=frozenset({"inquiries.view"}),
+    )
+    jar = _login(
+        employee_panel, username="inquiry.only.tasks.direct", password="ReaderTemp1!"
+    )
+    status, _url, body, _headers = _request(employee_panel.base, "/aufgaben", jar=jar)
+    assert status == 403

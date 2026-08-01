@@ -3391,6 +3391,7 @@ class OfficePanel:
                     v.kitchen_print_confirmed_at is None
                     and action_target is not None
                     and v.order_version_id == action_target.order_version_id
+                    and context.can("orders.print.confirm")
                 ):
                     actions.append(
                         f'<form class="inline" method="post" action="/order/{_e(order_id)}/print-confirm">'
@@ -3403,6 +3404,7 @@ class OfficePanel:
                     and v.order_version_id != order.effective_order_version_id
                     and action_target is not None
                     and v.order_version_id == action_target.order_version_id
+                    and context.can("orders.effective.set")
                 ):
                     actions.append(
                         f'<form class="inline" method="post" action="/order/{_e(order_id)}/effective">'
@@ -3491,12 +3493,25 @@ class OfficePanel:
                 latest_version_number=latest_version_number,
             )
             assert prefill is not None
-            actions_block = f"""
-<p>
-<form class="inline" method="post" action="/order/{_e(order_id)}/ready">{_csrf_input(context)}{self._command_fields()}<button>Freigabe anfordern</button></form>
-<form class="inline" method="post" action="/order/{_e(order_id)}/cancel">{_csrf_input(context)}{self._command_fields({"updated_at": order.updated_at.isoformat()})}<button>Auftrag stornieren</button></form>
-</p>
-<h2>Neue Version</h2>
+            action_parts: list[str] = []
+            inline_forms: list[str] = []
+            if context.can("orders.ready.release"):
+                inline_forms.append(
+                    f'<form class="inline" method="post" action="/order/{_e(order_id)}/ready">'
+                    f"{_csrf_input(context)}{self._command_fields()}"
+                    "<button>Freigabe anfordern</button></form>"
+                )
+            if context.can("orders.cancel"):
+                inline_forms.append(
+                    f'<form class="inline" method="post" action="/order/{_e(order_id)}/cancel">'
+                    f"{_csrf_input(context)}{self._command_fields({'updated_at': order.updated_at.isoformat()})}"
+                    "<button>Auftrag stornieren</button></form>"
+                )
+            if inline_forms:
+                action_parts.append(f"<p>{''.join(inline_forms)}</p>")
+            if context.can("orders.version.create"):
+                action_parts.append(
+                    f"""<h2>Neue Version</h2>
 <form method="post" action="/order/{_e(order_id)}/version">{_csrf_input(context)}{self._command_fields({"latest_version_number": str(latest_version_number), "current_effective_order_version_id": order.effective_order_version_id or "", "current_candidate_order_version_id": order.candidate_order_version_id or ""})}<input type="hidden" name="latest_version_number" value="{_e(prefill.latest_version_number)}"><fieldset>
 <p><label>Datum*</label><input type="date" name="event_date" required value="{_e(prefill.event_date)}"></p>
 <p><label>Zeitfenster</label><input name="time_window_text" value="{_e(prefill.time_window_text)}"></p>
@@ -3507,6 +3522,8 @@ class OfficePanel:
 <p><label>Änderungsgrund*</label><textarea name="change_reason" maxlength="1000" required></textarea></p>
 <p><button type="submit">Version anlegen</button></p>
 </fieldset></form>"""
+                )
+            actions_block = "".join(action_parts)
         truncation_warning = (
             '<p class="blocked"><strong>Unvollständige Ansicht:</strong> '
             f"Es werden {len(versions)} von {versions_total_count} Versionen "
@@ -3546,12 +3563,20 @@ class OfficePanel:
             ),
             pause_command_fields=(
                 self._command_fields(self._pause_expect_fields(pause_view))
-                if not cancelled and not pause_view.get("active")
+                if (
+                    not cancelled
+                    and not pause_view.get("active")
+                    and context.can("orders.pause")
+                )
                 else ""
             ),
             resume_command_fields=(
                 self._command_fields(self._resume_expect_fields(pause_view))
-                if not cancelled and pause_view.get("active")
+                if (
+                    not cancelled
+                    and pause_view.get("active")
+                    and context.can("orders.pause")
+                )
                 else ""
             ),
             customer_addresses_command_fields=(

@@ -584,6 +584,12 @@ def make_office_panel_handler(
                 raise SettingsUsersAccessDenied()
             return auth.employee
 
+        def _forbidden_page_context(
+            self, auth: OfficePanelRequestAuth | None = None
+        ) -> OfficePageContext:
+            """Minimal shell context for 403 pages — no Auerswald or badge fetch."""
+            return self._page_context(auth, rueckruf_count=None)
+
         def _business_forbidden(
             self, *, active_section: OfficeSection = "home"
         ) -> None:
@@ -592,7 +598,7 @@ def make_office_panel_handler(
                     "Zugriff verweigert",
                     '<p class="blocked">Ihre Berechtigung reicht für diese Aktion nicht aus.</p>',
                     active_section=active_section,
-                    context=self._page_context(),
+                    context=self._forbidden_page_context(),
                 ),
                 403,
             )
@@ -865,12 +871,12 @@ def make_office_panel_handler(
                     )
                 )
                 return
-            context = self._page_context()
             if parts == ["anfragen"]:
                 if not self._require_business_permission_get(
                     auth, "inquiries.view", active_section="inquiries"
                 ):
                     return
+                context = self._page_context()
                 search_query = parse_qs(parsed.query).get("q", [""])[0]
                 self._html(panel.render_anfragen(search_query, context=context))
             elif parts == ["angebote"]:
@@ -878,12 +884,14 @@ def make_office_panel_handler(
                     auth, "offers.view", active_section="offers"
                 ):
                     return
+                context = self._page_context()
                 self._html(panel.render_angebote(context=context))
             elif parts == ["kontakte"]:
                 if not self._require_business_permission_get(
                     auth, "customers.view", active_section="contacts"
                 ):
                     return
+                context = self._page_context()
                 query = parse_qs(parsed.query)
                 search_query = query.get("q", [""])[0]
                 status_filter = query.get("status", ["all"])[0]
@@ -895,6 +903,7 @@ def make_office_panel_handler(
                     auth, "catalog.view", active_section="catalog"
                 ):
                     return
+                context = self._page_context()
                 query = parse_qs(parsed.query)
                 self._html(
                     panel.render_gerichte(
@@ -908,30 +917,35 @@ def make_office_panel_handler(
                     auth, "catalog.edit", active_section="catalog"
                 ):
                     return
+                context = self._page_context()
                 self._html(panel.render_gericht_new(context=context))
             elif parts == ["emails"] or parts == ["email"]:
                 if not self._require_business_permission_get(
                     auth, "inquiries.view", active_section="email"
                 ):
                     return
+                context = self._page_context()
                 self._html(panel.render_email(context=context))
             elif parts == ["aufgaben"]:
                 if not self._require_business_permission_get(
                     auth, "queue.view", active_section="tasks"
                 ):
                     return
+                context = self._page_context()
                 self._html(panel.render_aufgaben(context=context))
             elif parts == ["kalender"]:
                 if not self._require_business_permission_get(
                     auth, "calendar.view", active_section="calendar"
                 ):
                     return
+                context = self._page_context()
                 self._html(panel.render_kalender(context=context))
             elif parts == ["auftraege"]:
                 if not self._require_business_permission_get(
                     auth, "orders.view", active_section="orders"
                 ):
                     return
+                context = self._page_context()
                 search_query = parse_qs(parsed.query).get("q", [""])[0]
                 self._html(panel.render_auftraege(search_query, context=context))
             elif parts == ["orders"]:
@@ -939,6 +953,7 @@ def make_office_panel_handler(
                     auth, "orders.view", active_section="orders"
                 ):
                     return
+                context = self._page_context()
                 query = parse_qs(parsed.query)
                 self._html(
                     panel.render_orders(
@@ -952,12 +967,14 @@ def make_office_panel_handler(
                     auth, "inquiries.create", active_section="proposal"
                 ):
                     return
+                context = self._page_context()
                 self._html(render_proposal_preview_form(context=context))
             elif parts == ["inquiry", "new"]:
                 if not self._require_business_permission_get(
                     auth, "inquiries.create", active_section="inquiries"
                 ):
                     return
+                context = self._page_context()
                 form_defaults = parse_qs(parsed.query)
                 self._html(
                     panel.render_inquiry_form(
@@ -974,6 +991,7 @@ def make_office_panel_handler(
                     auth, "inquiries.view", active_section="inquiries"
                 ):
                     return
+                context = self._page_context()
                 page = panel.render_inquiry(parts[1], context=context)
                 self._html(page) if page else self.send_error(404)
             elif len(parts) == 2 and parts[0] == "order":
@@ -981,6 +999,7 @@ def make_office_panel_handler(
                     auth, "orders.view", active_section="orders"
                 ):
                     return
+                context = self._page_context()
                 page = panel.render_order(parts[1], context=context)
                 self._html(page) if page else self.send_error(404)
             elif len(parts) == 2 and parts[0] == "offer":
@@ -988,6 +1007,7 @@ def make_office_panel_handler(
                     auth, "offers.view", active_section="offers"
                 ):
                     return
+                context = self._page_context()
                 page = panel.render_offer(parts[1], context=context)
                 self._html(page) if page else self.send_error(404)
             elif (
@@ -1006,6 +1026,7 @@ def make_office_panel_handler(
                     auth, "customers.view", active_section="contacts"
                 ):
                     return
+                context = self._page_context()
                 page = panel.render_kontakt(unquote(parts[1]), context=context)
                 self._html(page) if page else self.send_error(404)
             elif len(parts) == 2 and parts[0] == "gerichte":
@@ -1013,6 +1034,7 @@ def make_office_panel_handler(
                     auth, "catalog.view", active_section="catalog"
                 ):
                     return
+                context = self._page_context()
                 page = panel.render_gericht(parts[1], context=context)
                 self._html(page) if page else self.send_error(404)
             elif len(parts) == 3 and parts[0] == "gerichte" and parts[2] == "edit":
@@ -1020,6 +1042,7 @@ def make_office_panel_handler(
                     auth, "catalog.edit", active_section="catalog"
                 ):
                     return
+                context = self._page_context()
                 page = panel.render_gericht_edit(parts[1], context=context)
                 self._html(page) if page else self.send_error(404)
             elif len(parts) == 2 and parts[0] in ("emails", "email"):
@@ -1027,6 +1050,7 @@ def make_office_panel_handler(
                     auth, "inquiries.view", active_section="email"
                 ):
                     return
+                context = self._page_context()
                 page = panel.render_email_detail(parts[1], context=context)
                 self._html(page) if page else self.send_error(404)
             elif len(parts) == 3 and parts[0] == "order" and parts[2] == "print":

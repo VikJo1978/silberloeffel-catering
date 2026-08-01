@@ -195,11 +195,10 @@ def _page(
             _nav_link("/kontakte", "Kontakte", "users", "contacts", active_section)
         )
     if _nav_visible(context, "inquiries.view"):
-        vertrieb.extend(
-            (
-                _nav_link("/emails", "E-Mail", "doc", "email", active_section),
-                _nav_link("/aufgaben", "Aufgaben", "doc", "tasks", active_section),
-            )
+        vertrieb.append(_nav_link("/emails", "E-Mail", "doc", "email", active_section))
+    if _nav_visible(context, "queue.view"):
+        vertrieb.append(
+            _nav_link("/aufgaben", "Aufgaben", "doc", "tasks", active_section)
         )
     if _nav_visible(context, "calendar.view"):
         vertrieb.append(
