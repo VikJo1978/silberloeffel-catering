@@ -124,6 +124,7 @@ class OfficePageContext:
     logout_path: str = ""
     show_transition_banner: bool = False
     legacy_shared_access: bool = False
+    show_users_nav: bool = False
 
 
 _EMPTY_PAGE_CONTEXT = OfficePageContext()
@@ -198,6 +199,20 @@ def _page(
             ),
             '<div class="office-nav-label">Verwaltung</div>',
             _nav_link("/gerichte", "Gerichte", "doc", "catalog", active_section),
+            *(
+                (
+                    '<div class="office-nav-label">Einstellungen</div>',
+                    _nav_link(
+                        "/settings/users",
+                        "Benutzer & Rechte",
+                        "users",
+                        "settings",
+                        active_section,
+                    ),
+                )
+                if context.show_users_nav
+                else ()
+            ),
         )
     )
     page_title = f"<h1>{_e(title)}</h1>" if show_title else ""
