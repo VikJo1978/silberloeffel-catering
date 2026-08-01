@@ -44,9 +44,14 @@ _SCRYPT_KEY_BYTES = 32
 _SCRYPT_MAXMEM = 128 * 1024 * 1024
 _SESSION_TOKEN_BYTES = 32
 _CSRF_TOKEN_BYTES = 32
+_LAST_SEEN_WRITE_INTERVAL = timedelta(minutes=5)
 
 
 class AuthenticationError(Exception):
+    pass
+
+
+class CsrfValidationError(AuthenticationError):
     pass
 
 
@@ -470,8 +475,10 @@ class EmployeeAuthService:
             )
             self.repository.update_session(revoked)
             raise AuthenticationError("session invalidated")
-        touched = replace(session, last_seen_at=now)
-        self.repository.update_session(touched)
+        touched = session
+        if now - session.last_seen_at >= _LAST_SEEN_WRITE_INTERVAL:
+            touched = replace(session, last_seen_at=now)
+            self.repository.update_session(touched)
         resolved_permissions = self.repository.get_explicit_permissions(account.id)
         application_access_allowed = _application_access_allowed(account)
         return AuthenticatedEmployee(
@@ -489,7 +496,7 @@ class EmployeeAuthService:
         if not csrf_token or not hmac.compare_digest(
             session.csrf_token_hash, _token_hash(csrf_token)
         ):
-            raise AuthenticationError("invalid csrf token")
+            raise CsrfValidationError("invalid csrf token")
 
     def logout(self, employee: AuthenticatedEmployee) -> None:
         revoked = replace(

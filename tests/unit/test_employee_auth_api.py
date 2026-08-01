@@ -127,7 +127,7 @@ def test_login_logout_me_and_change_password_flow(auth_api) -> None:
         method="POST",
         headers={"Cookie": cookie},
     )
-    assert status == 401
+    assert status == 403
 
     status, _body, _headers = _request(
         f"{auth_api}/auth/password/change",
@@ -192,8 +192,8 @@ def test_csrf_required_for_state_changing_requests(auth_api) -> None:
         method="POST",
         headers={"Cookie": cookie},
     )
-    assert status == 401
-    assert body["error"] == "unauthorized"
+    assert status == 403
+    assert body["error"] == "forbidden"
 
 
 def test_csrf_token_from_another_session_is_rejected(auth_api) -> None:
@@ -220,8 +220,8 @@ def test_csrf_token_from_another_session_is_rejected(auth_api) -> None:
         method="POST",
         headers={"Cookie": cookie_b, "X-CSRF-Token": csrf_a},
     )
-    assert status == 401
-    assert body["error"] == "unauthorized"
+    assert status == 403
+    assert body["error"] == "forbidden"
     status, _body, _headers = _request(
         f"{auth_api}/auth/me",
         headers={"Cookie": cookie_a},

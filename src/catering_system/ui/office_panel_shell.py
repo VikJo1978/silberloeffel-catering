@@ -189,6 +189,8 @@ svg { display: block; }
   z-index: 20;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: 18px;
   min-height: 76px;
   padding: 0 clamp(24px, 4vw, 54px);
   border-bottom: 1px solid var(--line);
@@ -197,6 +199,58 @@ svg { display: block; }
 .office-crumb {
   color: var(--muted);
   font-size: 13px;
+}
+.office-account {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  min-width: 0;
+}
+.office-account-meta {
+  min-width: 0;
+  text-align: right;
+}
+.office-account-meta strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.office-account-meta span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.office-account-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.office-account-form { margin: 0; }
+.office-account-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--accent-deep);
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.1;
+  text-decoration: none;
+}
+button.office-account-link {
+  color: var(--accent-deep);
+  background: var(--surface);
+}
+.office-account-link:hover,
+button.office-account-link:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 .office-content {
   max-width: 1440px;
@@ -327,6 +381,14 @@ svg { display: block; }
   color: #76501c;
   background: var(--warning-soft);
   font-weight: 700;
+}
+.office-global-banner {
+  margin: 0 0 20px;
+  padding: 12px 15px;
+  border: 1px solid #e5cfab;
+  border-radius: var(--radius-small);
+  color: #76501c;
+  background: var(--warning-soft);
 }
 .office-content ul,
 .office-content ol { padding-left: 22px; }
@@ -1447,7 +1509,14 @@ svg { display: block; }
     position: static;
     min-height: 58px;
     padding-inline: 18px;
+    align-items: flex-start;
+    flex-direction: column;
   }
+  .office-account {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .office-account-meta { text-align: left; }
   .office-content { padding: 26px 18px 48px; }
   .office-content table {
     display: block;

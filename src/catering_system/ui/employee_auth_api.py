@@ -9,10 +9,8 @@ from __future__ import annotations
 
 import argparse
 import json
-from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any
 
 from catering_system.repositories.bootstrap_employee_auth_schema import (
     bootstrap_employee_auth_schema,
@@ -23,11 +21,17 @@ from catering_system.repositories.sqlite_employee_auth_repository import (
 )
 from catering_system.services.employee_auth_service import (
     AuthenticationError,
+    CsrfValidationError,
     EmployeeAuthService,
+)
+from catering_system.ui.employee_auth_http import (
+    bearer_token_from_headers,
+    clear_cookie_header,
+    session_cookie_header,
+    session_token_from_headers,
 )
 
 _MAX_BODY_BYTES = 16 * 1024
-_SESSION_COOKIE_NAME = "sl_employee_session"
 
 
 def _read_service_tokens_from_env() -> dict[str, str]:
@@ -52,46 +56,6 @@ def _strict_json(raw: bytes) -> dict[str, object]:
     if not isinstance(parsed, dict):
         raise ValueError("invalid JSON")
     return parsed
-
-
-def _get_cookie_token(headers: Any) -> str | None:
-    raw = headers.get("Cookie", "")
-    if not raw:
-        return None
-    cookie = SimpleCookie()
-    cookie.load(raw)
-    morsel = cookie.get(_SESSION_COOKIE_NAME)
-    if morsel is None:
-        return None
-    value = morsel.value.strip()
-    return value or None
-
-
-def _bearer_token(headers: Any) -> str | None:
-    raw = headers.get("Authorization", "")
-    if not raw.startswith("Bearer "):
-        return None
-    token = raw.removeprefix("Bearer ").strip()
-    return token or None
-
-
-def _session_cookie_header(
-    token: str,
-    *,
-    secure: bool,
-    max_age: int | None = None,
-) -> str:
-    cookie = SimpleCookie()
-    cookie[_SESSION_COOKIE_NAME] = token
-    morsel = cookie[_SESSION_COOKIE_NAME]
-    morsel["path"] = "/"
-    morsel["httponly"] = True
-    morsel["samesite"] = "Lax"
-    if secure:
-        morsel["secure"] = True
-    if max_age is not None:
-        morsel["max-age"] = str(max_age)
-    return morsel.OutputString()
 
 
 def make_employee_auth_handler(
@@ -149,7 +113,7 @@ def make_employee_auth_handler(
             return _strict_json(self.rfile.read(length))
 
         def _employee(self):
-            session_token = _get_cookie_token(self.headers)
+            session_token = session_token_from_headers(self.headers)
             if session_token is None:
                 raise AuthenticationError("missing session")
             return service.authenticate_session(session_token)
@@ -165,7 +129,7 @@ def make_employee_auth_handler(
                 except AuthenticationError:
                     self._json(401, {"error": "unauthorized"})
                     return
-                session_token = _get_cookie_token(self.headers)
+                session_token = session_token_from_headers(self.headers)
                 assert session_token is not None
                 self._json(
                     200,
@@ -189,8 +153,8 @@ def make_employee_auth_handler(
                 )
                 return
             if self.path == "/auth/introspect":
-                session_token = _get_cookie_token(self.headers)
-                bearer_token = _bearer_token(self.headers)
+                session_token = session_token_from_headers(self.headers)
+                bearer_token = bearer_token_from_headers(self.headers)
                 introspection = service.introspect(
                     session_token=session_token, bearer_token=bearer_token
                 )
@@ -250,7 +214,7 @@ def make_employee_auth_handler(
                             "expires_at": result.session.expires_at.isoformat(),
                         },
                     },
-                    cookie_header=_session_cookie_header(
+                    cookie_header=session_cookie_header(
                         result.session_token, secure=secure_cookie
                     ),
                 )
@@ -260,13 +224,18 @@ def make_employee_auth_handler(
                     employee = self._employee()
                     self._csrf(employee)
                     service.logout(employee)
+                except CsrfValidationError:
+                    self._json(403, {"error": "forbidden"})
+                    return
                 except AuthenticationError:
                     self._json(401, {"error": "unauthorized"})
                     return
                 self._empty(
                     204,
-                    cookie_header=_session_cookie_header(
-                        "", secure=secure_cookie, max_age=0
+                    cookie_header=clear_cookie_header(
+                        "sl_employee_session",
+                        secure=secure_cookie,
+                        http_only=True,
                     ),
                 )
                 return
@@ -280,6 +249,9 @@ def make_employee_auth_handler(
                         current_password=str(body.get("current_password", "")),
                         new_password=str(body.get("new_password", "")),
                     )
+                except CsrfValidationError:
+                    self._json(403, {"error": "forbidden"})
+                    return
                 except ValueError:
                     self._json(400, {"error": "invalid_request"})
                     return
@@ -288,8 +260,10 @@ def make_employee_auth_handler(
                     return
                 self._empty(
                     204,
-                    cookie_header=_session_cookie_header(
-                        "", secure=secure_cookie, max_age=0
+                    cookie_header=clear_cookie_header(
+                        "sl_employee_session",
+                        secure=secure_cookie,
+                        http_only=True,
                     ),
                 )
                 return

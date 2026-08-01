@@ -9,10 +9,12 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, cast
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
+from catering_system.domain.employee_auth import AuthenticatedEmployee
 from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.repositories.offer_repository import OfferRepository
 from catering_system.repositories.catalog_repository import CatalogRepository
@@ -47,6 +49,7 @@ from catering_system.ui.office_panel import (
     OfferPdfUnavailableError,
     OfficePageContext,
     OfficePanel,
+    _csrf_input,
     _e,
     _page,
     fetch_rueckruf_count,
@@ -76,7 +79,21 @@ from catering_system.services.order_confirmation_document_service import (
     OrderConfirmationDocumentNotFoundError,
 )
 from catering_system.services.buffet_cards_service import BuffetCardsService
+from catering_system.services.employee_auth_service import (
+    AuthenticationError,
+    CsrfValidationError,
+    EmployeeAuthService,
+)
 from catering_system.ui.remote_core_client import RemoteCoreError
+from catering_system.ui.employee_auth_http import (
+    CSRF_COOKIE_NAME,
+    SESSION_COOKIE_NAME,
+    clear_cookie_header,
+    csrf_cookie_header,
+    csrf_token_from_headers,
+    session_cookie_header,
+    session_token_from_headers,
+)
 
 if TYPE_CHECKING:
     from catering_system.repositories.core_transaction import CoreCommandExecutor
@@ -85,6 +102,16 @@ if TYPE_CHECKING:
 _CSRF_CONTEXT = b"catering-office-panel-csrf-v1"
 _MAX_FORM_BODY_BYTES = 256 * 1024
 _UNAVAILABLE_MESSAGE = "Core nicht erreichbar — nichts wurde gespeichert."
+_RUECKRUF_COUNT_UNSET = object()
+
+OfficePanelAuthMode = Literal["basic", "migration", "employee"]
+
+_ROLE_LABELS = {
+    "SUPERADMIN": "Superadmin",
+    "ADMIN": "Administrator",
+    "USER": "Benutzer",
+    "VIEWER": "Leser",
+}
 
 _INQUIRY_COMMAND_ERROR_LABELS: dict[str, str] = {
     "conversion_blocked": (
@@ -257,6 +284,35 @@ def csrf_token_for_password(password: str) -> str:
     return hmac.new(password.encode("utf-8"), _CSRF_CONTEXT, hashlib.sha256).hexdigest()
 
 
+def validate_office_panel_auth_mode(value: str) -> OfficePanelAuthMode:
+    if value not in {"basic", "migration", "employee"}:
+        raise ValueError(f"unknown office auth mode: {value}")
+    return cast(OfficePanelAuthMode, value)
+
+
+def _safe_redirect_target(raw: str) -> str:
+    candidate = raw.strip()
+    if not candidate.startswith("/") or candidate.startswith("//"):
+        return "/"
+    parsed = urlparse(candidate)
+    if parsed.scheme or parsed.netloc:
+        return "/"
+    return candidate or "/"
+
+
+@dataclass(frozen=True)
+class OfficePanelRequestAuth:
+    kind: Literal["basic", "employee"]
+    current_user_name: str
+    current_user_role_label: str
+    csrf_token: str
+    show_transition_banner: bool
+    legacy_shared_access: bool
+    password_change_path: str = ""
+    logout_path: str = ""
+    employee: AuthenticatedEmployee | None = None
+
+
 def make_office_panel_handler(
     inquiry_repo: InquiryRepository,
     order_repo: OrderRepository,
@@ -281,7 +337,15 @@ def make_office_panel_handler(
     offer_document_repo: OfferDocumentSnapshotRepository | None = None,
     offer_pdf_static_content: OfferPdfStaticContent | None = None,
     ui_version: str = "legacy",
+    auth_mode: OfficePanelAuthMode = "basic",
+    auth_service: EmployeeAuthService | None = None,
+    secure_cookie: bool = True,
 ) -> type[BaseHTTPRequestHandler]:
+    validated_auth_mode = validate_office_panel_auth_mode(auth_mode)
+    if validated_auth_mode in {"migration", "employee"} and auth_service is None:
+        raise ValueError(
+            "employee auth service is required for migration/employee mode"
+        )
     panel = OfficePanel(
         inquiry_repo,
         order_repo,
@@ -308,8 +372,169 @@ def make_office_panel_handler(
     class OfficePanelHandler(BaseHTTPRequestHandler):
         server_version = "OfficePanel/1.0"
 
-        def _authorized(self) -> bool:
+        def _legacy_authorized(self) -> bool:
             return hmac.compare_digest(self.headers.get("Authorization", ""), expected)
+
+        def _employee_from_session(self) -> AuthenticatedEmployee | None:
+            if auth_service is None:
+                return None
+            session_token = session_token_from_headers(self.headers)
+            if session_token is None:
+                return None
+            return auth_service.authenticate_session(session_token)
+
+        def _resolve_request_auth(self) -> OfficePanelRequestAuth | None:
+            employee: AuthenticatedEmployee | None = None
+            employee_auth_failed = False
+            if validated_auth_mode in {"migration", "employee"}:
+                try:
+                    employee = self._employee_from_session()
+                except AuthenticationError:
+                    employee_auth_failed = True
+                if employee is not None:
+                    return OfficePanelRequestAuth(
+                        kind="employee",
+                        current_user_name=employee.account.display_name,
+                        current_user_role_label=_ROLE_LABELS.get(
+                            employee.account.role, employee.account.role
+                        ),
+                        csrf_token=csrf_token_from_headers(self.headers) or "",
+                        show_transition_banner=validated_auth_mode == "migration",
+                        legacy_shared_access=False,
+                        password_change_path="/password-change",
+                        logout_path="/logout",
+                        employee=employee,
+                    )
+            if (
+                validated_auth_mode in {"basic", "migration"}
+                and self._legacy_authorized()
+            ):
+                return OfficePanelRequestAuth(
+                    kind="basic",
+                    current_user_name="Gemeinsamer Office-Zugang",
+                    current_user_role_label="Legacy-Zugang",
+                    csrf_token=csrf_token,
+                    show_transition_banner=validated_auth_mode == "migration",
+                    legacy_shared_access=True,
+                )
+            if employee_auth_failed:
+                return None
+            return None
+
+        def _render_login_page(
+            self, *, next_path: str, error_message: str = "", status: int = 200
+        ) -> None:
+            body = [
+                "<fieldset><legend>Anmeldung</legend>",
+                "<p>Bitte mit Ihrem Mitarbeiterkonto anmelden.</p>",
+            ]
+            if error_message:
+                body.append(f'<p class="blocked">{_e(error_message)}</p>')
+            body.extend(
+                [
+                    '<form method="post" action="/login">',
+                    f'<input type="hidden" name="next" value="{_e(next_path)}">',
+                    '<p><label for="username">Benutzername oder E-Mail</label><br>',
+                    '<input id="username" name="username" autocomplete="username"></p>',
+                    '<p><label for="password">Passwort</label><br>',
+                    '<input id="password" name="password" type="password" '
+                    'autocomplete="current-password"></p>',
+                    '<p><button type="submit">Anmelden</button></p>',
+                    "</form></fieldset>",
+                ]
+            )
+            self._html(
+                _page(
+                    "Anmeldung",
+                    "".join(body),
+                    active_section="home",
+                    context=OfficePageContext(),
+                ),
+                status=status,
+            )
+
+        def _render_password_change_page(
+            self,
+            auth: OfficePanelRequestAuth,
+            *,
+            error_message: str = "",
+            status: int = 200,
+        ) -> None:
+            body = [
+                "<fieldset><legend>Passwort ändern</legend>",
+                "<p>Ihr Konto ist angemeldet, der Zugriff bleibt aber bis zur Passwortänderung eingeschränkt.</p>",
+            ]
+            if error_message:
+                body.append(f'<p class="blocked">{_e(error_message)}</p>')
+            body.extend(
+                [
+                    '<form method="post" action="/password-change">',
+                    f"{_csrf_input(self._page_context(auth))}",
+                    '<p><label for="current_password">Aktuelles Passwort</label><br>',
+                    '<input id="current_password" name="current_password" type="password" '
+                    'autocomplete="current-password"></p>',
+                    '<p><label for="new_password">Neues Passwort</label><br>',
+                    '<input id="new_password" name="new_password" type="password" '
+                    'autocomplete="new-password"></p>',
+                    '<p><button type="submit">Passwort speichern</button></p>',
+                    "</form></fieldset>",
+                ]
+            )
+            self._html(
+                _page(
+                    "Passwort ändern",
+                    "".join(body),
+                    active_section="home",
+                    context=self._page_context(auth),
+                ),
+                status=status,
+            )
+
+        def _redirect_to_login(self) -> None:
+            next_path = _safe_redirect_target(self.path)
+            location = "/login"
+            if next_path != "/":
+                location = f"/login?next={quote(next_path, safe='')}"
+            self._redirect(location)
+
+        def _page_context(
+            self,
+            auth: OfficePanelRequestAuth | None = None,
+            *,
+            rueckruf_count: int | None | object = _RUECKRUF_COUNT_UNSET,
+        ) -> OfficePageContext:
+            if auth is None:
+                auth = getattr(self, "_request_auth", None)
+            if auth is None:
+                auth = self._resolve_request_auth()
+            if rueckruf_count is _RUECKRUF_COUNT_UNSET:
+                resolved_rueckruf_count = fetch_rueckruf_count(
+                    auerswald_url,
+                    auerswald_user,
+                    auerswald_password,
+                )
+            elif isinstance(rueckruf_count, int) or rueckruf_count is None:
+                resolved_rueckruf_count = rueckruf_count
+            else:
+                resolved_rueckruf_count = None
+            return OfficePageContext(
+                rueckruf_count=resolved_rueckruf_count,
+                csrf_token=auth.csrf_token if auth is not None else "",
+                current_user_name=auth.current_user_name if auth is not None else "",
+                current_user_role_label=(
+                    auth.current_user_role_label if auth is not None else ""
+                ),
+                password_change_path=auth.password_change_path
+                if auth is not None
+                else "",
+                logout_path=auth.logout_path if auth is not None else "",
+                show_transition_banner=(
+                    auth.show_transition_banner if auth is not None else False
+                ),
+                legacy_shared_access=auth.legacy_shared_access
+                if auth is not None
+                else False,
+            )
 
         def _security_headers(self) -> None:
             self.send_header("Cache-Control", "no-store")
@@ -331,11 +556,19 @@ def make_office_panel_handler(
             self.send_header("WWW-Authenticate", 'Basic realm="Office"')
             self.end_headers()
 
-        def _html(self, page: str, status: int = 200) -> None:
+        def _html(
+            self,
+            page: str,
+            status: int = 200,
+            *,
+            cookie_headers: tuple[str, ...] = (),
+        ) -> None:
             payload = page.encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(payload)))
+            for cookie_header in cookie_headers:
+                self.send_header("Set-Cookie", cookie_header)
             self.end_headers()
             self.wfile.write(payload)
 
@@ -349,18 +582,14 @@ def make_office_panel_handler(
             self.end_headers()
             self.wfile.write(payload)
 
-        def _redirect(self, location: str) -> None:
+        def _redirect(
+            self, location: str, *, cookie_headers: tuple[str, ...] = ()
+        ) -> None:
             self.send_response(303)
             self.send_header("Location", location)
+            for cookie_header in cookie_headers:
+                self.send_header("Set-Cookie", cookie_header)
             self.end_headers()
-
-        def _fetch_page_context(self) -> OfficePageContext:
-            return OfficePageContext(
-                rueckruf_count=fetch_rueckruf_count(
-                    auerswald_url, auerswald_user, auerswald_password
-                ),
-                csrf_token=csrf_token,
-            )
 
         def _fetch_enriched_missed_board(self) -> tuple[list[dict] | None, str | None]:
             items, error = fetch_missed_board(
@@ -376,7 +605,7 @@ def make_office_panel_handler(
                     "Fehler",
                     f'<p class="blocked">{_e(message)}</p>',
                     active_section="home",
-                    context=self._fetch_page_context(),
+                    context=self._page_context(),
                 ),
                 status,
             )
@@ -396,7 +625,7 @@ def make_office_panel_handler(
                         "Fehler",
                         f'<p class="blocked">{_e(_UNAVAILABLE_MESSAGE)}</p>',
                         active_section="home",
-                        context=self._fetch_page_context(),
+                        context=self._page_context(),
                     ),
                     503,
                 )
@@ -430,8 +659,60 @@ def make_office_panel_handler(
             pass
 
         def do_GET(self) -> None:  # noqa: N802
-            if not self._authorized():
-                self._deny()
+            parsed = urlparse(self.path)
+            parts = [part for part in parsed.path.split("/") if part]
+            auth = self._resolve_request_auth()
+            self._request_auth = auth
+            if parts == ["login"]:
+                if validated_auth_mode == "basic":
+                    self.send_error(404)
+                    return
+                if auth is not None and auth.kind == "employee":
+                    if (
+                        auth.employee is not None
+                        and not auth.employee.application_access_allowed
+                    ):
+                        self._redirect("/password-change")
+                    else:
+                        self._redirect(
+                            _safe_redirect_target(
+                                parse_qs(parsed.query).get("next", ["/"])[0]
+                            )
+                        )
+                    return
+                self._render_login_page(
+                    next_path=_safe_redirect_target(
+                        parse_qs(parsed.query).get("next", ["/"])[0]
+                    )
+                )
+                return
+            if parts == ["password-change"]:
+                if auth is None or auth.kind != "employee":
+                    if validated_auth_mode == "basic":
+                        self._deny()
+                    else:
+                        self._redirect_to_login()
+                    return
+                if (
+                    auth.employee is not None
+                    and auth.employee.application_access_allowed
+                ):
+                    self._redirect("/")
+                    return
+                self._render_password_change_page(auth)
+                return
+            if auth is None:
+                if validated_auth_mode == "basic":
+                    self._deny()
+                else:
+                    self._redirect_to_login()
+                return
+            if (
+                auth.kind == "employee"
+                and auth.employee is not None
+                and not auth.employee.application_access_allowed
+            ):
+                self._redirect("/password-change")
                 return
             panel.begin_request()
             try:
@@ -448,22 +729,40 @@ def make_office_panel_handler(
                         render_rueckruf(
                             None,
                             "Rückruf-Liste: nur vor Ort verfügbar",
-                            context=OfficePageContext(csrf_token=csrf_token),
+                            context=self._page_context(),
                         )
                     )
                     return
                 items, error = self._fetch_enriched_missed_board()
+                context = self._page_context(
+                    rueckruf_count=len(items) if items is not None else None
+                )
                 context = OfficePageContext(
                     rueckruf_count=len(items) if items is not None else None,
-                    csrf_token=csrf_token,
+                    csrf_token=context.csrf_token,
+                    current_user_name=context.current_user_name,
+                    current_user_role_label=context.current_user_role_label,
+                    password_change_path=context.password_change_path,
+                    logout_path=context.logout_path,
+                    show_transition_banner=context.show_transition_banner,
+                    legacy_shared_access=context.legacy_shared_access,
                 )
                 self._html(render_rueckruf(items, error, context=context))
                 return
             if not parts:
                 items, error = self._fetch_enriched_missed_board()
+                context = self._page_context(
+                    rueckruf_count=len(items) if items is not None else None
+                )
                 context = OfficePageContext(
                     rueckruf_count=len(items) if items is not None else None,
-                    csrf_token=csrf_token,
+                    csrf_token=context.csrf_token,
+                    current_user_name=context.current_user_name,
+                    current_user_role_label=context.current_user_role_label,
+                    password_change_path=context.password_change_path,
+                    logout_path=context.logout_path,
+                    show_transition_banner=context.show_transition_banner,
+                    legacy_shared_access=context.legacy_shared_access,
                 )
                 kalender_view = parse_qs(parsed.query).get("kalender", ["woche"])[0]
                 self._html(
@@ -475,7 +774,7 @@ def make_office_panel_handler(
                     )
                 )
                 return
-            context = self._fetch_page_context()
+            context = self._page_context()
             if parts == ["anfragen"]:
                 search_query = parse_qs(parsed.query).get("q", [""])[0]
                 self._html(panel.render_anfragen(search_query, context=context))
@@ -696,9 +995,9 @@ def make_office_panel_handler(
             self._html(body)
 
         def do_POST(self) -> None:  # noqa: N802
-            if not self._authorized():
-                self._deny()
-                return
+            parts = [part for part in urlparse(self.path).path.split("/") if part]
+            auth = self._resolve_request_auth()
+            self._request_auth = auth
             try:
                 form = self._form()
             except FormBodyTooLargeError as exc:
@@ -707,14 +1006,143 @@ def make_office_panel_handler(
             except (UnicodeDecodeError, ValueError) as exc:
                 self._error_page(str(exc), status=400)
                 return
+            if parts == ["login"]:
+                if validated_auth_mode == "basic":
+                    self.send_error(404)
+                    return
+                assert auth_service is not None
+                next_path = _safe_redirect_target(form.get("next", "/"))
+                try:
+                    result = auth_service.authenticate(
+                        username=form.get("username", ""),
+                        password=form.get("password", ""),
+                    )
+                except AuthenticationError:
+                    self._render_login_page(
+                        next_path=next_path,
+                        error_message="Anmeldung fehlgeschlagen.",
+                        status=401,
+                    )
+                    return
+                self._redirect(
+                    next_path,
+                    cookie_headers=(
+                        session_cookie_header(
+                            result.session_token, secure=secure_cookie
+                        ),
+                        csrf_cookie_header(result.csrf_token, secure=secure_cookie),
+                    ),
+                )
+                return
+            if parts == ["logout"]:
+                if auth is None or auth.kind != "employee" or auth.employee is None:
+                    if validated_auth_mode == "basic":
+                        self._deny()
+                    else:
+                        self._redirect_to_login()
+                    return
+                try:
+                    assert auth_service is not None
+                    auth_service.validate_csrf(
+                        auth.employee.session, form.get("_csrf_token", "")
+                    )
+                    auth_service.logout(auth.employee)
+                except CsrfValidationError:
+                    self._error_page(
+                        "Ungültiger oder fehlender CSRF-Sicherheitstoken.", status=403
+                    )
+                    return
+                self._redirect(
+                    "/login",
+                    cookie_headers=(
+                        clear_cookie_header(
+                            SESSION_COOKIE_NAME,
+                            secure=secure_cookie,
+                            http_only=True,
+                        ),
+                        clear_cookie_header(
+                            CSRF_COOKIE_NAME,
+                            secure=secure_cookie,
+                            http_only=True,
+                        ),
+                    ),
+                )
+                return
+            if parts == ["password-change"]:
+                if auth is None or auth.kind != "employee" or auth.employee is None:
+                    if validated_auth_mode == "basic":
+                        self._deny()
+                    else:
+                        self._redirect_to_login()
+                    return
+                try:
+                    assert auth_service is not None
+                    auth_service.validate_csrf(
+                        auth.employee.session, form.get("_csrf_token", "")
+                    )
+                    auth_service.change_password(
+                        auth.employee,
+                        current_password=form.get("current_password", ""),
+                        new_password=form.get("new_password", ""),
+                    )
+                except CsrfValidationError:
+                    self._error_page(
+                        "Ungültiger oder fehlender CSRF-Sicherheitstoken.", status=403
+                    )
+                    return
+                except (AuthenticationError, ValueError):
+                    self._render_password_change_page(
+                        auth,
+                        error_message="Passwort konnte nicht geändert werden.",
+                        status=401,
+                    )
+                    return
+                self._redirect(
+                    "/login",
+                    cookie_headers=(
+                        clear_cookie_header(
+                            SESSION_COOKIE_NAME,
+                            secure=secure_cookie,
+                            http_only=True,
+                        ),
+                        clear_cookie_header(
+                            CSRF_COOKIE_NAME,
+                            secure=secure_cookie,
+                            http_only=True,
+                        ),
+                    ),
+                )
+                return
+            if auth is None:
+                if validated_auth_mode == "basic":
+                    self._deny()
+                else:
+                    self._redirect_to_login()
+                return
+            if (
+                auth.kind == "employee"
+                and auth.employee is not None
+                and not auth.employee.application_access_allowed
+            ):
+                self._redirect("/password-change")
+                return
             submitted_token = form.get("_csrf_token", "")
-            if not hmac.compare_digest(submitted_token, csrf_token):
+            if auth.kind == "employee":
+                try:
+                    assert auth.employee is not None
+                    assert auth_service is not None
+                    auth_service.validate_csrf(auth.employee.session, submitted_token)
+                except CsrfValidationError:
+                    self._error_page(
+                        "Ungültiger oder fehlender CSRF-Sicherheitstoken.", status=403
+                    )
+                    return
+            elif not hmac.compare_digest(submitted_token, csrf_token):
                 self._error_page(
                     "Ungültiger oder fehlender CSRF-Sicherheitstoken.", status=403
                 )
                 return
             panel.begin_request(form)
-            parts = [part for part in urlparse(self.path).path.split("/") if part]
             try:
                 self._route_post(parts)
             except CatalogCommandError as exc:
@@ -751,7 +1179,7 @@ def make_office_panel_handler(
             elif parts == ["proposal-preview"]:
                 payload = parse_proposal_payload(self._form().get("payload_json", ""))
                 self._html(
-                    render_proposal_preview(payload, context=self._fetch_page_context())
+                    render_proposal_preview(payload, context=self._page_context())
                 )
             elif parts == ["proposal-preview", "prepare"]:
                 payload = parse_proposal_payload(self._form().get("payload_json", ""))
@@ -770,7 +1198,7 @@ def make_office_panel_handler(
                         intake_message=payload.get("notes") or "",
                         intake_summary=summary_lines,
                         intake_external_ref=payload.get("proposal_id") or "",
-                        context=self._fetch_page_context(),
+                        context=self._page_context(),
                     )
                 )
             elif parts == ["rueckruf", "resolve"]:
@@ -816,7 +1244,7 @@ def make_office_panel_handler(
             except CatalogCommandError as exc:
                 self._html(
                     panel.render_gericht_new(
-                        context=self._fetch_page_context(),
+                        context=self._page_context(),
                         form=form,
                         error_message=office_command_error_message(exc.code),
                     ),
@@ -829,7 +1257,7 @@ def make_office_panel_handler(
             except (ValueError, KeyError) as exc:
                 self._html(
                     panel.render_gericht_new(
-                        context=self._fetch_page_context(),
+                        context=self._page_context(),
                         form=form,
                         error_message=office_command_error_message(str(exc)),
                     ),
@@ -952,6 +1380,9 @@ def create_office_panel_server(
     offer_document_repo: OfferDocumentSnapshotRepository | None = None,
     offer_pdf_static_content: OfferPdfStaticContent | None = None,
     ui_version: str = "legacy",
+    auth_mode: OfficePanelAuthMode = "basic",
+    auth_service: EmployeeAuthService | None = None,
+    secure_cookie: bool = True,
 ) -> HTTPServer:
     """Create the intentionally single-threaded office HTTP server."""
     return HTTPServer(
@@ -979,5 +1410,8 @@ def create_office_panel_server(
             offer_document_repo=offer_document_repo,
             offer_pdf_static_content=offer_pdf_static_content,
             ui_version=ui_version,
+            auth_mode=auth_mode,
+            auth_service=auth_service,
+            secure_cookie=secure_cookie,
         ),
     )
