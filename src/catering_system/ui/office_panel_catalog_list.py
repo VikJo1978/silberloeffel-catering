@@ -135,7 +135,11 @@ def render_gerichte_list(
     body = (
         '<p class="subtitle">Stammdaten — Gerichte anlegen, bearbeiten und '
         "aktivieren.</p>"
-        '<p><a href="/gerichte/new">Neues Gericht anlegen</a></p>'
+        + (
+            '<p><a href="/gerichte/new">Neues Gericht anlegen</a></p>'
+            if context.can("catalog.edit")
+            else ""
+        )
         + _search_form(search_query, status_filter)
         + _status_tabs(search_query, status_filter)
         + limit_notice

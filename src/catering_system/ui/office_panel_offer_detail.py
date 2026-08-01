@@ -328,7 +328,11 @@ def _record_withdrawal_form(offer_id: str, *, forms: OfferDetailFormFields) -> s
     )
 
 
-def _prepare_next_version_cta(*, revision_prefill_url: str | None) -> str:
+def _prepare_next_version_cta(
+    *, revision_prefill_url: str | None, context: OfficePageContext
+) -> str:
+    if not context.can("offers.version.create"):
+        return ""
     if not revision_prefill_url:
         return (
             '<section class="offer-detail-section offer-action-section">'
@@ -353,12 +357,15 @@ def _sent_offer_actions(
     *,
     forms: OfferDetailFormFields,
     revision_prefill_url: str | None = None,
+    context: OfficePageContext,
 ) -> str:
     return (
         _record_acceptance_form(offer_id, variants, forms=forms)
         + _record_rejection_form(offer_id, forms=forms)
         + _record_withdrawal_form(offer_id, forms=forms)
-        + _prepare_next_version_cta(revision_prefill_url=revision_prefill_url)
+        + _prepare_next_version_cta(
+            revision_prefill_url=revision_prefill_url, context=context
+        )
     )
 
 
@@ -430,10 +437,11 @@ def render_offer_detail(
             variants,
             forms=forms,
             revision_prefill_url=revision_prefill_url,
+            context=context,
         )
     elif state in ("Expired", "Rejected", "Withdrawn"):
         action_section = _prepare_next_version_cta(
-            revision_prefill_url=revision_prefill_url
+            revision_prefill_url=revision_prefill_url, context=context
         )
     elif state == "Accepted":
         acceptance_id = detail.get("acceptance_id")
@@ -451,7 +459,7 @@ def render_offer_detail(
             )
     pdf_link = (
         f'<p><a href="{_e(pdf_download_url)}">PDF herunterladen</a></p>'
-        if pdf_download_url is not None
+        if pdf_download_url is not None and context.can("offers.pdf.generate")
         else ""
     )
     body = (

@@ -282,6 +282,8 @@ def _month_grid(data: ArbeitszentraleData) -> str:
 
 
 def _calendar_card(data: ArbeitszentraleData) -> str:
+    if not data.context.can("calendar.view"):
+        return ""
     if data.kalender_view == "monat":
         body = _month_grid(data)
         subtitle = f"{_MONTHS[data.today.month]} {data.today.year}"
@@ -331,32 +333,51 @@ def render_arbeitszentrale(data: ArbeitszentraleData) -> str:
         f"{_WEEKDAYS[today.weekday()]}, {today.day}. "
         f"{_MONTHS[today.month]} {today.year}"
     )
+    header_actions: list[str] = []
+    if data.context.can("orders.view"):
+        header_actions.append(
+            '<a class="dashboard-button secondary" href="/orders">Alle Aufträge</a>'
+        )
+    if data.context.can("inquiries.create"):
+        header_actions.append(
+            '<a class="dashboard-button" href="/inquiry/new">+ Neue Anfrage</a>'
+        )
     header = (
         '<header class="dashboard-page-header"><div>'
         f'<div class="dashboard-eyebrow">{_e(header_date)}</div>'
         "<h1>Heute im Büro</h1>"
         "<p>Anfragen, Rückrufe und operative Aufgaben im Blick.</p></div>"
         '<div class="dashboard-header-actions">'
-        '<a class="dashboard-button secondary" href="/orders">Alle Aufträge</a>'
-        '<a class="dashboard-button" href="/inquiry/new">+ Neue Anfrage</a>'
-        "</div></header>"
+        + "".join(header_actions)
+        + "</div></header>"
     )
+    events_section = ""
+    if data.context.can("calendar.view"):
+        events_section = (
+            '<section class="dashboard-card">'
+            '<div class="dashboard-card-head"><div>'
+            "<h2>Nächste Veranstaltungen</h2>"
+            "<p>Kommende Termine mit nächstem Schritt.</p></div>"
+            '<a class="dashboard-text-link" href="/kalender">Kalender öffnen</a></div>'
+            + _event_rows(data)
+            + "</section>"
+        )
     main_column = (
         '<div class="dashboard-main">'
         '<section class="dashboard-card">'
         '<div class="dashboard-card-head"><div>'
         "<h2>Was als Nächstes ansteht</h2>"
         "<p>Die wichtigsten offenen Schritte.</p></div>"
-        '<a class="dashboard-text-link" href="/aufgaben">Alle Aufgaben</a></div>'
+        + (
+            '<a class="dashboard-text-link" href="/aufgaben">Alle Aufgaben</a>'
+            if data.context.can("queue.view")
+            else ""
+        )
+        + "</div>"
         + _task_rows(data.tasks)
         + "</section>"
-        '<section class="dashboard-card">'
-        '<div class="dashboard-card-head"><div>'
-        "<h2>Nächste Veranstaltungen</h2>"
-        "<p>Kommende Termine mit nächstem Schritt.</p></div>"
-        '<a class="dashboard-text-link" href="/kalender">Kalender öffnen</a></div>'
-        + _event_rows(data)
-        + "</section></div>"
+        + events_section
+        + "</div>"
     )
     side_column = (
         '<div class="dashboard-side">'
