@@ -128,6 +128,10 @@ def _session_cookie_value(token: str) -> str:
     return token
 
 
+def _application_access_allowed(account: EmployeeAccount) -> bool:
+    return not account.must_change_password
+
+
 class EmployeeAuthService:
     def __init__(
         self,
@@ -415,6 +419,7 @@ class EmployeeAuthService:
         )
         self.repository.create_session(session)
         resolved_permissions = self.repository.get_explicit_permissions(updated.id)
+        application_access_allowed = _application_access_allowed(updated)
         self._append_audit(
             actor_type="employee",
             actor_account=updated,
@@ -431,8 +436,11 @@ class EmployeeAuthService:
             session=session,
             session_token=session_token,
             csrf_token=csrf_token,
-            effective_permissions=effective_permissions(
-                updated.role, resolved_permissions
+            application_access_allowed=application_access_allowed,
+            effective_permissions=(
+                effective_permissions(updated.role, resolved_permissions)
+                if application_access_allowed
+                else frozenset()
             ),
         )
 
@@ -465,11 +473,15 @@ class EmployeeAuthService:
         touched = replace(session, last_seen_at=now)
         self.repository.update_session(touched)
         resolved_permissions = self.repository.get_explicit_permissions(account.id)
+        application_access_allowed = _application_access_allowed(account)
         return AuthenticatedEmployee(
             account=account,
             session=touched,
-            effective_permissions=effective_permissions(
-                account.role, resolved_permissions
+            application_access_allowed=application_access_allowed,
+            effective_permissions=(
+                effective_permissions(account.role, resolved_permissions)
+                if application_access_allowed
+                else frozenset()
             ),
         )
 
@@ -592,6 +604,7 @@ class EmployeeAuthService:
                 return AuthIntrospection(
                     kind="employee_session",
                     authenticated=True,
+                    application_access_allowed=employee.application_access_allowed,
                     account=employee.account,
                     effective_permissions=employee.effective_permissions,
                 )
@@ -662,6 +675,8 @@ class EmployeeAuthService:
     def _assert_permission(
         self, actor: AuthenticatedEmployee, permission_code: str
     ) -> None:
+        if not actor.application_access_allowed:
+            raise AuthorizationError("password change required")
         if permission_code not in actor.effective_permissions:
             raise AuthorizationError(f"missing permission {permission_code}")
 

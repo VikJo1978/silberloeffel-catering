@@ -63,6 +63,18 @@ def _login_superadmin(auth):
     return service, repo, result, employee
 
 
+def _login_superadmin_ready(auth):
+    service, repo, result, employee = _login_superadmin(auth)
+    service.change_password(
+        employee,
+        current_password="TempPassw0rd!",
+        new_password="ChangedTemp1!",
+    )
+    relogin = service.authenticate(username="viktor.admin", password="ChangedTemp1!")
+    ready_employee = service.authenticate_session(relogin.session_token)
+    return service, repo, relogin, ready_employee
+
+
 def test_username_normalization_and_display_name_validation() -> None:
     assert normalize_username("  Viktor.Admin  ") == "viktor.admin"
     assert validate_display_name("  Viktor Johanson ") == "Viktor Johanson"
@@ -79,10 +91,11 @@ def test_password_hashing_and_verification(auth) -> None:
     assert stored.password_hash != "TempPassw0rd!"
     assert verify_password("TempPassw0rd!", stored.password_hash) is True
     assert verify_password("wrong-password", stored.password_hash) is False
+    assert verify_password("TempPassw0rd!", "scrypt$bad") is False
 
 
 def test_username_uniqueness_is_case_insensitive(auth) -> None:
-    service, repo, _result, employee = _login_superadmin(auth)
+    service, repo, _result, employee = _login_superadmin_ready(auth)
     service.create_account(
         employee,
         username="worker.one",
@@ -126,8 +139,72 @@ def test_session_creation_validation_expiry_and_revocation(auth) -> None:
         service.authenticate_session(result.session_token)
 
 
+def test_inactive_account_login_is_rejected(auth) -> None:
+    service, _repo, _result, employee = _login_superadmin_ready(auth)
+    target = service.create_account(
+        employee,
+        username="worker.inactive",
+        display_name="Worker Inactive",
+        password="AnotherTemp1!",
+        role="USER",
+    )
+    service.deactivate_account(employee, target.id)
+    with pytest.raises(AuthenticationError, match="inactive"):
+        service.authenticate(username="worker.inactive", password="AnotherTemp1!")
+
+
+def test_auth_version_mismatch_rejects_session(auth) -> None:
+    service, _repo, result, employee = _login_superadmin(auth)
+    service.change_password(
+        employee,
+        current_password="TempPassw0rd!",
+        new_password="ChangedTemp1!",
+    )
+    with pytest.raises(AuthenticationError, match="revoked|invalidated"):
+        service.authenticate_session(result.session_token)
+
+
+def test_must_change_password_blocks_application_permissions_until_changed(
+    auth,
+) -> None:
+    service, _repo, _account = _bootstrap(auth)
+    result = service.authenticate(username="viktor.admin", password="TempPassw0rd!")
+    employee = service.authenticate_session(result.session_token)
+    assert employee.account.must_change_password is True
+    assert employee.application_access_allowed is False
+    assert employee.effective_permissions == frozenset()
+    introspection = service.introspect(
+        session_token=result.session_token,
+        bearer_token=None,
+    )
+    assert introspection.authenticated is True
+    assert introspection.application_access_allowed is False
+    assert introspection.effective_permissions == frozenset()
+    with pytest.raises(AuthorizationError, match="password change required"):
+        service.create_account(
+            employee,
+            username="blocked.user",
+            display_name="Blocked User",
+            password="BlockedTemp1!",
+            role="USER",
+        )
+
+    updated = service.change_password(
+        employee,
+        current_password="TempPassw0rd!",
+        new_password="ChangedTemp1!",
+    )
+    assert updated.must_change_password is False
+    with pytest.raises(AuthenticationError):
+        service.authenticate_session(result.session_token)
+
+    relogin = service.authenticate(username="viktor.admin", password="ChangedTemp1!")
+    assert relogin.application_access_allowed is True
+    assert "settings.edit" in relogin.effective_permissions
+
+
 def test_deactivation_and_password_change_invalidate_sessions(auth) -> None:
-    service, repo, result, employee = _login_superadmin(auth)
+    service, repo, result, employee = _login_superadmin_ready(auth)
     target = service.create_account(
         employee,
         username="worker.two",
@@ -158,7 +235,7 @@ def test_deactivation_and_password_change_invalidate_sessions(auth) -> None:
 
 
 def test_last_active_superadmin_guard(auth) -> None:
-    service, _repo, _result, employee = _login_superadmin(auth)
+    service, _repo, _result, employee = _login_superadmin_ready(auth)
     with pytest.raises(LastActiveSuperadminError):
         service.deactivate_account(employee, employee.account.id)
     with pytest.raises(LastActiveSuperadminError):
@@ -180,7 +257,7 @@ def test_bootstrap_and_recovery_reset(auth) -> None:
 
 
 def test_admin_may_grant_only_within_own_effective_permissions(auth) -> None:
-    service, _repo, _result, superadmin = _login_superadmin(auth)
+    service, _repo, _result, superadmin = _login_superadmin_ready(auth)
     admin = service.create_account(
         superadmin,
         username="team.admin",

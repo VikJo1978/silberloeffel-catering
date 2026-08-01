@@ -332,6 +332,7 @@ class SecurityAuditEvent:
 class AuthenticatedEmployee:
     account: EmployeeAccount
     session: EmployeeSession
+    application_access_allowed: bool
     effective_permissions: frozenset[str]
 
 
@@ -341,6 +342,7 @@ class SessionLoginResult:
     session: EmployeeSession
     session_token: str
     csrf_token: str
+    application_access_allowed: bool
     effective_permissions: frozenset[str]
 
 
@@ -348,6 +350,7 @@ class SessionLoginResult:
 class AuthIntrospection:
     kind: Literal["employee_session", "service_token", "public"]
     authenticated: bool
+    application_access_allowed: bool = False
     account: EmployeeAccount | None = None
     effective_permissions: frozenset[str] = frozenset()
     service_id: str | None = None

@@ -95,7 +95,7 @@ def _session_cookie_header(
 
 
 def make_employee_auth_handler(
-    service: EmployeeAuthService, *, secure_cookie: bool = False
+    service: EmployeeAuthService, *, secure_cookie: bool = True
 ) -> type[BaseHTTPRequestHandler]:
     class EmployeeAuthHandler(BaseHTTPRequestHandler):
         server_version = "EmployeeAuth/1.0"
@@ -179,6 +179,7 @@ def make_employee_auth_handler(
                             "is_active": employee.account.is_active,
                             "must_change_password": employee.account.must_change_password,
                         },
+                        "application_access_allowed": employee.application_access_allowed,
                         "effective_permissions": sorted(employee.effective_permissions),
                         "session": {
                             "id": employee.session.id,
@@ -196,6 +197,7 @@ def make_employee_auth_handler(
                 payload: dict[str, object] = {
                     "kind": introspection.kind,
                     "authenticated": introspection.authenticated,
+                    "application_access_allowed": introspection.application_access_allowed,
                 }
                 if introspection.account is not None:
                     payload["account"] = {
@@ -240,6 +242,7 @@ def make_employee_auth_handler(
                             "is_active": result.account.is_active,
                             "must_change_password": result.account.must_change_password,
                         },
+                        "application_access_allowed": result.application_access_allowed,
                         "effective_permissions": sorted(result.effective_permissions),
                         "csrf_token": result.csrf_token,
                         "session": {
@@ -303,7 +306,7 @@ def create_employee_auth_server(
     *,
     host: str = "127.0.0.1",
     port: int = 8085,
-    secure_cookie: bool = False,
+    secure_cookie: bool = True,
     service_tokens: dict[str, str] | None = None,
 ) -> HTTPServer:
     connection = open_core_connection(db_path)
@@ -325,16 +328,16 @@ def main() -> None:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8085)
     parser.add_argument(
-        "--secure-cookie",
+        "--allow-insecure-cookie",
         action="store_true",
-        help="Mark the session cookie Secure (required behind private HTTPS reverse proxy)",
+        help="Allow non-Secure employee session cookies for local HTTP development only",
     )
     args = parser.parse_args()
     server = create_employee_auth_server(
         args.db,
         host=args.host,
         port=args.port,
-        secure_cookie=args.secure_cookie,
+        secure_cookie=not args.allow_insecure_cookie,
         service_tokens=_read_service_tokens_from_env(),
     )
     print(f"Employee auth API on http://{args.host}:{args.port}/auth/")
