@@ -9,13 +9,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-from catering_system.repositories.bootstrap_employee_auth_schema import (
-    bootstrap_employee_auth_schema,
-)
-from catering_system.repositories.core_transaction import open_core_connection
 from catering_system.repositories.sqlite_employee_auth_repository import (
     SQLiteEmployeeAuthRepository,
 )
@@ -37,6 +34,12 @@ from catering_system.ui.employee_auth_http import (
 )
 
 _MAX_BODY_BYTES = 16 * 1024
+
+
+class EmployeeAuthHTTPServer(HTTPServer):
+    request_lock: threading.RLock
+    auth_repository: SQLiteEmployeeAuthRepository
+    auth_service: EmployeeAuthService
 
 
 def _read_service_tokens_from_env() -> dict[str, str]:
@@ -68,6 +71,14 @@ def make_employee_auth_handler(
 ) -> type[BaseHTTPRequestHandler]:
     class EmployeeAuthHandler(BaseHTTPRequestHandler):
         server_version = "EmployeeAuth/1.0"
+
+        def handle(self) -> None:
+            lock = getattr(self.server, "request_lock", None)
+            if lock is None:
+                super().handle()
+                return
+            with lock:
+                super().handle()
 
         def log_message(self, format: str, *args: object) -> None:  # noqa: A002
             pass
@@ -353,18 +364,29 @@ def create_employee_auth_server(
     port: int = 8085,
     secure_cookie: bool = True,
     service_tokens: dict[str, str] | None = None,
-) -> HTTPServer:
-    connection = open_core_connection(db_path)
-    bootstrap_employee_auth_schema(connection)
-    repository = SQLiteEmployeeAuthRepository.from_connection(connection)
+) -> EmployeeAuthHTTPServer:
+    """Create the employee-auth HTTP server with a managed repository.
+
+    The server owns one transaction-capable SQLite connection. Request handling
+    is serialized through ``server.request_lock`` so nested repository
+    transaction depth remains safe if the server is ever run with a threading
+    HTTP mixin.
+    """
+    resolved_path = Path(db_path)
+    repository = SQLiteEmployeeAuthRepository(resolved_path)
+    repository._conn.execute("PRAGMA busy_timeout = 2000")
     service = EmployeeAuthService(
         repository,
         service_tokens=service_tokens,
     )
-    return HTTPServer(
+    server = EmployeeAuthHTTPServer(
         (host, port),
         make_employee_auth_handler(service, secure_cookie=secure_cookie),
     )
+    server.request_lock = threading.RLock()
+    server.auth_repository = repository
+    server.auth_service = service
+    return server
 
 
 def main() -> None:
