@@ -18,9 +18,7 @@ from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from catering_system.domain.catalog import CatalogDish, validate_allergen_codes
-from catering_system.repositories.sqlite_catalog_repository import (
-    SQLiteCatalogRepository,
-)
+from catering_system.repositories.sqlite_catalog_repository import SQLiteCatalogRepository
 
 _CATALOG_NAMESPACE = uuid.UUID("6d1c0000-0000-4000-8000-000000000001")
 _UUID_RE = re.compile(
@@ -155,7 +153,9 @@ def _map_item(item: dict[str, object], *, now: datetime) -> CatalogDish:
         dish_id=_dish_id_from_source(source_id),
         name=name,
         description=_optional_str(item.get("description")),
-        composition=_optional_str(item.get("composition", item.get("ingredients"))),
+        composition=_optional_str(
+            item.get("composition", item.get("ingredients"))
+        ),
         notes=_optional_str(item.get("notes")),
         current_unit_net_cents=cents,
         allergens=_parse_allergens(item.get("allergens")),
