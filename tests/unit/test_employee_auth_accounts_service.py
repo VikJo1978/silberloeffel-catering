@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import json
+import sqlite3
+import threading
+import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from catering_system.domain.employee_auth import SecurityAuditEvent
 from catering_system.services.employee_auth_service import (
     AccountConflictError,
     AuthorizationError,
@@ -367,7 +372,7 @@ def test_plaintext_password_absent_from_audit_and_generated_reset(auth) -> None:
     )
     result = service.reset_account_password(superadmin, worker.id)
     assert result.temporary_password is not None
-    events = repo.list_audit_events_for_account(worker.id)
+    events = repo.list_audit_events_for_account(worker.id, limit=100)
     assert events
     for event in events:
         assert result.temporary_password not in event.metadata_json
@@ -411,6 +416,221 @@ def test_account_specific_audit_listing_is_permission_protected(auth) -> None:
     events = service.list_account_audit_events(superadmin, worker.id)
     assert events
     assert all(event.target_id == worker.id for event in events)
+    assert all(event.target_type == "employee_account" for event in events)
     admin_employee = _ready_admin(auth, superadmin)
     with pytest.raises(AuthorizationError):
         service.list_account_audit_events(admin_employee, worker.id)
+
+
+def test_successful_profile_update_rolls_back_when_audit_insert_fails(auth) -> None:
+    service, _repo, superadmin = _ready_superadmin(auth)
+    worker = service.create_account(
+        superadmin,
+        username="worker.rollback",
+        display_name="Worker Rollback",
+        password="WorkerTemp1!",
+        role="USER",
+    )
+    original_append = service._append_audit
+
+    def failing_append(**kwargs: object) -> None:
+        if kwargs.get("action") == "auth.account_profile_updated":
+            raise sqlite3.OperationalError("audit insert failed")
+        original_append(**kwargs)  # type: ignore[arg-type]
+
+    service._append_audit = failing_append  # type: ignore[method-assign]
+
+    with pytest.raises(sqlite3.OperationalError, match="audit insert failed"):
+        service.update_account_profile(
+            superadmin, worker.id, display_name="Should Roll Back"
+        )
+
+    detail = service.get_account(superadmin, worker.id)
+    assert detail.display_name == "Worker Rollback"
+
+
+def test_account_audit_listing_filters_by_target_type(auth) -> None:
+    service, repo, superadmin = _ready_superadmin(auth)
+    worker = service.create_account(
+        superadmin,
+        username="worker.targettype",
+        display_name="Worker Target Type",
+        password="WorkerTemp1!",
+        role="USER",
+    )
+    repo.append_audit_event(
+        SecurityAuditEvent(
+            event_id=str(uuid.uuid4()),
+            occurred_at=datetime(2026, 8, 1, 12, 0, tzinfo=UTC),
+            actor_type="system",
+            actor_account_id=None,
+            actor_display_name_snapshot=None,
+            actor_role_snapshot=None,
+            session_id=None,
+            action="other.entity_updated",
+            target_type="other_entity",
+            target_id=worker.id,
+            permission_code=None,
+            outcome="success",
+            metadata_json='{"note": "cross-type probe"}',
+        )
+    )
+    service.deactivate_account(superadmin, worker.id)
+    events = service.list_account_audit_events(superadmin, worker.id)
+    assert events
+    assert all(event.target_type == "employee_account" for event in events)
+    assert all(event.action != "other.entity_updated" for event in events)
+
+
+def test_role_change_audit_metadata_records_old_new_and_removed_permissions(
+    auth,
+) -> None:
+    service, repo, superadmin = _ready_superadmin(auth)
+    worker = service.create_account(
+        superadmin,
+        username="worker.roleaudit",
+        display_name="Worker Role Audit",
+        password="WorkerTemp1!",
+        role="USER",
+        explicit_permissions={"offers.prepare", "offers.view", "inquiries.view"},
+    )
+    service.change_account_role(superadmin, worker.id, "VIEWER")
+    role_events = [
+        event
+        for event in repo.list_audit_events_for_account(worker.id, limit=100)
+        if event.action == "auth.role_changed"
+    ]
+    assert len(role_events) == 1
+    metadata = json.loads(role_events[0].metadata_json)
+    assert metadata["old_role"] == "USER"
+    assert metadata["new_role"] == "VIEWER"
+    assert metadata["removed_permission_codes"] == ["offers.prepare"]
+
+
+def test_concurrent_last_superadmin_demotions_leave_one_active_superadmin(
+    auth, tmp_path: Path
+) -> None:
+    service, repo, superadmin = _ready_superadmin(auth)
+    db_path = tmp_path / "core.db"
+    backup = service.create_account(
+        superadmin,
+        username="super.two",
+        display_name="Super Two",
+        password="SecondTemp1!",
+        role="SUPERADMIN",
+    )
+    super_one_id = superadmin.account.id
+    super_two_id = backup.id
+    repo.close()
+
+    clock = Clock(datetime(2026, 8, 1, 9, 30, tzinfo=UTC))
+    barrier = threading.Barrier(2)
+    results: list[tuple[str, str]] = []
+
+    def attempt_demote(target_id: str) -> None:
+        from catering_system.repositories.sqlite_employee_auth_repository import (
+            SQLiteEmployeeAuthRepository,
+        )
+
+        thread_repo = SQLiteEmployeeAuthRepository(db_path)
+        thread_service = EmployeeAuthService(thread_repo, now=clock.now)
+        login = thread_service.authenticate(
+            username="super.admin", password="ChangedTemp1!"
+        )
+        actor = thread_service.authenticate_session(login.session_token)
+        barrier.wait(timeout=5)
+        try:
+            thread_service.change_account_role(actor, target_id, "ADMIN")
+            results.append(("ok", target_id))
+        except LastActiveSuperadminError:
+            results.append(("blocked", target_id))
+        finally:
+            thread_repo.close()
+
+    threads = [
+        threading.Thread(target=attempt_demote, args=(super_one_id,)),
+        threading.Thread(target=attempt_demote, args=(super_two_id,)),
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10)
+
+    from catering_system.repositories.sqlite_employee_auth_repository import (
+        SQLiteEmployeeAuthRepository,
+    )
+
+    verify_repo = SQLiteEmployeeAuthRepository(db_path)
+    try:
+        assert verify_repo.count_active_superadmins() >= 1
+    finally:
+        verify_repo.close()
+
+    outcomes = {item[0] for item in results}
+    assert outcomes == {"ok", "blocked"}
+    assert len(results) == 2
+
+
+def test_account_audit_listing_default_and_max_limits(auth) -> None:
+    service, repo, superadmin = _ready_superadmin(auth)
+    worker = service.create_account(
+        superadmin,
+        username="worker.limit",
+        display_name="Worker Limit",
+        password="WorkerTemp1!",
+        role="USER",
+    )
+    for index in range(105):
+        repo.append_audit_event(
+            SecurityAuditEvent(
+                event_id=str(uuid.uuid4()),
+                occurred_at=datetime(2026, 8, 1, 10, 0, tzinfo=UTC)
+                + timedelta(seconds=index),
+                actor_type="system",
+                actor_account_id=None,
+                actor_display_name_snapshot=None,
+                actor_role_snapshot=None,
+                session_id=None,
+                action=f"auth.probe_{index}",
+                target_type="employee_account",
+                target_id=worker.id,
+                permission_code=None,
+                outcome="success",
+                metadata_json='{"index": ' + str(index) + "}",
+            )
+        )
+
+    default_events = service.list_account_audit_events(superadmin, worker.id)
+    assert len(default_events) == 100
+    assert default_events[0].action == "auth.account_created"
+
+    bounded_events = service.list_account_audit_events(superadmin, worker.id, limit=10)
+    assert len(bounded_events) == 10
+
+    with pytest.raises(ValueError, match="limit must be between"):
+        service.list_account_audit_events(superadmin, worker.id, limit=0)
+    with pytest.raises(ValueError, match="limit must be between"):
+        service.list_account_audit_events(superadmin, worker.id, limit=501)
+
+
+def test_employee_auth_migration_5_creates_target_type_index(tmp_path: Path) -> None:
+    from catering_system.repositories.sqlite_employee_auth_repository import (
+        SQLiteEmployeeAuthRepository,
+        _MIGRATIONS,
+    )
+    from catering_system.repositories.sqlite_migrations import apply_migrations
+
+    db_path = tmp_path / "migration5.db"
+    connection = sqlite3.connect(db_path)
+    try:
+        apply_migrations(connection, "employee_auth", _MIGRATIONS[:4])
+        apply_migrations(connection, "employee_auth", _MIGRATIONS)
+        row = connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'index' "
+            "AND name = 'idx_security_audit_events_employee_account_target'"
+        ).fetchone()
+        assert row is not None
+        rerun = SQLiteEmployeeAuthRepository(db_path)
+        rerun.close()
+    finally:
+        connection.close()

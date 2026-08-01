@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Callable
+from urllib.parse import parse_qs
 
 from catering_system.domain.employee_auth import (
     EmployeeAccountDetail,
@@ -18,6 +19,9 @@ from catering_system.services.employee_auth_service import (
     EmployeeAuthService,
     LastActiveSuperadminError,
 )
+
+_ACCOUNT_AUDIT_LIST_DEFAULT_LIMIT = 100
+_ACCOUNT_AUDIT_LIST_MAX_LIMIT = 500
 
 
 def _reject_unknown_keys(body: dict[str, object], allowed: set[str]) -> None:
@@ -104,6 +108,26 @@ def audit_event_json(event: SecurityAuditEventView) -> dict[str, object]:
     }
 
 
+def _parse_audit_events_limit(query: str) -> int | None:
+    if not query:
+        return None
+    params = parse_qs(query, keep_blank_values=True)
+    if "limit" not in params:
+        return None
+    raw_values = params["limit"]
+    if len(raw_values) != 1 or not raw_values[0].strip():
+        raise ValueError(f"limit must be between 1 and {_ACCOUNT_AUDIT_LIST_MAX_LIMIT}")
+    try:
+        limit = int(raw_values[0])
+    except ValueError as exc:
+        raise ValueError(
+            f"limit must be between 1 and {_ACCOUNT_AUDIT_LIST_MAX_LIMIT}"
+        ) from exc
+    if limit < 1 or limit > _ACCOUNT_AUDIT_LIST_MAX_LIMIT:
+        raise ValueError(f"limit must be between 1 and {_ACCOUNT_AUDIT_LIST_MAX_LIMIT}")
+    return limit
+
+
 def handle_accounts_get(
     service: EmployeeAuthService,
     *,
@@ -111,6 +135,7 @@ def handle_accounts_get(
     account_id: str | None,
     action: str | None,
     employee,
+    query: str = "",
 ) -> tuple[int, dict[str, object]]:
     if route_kind == "collection":
         accounts = service.list_accounts(employee)
@@ -118,7 +143,8 @@ def handle_accounts_get(
     if route_kind != "member" or account_id is None:
         return 404, {"error": "not_found"}
     if action == "audit-events":
-        events = service.list_account_audit_events(employee, account_id)
+        limit = _parse_audit_events_limit(query)
+        events = service.list_account_audit_events(employee, account_id, limit=limit)
         return 200, {"events": [audit_event_json(item) for item in events]}
     if action is not None:
         return 404, {"error": "not_found"}
@@ -295,6 +321,7 @@ def dispatch_account_route(
     employee,
     body: dict[str, object] | None,
     respond: Callable[[int, dict[str, object]], None],
+    query: str = "",
 ) -> bool:
     route_kind, account_id, action = parse_accounts_route(path)
     if route_kind == "":
@@ -307,6 +334,7 @@ def dispatch_account_route(
                 account_id=account_id,
                 action=action,
                 employee=employee,
+                query=query,
             )
         elif method == "POST":
             assert body is not None

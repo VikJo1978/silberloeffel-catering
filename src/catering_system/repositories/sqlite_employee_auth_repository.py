@@ -130,6 +130,13 @@ _AUDIT_INDEXES = (
     """,
 )
 
+_AUDIT_TARGET_TYPE_ID_INDEX = """
+CREATE INDEX IF NOT EXISTS idx_security_audit_events_employee_account_target
+ON security_audit_events (target_type, target_id, occurred_at);
+"""
+
+_EMPLOYEE_ACCOUNT_AUDIT_TARGET_TYPE = "employee_account"
+
 _AUDIT_APPEND_ONLY_TRIGGERS = (
     """
     CREATE TRIGGER IF NOT EXISTS trg_security_audit_events_no_update
@@ -174,7 +181,7 @@ def _migration_4_create_security_audit_events(connection: sqlite3.Connection) ->
 
 
 def _migration_5_audit_target_index(connection: sqlite3.Connection) -> None:
-    connection.execute(_AUDIT_INDEXES[2])
+    connection.execute(_AUDIT_TARGET_TYPE_ID_INDEX)
 
 
 _MIGRATIONS = (
@@ -466,15 +473,16 @@ class SQLiteEmployeeAuthRepository:
         return [self._row_to_account(row) for row in rows]
 
     def list_audit_events_for_account(
-        self, account_id: str
+        self, account_id: str, *, limit: int
     ) -> list[SecurityAuditEvent]:
         rows = self._conn.execute(
             """
             SELECT * FROM security_audit_events
-            WHERE target_id = ?
-            ORDER BY occurred_at, event_id
+            WHERE target_type = ? AND target_id = ?
+            ORDER BY occurred_at ASC, event_id ASC
+            LIMIT ?
             """,
-            (account_id,),
+            (_EMPLOYEE_ACCOUNT_AUDIT_TARGET_TYPE, account_id, limit),
         ).fetchall()
         return [self._row_to_audit_event(row) for row in rows]
 

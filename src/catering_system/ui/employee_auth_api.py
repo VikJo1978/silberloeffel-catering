@@ -158,6 +158,7 @@ def make_employee_auth_handler(
                 employee=employee,
                 body=body,
                 respond=lambda status, payload: self._json(status, payload),
+                query=self.path.split("?", 1)[1] if "?" in self.path else "",
             )
             if not handled:
                 self.send_error(404)

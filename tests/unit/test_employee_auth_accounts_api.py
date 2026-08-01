@@ -333,3 +333,28 @@ def test_last_active_superadmin_conflict_via_api(
     )
     assert status == 409
     assert body["error"] == "last_active_superadmin"
+
+
+def test_audit_events_invalid_limit_rejected_via_api(
+    auth_api: str, superadmin_session: tuple[str, str]
+) -> None:
+    cookie, csrf = superadmin_session
+    status, created, _headers = _request(
+        f"{auth_api}/auth/accounts",
+        method="POST",
+        headers={"Cookie": cookie, "X-CSRF-Token": csrf},
+        body={
+            "username": "worker.limitapi",
+            "display_name": "Worker Limit API",
+            "role": "USER",
+            "temporary_password": "WorkerTemp1!",
+        },
+    )
+    assert status == 201
+    account_id = str(created["account"]["id"])
+    status, body, _headers = _request(
+        f"{auth_api}/auth/accounts/{account_id}/audit-events?limit=0",
+        headers={"Cookie": cookie},
+    )
+    assert status == 400
+    assert body["error"] == "invalid_request"

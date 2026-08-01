@@ -78,6 +78,8 @@ class AccountConflictError(Exception):
 
 
 _TEMPORARY_PASSWORD_BYTES = 12
+_ACCOUNT_AUDIT_LIST_DEFAULT_LIMIT = 100
+_ACCOUNT_AUDIT_LIST_MAX_LIMIT = 500
 
 
 def _utc_now() -> datetime:
@@ -260,19 +262,19 @@ class EmployeeAuthService:
             with self.repository.immediate_transaction():
                 self.repository.add_account(account)
                 self.repository.set_explicit_permissions(account.id, permissions)
+                self._append_audit(
+                    actor_type="employee",
+                    actor_account=actor.account,
+                    session_id=actor.session.id,
+                    action="auth.account_created",
+                    target_type="employee_account",
+                    target_id=account.id,
+                    permission_code=None,
+                    outcome="success",
+                    metadata={"role": account.role, "username": account.username},
+                )
         except sqlite3.IntegrityError as exc:
             raise AccountConflictError("username or email already exists") from exc
-        self._append_audit(
-            actor_type="employee",
-            actor_account=actor.account,
-            session_id=actor.session.id,
-            action="auth.account_created",
-            target_type="employee_account",
-            target_id=account.id,
-            permission_code=None,
-            outcome="success",
-            metadata={"role": account.role, "username": account.username},
-        )
         return account
 
     def list_accounts(
@@ -331,30 +333,46 @@ class EmployeeAuthService:
         try:
             with self.repository.immediate_transaction():
                 self.repository.update_account(updated)
+                self._append_audit(
+                    actor_type="employee",
+                    actor_account=actor.account,
+                    session_id=actor.session.id,
+                    action="auth.account_profile_updated",
+                    target_type="employee_account",
+                    target_id=target.id,
+                    permission_code=None,
+                    outcome="success",
+                    metadata={"changes": changes},
+                )
         except sqlite3.IntegrityError as exc:
             raise AccountConflictError("username or email already exists") from exc
-        self._append_audit(
-            actor_type="employee",
-            actor_account=actor.account,
-            session_id=actor.session.id,
-            action="auth.account_profile_updated",
-            target_type="employee_account",
-            target_id=target.id,
-            permission_code=None,
-            outcome="success",
-            metadata={"changes": changes},
-        )
         explicit = self.repository.get_explicit_permissions(updated.id)
         return self._account_detail(actor, updated, explicit)
 
     def list_account_audit_events(
-        self, actor: AuthenticatedEmployee, target_account_id: str
+        self,
+        actor: AuthenticatedEmployee,
+        target_account_id: str,
+        *,
+        limit: int | None = None,
     ) -> list[SecurityAuditEventView]:
+        """Return employee-account audit events oldest-first, bounded by limit."""
         self._assert_permission(actor, "audit.view")
         target = self._require_visible_account(target_account_id)
+        resolved_limit = _ACCOUNT_AUDIT_LIST_DEFAULT_LIMIT if limit is None else limit
+        if (
+            not isinstance(resolved_limit, int)
+            or resolved_limit < 1
+            or resolved_limit > _ACCOUNT_AUDIT_LIST_MAX_LIMIT
+        ):
+            raise ValueError(
+                f"limit must be between 1 and {_ACCOUNT_AUDIT_LIST_MAX_LIMIT}"
+            )
         return [
             self._audit_event_view(event)
-            for event in self.repository.list_audit_events_for_account(target.id)
+            for event in self.repository.list_audit_events_for_account(
+                target.id, limit=resolved_limit
+            )
         ]
 
     def reset_account_password(
@@ -388,17 +406,17 @@ class EmployeeAuthService:
             self.repository.revoke_sessions_for_account(
                 target.id, revoked_at=now, reason="password_reset"
             )
-        self._append_audit(
-            actor_type="employee",
-            actor_account=actor.account,
-            session_id=actor.session.id,
-            action="auth.password_reset",
-            target_type="employee_account",
-            target_id=target.id,
-            permission_code=None,
-            outcome="success",
-            metadata={"username": target.username, "generated": generated},
-        )
+            self._append_audit(
+                actor_type="employee",
+                actor_account=actor.account,
+                session_id=actor.session.id,
+                action="auth.password_reset",
+                target_type="employee_account",
+                target_id=target.id,
+                permission_code=None,
+                outcome="success",
+                metadata={"username": target.username, "generated": generated},
+            )
         return PasswordResetResult(
             account=updated,
             temporary_password=resolved_password if generated else None,
@@ -426,17 +444,17 @@ class EmployeeAuthService:
         removed = sorted(previous.difference(permissions))
         with self.repository.immediate_transaction():
             self.repository.replace_explicit_permissions(target.id, permissions)
-        self._append_audit(
-            actor_type="employee",
-            actor_account=actor.account,
-            session_id=actor.session.id,
-            action="auth.permission_changed",
-            target_type="employee_account",
-            target_id=target.id,
-            permission_code=None,
-            outcome="success",
-            metadata={"added": added, "removed": removed},
-        )
+            self._append_audit(
+                actor_type="employee",
+                actor_account=actor.account,
+                session_id=actor.session.id,
+                action="auth.permission_changed",
+                target_type="employee_account",
+                target_id=target.id,
+                permission_code=None,
+                outcome="success",
+                metadata={"added": added, "removed": removed},
+            )
         return target
 
     def change_account_role(
@@ -454,22 +472,27 @@ class EmployeeAuthService:
         )
         current_permissions = self.repository.get_explicit_permissions(target.id)
         pruned_permissions = set(effective_permissions(next_role, current_permissions))
+        removed_by_ceiling = sorted(current_permissions.difference(pruned_permissions))
         with self.repository.immediate_transaction():
             if target.role == "SUPERADMIN" and next_role != "SUPERADMIN":
                 self._assert_not_last_active_superadmin(target)
             self.repository.update_account(updated)
             self.repository.replace_explicit_permissions(target.id, pruned_permissions)
-        self._append_audit(
-            actor_type="employee",
-            actor_account=actor.account,
-            session_id=actor.session.id,
-            action="auth.role_changed",
-            target_type="employee_account",
-            target_id=target.id,
-            permission_code=None,
-            outcome="success",
-            metadata={"role": next_role},
-        )
+            self._append_audit(
+                actor_type="employee",
+                actor_account=actor.account,
+                session_id=actor.session.id,
+                action="auth.role_changed",
+                target_type="employee_account",
+                target_id=target.id,
+                permission_code=None,
+                outcome="success",
+                metadata={
+                    "old_role": target.role,
+                    "new_role": next_role,
+                    "removed_permission_codes": removed_by_ceiling,
+                },
+            )
         return updated
 
     def deactivate_account(
@@ -493,17 +516,17 @@ class EmployeeAuthService:
             self.repository.revoke_sessions_for_account(
                 target.id, revoked_at=now, reason="account_deactivated"
             )
-        self._append_audit(
-            actor_type="employee",
-            actor_account=actor.account,
-            session_id=actor.session.id,
-            action="auth.account_deactivated",
-            target_type="employee_account",
-            target_id=target.id,
-            permission_code=None,
-            outcome="success",
-            metadata={"username": target.username},
-        )
+            self._append_audit(
+                actor_type="employee",
+                actor_account=actor.account,
+                session_id=actor.session.id,
+                action="auth.account_deactivated",
+                target_type="employee_account",
+                target_id=target.id,
+                permission_code=None,
+                outcome="success",
+                metadata={"username": target.username},
+            )
         return updated
 
     def reactivate_account(
@@ -518,18 +541,19 @@ class EmployeeAuthService:
             updated_at=self._now(),
             deactivated_at=None,
         )
-        self.repository.update_account(updated)
-        self._append_audit(
-            actor_type="employee",
-            actor_account=actor.account,
-            session_id=actor.session.id,
-            action="auth.account_reactivated",
-            target_type="employee_account",
-            target_id=target.id,
-            permission_code=None,
-            outcome="success",
-            metadata={"username": target.username},
-        )
+        with self.repository.immediate_transaction():
+            self.repository.update_account(updated)
+            self._append_audit(
+                actor_type="employee",
+                actor_account=actor.account,
+                session_id=actor.session.id,
+                action="auth.account_reactivated",
+                target_type="employee_account",
+                target_id=target.id,
+                permission_code=None,
+                outcome="success",
+                metadata={"username": target.username},
+            )
         return updated
 
     def authenticate(self, *, username: str, password: str) -> SessionLoginResult:
