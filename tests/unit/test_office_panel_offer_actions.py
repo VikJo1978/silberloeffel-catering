@@ -57,10 +57,7 @@ from catering_system.ui.office_panel_http import (
     inquiry_command_error_message,
 )
 from catering_system.ui.office_panel_offer_detail import render_offer_detail
-from catering_system.ui.office_panel_views import (
-    OfficePageContext,
-    parse_datetime_local_berlin,
-)
+from catering_system.ui.office_panel_views import parse_datetime_local_berlin
 from tests.helpers.office_panel_context import legacy_office_context
 from catering_system.ui.remote_core_client import RemoteCoreClient
 

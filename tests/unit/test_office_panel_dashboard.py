@@ -14,7 +14,7 @@ from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
 )
 from catering_system.services.inquiry_service import InquiryService
-from catering_system.ui.office_panel import OfficePageContext, OfficePanel
+from catering_system.ui.office_panel import OfficePanel
 from catering_system.ui.office_panel_dashboard import (
     ArbeitszentraleData,
     render_arbeitszentrale,

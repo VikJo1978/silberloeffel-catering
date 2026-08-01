@@ -30,7 +30,6 @@ from catering_system.repositories.in_memory_order_repository import (
 )
 from catering_system.ui import office_api_views
 from catering_system.ui.office_panel import (
-    OfficePageContext,
     OfficePanel,
     create_office_panel_server,
     parse_proposal_payload,
