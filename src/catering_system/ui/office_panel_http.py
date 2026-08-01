@@ -507,11 +507,16 @@ def make_office_panel_handler(
                 auth = getattr(self, "_request_auth", None)
             if auth is None:
                 auth = self._resolve_request_auth()
-            resolved_rueckruf_count = (
-                fetch_rueckruf_count(auerswald_url, auerswald_user, auerswald_password)
-                if rueckruf_count is _RUECKRUF_COUNT_UNSET
-                else rueckruf_count
-            )
+            if rueckruf_count is _RUECKRUF_COUNT_UNSET:
+                resolved_rueckruf_count = fetch_rueckruf_count(
+                    auerswald_url,
+                    auerswald_user,
+                    auerswald_password,
+                )
+            elif isinstance(rueckruf_count, int) or rueckruf_count is None:
+                resolved_rueckruf_count = rueckruf_count
+            else:
+                resolved_rueckruf_count = None
             return OfficePageContext(
                 rueckruf_count=resolved_rueckruf_count,
                 csrf_token=auth.csrf_token if auth is not None else "",
