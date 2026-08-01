@@ -164,6 +164,25 @@ def test_auth_version_mismatch_rejects_session(auth) -> None:
         service.authenticate_session(result.session_token)
 
 
+def test_last_seen_at_writes_are_bounded(auth) -> None:
+    service, repo, result, _employee = _login_superadmin(auth)
+    session = repo.get_session_by_token_hash(result.session.token_hash)
+    assert session is not None
+    first_seen = session.last_seen_at
+
+    auth[2].value = auth[2].value + timedelta(minutes=4)
+    service.authenticate_session(result.session_token)
+    session = repo.get_session_by_token_hash(result.session.token_hash)
+    assert session is not None
+    assert session.last_seen_at == first_seen
+
+    auth[2].value = auth[2].value + timedelta(minutes=1)
+    service.authenticate_session(result.session_token)
+    session = repo.get_session_by_token_hash(result.session.token_hash)
+    assert session is not None
+    assert session.last_seen_at == auth[2].value
+
+
 def test_must_change_password_blocks_application_permissions_until_changed(
     auth,
 ) -> None:

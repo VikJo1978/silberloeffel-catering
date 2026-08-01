@@ -118,6 +118,12 @@ class OfficePageContext:
 
     rueckruf_count: int | None = None
     csrf_token: str = ""
+    current_user_name: str = ""
+    current_user_role_label: str = ""
+    password_change_path: str = ""
+    logout_path: str = ""
+    show_transition_banner: bool = False
+    legacy_shared_access: bool = False
 
 
 _EMPTY_PAGE_CONTEXT = OfficePageContext()
@@ -195,6 +201,39 @@ def _page(
         )
     )
     page_title = f"<h1>{_e(title)}</h1>" if show_title else ""
+    account_meta = (
+        '<div class="office-account-meta">'
+        f"<strong>{_e(context.current_user_name or 'Office Panel')}</strong>"
+        f"<span>{_e(context.current_user_role_label or 'Tägliche Arbeitszentrale')}</span>"
+        "</div>"
+    )
+    account_actions = ""
+    if context.password_change_path or context.logout_path:
+        password_link = (
+            f'<a class="office-account-link" href="{_e(context.password_change_path)}">'
+            "Passwort ändern</a>"
+            if context.password_change_path
+            else ""
+        )
+        logout_form = (
+            '<form class="office-account-form" method="post" '
+            f'action="{_e(context.logout_path)}">{_csrf_input(context)}'
+            '<button type="submit" class="office-account-link">Abmelden</button>'
+            "</form>"
+            if context.logout_path
+            else ""
+        )
+        account_actions = (
+            f'<div class="office-account-actions">{password_link}{logout_form}</div>'
+        )
+    transition_banner = (
+        '<div class="office-global-banner">'
+        "<strong>Übergangsmodus aktiv:</strong> "
+        "Die Anmeldung mit dem gemeinsamen Office-Passwort ist noch möglich."
+        "</div>"
+        if context.show_transition_banner
+        else ""
+    )
     refresh_meta = (
         f'<meta http-equiv="refresh" content="{auto_refresh_seconds}">'
         if auto_refresh_seconds is not None
@@ -215,8 +254,9 @@ def _page(
         '<div class="office-user"><strong>Office Panel</strong>'
         "<span>Tägliche Arbeitszentrale</span></div></aside>"
         '<main class="office-workspace">'
-        f'<header class="office-topbar"><span class="office-crumb">{_e(title)}</span></header>'
-        f'<div class="office-content">{page_title}{body}</div>'
+        f'<header class="office-topbar"><span class="office-crumb">{_e(title)}</span>'
+        f'<div class="office-account">{account_meta}{account_actions}</div></header>'
+        f'<div class="office-content">{transition_banner}{page_title}{body}</div>'
         "</main></div></body></html>"
     )
 

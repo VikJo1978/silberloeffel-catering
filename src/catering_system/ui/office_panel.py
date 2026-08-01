@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import quote, urlencode
 
 
@@ -3846,6 +3846,9 @@ def create_office_panel_server(
     offer_document_repo: OfferDocumentSnapshotRepository | None = None,
     offer_pdf_static_content: OfferPdfStaticContent | None = None,
     ui_version: str = "legacy",
+    auth_mode: Literal["basic", "migration", "employee"] = "basic",
+    auth_service: Any | None = None,
+    secure_cookie: bool = True,
 ) -> HTTPServer:
     """Compatibility wrapper; server construction lives in office_panel_http."""
     from catering_system.ui.office_panel_http import (
@@ -3877,6 +3880,9 @@ def create_office_panel_server(
         offer_document_repo=offer_document_repo,
         offer_pdf_static_content=offer_pdf_static_content,
         ui_version=ui_version,
+        auth_mode=auth_mode,
+        auth_service=auth_service,
+        secure_cookie=secure_cookie,
     )
 
 
@@ -3899,11 +3905,25 @@ def main() -> None:
         "without ever opening core.db",
     )
     parser.add_argument("--port", type=int, default=8081)
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument(
+        "--host",
+        default=os.environ.get("OFFICE_PANEL_HOST", "0.0.0.0"),
+    )
+    parser.add_argument(
+        "--auth-mode",
+        default=os.environ.get("OFFICE_PANEL_AUTH_MODE", "basic"),
+        help="Office auth mode: basic, migration, employee",
+    )
     parser.add_argument(
         "--password",
         default=os.environ.get("OFFICE_PANEL_PASSWORD", ""),
         help="Office password (or set OFFICE_PANEL_PASSWORD)",
+    )
+    parser.add_argument(
+        "--allow-insecure-cookie",
+        action="store_true",
+        default=os.environ.get("OFFICE_PANEL_ALLOW_INSECURE_COOKIE", "") == "1",
+        help="Allow non-Secure employee cookies for local HTTP development only",
     )
     parser.add_argument(
         "--auerswald-url",
@@ -3941,11 +3961,15 @@ def main() -> None:
         "legacy is the safe rollout default",
     )
     args = parser.parse_args()
-    if not args.password:
+    from catering_system.ui.office_panel_http import validate_office_panel_auth_mode
+
+    auth_mode = validate_office_panel_auth_mode(args.auth_mode)
+    if auth_mode in {"basic", "migration"} and not args.password:
         raise SystemExit(
             "office panel refuses to start without a password "
             "(--password or OFFICE_PANEL_PASSWORD): it is a write surface (pack §7)"
         )
+    secure_cookie = not args.allow_insecure_cookie
 
     # Phase 2 dual mode (pack §7): CORE_OFFICE_API_URL and CORE_OFFICE_API_TOKEN
     # must be set together (remote mode) or both left empty (direct mode) — a
@@ -3959,6 +3983,27 @@ def main() -> None:
         raise SystemExit(
             "CORE_OFFICE_API_URL and CORE_OFFICE_API_TOKEN must be set together "
             "(remote mode) or both left empty (direct mode)"
+        )
+
+    auth_service = None
+    if auth_mode in {"migration", "employee"}:
+        if not args.db:
+            raise SystemExit(
+                "--db is required when OFFICE_PANEL_AUTH_MODE is migration or employee"
+            )
+        from catering_system.repositories.bootstrap_employee_auth_schema import (
+            bootstrap_employee_auth_schema,
+        )
+        from catering_system.repositories.core_transaction import open_core_connection
+        from catering_system.repositories.sqlite_employee_auth_repository import (
+            SQLiteEmployeeAuthRepository,
+        )
+        from catering_system.services.employee_auth_service import EmployeeAuthService
+
+        auth_connection = open_core_connection(args.db)
+        bootstrap_employee_auth_schema(auth_connection)
+        auth_service = EmployeeAuthService(
+            SQLiteEmployeeAuthRepository.from_connection(auth_connection)
         )
 
     if core_api_url:
@@ -3978,10 +4023,15 @@ def main() -> None:
             args.configurator_url,
             remote=remote,
             ui_version=args.ui_version,
+            auth_mode=auth_mode,
+            auth_service=auth_service,
+            secure_cookie=secure_cookie,
         )
         print(
-            f"Office panel on http://{args.host}:{args.port}/ (user: office) "
-            f"— remote mode against {core_api_url}"
+            "Office panel on "
+            f"http://{args.host}:{args.port}/ — remote mode against {core_api_url} "
+            f"(auth_mode={auth_mode}, secure_cookie={secure_cookie}, "
+            f"basic_fallback_active={auth_mode in {'basic', 'migration'}})"
         )
     else:
         if not args.db:
@@ -4097,8 +4147,16 @@ def main() -> None:
             offer_document_repo=offer_document_repo,
             offer_pdf_static_content=offer_pdf_static_content,
             ui_version=args.ui_version,
+            auth_mode=auth_mode,
+            auth_service=auth_service,
+            secure_cookie=secure_cookie,
         )
-        print(f"Office panel on http://{args.host}:{args.port}/ (user: office)")
+        print(
+            "Office panel on "
+            f"http://{args.host}:{args.port}/ "
+            f"(auth_mode={auth_mode}, secure_cookie={secure_cookie}, "
+            f"basic_fallback_active={auth_mode in {'basic', 'migration'}})"
+        )
     server.serve_forever()
 
 
