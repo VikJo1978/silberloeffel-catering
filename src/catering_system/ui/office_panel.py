@@ -3297,7 +3297,7 @@ class OfficePanel:
                                 )
                             }
                         )
-                        if not cancelled
+                        if not cancelled and context.can("orders.payment.reminder")
                         else ""
                     ),
                     confirmation_command_fields=(
@@ -3475,7 +3475,7 @@ class OfficePanel:
                 f"<p><strong>Nächster Schritt:</strong> {_e(payment.next_step)}</p>"
             )
         payment_form = ""
-        if not cancelled:
+        if not cancelled and context.can("orders.payment.reminder"):
             options = ['<option value="">Bitte wählen</option>']
             for method in PAYMENT_METHODS:
                 selected = " selected" if payment.payment_method == method else ""
@@ -3643,7 +3643,9 @@ class OfficePanel:
             operational_pause=pause_view,
             context=context,
         )
-        pause_card = render_operational_pause_card(order, pause_view, detail_forms)
+        pause_card = render_operational_pause_card(
+            order, pause_view, detail_forms, context=context
+        )
         paused_header = (
             '<p class="blocked"><strong>Auftrag pausiert</strong></p>'
             if pause_view.get("active")
