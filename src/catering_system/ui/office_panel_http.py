@@ -104,7 +104,13 @@ from catering_system.ui.office_panel_settings_users import (
 )
 from catering_system.ui.office_panel_authz import (
     BusinessAccessDenied,
+    DYNAMIC_CATALOG_UPDATE_AUTH,
+    DynamicCatalogUpdateAuth,
+    authorize_catalog_update,
+    require_all_business_permissions,
     require_all_business_permissions_post,
+    require_any_business_permissions,
+    require_any_business_permissions_post,
     require_business_permission,
     require_business_permission_post,
 )
@@ -619,6 +625,34 @@ def make_office_panel_handler(
                 return False
             return True
 
+        def _require_all_business_permissions_get(
+            self,
+            auth: OfficePanelRequestAuth | None,
+            permission_codes: tuple[str, ...],
+            *,
+            active_section: OfficeSection = "home",
+        ) -> bool:
+            try:
+                require_all_business_permissions(auth, permission_codes)
+            except BusinessAccessDenied:
+                self._business_forbidden(active_section=active_section)
+                return False
+            return True
+
+        def _require_any_business_permission_get(
+            self,
+            auth: OfficePanelRequestAuth | None,
+            permission_codes: tuple[str, ...],
+            *,
+            active_section: OfficeSection = "home",
+        ) -> bool:
+            try:
+                require_any_business_permissions(auth, permission_codes)
+            except BusinessAccessDenied:
+                self._business_forbidden(active_section=active_section)
+                return False
+            return True
+
         def _post_active_section(self, parts: list[str]) -> OfficeSection:
             if parts == ["proposal-preview"] or parts == [
                 "proposal-preview",
@@ -641,11 +675,17 @@ def make_office_panel_handler(
                 and parts[2] == "confirmation-document"
             ):
                 return "orders"
+            if parts == ["rueckruf"] or parts == ["rueckruf", "resolve"]:
+                return "callbacks"
+            if parts == ["gerichte", "new"] or (
+                len(parts) >= 2 and parts[0] == "gerichte"
+            ):
+                return "catalog"
             return "home"
 
         def _auth2d2_post_permission_requirements(
             self, parts: list[str]
-        ) -> tuple[str, ...] | None:
+        ) -> tuple[str, ...] | DynamicCatalogUpdateAuth | None:
             if parts == ["inquiry", "new"]:
                 return ("inquiries.create",)
             if len(parts) == 3 and parts[0] == "inquiry":
@@ -705,6 +745,16 @@ def make_office_panel_handler(
                 and parts[3] == "send"
             ):
                 return ("documents.send",)
+            if parts == ["rueckruf", "resolve"]:
+                return ("queue.resolve",)
+            if parts == ["gerichte", "new"]:
+                return ("catalog.edit", "prices.edit")
+            if len(parts) == 3 and parts[0] == "gerichte":
+                action = parts[2]
+                if action in ("activate", "deactivate"):
+                    return ("catalog.edit",)
+                if action == "update":
+                    return DYNAMIC_CATALOG_UPDATE_AUTH
             return None
 
         def _require_auth2d2_post_permissions(
@@ -720,7 +770,12 @@ def make_office_panel_handler(
             if auth.kind != "employee" or auth.employee is None:
                 return True
             try:
-                require_all_business_permissions_post(auth, requirements)
+                if requirements is DYNAMIC_CATALOG_UPDATE_AUTH:
+                    require_any_business_permissions_post(
+                        auth, ("catalog.edit", "prices.edit")
+                    )
+                else:
+                    require_all_business_permissions_post(auth, requirements)
             except BusinessAccessDenied:
                 self._business_forbidden(
                     active_section=self._post_active_section(parts)
@@ -1038,8 +1093,10 @@ def make_office_panel_handler(
                     )
                 )
             elif parts == ["gerichte", "new"]:
-                if not self._require_business_permission_get(
-                    auth, "catalog.edit", active_section="catalog"
+                if not self._require_all_business_permissions_get(
+                    auth,
+                    ("catalog.edit", "prices.edit"),
+                    active_section="catalog",
                 ):
                     return
                 context = self._page_context()
@@ -1163,8 +1220,10 @@ def make_office_panel_handler(
                 page = panel.render_gericht(parts[1], context=context)
                 self._html(page) if page else self.send_error(404)
             elif len(parts) == 3 and parts[0] == "gerichte" and parts[2] == "edit":
-                if not self._require_business_permission_get(
-                    auth, "catalog.edit", active_section="catalog"
+                if not self._require_any_business_permission_get(
+                    auth,
+                    ("catalog.edit", "prices.edit"),
+                    active_section="catalog",
                 ):
                     return
                 context = self._page_context()
@@ -1649,8 +1708,23 @@ def make_office_panel_handler(
             elif parts == ["gerichte", "new"]:
                 self._create_catalog_dish()
             elif len(parts) == 3 and parts[0] == "gerichte" and parts[2] == "update":
-                panel.update_catalog_dish(parts[1], self._form())
-                self._redirect(f"/gerichte/{parts[1]}")
+                dish_id = parts[1]
+                form = self._form()
+                current = panel._catalog_detail_payload(dish_id)
+                if current is None:
+                    self.send_error(404)
+                    return
+                try:
+                    authorize_catalog_update(
+                        auth,
+                        current=current,
+                        form=form,
+                    )
+                except BusinessAccessDenied:
+                    self._business_forbidden(active_section="catalog")
+                    return
+                panel.update_catalog_dish(dish_id, form)
+                self._redirect(f"/gerichte/{dish_id}")
             elif (
                 len(parts) == 3
                 and parts[0] == "gerichte"
