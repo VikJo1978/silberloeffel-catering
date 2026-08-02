@@ -2,12 +2,23 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
 
-from catering_system.domain.inquiry_timing import evaluate_timing
+from catering_system.domain.inquiry_timing import (
+    TimingEvaluation,
+    evaluate_timing,
+    normalize_legacy_time_window_text,
+    timing_acknowledgement_is_valid,
+    validate_local_date_text,
+    validate_local_time_text,
+    validate_optional_acknowledged_by,
+    validate_optional_local_date_text,
+    validate_optional_local_time_text,
+)
 from catering_system.repositories.in_memory_inquiry_repository import (
     InMemoryInquiryRepository,
 )
@@ -33,6 +44,98 @@ from tests.unit.test_offer_service import (
     _sample_inquiry,
     _valid_snapshot,
 )
+
+
+@pytest.mark.parametrize(
+    ("validator", "value", "message"),
+    [
+        (validate_local_date_text, None, "YYYY-MM-DD string"),
+        (validate_local_date_text, "20-08-2026", "YYYY-MM-DD string"),
+        (validate_local_date_text, "2026-02-30", "real YYYY-MM-DD date"),
+        (validate_optional_local_date_text, True, "must not be a boolean"),
+        (validate_local_time_text, None, "HH:MM string"),
+        (validate_local_time_text, "9:00", "HH:MM string"),
+        (validate_local_time_text, "25:00", "real HH:MM time"),
+        (validate_optional_local_time_text, False, "must not be a boolean"),
+    ],
+)
+def test_timing_text_validators_reject_invalid_values(
+    validator: Callable[[object, str], object],
+    value: object,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        validator(value, "event_field")
+
+
+def test_optional_timing_metadata_normalizes_and_rejects_invalid_values() -> None:
+    assert validate_optional_local_date_text(None, "delivery_date") is None
+    assert validate_optional_local_time_text(None, "event_start") is None
+    assert validate_optional_acknowledged_by(None, "acknowledged_by") is None
+    assert (
+        validate_optional_acknowledged_by("  office  ", "acknowledged_by") == "office"
+    )
+    assert validate_optional_acknowledged_by("   ", "acknowledged_by") is None
+    assert normalize_legacy_time_window_text("  18:00–22:00  ", "legacy") == (
+        "18:00–22:00"
+    )
+    assert normalize_legacy_time_window_text("   ", "legacy") is None
+
+    with pytest.raises(ValueError, match="must be a string"):
+        validate_optional_acknowledged_by(1, "acknowledged_by")
+    with pytest.raises(ValueError, match="exceeds length limit"):
+        validate_optional_acknowledged_by("x" * 201, "acknowledged_by")
+    with pytest.raises(ValueError, match="must be a string"):
+        normalize_legacy_time_window_text(1, "legacy")
+    with pytest.raises(ValueError, match="exceeds length limit"):
+        normalize_legacy_time_window_text("x" * 501, "legacy")
+
+
+def test_timing_evaluation_reports_missing_legacy_and_after_event_findings() -> None:
+    incomplete = evaluate_timing(
+        event_date=date(2026, 8, 20),
+        delivery_date_local=None,
+        delivery_window_start_local=None,
+        delivery_window_end_local=None,
+        event_start_local=None,
+        legacy_time_window_text="18:00–22:00",
+    )
+    assert incomplete.findings == (
+        "DELIVERY_DATE_MISSING",
+        "DELIVERY_WINDOW_START_MISSING",
+        "DELIVERY_WINDOW_END_MISSING",
+        "EVENT_START_MISSING",
+        "LEGACY_TIME_UNRESOLVED",
+    )
+
+    after_event = evaluate_timing(
+        event_date=date(2026, 8, 20),
+        delivery_date_local="2026-08-20",
+        delivery_window_start_local="18:00",
+        delivery_window_end_local="19:00",
+        event_start_local="18:30",
+        legacy_time_window_text=None,
+    )
+    assert after_event.findings == ("DELIVERY_AFTER_EVENT_START",)
+
+
+def test_timing_acknowledgement_validity_depends_on_finding_kind() -> None:
+    acknowledged_at = datetime(2026, 7, 15, 9, 0, tzinfo=UTC)
+    assert not timing_acknowledgement_is_valid(
+        TimingEvaluation(("DELIVERY_WINDOW_INVALID",)),
+        acknowledged_at=acknowledged_at,
+        acknowledged_by="office",
+    )
+    assert timing_acknowledgement_is_valid(
+        TimingEvaluation(()),
+        acknowledged_at=None,
+        acknowledged_by=None,
+    )
+    assert not timing_acknowledgement_is_valid(
+        TimingEvaluation(("DELIVERY_DATE_MISSING",)),
+        acknowledged_at=None,
+        acknowledged_by=None,
+    )
 
 
 def test_previous_day_delivery_does_not_trigger_short_gap_warning() -> None:
