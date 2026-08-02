@@ -31,6 +31,7 @@ from catering_system.services.order_confirmation_document_service import (
 from catering_system.services.order_confirmation_outbound_service import (
     OutboundSendEligibility,
 )
+from catering_system.ui.office_panel_views import OfficePageContext
 from catering_system.ui.operational_pause_labels import (
     PAUSE_REASON_LABELS,
     pause_reason_label,
@@ -850,8 +851,10 @@ def render_customer_addresses_card(
     forms: OrderDetailFormFields,
     *,
     editable: bool = True,
+    context: OfficePageContext | None = None,
 ) -> str:
     """Show stored vs effective delivery addresses for confirmation context."""
+    page_context = context or OfficePageContext()
     if inquiry is None:
         return (
             '<section class="order-card order-content-card order-addresses-card">'
@@ -884,7 +887,12 @@ def render_customer_addresses_card(
     )
     form = (
         _customer_addresses_form(inquiry, order, forms)
-        if editable and order.cancelled_at is None
+        if (
+            editable
+            and order.cancelled_at is None
+            and page_context.can("inquiries.view")
+            and page_context.can("customers.edit")
+        )
         else ""
     )
     return (
@@ -925,8 +933,10 @@ def render_fulfillment_mode_card(
     forms: OrderDetailFormFields,
     *,
     editable: bool = True,
+    context: OfficePageContext | None = None,
 ) -> str:
     """Auftragsart (Lieferung/Abholung) — never guessed, always explicit."""
+    page_context = context or OfficePageContext()
     if inquiry is None:
         return (
             '<section class="order-card order-content-card order-fulfillment-card">'
@@ -939,7 +949,11 @@ def render_fulfillment_mode_card(
     )
     form = (
         _fulfillment_mode_form(inquiry, order, forms)
-        if editable and order.cancelled_at is None
+        if (
+            editable
+            and order.cancelled_at is None
+            and page_context.can("inquiries.edit")
+        )
         else ""
     )
     return (
@@ -1200,8 +1214,10 @@ def render_order_detail(
     operational_pause: Mapping[str, object] | None = None,
     versions_total_count: int,
     versions_truncated: bool,
+    context: OfficePageContext | None = None,
 ) -> OrderDetailPage:
     """Render existing Order facts and actions without performing any reads."""
+    page_context = context or OfficePageContext()
 
     pause_view = operational_pause or {"active": False}
     target = _target_version(order, versions)
@@ -1276,8 +1292,12 @@ def render_order_detail(
         + "</div>"
         '<aside class="order-detail-side">'
         + _primary_action(order, target, next_action, forms)
-        + render_fulfillment_mode_card(source_inquiry, order, forms)
-        + render_customer_addresses_card(source_inquiry, order, forms)
+        + render_fulfillment_mode_card(
+            source_inquiry, order, forms, context=page_context
+        )
+        + render_customer_addresses_card(
+            source_inquiry, order, forms, context=page_context
+        )
         + _confirmation_card(order, confirmation, forms, live_preview)
         + render_confirmation_outbound_card(
             order, confirmation, outbound, forms, operational_pause=pause_view

@@ -104,7 +104,9 @@ from catering_system.ui.office_panel_settings_users import (
 )
 from catering_system.ui.office_panel_authz import (
     BusinessAccessDenied,
+    require_all_business_permissions_post,
     require_business_permission,
+    require_business_permission_post,
 )
 from catering_system.ui.employee_auth_http import (
     CSRF_COOKIE_NAME,
@@ -612,6 +614,85 @@ def make_office_panel_handler(
         ) -> bool:
             try:
                 require_business_permission(auth, permission_code)
+            except BusinessAccessDenied:
+                self._business_forbidden(active_section=active_section)
+                return False
+            return True
+
+        def _post_active_section(self, parts: list[str]) -> OfficeSection:
+            if parts == ["proposal-preview"] or parts == [
+                "proposal-preview",
+                "prepare",
+            ]:
+                return "proposal"
+            if parts == ["inquiry", "new"] or (
+                len(parts) == 3 and parts[0] == "inquiry"
+            ):
+                return "inquiries"
+            if len(parts) == 3 and parts[0] == "kontakt":
+                return "contacts"
+            return "home"
+
+        def _auth2d2_post_permission_requirements(
+            self, parts: list[str]
+        ) -> tuple[str, ...] | None:
+            if parts == ["inquiry", "new"]:
+                return ("inquiries.create",)
+            if len(parts) == 3 and parts[0] == "inquiry":
+                action = parts[2]
+                if action == "update":
+                    return ("inquiries.edit",)
+                if action == "contact-completion":
+                    return ("inquiries.edit",)
+                if action == "fulfillment-mode":
+                    return ("inquiries.edit",)
+                if action == "customer-addresses":
+                    return ("inquiries.view", "customers.edit")
+                if action == "verify":
+                    return ("inquiries.verify",)
+                if action == "convert":
+                    return ("inquiries.view", "orders.version.create")
+                if action == "convert-accepted":
+                    return ("offers.view", "orders.version.create")
+                return None
+            if parts == ["proposal-preview"]:
+                return ("inquiries.create",)
+            if parts == ["proposal-preview", "prepare"]:
+                return ("inquiries.create",)
+            if len(parts) == 3 and parts[0] == "kontakt" and parts[2] == "notizen":
+                return ("customers.edit",)
+            return None
+
+        def _require_auth2d2_post_permissions(
+            self,
+            parts: list[str],
+            auth: OfficePanelRequestAuth | None,
+        ) -> bool:
+            requirements = self._auth2d2_post_permission_requirements(parts)
+            if requirements is None:
+                return True
+            if auth is None or auth.legacy_shared_access:
+                return True
+            if auth.kind != "employee" or auth.employee is None:
+                return True
+            try:
+                require_all_business_permissions_post(auth, requirements)
+            except BusinessAccessDenied:
+                self._business_forbidden(
+                    active_section=self._post_active_section(parts)
+                )
+                return False
+            return True
+
+        def _require_business_permission_post(
+            self,
+            auth: OfficePanelRequestAuth | None,
+            permission_code: str,
+            *,
+            active_section: OfficeSection = "home",
+        ) -> bool:
+            try:
+                require_business_permission_post(auth, permission_code)
             except BusinessAccessDenied:
                 self._business_forbidden(active_section=active_section)
                 return False
@@ -1282,15 +1363,15 @@ def make_office_panel_handler(
             parts = [part for part in urlparse(self.path).path.split("/") if part]
             auth = self._resolve_request_auth()
             self._request_auth = auth
-            try:
-                form = self._form()
-            except FormBodyTooLargeError as exc:
-                self._error_page(str(exc), status=413)
-                return
-            except (UnicodeDecodeError, ValueError) as exc:
-                self._error_page(str(exc), status=400)
-                return
             if parts == ["login"]:
+                try:
+                    form = self._form()
+                except FormBodyTooLargeError as exc:
+                    self._error_page(str(exc), status=413)
+                    return
+                except (UnicodeDecodeError, ValueError) as exc:
+                    self._error_page(str(exc), status=400)
+                    return
                 if validated_auth_mode == "basic":
                     self.send_error(404)
                     return
@@ -1319,6 +1400,14 @@ def make_office_panel_handler(
                 )
                 return
             if parts == ["logout"]:
+                try:
+                    form = self._form()
+                except FormBodyTooLargeError as exc:
+                    self._error_page(str(exc), status=413)
+                    return
+                except (UnicodeDecodeError, ValueError) as exc:
+                    self._error_page(str(exc), status=400)
+                    return
                 if auth is None or auth.kind != "employee" or auth.employee is None:
                     if validated_auth_mode == "basic":
                         self._deny()
@@ -1353,6 +1442,14 @@ def make_office_panel_handler(
                 )
                 return
             if parts == ["password-change"]:
+                try:
+                    form = self._form()
+                except FormBodyTooLargeError as exc:
+                    self._error_page(str(exc), status=413)
+                    return
+                except (UnicodeDecodeError, ValueError) as exc:
+                    self._error_page(str(exc), status=400)
+                    return
                 if auth is None or auth.kind != "employee" or auth.employee is None:
                     if validated_auth_mode == "basic":
                         self._deny()
@@ -1409,6 +1506,16 @@ def make_office_panel_handler(
                 and not auth.employee.application_access_allowed
             ):
                 self._redirect("/password-change")
+                return
+            if not self._require_auth2d2_post_permissions(parts, auth):
+                return
+            try:
+                form = self._form()
+            except FormBodyTooLargeError as exc:
+                self._error_page(str(exc), status=413)
+                return
+            except (UnicodeDecodeError, ValueError) as exc:
+                self._error_page(str(exc), status=400)
                 return
             submitted_token = form.get("_csrf_token", "")
             if auth.kind == "employee":
