@@ -3633,6 +3633,7 @@ class OfficePanel:
             confirmation,
             detail_forms,
             live_preview,
+            context=context,
         )
         outbound_card = render_confirmation_outbound_card(
             order,
@@ -3640,6 +3641,7 @@ class OfficePanel:
             outbound,
             detail_forms,
             operational_pause=pause_view,
+            context=context,
         )
         pause_card = render_operational_pause_card(order, pause_view, detail_forms)
         paused_header = (

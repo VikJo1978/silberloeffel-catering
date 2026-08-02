@@ -42,6 +42,8 @@ PERMISSION_REGISTRY: tuple[str, ...] = (
     "calendar.view",
     "queue.view",
     "documents.view",
+    "documents.prepare",
+    "documents.send",
     "users.view",
     "users.create",
     "users.edit",
@@ -88,6 +90,8 @@ ADMIN_ROLE_CEILING: frozenset[str] = frozenset(
         "calendar.view",
         "queue.view",
         "documents.view",
+        "documents.prepare",
+        "documents.send",
         "users.view",
         "users.create",
         "users.edit",
@@ -129,6 +133,8 @@ USER_ROLE_CEILING: frozenset[str] = frozenset(
         "calendar.view",
         "queue.view",
         "documents.view",
+        "documents.prepare",
+        "documents.send",
     }
 )
 

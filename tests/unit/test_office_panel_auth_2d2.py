@@ -391,7 +391,7 @@ def _assert_post_forbidden(
             frozenset({"inquiries.view"}),
             {
                 "parse_proposal_payload": (
-                    "catering_system.ui.office_panel_proposal.parse_proposal_payload"
+                    "catering_system.ui.office_panel_http.parse_proposal_payload"
                 )
             },
             "denied.proposal.preview",
@@ -402,7 +402,7 @@ def _assert_post_forbidden(
             frozenset({"inquiries.view"}),
             {
                 "parse_proposal_payload": (
-                    "catering_system.ui.office_panel_proposal.parse_proposal_payload"
+                    "catering_system.ui.office_panel_http.parse_proposal_payload"
                 )
             },
             "denied.proposal.prepare",
@@ -499,6 +499,7 @@ def test_customer_addresses_requires_both_inquiries_view_and_customers_edit(
         "catering_system.ui.office_panel.OfficePanel.set_inquiry_customer_addresses"
     )
     for username, permissions in (
+        ("addresses.neither", frozenset({"inquiries.create"})),
         ("addresses.view.only", frozenset({"inquiries.view"})),
         ("addresses.edit.only", frozenset({"customers.edit"})),
     ):

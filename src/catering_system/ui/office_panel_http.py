@@ -631,6 +631,16 @@ def make_office_panel_handler(
                 return "inquiries"
             if len(parts) == 3 and parts[0] == "kontakt":
                 return "contacts"
+            if len(parts) == 3 and parts[0] == "offer":
+                return "offers"
+            if len(parts) == 3 and parts[0] == "order":
+                return "orders"
+            if (
+                len(parts) == 4
+                and parts[0] == "order"
+                and parts[2] == "confirmation-document"
+            ):
+                return "orders"
             return "home"
 
         def _auth2d2_post_permission_requirements(
@@ -661,6 +671,32 @@ def make_office_panel_handler(
                 return ("inquiries.create",)
             if len(parts) == 3 and parts[0] == "kontakt" and parts[2] == "notizen":
                 return ("customers.edit",)
+            if len(parts) == 3 and parts[0] == "offer":
+                action = parts[2]
+                if action == "mark-sent":
+                    return ("offers.send",)
+                if action in (
+                    "record-acceptance",
+                    "record-rejection",
+                    "record-withdrawal",
+                ):
+                    return ("offers.status.change",)
+                if action == "convert":
+                    return ("offers.view", "orders.version.create")
+                return None
+            if (
+                len(parts) == 3
+                and parts[0] == "order"
+                and parts[2] == "confirmation-document"
+            ):
+                return ("documents.prepare",)
+            if (
+                len(parts) == 4
+                and parts[0] == "order"
+                and parts[2] == "confirmation-document"
+                and parts[3] == "send"
+            ):
+                return ("documents.send",)
             return None
 
         def _require_auth2d2_post_permissions(

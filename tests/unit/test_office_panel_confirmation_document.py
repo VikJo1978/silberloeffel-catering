@@ -65,6 +65,7 @@ from catering_system.ui.office_panel_order_detail import (
     OrderDetailFormFields,
     render_confirmation_card,
 )
+from tests.helpers.office_panel_context import legacy_office_context
 
 _PASSWORD = "panel-b1-pw"
 _AUTH = "Basic " + base64.b64encode(f"office:{_PASSWORD}".encode()).decode()
@@ -297,7 +298,7 @@ def test_legacy_order_detail_before_snapshot_shows_prepare_action(
         ui_version="legacy",
     )
     eligibility = doc_service.eligibility(order_id)
-    page = panel.render_order(order_id)
+    page = panel.render_order(order_id, context=legacy_office_context())
     assert page is not None
     assert "Auftragsbestätigung" in page
     assert (
@@ -332,7 +333,7 @@ def test_legacy_order_detail_after_snapshot_shows_created_facts(
         ),
         ui_version="legacy",
     )
-    page = panel.render_order(order_id)
+    page = panel.render_order(order_id, context=legacy_office_context())
     assert page is not None
     assert "Dokument erstellt" in page
     summary = doc_service.eligibility(order_id).snapshot
@@ -502,7 +503,7 @@ def test_pending_candidate_shows_blocked_state_without_prepare(tmp_path: Path) -
         ),
         ui_version="legacy",
     )
-    page = panel.render_order(order_id)
+    page = panel.render_order(order_id, context=legacy_office_context())
     assert page is not None
     assert "Auftrag nicht bereit für Kundendokument" in page
     assert "Auftragsbestätigung erstellen" not in page

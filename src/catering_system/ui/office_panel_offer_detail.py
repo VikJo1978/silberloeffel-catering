@@ -234,7 +234,11 @@ def _select_options(
     return "".join(options)
 
 
-def _mark_sent_form(offer_id: str, *, forms: OfferDetailFormFields) -> str:
+def _mark_sent_form(
+    offer_id: str, *, forms: OfferDetailFormFields, context: OfficePageContext
+) -> str:
+    if not context.can("offers.send"):
+        return ""
     default_at = default_datetime_local_berlin()
     return (
         '<section class="offer-detail-section offer-action-section">'
@@ -262,7 +266,10 @@ def _record_acceptance_form(
     variants: list[dict[str, object]],
     *,
     forms: OfferDetailFormFields,
+    context: OfficePageContext,
 ) -> str:
+    if not context.can("offers.status.change"):
+        return ""
     default_at = default_datetime_local_berlin()
     variant_options = "".join(
         f'<option value="{_e(str(variant["variant_id"]))}">'
@@ -295,7 +302,11 @@ def _record_acceptance_form(
     )
 
 
-def _record_rejection_form(offer_id: str, *, forms: OfferDetailFormFields) -> str:
+def _record_rejection_form(
+    offer_id: str, *, forms: OfferDetailFormFields, context: OfficePageContext
+) -> str:
+    if not context.can("offers.status.change"):
+        return ""
     default_at = default_datetime_local_berlin()
     return (
         '<section class="offer-detail-section offer-action-section">'
@@ -313,7 +324,11 @@ def _record_rejection_form(offer_id: str, *, forms: OfferDetailFormFields) -> st
     )
 
 
-def _record_withdrawal_form(offer_id: str, *, forms: OfferDetailFormFields) -> str:
+def _record_withdrawal_form(
+    offer_id: str, *, forms: OfferDetailFormFields, context: OfficePageContext
+) -> str:
+    if not context.can("offers.status.change"):
+        return ""
     return (
         '<section class="offer-detail-section offer-action-section">'
         "<h2>Angebot zurückziehen</h2>"
@@ -360,9 +375,9 @@ def _sent_offer_actions(
     context: OfficePageContext,
 ) -> str:
     return (
-        _record_acceptance_form(offer_id, variants, forms=forms)
-        + _record_rejection_form(offer_id, forms=forms)
-        + _record_withdrawal_form(offer_id, forms=forms)
+        _record_acceptance_form(offer_id, variants, forms=forms, context=context)
+        + _record_rejection_form(offer_id, forms=forms, context=context)
+        + _record_withdrawal_form(offer_id, forms=forms, context=context)
         + _prepare_next_version_cta(
             revision_prefill_url=revision_prefill_url, context=context
         )
@@ -375,7 +390,10 @@ def _convert_form(
     accepted_variant_id: str,
     acceptance_id: str,
     forms: OfferDetailFormFields,
+    context: OfficePageContext,
 ) -> str:
+    if not (context.can("offers.view") and context.can("orders.version.create")):
+        return ""
     return (
         '<section class="offer-detail-section offer-action-section">'
         "<h2>In Auftrag umwandeln</h2>"
@@ -430,7 +448,7 @@ def render_offer_detail(
     )
     action_section = ""
     if state == "Prepared":
-        action_section = _mark_sent_form(offer_id, forms=forms)
+        action_section = _mark_sent_form(offer_id, forms=forms, context=context)
     elif state == "Sent":
         action_section = _sent_offer_actions(
             offer_id,
@@ -456,6 +474,7 @@ def render_offer_detail(
                 accepted_variant_id=str(acceptance["accepted_variant_id"]),
                 acceptance_id=acceptance_id,
                 forms=forms,
+                context=context,
             )
     pdf_link = (
         f'<p><a href="{_e(pdf_download_url)}">PDF herunterladen</a></p>'

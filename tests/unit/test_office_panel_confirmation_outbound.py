@@ -43,6 +43,7 @@ from catering_system.ui.office_panel_order_detail import (
     OrderDetailFormFields,
     render_confirmation_outbound_card,
 )
+from tests.helpers.office_panel_context import legacy_office_context
 from tests.unit.test_office_panel_confirmation_document import _sqlite_world
 
 _PASSWORD = "panel-b2-pw"
@@ -164,6 +165,7 @@ def test_outbound_card_before_send_shows_testversand_warning(tmp_path: Path) -> 
             confirmation_command_fields="",
             send_command_fields="",
         ),
+        context=legacy_office_context(),
     )
     assert "Testversand erzeugen" in card
     assert "Es wird keine E-Mail an den Kunden gesendet." in card
@@ -176,7 +178,7 @@ def test_legacy_order_detail_shows_outbound_block(tmp_path: Path) -> None:
     )
     doc_service.prepare_snapshot(order_id, order_version_id, "office-panel")
     panel = _panel_with_outbound(db, ui_version="legacy")
-    page = panel.render_order(order_id)
+    page = panel.render_order(order_id, context=legacy_office_context())
     assert page is not None
     assert "Testversand erzeugen" in page
     assert "Es wird keine E-Mail an den Kunden gesendet." in page
