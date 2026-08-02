@@ -64,3 +64,18 @@ def require_all_business_permissions(
 ) -> None:
     for permission_code in permission_codes:
         require_business_permission(auth, permission_code)
+
+
+def require_business_permission_post(
+    auth: BusinessAuthRequest | "OfficePanelRequestAuth" | None,
+    permission_code: str,
+) -> None:
+    """POST alias — same employee/Basic semantics as GET (AUTH-2D2)."""
+    require_business_permission(auth, permission_code)
+
+
+def require_all_business_permissions_post(
+    auth: BusinessAuthRequest | "OfficePanelRequestAuth" | None,
+    permission_codes: tuple[str, ...],
+) -> None:
+    require_all_business_permissions(auth, permission_codes)

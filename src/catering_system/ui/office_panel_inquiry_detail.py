@@ -191,6 +191,8 @@ def _primary_action(
             "</section>"
         )
     elif inquiry_shows_convert_accepted_button(state):
+        if not (context.can("offers.view") and context.can("orders.version.create")):
+            return ""
         return (
             '<section class="inquiry-next-step">'
             '<div class="inquiry-eyebrow">Nächster Schritt</div>'
@@ -305,7 +307,11 @@ def _contact_completion_form(
     inquiry: Inquiry,
     forms: InquiryDetailFormFields,
     missing: tuple[str, ...],
+    *,
+    context: OfficePageContext,
 ) -> str:
+    if not context.can("inquiries.edit"):
+        return ""
     """Inputs only for missing fields; stored values stay read-only above."""
     inputs = []
     if "email" in missing:
@@ -330,7 +336,9 @@ def _contact_completion_form(
     )
 
 
-def _contact_card(inquiry: Inquiry, forms: InquiryDetailFormFields) -> str:
+def _contact_card(
+    inquiry: Inquiry, forms: InquiryDetailFormFields, *, context: OfficePageContext
+) -> str:
     snapshot = inquiry.customer_snapshot
     completeness = derive_inquiry_contact_completeness(inquiry)
     missing = missing_contact_fields(completeness)
@@ -358,7 +366,7 @@ def _contact_card(inquiry: Inquiry, forms: InquiryDetailFormFields) -> str:
             "Ohne vollständige Kontaktdaten sind Angebot und Auftrag blockiert."
             "</div>"
         )
-        form = _contact_completion_form(inquiry, forms, missing)
+        form = _contact_completion_form(inquiry, forms, missing, context=context)
     return (
         '<section class="inquiry-card inquiry-content-card">'
         "<h2>Kontaktdaten</h2>"
@@ -545,7 +553,7 @@ def render_inquiry_detail(
         f"<strong>{_e(state_title)}</strong><p>{_e(state_description)}</p></div>"
         "</section>"
         '<div class="inquiry-detail-layout"><div class="inquiry-detail-main">'
-        + _contact_card(inquiry, forms)
+        + _contact_card(inquiry, forms, context=page_context)
         + '<section class="inquiry-card inquiry-content-card">'
         "<h2>Nachricht des Kunden</h2>"
         f'<p class="inquiry-message">{_e(message)}</p></section>'

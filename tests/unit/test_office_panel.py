@@ -2505,7 +2505,9 @@ def test_website_intake_to_office_verification_and_conversion_workflow() -> None
     )
 
     queue = office.render_queue(None)
-    detail = office.render_inquiry(inquiry.inquiry_id)
+    from tests.helpers.office_panel_context import legacy_office_context
+
+    detail = office.render_inquiry(inquiry.inquiry_id, context=legacy_office_context())
     assert inquiry.inquiry_id[:8] in queue
     assert detail is not None
     assert "Website-Anfrage" in detail

@@ -911,11 +911,12 @@ def _panel_detail(inquiry: Inquiry, *, ui_version: str = "legacy") -> str:
         InMemoryOrderRepository as _Orders,
     )
     from catering_system.ui.office_panel import OfficePanel
+    from tests.helpers.office_panel_context import legacy_office_context
 
     inquiries = InMemoryInquiryRepository()
     inquiries.save(inquiry)
     panel = OfficePanel(inquiries, _Orders(), ui_version=ui_version)
-    html = panel.render_inquiry(inquiry.inquiry_id)
+    html = panel.render_inquiry(inquiry.inquiry_id, context=legacy_office_context())
     assert html is not None
     return html
 
@@ -993,6 +994,7 @@ def test_ui_panel_completion_roundtrip() -> None:
         InMemoryOrderRepository as _Orders,
     )
     from catering_system.ui.office_panel import OfficePanel
+    from tests.helpers.office_panel_context import legacy_office_context
 
     inquiries = InMemoryInquiryRepository()
     inquiry = _inquiry(customer_snapshot=InquiryCustomerSnapshot(phone="+49301234567"))
@@ -1004,6 +1006,6 @@ def test_ui_panel_completion_roundtrip() -> None:
     assert updated.customer_snapshot == InquiryCustomerSnapshot(
         email="neu@example.com", phone="+49301234567"
     )
-    html = panel.render_inquiry(inquiry.inquiry_id)
+    html = panel.render_inquiry(inquiry.inquiry_id, context=legacy_office_context())
     assert html is not None
     assert "Kontaktdaten vollständig" in html

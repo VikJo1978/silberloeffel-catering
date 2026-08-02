@@ -2609,6 +2609,14 @@ class OfficePanel:
         # written anywhere — it's page context for the office worker, shown
         # once, not a prefilled form field bound to any Inquiry attribute.
         phone_hint = f'<p class="subtitle">Anruf von: {_e(phone)}</p>' if phone else ""
+        if not context.can("inquiries.create"):
+            return _page(
+                "Neue Anfrage",
+                phone_hint
+                + '<p class="blocked">Ihre Berechtigung reicht für diese Aktion nicht aus.</p>',
+                active_section="inquiries",
+                context=context,
+            )
         # event_date / guest_count_estimate / inquiry_source / intake_*:
         # optional prefill hints, from either the proposal preview's GET hint
         # (event_date/guest_count_estimate only, PROPOSAL_PREVIEW_MANUAL_
@@ -2669,23 +2677,25 @@ class OfficePanel:
                 f"{_e(CONTACT_COMPLETION_NEXT_ACTION)}. "
                 "Ohne vollständige Kontaktdaten sind Angebot und Auftrag blockiert.</p>"
             )
-            inputs = ""
-            if "email" in missing:
-                inputs += '<p><label>E-Mail</label><input type="email" name="contact_email"></p>'
-            if "phone" in missing:
-                inputs += '<p><label>Telefon</label><input type="tel" name="contact_phone"></p>'
-            form = (
-                f'<form method="post" action="/inquiry/{_e(inq.inquiry_id)}/contact-completion" '
-                'onsubmit="return confirm('
-                "'Fehlende Kontaktdaten werden ergänzt. "
-                "Vorhandene Angaben werden nicht überschrieben.'"
-                ');">'
-                f"{_csrf_input(context)}"
-                f"{self._command_fields({'updated_at': inq.updated_at.isoformat()})}"
-                f"<fieldset>{inputs}"
-                '<p><button type="submit">Kontaktdaten ergänzen</button></p>'
-                "</fieldset></form>"
-            )
+            form = ""
+            if context.can("inquiries.edit"):
+                inputs = ""
+                if "email" in missing:
+                    inputs += '<p><label>E-Mail</label><input type="email" name="contact_email"></p>'
+                if "phone" in missing:
+                    inputs += '<p><label>Telefon</label><input type="tel" name="contact_phone"></p>'
+                form = (
+                    f'<form method="post" action="/inquiry/{_e(inq.inquiry_id)}/contact-completion" '
+                    'onsubmit="return confirm('
+                    "'Fehlende Kontaktdaten werden ergänzt. "
+                    "Vorhandene Angaben werden nicht überschrieben.'"
+                    ');">'
+                    f"{_csrf_input(context)}"
+                    f"{self._command_fields({'updated_at': inq.updated_at.isoformat()})}"
+                    f"<fieldset>{inputs}"
+                    '<p><button type="submit">Kontaktdaten ergänzen</button></p>'
+                    "</fieldset></form>"
+                )
         return f"<h2>Kontaktdaten</h2>{status}<table>{rows}</table>{form}"
 
     def create_inquiry(self, form: dict[str, str]) -> Inquiry:
@@ -2847,7 +2857,7 @@ class OfficePanel:
         else:
             prog = '<p class="ok">Angebot kann vorbereitet werden.</p>'
         verify_btn = ""
-        if state.next_action == "verify":
+        if state.next_action == "verify" and context.can("inquiries.verify"):
             verify_btn = (
                 f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/verify">'
                 f"{_csrf_input(context)}{self._command_fields()}"
@@ -2876,7 +2886,11 @@ class OfficePanel:
                     '<p class="muted">Auftrag bereits erstellt — '
                     "verknüpften Auftrag unten öffnen.</p>"
                 )
-            elif inquiry_shows_convert_accepted_button(state):
+            elif (
+                inquiry_shows_convert_accepted_button(state)
+                and context.can("offers.view")
+                and context.can("orders.version.create")
+            ):
                 convert += (
                     f'<form class="inline" method="post" '
                     f'action="/inquiry/{_e(inquiry_id)}/convert-accepted" '
@@ -2944,6 +2958,23 @@ class OfficePanel:
             else _crm_stage_select(inq.crm_stage)
         )
         contact_section = self._render_contact_section(inq, context)
+        update_form = ""
+        if context.can("inquiries.edit"):
+            update_form = f"""<h2>Anfrage bearbeiten</h2>
+<form method="post" action="/inquiry/{_e(inquiry_id)}/update">{_csrf_input(context)}{self._command_fields({"updated_at": inq.updated_at.isoformat()})}<fieldset>
+<p><label>Datum</label><input type="date" name="event_date" value="{_e(inq.event_date.isoformat())}"></p>
+<p><label>Zeitfenster</label><input name="time_window_text" value="{_e(inq.time_window_text)}"></p>
+<p><label>Ort</label><input name="location_text" value="{_e(inq.location_text)}"></p>
+<p><label>Gäste (ca.)</label><input name="guest_count_estimate" value="{_e(guests)}"></p>
+<p><label>Planungsmodus</label>{_planning_mode_select(inq.planning_mode)}</p>
+<p><label>CRM-Stufe</label>{crm_stage_field}</p>
+<p class="subtitle">Intake-Kontext — keine Auftrags-/Küchenfreigabe.</p>
+<p><label>Betreff</label><input name="intake_subject" value="{_e(inq.intake_subject or "")}"></p>
+<p><label>Nachricht</label><textarea name="intake_message" rows="4">{_e(inq.intake_message or "")}</textarea></p>
+<p><label>Zusammenfassung</label><textarea name="intake_summary" rows="3">{_e(inq.intake_summary or "")}</textarea></p>
+<p><label>Externe Referenz</label><input name="intake_external_ref" value="{_e(inq.intake_external_ref or "")}"></p>
+<p><button type="submit">Speichern</button></p>
+</fieldset></form>"""
         body = (
             inquiry_truncation_warning
             + website_banner
@@ -2960,21 +2991,7 @@ class OfficePanel:
 <h2>Vorgangsprüfung (Progression)</h2>{prog}
 <p>{verify_btn}{convert}</p>
 {offer_prefill}
-<h2>Anfrage bearbeiten</h2>
-<form method="post" action="/inquiry/{_e(inquiry_id)}/update">{_csrf_input(context)}{self._command_fields({"updated_at": inq.updated_at.isoformat()})}<fieldset>
-<p><label>Datum</label><input type="date" name="event_date" value="{_e(inq.event_date.isoformat())}"></p>
-<p><label>Zeitfenster</label><input name="time_window_text" value="{_e(inq.time_window_text)}"></p>
-<p><label>Ort</label><input name="location_text" value="{_e(inq.location_text)}"></p>
-<p><label>Gäste (ca.)</label><input name="guest_count_estimate" value="{_e(guests)}"></p>
-<p><label>Planungsmodus</label>{_planning_mode_select(inq.planning_mode)}</p>
-<p><label>CRM-Stufe</label>{crm_stage_field}</p>
-<p class="subtitle">Intake-Kontext — keine Auftrags-/Küchenfreigabe.</p>
-<p><label>Betreff</label><input name="intake_subject" value="{_e(inq.intake_subject or "")}"></p>
-<p><label>Nachricht</label><textarea name="intake_message" rows="4">{_e(inq.intake_message or "")}</textarea></p>
-<p><label>Zusammenfassung</label><textarea name="intake_summary" rows="3">{_e(inq.intake_summary or "")}</textarea></p>
-<p><label>Externe Referenz</label><input name="intake_external_ref" value="{_e(inq.intake_external_ref or "")}"></p>
-<p><button type="submit">Speichern</button></p>
-</fieldset></form>"""
+{update_form}"""
         )
         return _page(
             f"Anfrage {inq.inquiry_id[:8]}",
@@ -3350,6 +3367,7 @@ class OfficePanel:
                 operational_pause=pause_view,
                 versions_total_count=versions_total_count,
                 versions_truncated=versions_truncated,
+                context=context,
             )
             return _page(
                 detail.title,
@@ -3602,11 +3620,13 @@ class OfficePanel:
             source_inquiry,
             order,
             detail_forms,
+            context=context,
         )
         addresses_card = render_customer_addresses_card(
             source_inquiry,
             order,
             detail_forms,
+            context=context,
         )
         confirmation_card = render_confirmation_card(
             order,
