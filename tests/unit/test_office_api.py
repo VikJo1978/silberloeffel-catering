@@ -1937,6 +1937,66 @@ def test_update_intake_merge_preserve_clear_reject_null(api) -> None:
     assert (status, body["error"]) == (400, "invalid_request")
 
 
+def test_update_inquiry_rejects_client_acknowledgement_fields(api) -> None:
+    base, ids, _db = api
+    inquiry_id = ids["inquiry_convertible"]
+    _status, detail, _h = _get(f"{base}/office/v1/inquiries/{inquiry_id}")
+    base_args = {
+        "event_date": detail["event_date"],
+        "crm_stage": detail["crm_stage"],
+        "time_window_text": detail["time_window_text"],
+        "location_text": detail["location_text"],
+        "guest_count_estimate": detail["guest_count_estimate"],
+        "planning_mode": detail["planning_mode"],
+    }
+    status, body, _h = _post(
+        f"{base}/office/v1/inquiries/{inquiry_id}/update",
+        args={
+            **base_args,
+            "time_review_acknowledged_at": "2026-07-15T08:40:00+00:00",
+            "time_review_acknowledged_by": "office",
+        },
+        expect={"updated_at": detail["updated_at"]},
+    )
+    assert (status, body["error"]) == (400, "invalid_request")
+
+
+def test_prepare_offer_rejects_snapshot_with_client_acknowledgement(api) -> None:
+    base, ids, _db = api
+    inquiry_id = ids["inquiry_offer_ready"]
+    snapshot = _valid_offer_snapshot(inquiry_id=inquiry_id)
+    snapshot["event"]["time_review_acknowledged_at"] = "2026-07-15T08:40:00+00:00"
+    snapshot["event"]["time_review_acknowledged_by"] = "office"
+    snapshot["snapshot_hash"] = compute_snapshot_hash(snapshot)
+    status, body, _h = _post(
+        f"{base}/office/v1/inquiries/{inquiry_id}/prepare-offer",
+        args={"snapshot": snapshot},
+    )
+    assert (status, body["error"]) == (422, "untrusted_acknowledgement_provenance")
+
+
+def test_prepare_next_version_rejects_snapshot_with_client_acknowledgement(
+    api,
+) -> None:
+    base, ids, _db = api
+    offer_id, version_id = _prepare_offer(api)
+    inquiry_id = ids["inquiry_offer_ready"]
+    assert (
+        _post(_mark_sent_url(base, offer_id, version_id), args=_MARK_SENT_ARGS)[0]
+        == 200
+    )
+    snapshot = _revision_offer_snapshot(inquiry_id=inquiry_id)
+    snapshot["event"]["time_review_acknowledged_at"] = "2026-07-15T08:40:00+00:00"
+    snapshot["event"]["time_review_acknowledged_by"] = "office"
+    snapshot["snapshot_hash"] = compute_snapshot_hash(snapshot)
+    status, body, _h = _post(
+        _prepare_next_url(base, offer_id),
+        args={"snapshot": snapshot},
+        expect={"latest_version_number": 1},
+    )
+    assert (status, body["error"]) == (422, "untrusted_acknowledgement_provenance")
+
+
 def _valid_offer_snapshot(*, inquiry_id: str) -> dict[str, object]:
     payload: dict[str, object] = {
         "schema_version": "offer_snapshot_v1",

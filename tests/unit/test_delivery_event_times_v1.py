@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -35,6 +36,7 @@ from catering_system.repositories.sqlite_offer_repository import SQLiteOfferRepo
 from catering_system.domain.offer_snapshot import compute_snapshot_hash
 from catering_system.services.inquiry_service import InquiryService
 from catering_system.services.offer_service import (
+    OfferPreparationBlockedError,
     OfferService,
     OfferTimingReviewRequiredError,
 )
@@ -171,6 +173,29 @@ def test_gap_29_minutes_is_warning_but_30_minutes_is_not() -> None:
     assert "DELIVERY_GAP_TOO_SHORT" not in exact.findings
 
 
+def _snapshot_without_det_timing() -> dict[str, object]:
+    payload = _valid_snapshot()
+    for key in (
+        "delivery_date_local",
+        "delivery_window_start_local",
+        "delivery_window_end_local",
+        "event_start_local",
+    ):
+        payload["event"].pop(key, None)
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+    return payload
+
+
+def _offer_service_with_inquiry(
+    inquiry=_sample_inquiry(),  # noqa: ANN001
+) -> tuple[InMemoryOfferRepository, InMemoryInquiryRepository, OfferService]:
+    offers = InMemoryOfferRepository()
+    inquiries = InMemoryInquiryRepository()
+    inquiries.save(inquiry)
+    service = OfferService(offers, inquiries, InMemoryOrderRepository())
+    return offers, inquiries, service
+
+
 def test_snapshot_validation_accepts_canonical_timing_fields() -> None:
     payload = _valid_snapshot()
     payload["event"]["legacy_time_window_text"] = "Alttext"
@@ -248,67 +273,240 @@ def test_inquiry_service_canonical_write_does_not_synthesize_legacy() -> None:
     assert inquiry.legacy_time_window_text is None
 
 
-def test_prepare_offer_legacy_snapshot_uses_inquiry_fallback_and_persists_timing() -> (
+def test_prepare_offer_rejects_snapshot_without_det_even_when_inquiry_has_timing() -> (
     None
 ):
     inquiry = _sample_inquiry()
-    offers = InMemoryOfferRepository()
-    service = OfferService(
-        offers,
-        InMemoryInquiryRepository(),
-        InMemoryOrderRepository(),
-    )
-    service._inquiry_repository.save(inquiry)  # type: ignore[attr-defined]
+    inquiry.delivery_date_local = "2026-09-01"
+    inquiry.delivery_window_end_local = "12:00"
+    _offers, _inquiries, service = _offer_service_with_inquiry(inquiry)
+    payload = _snapshot_without_det_timing()
+    with pytest.raises(OfferTimingReviewRequiredError) as excinfo:
+        service.prepare_offer_version(_INQUIRY_ID, payload)
+    assert "DELIVERY_DATE_MISSING" in excinfo.value.findings
+
+
+def test_prepare_offer_rejects_snapshot_missing_required_canonical_timing() -> None:
+    _offers, _inquiries, service = _offer_service_with_inquiry()
+    payload = _snapshot_without_det_timing()
+    with pytest.raises(OfferTimingReviewRequiredError) as excinfo:
+        service.prepare_offer_version(_INQUIRY_ID, payload)
+    assert "DELIVERY_DATE_MISSING" in excinfo.value.findings
+
+
+def test_prepare_offer_creates_version_from_full_canonical_timing() -> None:
+    inquiry = _sample_inquiry()
+    _offers, _inquiries, service = _offer_service_with_inquiry(inquiry)
     payload = _valid_snapshot()
-    payload["event"].pop("delivery_date_local")
-    payload["event"].pop("delivery_window_start_local")
-    payload["event"].pop("delivery_window_end_local")
-    payload["event"].pop("event_start_local")
+    offer = service.prepare_offer_version(_INQUIRY_ID, payload)
+    version = offer.versions[0]
+    assert version.delivery_date_local == payload["event"]["delivery_date_local"]
+    assert (
+        version.delivery_window_start_local
+        == payload["event"]["delivery_window_start_local"]
+    )
+    assert (
+        version.delivery_window_end_local
+        == payload["event"]["delivery_window_end_local"]
+    )
+    assert version.event_start_local == payload["event"]["event_start_local"]
+    assert version.time_review_acknowledged_at is None
+    assert version.time_review_acknowledged_by is None
+
+
+def test_inquiry_timing_change_after_offer_does_not_mutate_saved_version() -> None:
+    inquiry = _sample_inquiry()
+    _offers, inquiries, service = _offer_service_with_inquiry(inquiry)
+    payload = _valid_snapshot()
+    offer = service.prepare_offer_version(_INQUIRY_ID, payload)
+    version_before = offer.versions[0]
+    inquiries.update(
+        replace(
+            inquiry,
+            delivery_date_local="2026-09-01",
+            delivery_window_start_local="10:00",
+            delivery_window_end_local="11:00",
+            event_start_local="12:00",
+            time_review_acknowledged_at=datetime(2026, 7, 15, 9, 0, tzinfo=UTC),
+            time_review_acknowledged_by="forged",
+        )
+    )
+    stored = _offers.get(offer.offer_id)
+    assert stored is not None
+    version_after = stored.versions[0]
+    assert version_after.delivery_date_local == version_before.delivery_date_local
+    assert (
+        version_after.delivery_window_end_local
+        == version_before.delivery_window_end_local
+    )
+    assert version_after.event_start_local == version_before.event_start_local
+    assert version_after.snapshot_hash == version_before.snapshot_hash
+    assert version_after.time_review_acknowledged_at is None
+    assert version_after.time_review_acknowledged_by is None
+
+
+def test_persisted_offer_version_timing_matches_validated_snapshot() -> None:
+    _offers, _inquiries, service = _offer_service_with_inquiry()
+    payload = _valid_snapshot()
+    validated = validate_offer_snapshot(payload)
+    offer = service.prepare_offer_version(_INQUIRY_ID, payload)
+    version = offer.versions[0]
+    assert version.delivery_date_local == validated.event.delivery_date_local
+    assert (
+        version.delivery_window_start_local
+        == validated.event.delivery_window_start_local
+    )
+    assert (
+        version.delivery_window_end_local == validated.event.delivery_window_end_local
+    )
+    assert version.event_start_local == validated.event.event_start_local
+    assert version.legacy_time_window_text == validated.event.legacy_time_window_text
+
+
+def test_trusted_internal_acknowledgement_allows_overrideable_finding() -> None:
+    _offers, _inquiries, service = _offer_service_with_inquiry()
+    payload = _valid_snapshot()
+    payload["event"]["delivery_window_end_local"] = "18:16"
+    payload["event"]["time_review_acknowledged_at"] = "2026-07-15T08:40:00+00:00"
+    payload["event"]["time_review_acknowledged_by"] = "employee:trusted-internal"
     payload["snapshot_hash"] = compute_snapshot_hash(payload)
     offer = service.prepare_offer_version(_INQUIRY_ID, payload)
     version = offer.versions[0]
-    assert version.delivery_date_local == inquiry.delivery_date_local
-    assert version.delivery_window_end_local == inquiry.delivery_window_end_local
-    assert version.legacy_time_window_text is None
+    assert version.delivery_window_end_local == "18:16"
+    assert version.time_review_acknowledged_by == "employee:trusted-internal"
+    assert version.time_review_acknowledged_at is not None
+
+
+def test_direct_offer_service_without_acknowledgement_fails_on_overrideable_finding() -> (
+    None
+):
+    _offers, _inquiries, service = _offer_service_with_inquiry()
+    payload = _valid_snapshot()
+    payload["event"]["delivery_window_end_local"] = "18:16"
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+    with pytest.raises(OfferTimingReviewRequiredError) as excinfo:
+        service.prepare_offer_version(_INQUIRY_ID, payload)
+    assert "DELIVERY_GAP_TOO_SHORT" in excinfo.value.findings
+    assert excinfo.value.invalid_window is False
 
 
 def test_prepare_offer_blocks_when_time_review_required() -> None:
-    inquiry = _sample_inquiry()
-    offers = InMemoryOfferRepository()
-    inquiries = InMemoryInquiryRepository()
-    inquiries.save(inquiry)
-    service = OfferService(offers, inquiries, InMemoryOrderRepository())
-    payload = _valid_snapshot()
-    payload["event"].pop("delivery_date_local")
-    payload["event"].pop("delivery_window_start_local")
-    payload["event"].pop("delivery_window_end_local")
-    payload["event"].pop("event_start_local")
-    inquiry.delivery_date_local = None
-    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+    _offers, _inquiries, service = _offer_service_with_inquiry()
+    payload = _snapshot_without_det_timing()
     with pytest.raises(OfferTimingReviewRequiredError) as excinfo:
         service.prepare_offer_version(_INQUIRY_ID, payload)
     assert "DELIVERY_DATE_MISSING" in excinfo.value.findings
 
 
 def test_invalid_delivery_window_cannot_be_acknowledged_through() -> None:
-    inquiry = _sample_inquiry()
-    inquiry.delivery_window_start_local = "19:00"
-    inquiry.delivery_window_end_local = "18:00"
-    inquiry.time_review_acknowledged_at = datetime(2026, 7, 15, 9, 0, tzinfo=UTC)
-    inquiry.time_review_acknowledged_by = "office"
-    offers = InMemoryOfferRepository()
-    inquiries = InMemoryInquiryRepository()
-    inquiries.save(inquiry)
-    service = OfferService(offers, inquiries, InMemoryOrderRepository())
+    _offers, _inquiries, service = _offer_service_with_inquiry()
     payload = _valid_snapshot()
-    payload["event"].pop("delivery_date_local")
-    payload["event"].pop("delivery_window_start_local")
-    payload["event"].pop("delivery_window_end_local")
-    payload["event"].pop("event_start_local")
+    payload["event"]["delivery_window_start_local"] = "19:00"
+    payload["event"]["delivery_window_end_local"] = "18:00"
     payload["snapshot_hash"] = compute_snapshot_hash(payload)
     with pytest.raises(OfferTimingReviewRequiredError) as excinfo:
         service.prepare_offer_version(_INQUIRY_ID, payload)
     assert excinfo.value.invalid_window is True
+
+
+def test_invalid_delivery_window_blocked_even_with_trusted_acknowledgement() -> None:
+    _offers, _inquiries, service = _offer_service_with_inquiry()
+    payload = _valid_snapshot()
+    payload["event"]["delivery_window_start_local"] = "19:00"
+    payload["event"]["delivery_window_end_local"] = "18:00"
+    payload["event"]["time_review_acknowledged_at"] = "2026-07-15T08:40:00+00:00"
+    payload["event"]["time_review_acknowledged_by"] = "employee:trusted-internal"
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+    with pytest.raises(OfferTimingReviewRequiredError) as excinfo:
+        service.prepare_offer_version(_INQUIRY_ID, payload)
+    assert excinfo.value.invalid_window is True
+
+
+def test_identical_canonical_snapshot_preserves_idempotency_semantics() -> None:
+    _offers, _inquiries, service = _offer_service_with_inquiry()
+    payload = _valid_snapshot()
+    first = service.prepare_offer_version(_INQUIRY_ID, payload)
+    with pytest.raises(OfferPreparationBlockedError, match="offer already exists"):
+        service.prepare_offer_version(_INQUIRY_ID, payload)
+    stored = _offers.get(first.offer_id)
+    assert stored == first
+
+
+def test_different_canonical_timing_facts_produce_different_snapshot_hash() -> None:
+    first = _valid_snapshot()
+    second = _valid_snapshot()
+    second["event"]["delivery_window_end_local"] = "18:15"
+    second["snapshot_hash"] = compute_snapshot_hash(second)
+    assert first["snapshot_hash"] != second["snapshot_hash"]
+
+
+def test_prepare_next_offer_version_does_not_read_timing_from_inquiry() -> None:
+    inquiry = _sample_inquiry()
+    _offers, inquiries, service = _offer_service_with_inquiry(inquiry)
+    offer = service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
+    version_id = offer.versions[0].offer_version_id
+    service.record_sent_evidence(
+        offer.offer_id,
+        version_id,
+        sent_at=datetime(2026, 7, 15, 10, 0, tzinfo=UTC),
+        channel="email",
+        recipient_reference="customer@example.invalid",
+        evidence_reference="msg-1",
+        recorded_by="office-panel",
+    )
+    inquiries.update(
+        replace(
+            inquiry,
+            delivery_date_local="2026-09-01",
+            delivery_window_start_local="10:00",
+            delivery_window_end_local="11:00",
+            event_start_local="12:00",
+        )
+    )
+    revision = _valid_snapshot()
+    revision["snapshot_id"] = "88888888-8888-4888-8888-888888888882"
+    revision["source_draft_id"] = "draft-2"
+    revision["snapshot_created_at"] = "2026-07-16T08:30:00+00:00"
+    revision["valid_until"] = "2026-08-05"
+    for key in (
+        "delivery_date_local",
+        "delivery_window_start_local",
+        "delivery_window_end_local",
+        "event_start_local",
+    ):
+        revision["event"].pop(key, None)
+    revision["snapshot_hash"] = compute_snapshot_hash(revision)
+    with pytest.raises(OfferTimingReviewRequiredError) as excinfo:
+        service.prepare_next_offer_version(
+            offer.offer_id,
+            revision,
+            expected_latest_version_number=1,
+        )
+    assert "DELIVERY_DATE_MISSING" in excinfo.value.findings
+
+
+def test_sqlite_offer_version_immutability_triggers_remain_effective(
+    tmp_path: Path,
+) -> None:
+    inquiry = _sample_inquiry()
+    db = tmp_path / "immutable-offer.db"
+    inquiries = SQLiteInquiryRepository(db)
+    inquiries.save(inquiry)
+    offers = SQLiteOfferRepository(db)
+    service = OfferService(
+        offers,
+        inquiries,
+        InMemoryOrderRepository(),
+    )
+    offer = service.prepare_offer_version(_INQUIRY_ID, _valid_snapshot())
+    version_id = offer.versions[0].offer_version_id
+    with pytest.raises(sqlite3.IntegrityError, match="offer_versions is immutable"):
+        offers._conn.execute(
+            "UPDATE offer_versions SET delivery_date_local = ? WHERE offer_version_id = ?",
+            ("2026-09-01", version_id),
+        )
+    offers.close()
+    inquiries.close()
 
 
 def test_sqlite_inquiry_migration_backfills_legacy_time_window_text(

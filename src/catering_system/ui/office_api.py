@@ -225,6 +225,23 @@ def _invalid() -> ApiError:
     return ApiError(400, "invalid_request")
 
 
+class UntrustedTimingAcknowledgementError(ValueError):
+    """Client-supplied acknowledgement provenance rejected at the Office API boundary."""
+
+
+def _reject_client_timing_acknowledgement(snapshot: dict[str, object]) -> None:
+    event = snapshot.get("event")
+    if not isinstance(event, dict):
+        return
+    if (
+        event.get("time_review_acknowledged_at") is not None
+        or event.get("time_review_acknowledged_by") is not None
+    ):
+        raise UntrustedTimingAcknowledgementError(
+            "client-supplied time review acknowledgement is not accepted"
+        )
+
+
 # --- strict JSON / value validation ------------------------------------------
 
 
@@ -1101,14 +1118,6 @@ class OfficeApi:
             legacy_time_window_text = _v_optional_str(
                 args.get("legacy_time_window_text"), 500
             )
-            time_review_acknowledged_at = (
-                _v_datetime(args["time_review_acknowledged_at"])
-                if args.get("time_review_acknowledged_at") is not None
-                else None
-            )
-            time_review_acknowledged_by = _v_optional_str(
-                args.get("time_review_acknowledged_by"), 200
-            )
             inquiry = self.inquiry_service.create_inquiry(
                 event_date=_v_date(args["event_date"]),
                 inquiry_source=_v_enum(args["inquiry_source"], validate_inquiry_source),
@@ -1133,8 +1142,6 @@ class OfficeApi:
                 delivery_window_end_local=delivery_window_end_local,
                 event_start_local=event_start_local,
                 legacy_time_window_text=legacy_time_window_text,
-                time_review_acknowledged_at=time_review_acknowledged_at,
-                time_review_acknowledged_by=time_review_acknowledged_by,
             )
         except DuplicateExternalReferenceError as exc:
             raise ApiError(409, "external_ref_conflict") from exc
@@ -1252,16 +1259,9 @@ class OfficeApi:
                 ("delivery_window_end_local", 5),
                 ("event_start_local", 5),
                 ("legacy_time_window_text", 500),
-                ("time_review_acknowledged_by", 200),
             ):
                 if key in args:
                     timing_kwargs[key] = _v_optional_str(args.get(key), max_len)
-            if "time_review_acknowledged_at" in args:
-                timing_kwargs["time_review_acknowledged_at"] = (
-                    _v_datetime(args["time_review_acknowledged_at"])
-                    if args.get("time_review_acknowledged_at") is not None
-                    else None
-                )
             updated = self.inquiry_service.update_inquiry(
                 current.inquiry_id,
                 event_date=_v_date(args["event_date"]),
@@ -1329,6 +1329,7 @@ class OfficeApi:
         if not isinstance(snapshot, dict):
             raise _invalid()
         try:
+            _reject_client_timing_acknowledgement(snapshot)
             offer = self.offer_service.prepare_offer_version(path_ids["id"], snapshot)
         except KeyError as exc:
             raise ApiError(404, "not_found") from exc
@@ -1357,6 +1358,11 @@ class OfficeApi:
                 422,
                 "offer_timing_review_required",
                 reasons=exc.findings,
+            ) from exc
+        except UntrustedTimingAcknowledgementError as exc:
+            raise ApiError(
+                422,
+                "untrusted_acknowledgement_provenance",
             ) from exc
         except ValueError as exc:
             message = str(exc)
@@ -1458,6 +1464,7 @@ class OfficeApi:
             raise _invalid()
         offer_id = path_ids["offer_id"]
         try:
+            _reject_client_timing_acknowledgement(snapshot)
             offer = self.offer_service.prepare_next_offer_version(
                 offer_id,
                 snapshot,
@@ -1468,6 +1475,11 @@ class OfficeApi:
                 422,
                 "offer_timing_review_required",
                 reasons=exc.findings,
+            ) from exc
+        except UntrustedTimingAcknowledgementError as exc:
+            raise ApiError(
+                422,
+                "untrusted_acknowledgement_provenance",
             ) from exc
         except KeyError as exc:
             raise ApiError(404, "not_found") from exc
@@ -2208,8 +2220,6 @@ _TIMING_OPTIONAL = frozenset(
         "delivery_window_end_local",
         "event_start_local",
         "legacy_time_window_text",
-        "time_review_acknowledged_at",
-        "time_review_acknowledged_by",
     }
 )
 _CREATE_ARGS = _ArgKeys(

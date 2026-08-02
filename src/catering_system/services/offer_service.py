@@ -172,7 +172,7 @@ class OfferService:
                 eligibility.reasons,
             )
 
-        resolved_event = _resolved_event_timing(validated, inquiry)
+        resolved_event = _snapshot_event_timing(validated)
         _require_offer_timing_ready(inquiry_id, resolved_event)
         offer = _build_offer_from_snapshot(validated, resolved_event=resolved_event)
         self._offer_repository.save(offer)
@@ -238,7 +238,7 @@ class OfferService:
                 f"{derive_offer_state(offer, max(offer.versions, key=lambda v: v.version_number).offer_version_id, today=self._today())!r})"
             )
 
-        resolved_event = _resolved_event_timing(validated, inquiry)
+        resolved_event = _snapshot_event_timing(validated)
         _require_offer_timing_ready(inquiry.inquiry_id, resolved_event)
         next_version = _build_next_version_from_snapshot(
             offer,
@@ -786,49 +786,26 @@ class ResolvedSnapshotEvent:
         self.evaluation = evaluation
 
 
-def _resolved_event_timing(
+def _snapshot_event_timing(
     snapshot: OfferSnapshotV1 | OfferSnapshotV2,
-    inquiry,
 ) -> ResolvedSnapshotEvent:
-    delivery_date_local = snapshot.event.delivery_date_local
-    delivery_window_start_local = snapshot.event.delivery_window_start_local
-    delivery_window_end_local = snapshot.event.delivery_window_end_local
-    event_start_local = snapshot.event.event_start_local
-    legacy_time_window_text = snapshot.event.legacy_time_window_text
-    acknowledged_at = snapshot.event.time_review_acknowledged_at
-    acknowledged_by = snapshot.event.time_review_acknowledged_by
-    if (
-        delivery_date_local is None
-        and delivery_window_start_local is None
-        and delivery_window_end_local is None
-        and event_start_local is None
-        and legacy_time_window_text is None
-        and acknowledged_at is None
-        and acknowledged_by is None
-    ):
-        delivery_date_local = inquiry.delivery_date_local
-        delivery_window_start_local = inquiry.delivery_window_start_local
-        delivery_window_end_local = inquiry.delivery_window_end_local
-        event_start_local = inquiry.event_start_local
-        legacy_time_window_text = inquiry.legacy_time_window_text
-        acknowledged_at = inquiry.time_review_acknowledged_at
-        acknowledged_by = inquiry.time_review_acknowledged_by
+    event = snapshot.event
     evaluation = evaluate_timing(
-        event_date=snapshot.event.event_date,
-        delivery_date_local=delivery_date_local,
-        delivery_window_start_local=delivery_window_start_local,
-        delivery_window_end_local=delivery_window_end_local,
-        event_start_local=event_start_local,
-        legacy_time_window_text=legacy_time_window_text,
+        event_date=event.event_date,
+        delivery_date_local=event.delivery_date_local,
+        delivery_window_start_local=event.delivery_window_start_local,
+        delivery_window_end_local=event.delivery_window_end_local,
+        event_start_local=event.event_start_local,
+        legacy_time_window_text=event.legacy_time_window_text,
     )
     return ResolvedSnapshotEvent(
-        delivery_date_local=delivery_date_local,
-        delivery_window_start_local=delivery_window_start_local,
-        delivery_window_end_local=delivery_window_end_local,
-        event_start_local=event_start_local,
-        legacy_time_window_text=legacy_time_window_text,
-        time_review_acknowledged_at=acknowledged_at,
-        time_review_acknowledged_by=acknowledged_by,
+        delivery_date_local=event.delivery_date_local,
+        delivery_window_start_local=event.delivery_window_start_local,
+        delivery_window_end_local=event.delivery_window_end_local,
+        event_start_local=event.event_start_local,
+        legacy_time_window_text=event.legacy_time_window_text,
+        time_review_acknowledged_at=event.time_review_acknowledged_at,
+        time_review_acknowledged_by=event.time_review_acknowledged_by,
         evaluation=evaluation,
     )
 
