@@ -75,6 +75,7 @@ PERMISSION_LABELS: dict[str, str] = {
     "orders.ready.release": "Versandbereit freigeben",
     "orders.pause": "Aufträge pausieren",
     "orders.cancel": "Aufträge stornieren",
+    "orders.payment.reminder": "Zahlungserinnerungen verwalten",
     "catalog.view": "Katalog ansehen",
     "catalog.edit": "Katalog bearbeiten",
     "prices.view": "Preise ansehen",

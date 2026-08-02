@@ -684,12 +684,20 @@ def make_office_panel_handler(
                 if action == "convert":
                     return ("offers.view", "orders.version.create")
                 return None
-            if (
-                len(parts) == 3
-                and parts[0] == "order"
-                and parts[2] == "confirmation-document"
-            ):
-                return ("documents.prepare",)
+            if len(parts) == 3 and parts[0] == "order":
+                action = parts[2]
+                order_post_permissions: dict[str, tuple[str, ...]] = {
+                    "version": ("orders.version.create",),
+                    "print-confirm": ("orders.print.confirm",),
+                    "effective": ("orders.effective.set",),
+                    "ready": ("orders.ready.release",),
+                    "pause": ("orders.pause",),
+                    "resume": ("orders.pause",),
+                    "cancel": ("orders.cancel",),
+                    "payment-reminder": ("orders.payment.reminder",),
+                    "confirmation-document": ("documents.prepare",),
+                }
+                return order_post_permissions.get(action)
             if (
                 len(parts) == 4
                 and parts[0] == "order"

@@ -809,3 +809,123 @@ def test_confirmation_send_hidden_without_documents_send() -> None:
     )
     assert "/confirmation-document/send" in allowed
     assert "Testversand erzeugen" in allowed
+
+
+def test_offers_send_alone_cannot_status_change(
+    employee_panel: PanelHarness,
+    super_jar: http.cookiejar.CookieJar,
+) -> None:
+    jar = _employee_jar(
+        employee_panel,
+        super_jar,
+        username="sender.not.status",
+        permissions=frozenset({"offers.send", "offers.view"}),
+    )
+    _assert_post_forbidden(
+        employee_panel,
+        f"/offer/{_OFFER_ID}/record-acceptance",
+        jar=jar,
+        data={
+            "_csrf_token": _csrf(jar),
+            "accepted_variant_id": _VARIANT_ID,
+            "acceptance_id": _ACCEPTANCE_ID,
+        },
+        patches={
+            "record_acceptance": (
+                "catering_system.ui.office_panel.OfficePanel.record_offer_acceptance"
+            )
+        },
+    )
+
+
+def test_offers_status_change_alone_cannot_mark_sent(
+    employee_panel: PanelHarness,
+    super_jar: http.cookiejar.CookieJar,
+) -> None:
+    jar = _employee_jar(
+        employee_panel,
+        super_jar,
+        username="status.not.sender",
+        permissions=frozenset({"offers.status.change", "offers.view"}),
+    )
+    _assert_post_forbidden(
+        employee_panel,
+        f"/offer/{_OFFER_ID}/mark-sent",
+        jar=jar,
+        data={
+            "_csrf_token": _csrf(jar),
+            "sent_at": "2026-09-01T10:00",
+            "channel": "email",
+            "recipient_reference": "kunde@example.test",
+            "evidence_reference": "mail-1",
+        },
+        patches={
+            "mark_sent": "catering_system.ui.office_panel.OfficePanel.mark_offer_sent"
+        },
+    )
+
+
+def test_confirmation_prepare_button_hidden_without_documents_prepare() -> None:
+    from unittest.mock import MagicMock
+
+    from catering_system.domain.order import Order
+    from catering_system.services.order_confirmation_document_service import (
+        OrderConfirmationDocumentEligibility,
+    )
+    from catering_system.ui.office_panel_order_detail import (
+        ConfirmationLivePreviewView,
+        OrderDetailFormFields,
+        _confirmation_card,
+    )
+
+    now = datetime(2026, 8, 1, 10, 0, tzinfo=UTC)
+    order = Order(
+        order_id=_ORDER_ID,
+        source_inquiry_id="22222222-2222-2222-2222-222222222222",
+        created_at=now,
+        updated_at=now,
+    )
+    preview = MagicMock()
+    preview.eligible = True
+    preview.blockers = ()
+    preview.warnings = ()
+    preview.commercial_reference = None
+    live_preview = ConfirmationLivePreviewView(state="ready", preview=preview)
+    forms = OrderDetailFormFields(
+        csrf_input=_csrf_input(_employee_context()),
+        print_confirm_command_fields={},
+        effective_command_fields={},
+        ready_command_fields="",
+        cancel_command_fields="",
+        version_command_fields="",
+        payment_command_fields="",
+        confirmation_command_fields="confirmed",
+        send_command_fields="",
+    )
+    hidden = _confirmation_card(
+        order,
+        OrderConfirmationDocumentEligibility(
+            available=True,
+            state="ready",
+            snapshot=None,
+        ),
+        forms,
+        live_preview,
+        context=_employee_context("orders.view", "documents.view"),
+    )
+    assert "/confirmation-document" not in hidden
+    assert "Auftragsbestätigung erstellen" not in hidden
+
+    allowed = _confirmation_card(
+        order,
+        OrderConfirmationDocumentEligibility(
+            available=True,
+            state="ready",
+            snapshot=None,
+        ),
+        forms,
+        live_preview,
+        context=_employee_context("documents.prepare"),
+    )
+    assert "/confirmation-document" in allowed
+    assert "Auftragsbestätigung erstellen" in allowed
