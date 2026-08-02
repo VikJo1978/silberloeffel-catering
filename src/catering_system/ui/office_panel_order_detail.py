@@ -650,6 +650,8 @@ def _confirmation_card(
     confirmation: OrderConfirmationDocumentEligibility,
     forms: OrderDetailFormFields,
     live_preview: ConfirmationLivePreviewView,
+    *,
+    context: OfficePageContext,
 ) -> str:
     state_label = _confirmation_state_label(confirmation.state)
     facts: list[tuple[str, str]] = [("Status", state_label)]
@@ -679,7 +681,7 @@ def _confirmation_card(
         and live_preview.preview is not None
         and live_preview.preview.eligible
     )
-    if can_create:
+    if can_create and context.can("documents.prepare"):
         actions.append(
             f'<form method="post" action="/order/{_e(order.order_id)}/confirmation-document">'
             f"{forms.csrf_input}{forms.confirmation_command_fields}"
@@ -971,9 +973,14 @@ def render_confirmation_card(
     confirmation: OrderConfirmationDocumentEligibility,
     forms: OrderDetailFormFields,
     live_preview: ConfirmationLivePreviewView,
+    *,
+    context: OfficePageContext | None = None,
 ) -> str:
     """Shared Auftragsbestätigung card for v2 and legacy Order Detail."""
-    return _confirmation_card(order, confirmation, forms, live_preview)
+    page_context = context or OfficePageContext()
+    return _confirmation_card(
+        order, confirmation, forms, live_preview, context=page_context
+    )
 
 
 def render_confirmation_outbound_card(
@@ -983,8 +990,10 @@ def render_confirmation_outbound_card(
     forms: OrderDetailFormFields,
     *,
     operational_pause: Mapping[str, object] | None = None,
+    context: OfficePageContext | None = None,
 ) -> str:
     """Fake-outbox test send card — never implies real customer delivery."""
+    page_context = context or OfficePageContext()
     pause_view = operational_pause or {"active": False}
     state_label = _OUTBOUND_STATE_LABELS.get(outbound.state, outbound.state)
     facts: list[tuple[str, str]] = [("Status", state_label)]
@@ -1007,7 +1016,11 @@ def render_confirmation_outbound_card(
             '<p class="order-context-note blocked">'
             "Testversand blockiert: Auftrag pausiert</p>"
         )
-    elif outbound.can_send and confirmation.snapshot is not None:
+    elif (
+        outbound.can_send
+        and confirmation.snapshot is not None
+        and page_context.can("documents.send")
+    ):
         actions.append(
             '<p class="order-context-note">Es wird keine E-Mail an den Kunden gesendet.</p>'
         )
@@ -1298,9 +1311,16 @@ def render_order_detail(
         + render_customer_addresses_card(
             source_inquiry, order, forms, context=page_context
         )
-        + _confirmation_card(order, confirmation, forms, live_preview)
+        + _confirmation_card(
+            order, confirmation, forms, live_preview, context=page_context
+        )
         + render_confirmation_outbound_card(
-            order, confirmation, outbound, forms, operational_pause=pause_view
+            order,
+            confirmation,
+            outbound,
+            forms,
+            operational_pause=pause_view,
+            context=page_context,
         )
         + _payment_card(order, payment, forms)
         + _secondary_actions(order, forms, operational_pause=pause_view)
