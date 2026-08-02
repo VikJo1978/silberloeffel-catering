@@ -57,10 +57,8 @@ from catering_system.ui.office_panel_http import (
     inquiry_command_error_message,
 )
 from catering_system.ui.office_panel_offer_detail import render_offer_detail
-from catering_system.ui.office_panel_views import (
-    OfficePageContext,
-    parse_datetime_local_berlin,
-)
+from catering_system.ui.office_panel_views import parse_datetime_local_berlin
+from tests.helpers.office_panel_context import legacy_office_context
 from catering_system.ui.remote_core_client import RemoteCoreClient
 
 _PASSWORD = "test-pw"
@@ -809,7 +807,7 @@ def test_html_escaping_in_variant_label() -> None:
 
     html = render_offer_detail(
         detail,
-        context=OfficePageContext(csrf_token=_CSRF_TOKEN),
+        context=legacy_office_context(csrf_token=_CSRF_TOKEN),
         forms=OfferDetailFormFields(csrf_input="", command_fields=""),
     )
     assert "<script>" not in html
@@ -850,7 +848,7 @@ def test_expired_offer_detail_shows_prepare_next_without_link() -> None:
 
     html = render_offer_detail(
         detail,
-        context=OfficePageContext(csrf_token=_CSRF_TOKEN),
+        context=legacy_office_context(csrf_token=_CSRF_TOKEN),
         forms=OfferDetailFormFields(csrf_input="", command_fields=""),
         revision_prefill_url=None,
     )
@@ -893,7 +891,7 @@ def test_expired_offer_detail_shows_prepare_next_with_link() -> None:
 
     html = render_offer_detail(
         detail,
-        context=OfficePageContext(csrf_token=_CSRF_TOKEN),
+        context=legacy_office_context(csrf_token=_CSRF_TOKEN),
         forms=OfferDetailFormFields(csrf_input="", command_fields=""),
         revision_prefill_url="/configurator?offer=11111111-1111-4111-8111-111111111111",
     )

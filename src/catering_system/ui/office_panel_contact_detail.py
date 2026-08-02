@@ -60,17 +60,20 @@ def _notes_section(detail: dict[str, object], context: OfficePageContext) -> str
         )
         or "<p>Keine internen Notizen.</p>"
     )
+    note_form = ""
+    if context.can("customers.edit"):
+        note_form = (
+            f'<form method="post" action="/kontakt/{_e(encoded)}/notizen">'
+            f"{_csrf_input(context)}"
+            f'<p><label>Kategorie</label><select name="category">{options}</select></p>'
+            "<p><label>Notiz</label>"
+            '<textarea name="note_text" rows="4" maxlength="4000" required></textarea></p>'
+            '<p><button type="submit">Notiz speichern</button></p>'
+            "</form>"
+        )
     return (
         '<section class="offer-detail-section">'
-        "<h2>Interne Notizen</h2>"
-        f'<form method="post" action="/kontakt/{_e(encoded)}/notizen">'
-        f"{_csrf_input(context)}"
-        f'<p><label>Kategorie</label><select name="category">{options}</select></p>'
-        "<p><label>Notiz</label>"
-        '<textarea name="note_text" rows="4" maxlength="4000" required></textarea></p>'
-        '<p><button type="submit">Notiz speichern</button></p>'
-        "</form>"
-        f"{note_rows}"
+        "<h2>Interne Notizen</h2>" + note_form + f"{note_rows}"
         "</section>"
     )
 

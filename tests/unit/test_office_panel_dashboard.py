@@ -14,11 +14,12 @@ from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
 )
 from catering_system.services.inquiry_service import InquiryService
-from catering_system.ui.office_panel import OfficePageContext, OfficePanel
+from catering_system.ui.office_panel import OfficePanel
 from catering_system.ui.office_panel_dashboard import (
     ArbeitszentraleData,
     render_arbeitszentrale,
 )
+from tests.helpers.office_panel_context import legacy_office_context
 
 
 def _snapshot(**overrides: int) -> WorkCenterSnapshot:
@@ -89,7 +90,7 @@ def _entry(
 
 def _data(**overrides: object) -> ArbeitszentraleData:
     values: dict[str, object] = {
-        "context": OfficePageContext(csrf_token="csrf-real"),
+        "context": legacy_office_context(csrf_token="csrf-real"),
         "today": date(2026, 7, 15),
         "snapshot": _snapshot(),
         "tasks": [],
@@ -315,7 +316,7 @@ def test_v2_panel_renders_new_dashboard() -> None:
     missed_calls = [{"call_id": f"c{i}", "phone": f"040{i}"} for i in range(15)]
     page = OfficePanel(inquiries, orders, ui_version="v2").render_queue(
         missed_calls,
-        context=OfficePageContext(rueckruf_count=15, csrf_token="csrf"),
+        context=legacy_office_context(rueckruf_count=15, csrf_token="csrf"),
     )
 
     assert "<h1>Heute im Büro</h1>" in page

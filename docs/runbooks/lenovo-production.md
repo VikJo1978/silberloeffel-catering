@@ -22,6 +22,34 @@ reconstructable from CRM or staging; protect it before every deployment.
 | `catering-kiosk` | 8082 | LAN/Tailscale | no |
 | `catering-website-intake` | 8083 | loopback only | Inquiry only |
 
+## Planned AUTH-2A rollout (not yet executed)
+
+AUTH-2A introduces employee login for the Office Panel. The approved production
+front door is private Tailscale Serve HTTPS on the Lenovo hostname's `.ts.net`
+origin, terminating TLS before proxying to the Office Panel on
+`127.0.0.1:8081`. Do not apply these steps during ordinary development or
+review; this section is the planned no-lockout rollout only.
+
+1. Create a database backup and confirm the latest backup completed normally.
+2. Verify current Tailscale health and record the current `tailscale serve status`.
+3. Configure private HTTPS Serve for the Office Panel's `.ts.net` origin.
+4. Bind the Office Panel to `127.0.0.1` instead of a LAN/Tailscale address.
+5. Deploy the Office Panel in `migration` mode first, never directly to
+   `employee` mode.
+6. Run the employee-auth schema bootstrap/migrations on the production Core
+   database.
+7. Bootstrap Viktor as the initial `SUPERADMIN` with a temporary password.
+8. Perform the first employee login through the Tailscale Serve HTTPS origin.
+9. Complete the forced password-change flow, then log out.
+10. Log in again with the new password and verify normal Office Panel access.
+11. Smoke-test the Office Panel in `migration` mode, including temporary Basic
+   fallback behaviour.
+12. Switch production from `migration` to `employee` mode.
+13. Confirm the shared Basic fallback is no longer accepted.
+14. Keep rollback limited to code/config rollback: return temporarily to
+   `basic` mode if necessary without deleting employee-auth tables or audit
+   history.
+
 ## Connect and inspect
 
 ```bash

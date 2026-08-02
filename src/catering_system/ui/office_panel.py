@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import quote, urlencode
 
 
@@ -762,13 +762,16 @@ class OfficePanel:
     ) -> str:
         operating_today = api_views.berlin_today()
         snapshot = self.build_work_center_snapshot(missed_calls_open)
+        calendar_entries = (
+            self._calendar_list_rows() if context.can("calendar.view") else []
+        )
         return render_arbeitszentrale(
             ArbeitszentraleData(
                 context=context,
                 today=operating_today,
                 snapshot=snapshot,
                 tasks=self._task_list_rows(),
-                calendar_entries=self._calendar_list_rows(),
+                calendar_entries=calendar_entries,
                 contact_check_open=self._contact_check_open_count(),
                 open_inquiries_open=self._open_inquiries_count(),
                 kalender_view=kalender_view,
@@ -839,11 +842,19 @@ class OfficePanel:
                 )
         version_id = surface_version_id(detail)
         pdf_download_url: str | None = None
-        if version_id and self.offer_document_exists(offer_id, version_id):
+        if (
+            version_id
+            and context.can("offers.pdf.generate")
+            and self.offer_document_exists(offer_id, version_id)
+        ):
             pdf_download_url = (
                 f"/offer/{quote(offer_id, safe='')}/offer-document/pdf"
                 f"?{urlencode({'offer_version_id': version_id})}"
             )
+        if revision_prefill_url is not None and not context.can(
+            "offers.version.create"
+        ):
+            revision_prefill_url = None
         return render_offer_detail(
             detail,
             context=context,
@@ -1776,8 +1787,12 @@ class OfficePanel:
             version = max(versions, key=lambda v: v.version_number)
         expect: dict[str, str] = {}
         if version.kitchen_print_confirmed_at is None:
+            if not context.can("orders.print.confirm"):
+                return ""
             label, action = "Druck bestätigen", "print-confirm"
         elif version.order_version_id != order.effective_order_version_id:
+            if not context.can("orders.effective.set"):
+                return ""
             label, action = "Wirksam machen", "effective"
             expect = {
                 "effective_version_id": order.effective_order_version_id or "",
@@ -1859,14 +1874,20 @@ class OfficePanel:
         context: OfficePageContext,
     ) -> str:
         if state.next_action == "verify":
+            if not context.can("inquiries.verify"):
+                return ""
             return (
                 f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/verify">'
                 f"{_csrf_input(context)}{self._command_fields()}"
                 "<button>Telefonisch verifiziert</button></form>"
             )
         if state.next_action == "prepare-offer":
+            if not context.can("offers.prepare"):
+                return ""
             return '<span class="muted">Angebot vorbereiten</span>'
         if state.next_action == "prepare-next-version":
+            if not context.can("offers.version.create"):
+                return ""
             return '<span class="muted">Neue Version vorbereiten</span>'
         if state.next_action == "offer-pending":
             return '<span class="muted">Angebot ausstehend</span>'
@@ -1994,18 +2015,20 @@ class OfficePanel:
             if self.kiosk_url
             else ""
         )
-        diese_woche = (
-            f'<h2 id="diese-woche">Diese Woche (KW {iso.week}/{iso.year})</h2>'
-            "<table><tr><th>Datum</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th><th>Auftrag</th></tr>"
-            + "".join(
-                week_rows
-                or [
-                    '<tr><td colspan="5">keine wirksamen Aufträge diese Woche</td></tr>'
-                ]
+        diese_woche = ""
+        if context.can("calendar.view"):
+            diese_woche = (
+                f'<h2 id="diese-woche">Diese Woche (KW {iso.week}/{iso.year})</h2>'
+                "<table><tr><th>Datum</th><th>Zeitfenster</th><th>Ort</th><th>Gäste</th><th>Auftrag</th></tr>"
+                + "".join(
+                    week_rows
+                    or [
+                        '<tr><td colspan="5">keine wirksamen Aufträge diese Woche</td></tr>'
+                    ]
+                )
+                + "</table>"
+                + kiosk_link
             )
-            + "</table>"
-            + kiosk_link
-        )
 
         # -- three action queues (§11 addendum): top 5 rows each, one
         # primary action per row, full lists live at /rueckruf, /anfragen,
@@ -2083,7 +2106,11 @@ class OfficePanel:
             + rueckruf_section
             + offene_anfragen_section
             + auftraege_section
-            + '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a></p>'
+            + (
+                '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a></p>'
+                if context.can("inquiries.create")
+                else ""
+            )
         )
         return _page("Büro-Übersicht", body, active_section="home", context=context)
 
@@ -2582,6 +2609,14 @@ class OfficePanel:
         # written anywhere — it's page context for the office worker, shown
         # once, not a prefilled form field bound to any Inquiry attribute.
         phone_hint = f'<p class="subtitle">Anruf von: {_e(phone)}</p>' if phone else ""
+        if not context.can("inquiries.create"):
+            return _page(
+                "Neue Anfrage",
+                phone_hint
+                + '<p class="blocked">Ihre Berechtigung reicht für diese Aktion nicht aus.</p>',
+                active_section="inquiries",
+                context=context,
+            )
         # event_date / guest_count_estimate / inquiry_source / intake_*:
         # optional prefill hints, from either the proposal preview's GET hint
         # (event_date/guest_count_estimate only, PROPOSAL_PREVIEW_MANUAL_
@@ -2642,23 +2677,25 @@ class OfficePanel:
                 f"{_e(CONTACT_COMPLETION_NEXT_ACTION)}. "
                 "Ohne vollständige Kontaktdaten sind Angebot und Auftrag blockiert.</p>"
             )
-            inputs = ""
-            if "email" in missing:
-                inputs += '<p><label>E-Mail</label><input type="email" name="contact_email"></p>'
-            if "phone" in missing:
-                inputs += '<p><label>Telefon</label><input type="tel" name="contact_phone"></p>'
-            form = (
-                f'<form method="post" action="/inquiry/{_e(inq.inquiry_id)}/contact-completion" '
-                'onsubmit="return confirm('
-                "'Fehlende Kontaktdaten werden ergänzt. "
-                "Vorhandene Angaben werden nicht überschrieben.'"
-                ');">'
-                f"{_csrf_input(context)}"
-                f"{self._command_fields({'updated_at': inq.updated_at.isoformat()})}"
-                f"<fieldset>{inputs}"
-                '<p><button type="submit">Kontaktdaten ergänzen</button></p>'
-                "</fieldset></form>"
-            )
+            form = ""
+            if context.can("inquiries.edit"):
+                inputs = ""
+                if "email" in missing:
+                    inputs += '<p><label>E-Mail</label><input type="email" name="contact_email"></p>'
+                if "phone" in missing:
+                    inputs += '<p><label>Telefon</label><input type="tel" name="contact_phone"></p>'
+                form = (
+                    f'<form method="post" action="/inquiry/{_e(inq.inquiry_id)}/contact-completion" '
+                    'onsubmit="return confirm('
+                    "'Fehlende Kontaktdaten werden ergänzt. "
+                    "Vorhandene Angaben werden nicht überschrieben.'"
+                    ');">'
+                    f"{_csrf_input(context)}"
+                    f"{self._command_fields({'updated_at': inq.updated_at.isoformat()})}"
+                    f"<fieldset>{inputs}"
+                    '<p><button type="submit">Kontaktdaten ergänzen</button></p>'
+                    "</fieldset></form>"
+                )
         return f"<h2>Kontaktdaten</h2>{status}<table>{rows}</table>{form}"
 
     def create_inquiry(self, form: dict[str, str]) -> Inquiry:
@@ -2796,6 +2833,7 @@ class OfficePanel:
                 linked_orders_total_count=linked_orders_total_count,
                 linked_orders_truncated=linked_orders_truncated,
                 offer_url=offer_url,
+                context=context,
             )
             return _page(
                 detail.title,
@@ -2819,7 +2857,7 @@ class OfficePanel:
         else:
             prog = '<p class="ok">Angebot kann vorbereitet werden.</p>'
         verify_btn = ""
-        if state.next_action == "verify":
+        if state.next_action == "verify" and context.can("inquiries.verify"):
             verify_btn = (
                 f'<form class="inline" method="post" action="/inquiry/{_e(inquiry_id)}/verify">'
                 f"{_csrf_input(context)}{self._command_fields()}"
@@ -2848,7 +2886,11 @@ class OfficePanel:
                     '<p class="muted">Auftrag bereits erstellt — '
                     "verknüpften Auftrag unten öffnen.</p>"
                 )
-            elif inquiry_shows_convert_accepted_button(state):
+            elif (
+                inquiry_shows_convert_accepted_button(state)
+                and context.can("offers.view")
+                and context.can("orders.version.create")
+            ):
                 convert += (
                     f'<form class="inline" method="post" '
                     f'action="/inquiry/{_e(inquiry_id)}/convert-accepted" '
@@ -2916,6 +2958,23 @@ class OfficePanel:
             else _crm_stage_select(inq.crm_stage)
         )
         contact_section = self._render_contact_section(inq, context)
+        update_form = ""
+        if context.can("inquiries.edit"):
+            update_form = f"""<h2>Anfrage bearbeiten</h2>
+<form method="post" action="/inquiry/{_e(inquiry_id)}/update">{_csrf_input(context)}{self._command_fields({"updated_at": inq.updated_at.isoformat()})}<fieldset>
+<p><label>Datum</label><input type="date" name="event_date" value="{_e(inq.event_date.isoformat())}"></p>
+<p><label>Zeitfenster</label><input name="time_window_text" value="{_e(inq.time_window_text)}"></p>
+<p><label>Ort</label><input name="location_text" value="{_e(inq.location_text)}"></p>
+<p><label>Gäste (ca.)</label><input name="guest_count_estimate" value="{_e(guests)}"></p>
+<p><label>Planungsmodus</label>{_planning_mode_select(inq.planning_mode)}</p>
+<p><label>CRM-Stufe</label>{crm_stage_field}</p>
+<p class="subtitle">Intake-Kontext — keine Auftrags-/Küchenfreigabe.</p>
+<p><label>Betreff</label><input name="intake_subject" value="{_e(inq.intake_subject or "")}"></p>
+<p><label>Nachricht</label><textarea name="intake_message" rows="4">{_e(inq.intake_message or "")}</textarea></p>
+<p><label>Zusammenfassung</label><textarea name="intake_summary" rows="3">{_e(inq.intake_summary or "")}</textarea></p>
+<p><label>Externe Referenz</label><input name="intake_external_ref" value="{_e(inq.intake_external_ref or "")}"></p>
+<p><button type="submit">Speichern</button></p>
+</fieldset></form>"""
         body = (
             inquiry_truncation_warning
             + website_banner
@@ -2932,21 +2991,7 @@ class OfficePanel:
 <h2>Vorgangsprüfung (Progression)</h2>{prog}
 <p>{verify_btn}{convert}</p>
 {offer_prefill}
-<h2>Anfrage bearbeiten</h2>
-<form method="post" action="/inquiry/{_e(inquiry_id)}/update">{_csrf_input(context)}{self._command_fields({"updated_at": inq.updated_at.isoformat()})}<fieldset>
-<p><label>Datum</label><input type="date" name="event_date" value="{_e(inq.event_date.isoformat())}"></p>
-<p><label>Zeitfenster</label><input name="time_window_text" value="{_e(inq.time_window_text)}"></p>
-<p><label>Ort</label><input name="location_text" value="{_e(inq.location_text)}"></p>
-<p><label>Gäste (ca.)</label><input name="guest_count_estimate" value="{_e(guests)}"></p>
-<p><label>Planungsmodus</label>{_planning_mode_select(inq.planning_mode)}</p>
-<p><label>CRM-Stufe</label>{crm_stage_field}</p>
-<p class="subtitle">Intake-Kontext — keine Auftrags-/Küchenfreigabe.</p>
-<p><label>Betreff</label><input name="intake_subject" value="{_e(inq.intake_subject or "")}"></p>
-<p><label>Nachricht</label><textarea name="intake_message" rows="4">{_e(inq.intake_message or "")}</textarea></p>
-<p><label>Zusammenfassung</label><textarea name="intake_summary" rows="3">{_e(inq.intake_summary or "")}</textarea></p>
-<p><label>Externe Referenz</label><input name="intake_external_ref" value="{_e(inq.intake_external_ref or "")}"></p>
-<p><button type="submit">Speichern</button></p>
-</fieldset></form>"""
+{update_form}"""
         )
         return _page(
             f"Anfrage {inq.inquiry_id[:8]}",
@@ -3173,6 +3218,7 @@ class OfficePanel:
                         target is not None
                         and version.order_version_id == target.order_version_id
                         and version.kitchen_print_confirmed_at is None
+                        and context.can("orders.print.confirm")
                     ):
                         print_confirm_fields[version.order_version_id] = (
                             self._command_fields()
@@ -3182,6 +3228,7 @@ class OfficePanel:
                         and version.order_version_id == target.order_version_id
                         and version.kitchen_print_confirmed_at is not None
                         and version.order_version_id != order.effective_order_version_id
+                        and context.can("orders.effective.set")
                     ):
                         effective_fields[version.order_version_id] = (
                             self._command_fields(
@@ -3214,13 +3261,15 @@ class OfficePanel:
                     print_confirm_command_fields=print_confirm_fields,
                     effective_command_fields=effective_fields,
                     ready_command_fields=(
-                        self._command_fields() if not cancelled else ""
+                        self._command_fields()
+                        if not cancelled and context.can("orders.ready.release")
+                        else ""
                     ),
                     cancel_command_fields=(
                         self._command_fields(
                             {"updated_at": order.updated_at.isoformat()}
                         )
-                        if not cancelled
+                        if not cancelled and context.can("orders.cancel")
                         else ""
                     ),
                     version_command_fields=(
@@ -3235,7 +3284,7 @@ class OfficePanel:
                                 ),
                             }
                         )
-                        if not cancelled
+                        if not cancelled and context.can("orders.version.create")
                         else ""
                     ),
                     payment_command_fields=(
@@ -3248,7 +3297,7 @@ class OfficePanel:
                                 )
                             }
                         )
-                        if not cancelled
+                        if not cancelled and context.can("orders.payment.reminder")
                         else ""
                     ),
                     confirmation_command_fields=(
@@ -3275,12 +3324,20 @@ class OfficePanel:
                     ),
                     pause_command_fields=(
                         self._command_fields(self._pause_expect_fields(pause_view))
-                        if not cancelled and not pause_view.get("active")
+                        if (
+                            not cancelled
+                            and not pause_view.get("active")
+                            and context.can("orders.pause")
+                        )
                         else ""
                     ),
                     resume_command_fields=(
                         self._command_fields(self._resume_expect_fields(pause_view))
-                        if not cancelled and pause_view.get("active")
+                        if (
+                            not cancelled
+                            and pause_view.get("active")
+                            and context.can("orders.pause")
+                        )
                         else ""
                     ),
                     customer_addresses_command_fields=(
@@ -3310,6 +3367,7 @@ class OfficePanel:
                 operational_pause=pause_view,
                 versions_total_count=versions_total_count,
                 versions_truncated=versions_truncated,
+                context=context,
             )
             return _page(
                 detail.title,
@@ -3351,6 +3409,7 @@ class OfficePanel:
                     v.kitchen_print_confirmed_at is None
                     and action_target is not None
                     and v.order_version_id == action_target.order_version_id
+                    and context.can("orders.print.confirm")
                 ):
                     actions.append(
                         f'<form class="inline" method="post" action="/order/{_e(order_id)}/print-confirm">'
@@ -3363,6 +3422,7 @@ class OfficePanel:
                     and v.order_version_id != order.effective_order_version_id
                     and action_target is not None
                     and v.order_version_id == action_target.order_version_id
+                    and context.can("orders.effective.set")
                 ):
                     actions.append(
                         f'<form class="inline" method="post" action="/order/{_e(order_id)}/effective">'
@@ -3415,7 +3475,7 @@ class OfficePanel:
                 f"<p><strong>Nächster Schritt:</strong> {_e(payment.next_step)}</p>"
             )
         payment_form = ""
-        if not cancelled:
+        if not cancelled and context.can("orders.payment.reminder"):
             options = ['<option value="">Bitte wählen</option>']
             for method in PAYMENT_METHODS:
                 selected = " selected" if payment.payment_method == method else ""
@@ -3451,12 +3511,25 @@ class OfficePanel:
                 latest_version_number=latest_version_number,
             )
             assert prefill is not None
-            actions_block = f"""
-<p>
-<form class="inline" method="post" action="/order/{_e(order_id)}/ready">{_csrf_input(context)}{self._command_fields()}<button>Freigabe anfordern</button></form>
-<form class="inline" method="post" action="/order/{_e(order_id)}/cancel">{_csrf_input(context)}{self._command_fields({"updated_at": order.updated_at.isoformat()})}<button>Auftrag stornieren</button></form>
-</p>
-<h2>Neue Version</h2>
+            action_parts: list[str] = []
+            inline_forms: list[str] = []
+            if context.can("orders.ready.release"):
+                inline_forms.append(
+                    f'<form class="inline" method="post" action="/order/{_e(order_id)}/ready">'
+                    f"{_csrf_input(context)}{self._command_fields()}"
+                    "<button>Freigabe anfordern</button></form>"
+                )
+            if context.can("orders.cancel"):
+                inline_forms.append(
+                    f'<form class="inline" method="post" action="/order/{_e(order_id)}/cancel">'
+                    f"{_csrf_input(context)}{self._command_fields({'updated_at': order.updated_at.isoformat()})}"
+                    "<button>Auftrag stornieren</button></form>"
+                )
+            if inline_forms:
+                action_parts.append(f"<p>{''.join(inline_forms)}</p>")
+            if context.can("orders.version.create"):
+                action_parts.append(
+                    f"""<h2>Neue Version</h2>
 <form method="post" action="/order/{_e(order_id)}/version">{_csrf_input(context)}{self._command_fields({"latest_version_number": str(latest_version_number), "current_effective_order_version_id": order.effective_order_version_id or "", "current_candidate_order_version_id": order.candidate_order_version_id or ""})}<input type="hidden" name="latest_version_number" value="{_e(prefill.latest_version_number)}"><fieldset>
 <p><label>Datum*</label><input type="date" name="event_date" required value="{_e(prefill.event_date)}"></p>
 <p><label>Zeitfenster</label><input name="time_window_text" value="{_e(prefill.time_window_text)}"></p>
@@ -3467,6 +3540,8 @@ class OfficePanel:
 <p><label>Änderungsgrund*</label><textarea name="change_reason" maxlength="1000" required></textarea></p>
 <p><button type="submit">Version anlegen</button></p>
 </fieldset></form>"""
+                )
+            actions_block = "".join(action_parts)
         truncation_warning = (
             '<p class="blocked"><strong>Unvollständige Ansicht:</strong> '
             f"Es werden {len(versions)} von {versions_total_count} Versionen "
@@ -3506,12 +3581,20 @@ class OfficePanel:
             ),
             pause_command_fields=(
                 self._command_fields(self._pause_expect_fields(pause_view))
-                if not cancelled and not pause_view.get("active")
+                if (
+                    not cancelled
+                    and not pause_view.get("active")
+                    and context.can("orders.pause")
+                )
                 else ""
             ),
             resume_command_fields=(
                 self._command_fields(self._resume_expect_fields(pause_view))
-                if not cancelled and pause_view.get("active")
+                if (
+                    not cancelled
+                    and pause_view.get("active")
+                    and context.can("orders.pause")
+                )
                 else ""
             ),
             customer_addresses_command_fields=(
@@ -3537,17 +3620,20 @@ class OfficePanel:
             source_inquiry,
             order,
             detail_forms,
+            context=context,
         )
         addresses_card = render_customer_addresses_card(
             source_inquiry,
             order,
             detail_forms,
+            context=context,
         )
         confirmation_card = render_confirmation_card(
             order,
             confirmation,
             detail_forms,
             live_preview,
+            context=context,
         )
         outbound_card = render_confirmation_outbound_card(
             order,
@@ -3555,8 +3641,11 @@ class OfficePanel:
             outbound,
             detail_forms,
             operational_pause=pause_view,
+            context=context,
         )
-        pause_card = render_operational_pause_card(order, pause_view, detail_forms)
+        pause_card = render_operational_pause_card(
+            order, pause_view, detail_forms, context=context
+        )
         paused_header = (
             '<p class="blocked"><strong>Auftrag pausiert</strong></p>'
             if pause_view.get("active")
@@ -3846,6 +3935,9 @@ def create_office_panel_server(
     offer_document_repo: OfferDocumentSnapshotRepository | None = None,
     offer_pdf_static_content: OfferPdfStaticContent | None = None,
     ui_version: str = "legacy",
+    auth_mode: Literal["basic", "migration", "employee"] = "basic",
+    auth_service: Any | None = None,
+    secure_cookie: bool = True,
 ) -> HTTPServer:
     """Compatibility wrapper; server construction lives in office_panel_http."""
     from catering_system.ui.office_panel_http import (
@@ -3877,6 +3969,9 @@ def create_office_panel_server(
         offer_document_repo=offer_document_repo,
         offer_pdf_static_content=offer_pdf_static_content,
         ui_version=ui_version,
+        auth_mode=auth_mode,
+        auth_service=auth_service,
+        secure_cookie=secure_cookie,
     )
 
 
@@ -3899,11 +3994,25 @@ def main() -> None:
         "without ever opening core.db",
     )
     parser.add_argument("--port", type=int, default=8081)
-    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument(
+        "--host",
+        default=os.environ.get("OFFICE_PANEL_HOST", "0.0.0.0"),
+    )
+    parser.add_argument(
+        "--auth-mode",
+        default=os.environ.get("OFFICE_PANEL_AUTH_MODE", "basic"),
+        help="Office auth mode: basic, migration, employee",
+    )
     parser.add_argument(
         "--password",
         default=os.environ.get("OFFICE_PANEL_PASSWORD", ""),
         help="Office password (or set OFFICE_PANEL_PASSWORD)",
+    )
+    parser.add_argument(
+        "--allow-insecure-cookie",
+        action="store_true",
+        default=os.environ.get("OFFICE_PANEL_ALLOW_INSECURE_COOKIE", "") == "1",
+        help="Allow non-Secure employee cookies for local HTTP development only",
     )
     parser.add_argument(
         "--auerswald-url",
@@ -3941,11 +4050,15 @@ def main() -> None:
         "legacy is the safe rollout default",
     )
     args = parser.parse_args()
-    if not args.password:
+    from catering_system.ui.office_panel_http import validate_office_panel_auth_mode
+
+    auth_mode = validate_office_panel_auth_mode(args.auth_mode)
+    if auth_mode in {"basic", "migration"} and not args.password:
         raise SystemExit(
             "office panel refuses to start without a password "
             "(--password or OFFICE_PANEL_PASSWORD): it is a write surface (pack §7)"
         )
+    secure_cookie = not args.allow_insecure_cookie
 
     # Phase 2 dual mode (pack §7): CORE_OFFICE_API_URL and CORE_OFFICE_API_TOKEN
     # must be set together (remote mode) or both left empty (direct mode) — a
@@ -3960,6 +4073,20 @@ def main() -> None:
             "CORE_OFFICE_API_URL and CORE_OFFICE_API_TOKEN must be set together "
             "(remote mode) or both left empty (direct mode)"
         )
+
+    auth_runtime = None
+    auth_service = None
+    if auth_mode in {"migration", "employee"}:
+        if not args.db:
+            raise SystemExit(
+                "--db is required when OFFICE_PANEL_AUTH_MODE is migration or employee"
+            )
+        from catering_system.repositories.employee_auth_runtime import (
+            open_managed_employee_auth_runtime,
+        )
+
+        auth_runtime = open_managed_employee_auth_runtime(args.db)
+        auth_service = auth_runtime.service
 
     if core_api_url:
         from catering_system.ui.remote_core_client import RemoteCoreClient
@@ -3978,10 +4105,15 @@ def main() -> None:
             args.configurator_url,
             remote=remote,
             ui_version=args.ui_version,
+            auth_mode=auth_mode,
+            auth_service=auth_service,
+            secure_cookie=secure_cookie,
         )
         print(
-            f"Office panel on http://{args.host}:{args.port}/ (user: office) "
-            f"— remote mode against {core_api_url}"
+            "Office panel on "
+            f"http://{args.host}:{args.port}/ — remote mode against {core_api_url} "
+            f"(auth_mode={auth_mode}, secure_cookie={secure_cookie}, "
+            f"basic_fallback_active={auth_mode in {'basic', 'migration'}})"
         )
     else:
         if not args.db:
@@ -4097,9 +4229,21 @@ def main() -> None:
             offer_document_repo=offer_document_repo,
             offer_pdf_static_content=offer_pdf_static_content,
             ui_version=args.ui_version,
+            auth_mode=auth_mode,
+            auth_service=auth_service,
+            secure_cookie=secure_cookie,
         )
-        print(f"Office panel on http://{args.host}:{args.port}/ (user: office)")
-    server.serve_forever()
+        print(
+            "Office panel on "
+            f"http://{args.host}:{args.port}/ "
+            f"(auth_mode={auth_mode}, secure_cookie={secure_cookie}, "
+            f"basic_fallback_active={auth_mode in {'basic', 'migration'}})"
+        )
+    try:
+        server.serve_forever()
+    finally:
+        if auth_runtime is not None:
+            auth_runtime.close()
 
 
 if __name__ == "__main__":

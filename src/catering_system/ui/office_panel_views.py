@@ -6,6 +6,7 @@ import html
 from dataclasses import dataclass
 from datetime import date, datetime
 
+from catering_system.domain.employee_auth import PERMISSION_SET
 from catering_system.domain.inquiry import CRM_PIPELINE, PLANNING_MODES
 from catering_system.services.buffet_cards_service import BuffetCard, buffet_card_body
 from catering_system.services.order_print_projection_service import OrderPrintProjection
@@ -118,6 +119,21 @@ class OfficePageContext:
 
     rueckruf_count: int | None = None
     csrf_token: str = ""
+    current_user_name: str = ""
+    current_user_role_label: str = ""
+    password_change_path: str = ""
+    logout_path: str = ""
+    show_transition_banner: bool = False
+    legacy_shared_access: bool = False
+    show_users_nav: bool = False
+    employee_effective_permissions: frozenset[str] = frozenset()
+
+    def can(self, permission_code: str) -> bool:
+        if permission_code not in PERMISSION_SET:
+            return False
+        if self.legacy_shared_access:
+            return True
+        return permission_code in self.employee_effective_permissions
 
 
 _EMPTY_PAGE_CONTEXT = OfficePageContext()
@@ -127,6 +143,10 @@ def _csrf_input(context: OfficePageContext) -> str:
     if not context.csrf_token:
         return ""
     return f'<input type="hidden" name="_csrf_token" value="{_e(context.csrf_token)}">'
+
+
+def _nav_visible(context: OfficePageContext, permission_code: str) -> bool:
+    return context.can(permission_code)
 
 
 def _nav_link(
@@ -156,25 +176,51 @@ def _page(
     show_title: bool = True,
     auto_refresh_seconds: int | None = None,
 ) -> str:
-    nav = "".join(
-        (
-            _nav_link("/", "Arbeitszentrale", "grid", "home", active_section),
-            '<div class="office-nav-label">Vertrieb</div>',
-            _nav_link("/anfragen", "Anfragen", "doc", "inquiries", active_section),
-            _nav_link("/angebote", "Angebote", "doc", "offers", active_section),
-            _nav_link("/kontakte", "Kontakte", "users", "contacts", active_section),
-            _nav_link("/emails", "E-Mail", "doc", "email", active_section),
-            _nav_link("/aufgaben", "Aufgaben", "doc", "tasks", active_section),
-            _nav_link("/kalender", "Kalender", "calendar", "calendar", active_section),
-            '<div class="office-nav-label">Betrieb</div>',
-            _nav_link("/auftraege", "Aufträge", "briefcase", "orders", active_section),
+    nav_items: list[str] = []
+    if _nav_visible(context, "queue.view"):
+        nav_items.append(
+            _nav_link("/", "Arbeitszentrale", "grid", "home", active_section)
+        )
+    vertrieb: list[str] = []
+    if _nav_visible(context, "inquiries.view"):
+        vertrieb.append(
+            _nav_link("/anfragen", "Anfragen", "doc", "inquiries", active_section)
+        )
+    if _nav_visible(context, "offers.view"):
+        vertrieb.append(
+            _nav_link("/angebote", "Angebote", "doc", "offers", active_section)
+        )
+    if _nav_visible(context, "customers.view"):
+        vertrieb.append(
+            _nav_link("/kontakte", "Kontakte", "users", "contacts", active_section)
+        )
+    if _nav_visible(context, "inquiries.view"):
+        vertrieb.append(_nav_link("/emails", "E-Mail", "doc", "email", active_section))
+    if _nav_visible(context, "queue.view"):
+        vertrieb.append(
+            _nav_link("/aufgaben", "Aufgaben", "doc", "tasks", active_section)
+        )
+    if _nav_visible(context, "calendar.view"):
+        vertrieb.append(
+            _nav_link("/kalender", "Kalender", "calendar", "calendar", active_section)
+        )
+    betrieb: list[str] = []
+    if _nav_visible(context, "orders.view"):
+        betrieb.append(
+            _nav_link("/auftraege", "Aufträge", "briefcase", "orders", active_section)
+        )
+    if _nav_visible(context, "calendar.view"):
+        betrieb.append(
             _nav_link(
                 "/#diese-woche",
                 "Diese Woche",
                 "calendar",
                 "week",
                 active_section,
-            ),
+            )
+        )
+    if _nav_visible(context, "queue.view"):
+        betrieb.append(
             _nav_link(
                 "/rueckruf",
                 "Rückrufliste",
@@ -182,19 +228,83 @@ def _page(
                 "callbacks",
                 active_section,
                 badge=context.rueckruf_count,
-            ),
+            )
+        )
+    if _nav_visible(context, "inquiries.create"):
+        betrieb.append(
             _nav_link(
                 "/proposal-preview",
                 "Angebots-Import",
                 "import",
                 "proposal",
                 active_section,
-            ),
-            '<div class="office-nav-label">Verwaltung</div>',
-            _nav_link("/gerichte", "Gerichte", "doc", "catalog", active_section),
+            )
         )
-    )
+    verwaltung: list[str] = []
+    if _nav_visible(context, "catalog.view"):
+        verwaltung.append(
+            _nav_link("/gerichte", "Gerichte", "doc", "catalog", active_section)
+        )
+    nav_parts: list[str] = []
+    if nav_items:
+        nav_parts.extend(nav_items)
+    if vertrieb:
+        nav_parts.append('<div class="office-nav-label">Vertrieb</div>')
+        nav_parts.extend(vertrieb)
+    if betrieb:
+        nav_parts.append('<div class="office-nav-label">Betrieb</div>')
+        nav_parts.extend(betrieb)
+    if verwaltung:
+        nav_parts.append('<div class="office-nav-label">Verwaltung</div>')
+        nav_parts.extend(verwaltung)
+    if context.show_users_nav:
+        nav_parts.extend(
+            (
+                '<div class="office-nav-label">Einstellungen</div>',
+                _nav_link(
+                    "/settings/users",
+                    "Benutzer & Rechte",
+                    "users",
+                    "settings",
+                    active_section,
+                ),
+            )
+        )
+    nav = "".join(nav_parts)
     page_title = f"<h1>{_e(title)}</h1>" if show_title else ""
+    account_meta = (
+        '<div class="office-account-meta">'
+        f"<strong>{_e(context.current_user_name or 'Office Panel')}</strong>"
+        f"<span>{_e(context.current_user_role_label or 'Tägliche Arbeitszentrale')}</span>"
+        "</div>"
+    )
+    account_actions = ""
+    if context.password_change_path or context.logout_path:
+        password_link = (
+            f'<a class="office-account-link" href="{_e(context.password_change_path)}">'
+            "Passwort ändern</a>"
+            if context.password_change_path
+            else ""
+        )
+        logout_form = (
+            '<form class="office-account-form" method="post" '
+            f'action="{_e(context.logout_path)}">{_csrf_input(context)}'
+            '<button type="submit" class="office-account-link">Abmelden</button>'
+            "</form>"
+            if context.logout_path
+            else ""
+        )
+        account_actions = (
+            f'<div class="office-account-actions">{password_link}{logout_form}</div>'
+        )
+    transition_banner = (
+        '<div class="office-global-banner">'
+        "<strong>Übergangsmodus aktiv:</strong> "
+        "Die Anmeldung mit dem gemeinsamen Office-Passwort ist noch möglich."
+        "</div>"
+        if context.show_transition_banner
+        else ""
+    )
     refresh_meta = (
         f'<meta http-equiv="refresh" content="{auto_refresh_seconds}">'
         if auto_refresh_seconds is not None
@@ -215,8 +325,9 @@ def _page(
         '<div class="office-user"><strong>Office Panel</strong>'
         "<span>Tägliche Arbeitszentrale</span></div></aside>"
         '<main class="office-workspace">'
-        f'<header class="office-topbar"><span class="office-crumb">{_e(title)}</span></header>'
-        f'<div class="office-content">{page_title}{body}</div>'
+        f'<header class="office-topbar"><span class="office-crumb">{_e(title)}</span>'
+        f'<div class="office-account">{account_meta}{account_actions}</div></header>'
+        f'<div class="office-content">{transition_banner}{page_title}{body}</div>'
         "</main></div></body></html>"
     )
 

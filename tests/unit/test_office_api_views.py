@@ -56,11 +56,12 @@ def _panel_action(order: Order, repo: InMemoryOrderRepository) -> dict | None:
     """Extract (action, version) from the real panel's `_next_step_action`
     HTML so the API resolution is provably identical."""
     from catering_system.ui.office_panel import OfficePanel
+    from tests.helpers.office_panel_context import legacy_office_context
 
     panel = OfficePanel.__new__(OfficePanel)
     panel._orders = repo
     panel._remote = None
-    html = panel._next_step_action(order)
+    html = panel._next_step_action(order, context=legacy_office_context())
     if not html:
         return None
     action = re.search(r"/order/[^/]+/([a-z-]+)\"", html)

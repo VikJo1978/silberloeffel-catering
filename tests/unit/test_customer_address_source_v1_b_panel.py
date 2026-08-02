@@ -45,6 +45,7 @@ from catering_system.ui.office_panel_order_detail import (
     OrderDetailFormFields,
     render_customer_addresses_card,
 )
+from tests.helpers.office_panel_context import legacy_office_context
 from tests.unit.test_offer_service import (
     _INQUIRY_ID,
     _acceptance_args,
@@ -105,7 +106,9 @@ def test_address_card_separate_shows_stored_and_effective() -> None:
         created_at=datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
         updated_at=datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
     )
-    card = render_customer_addresses_card(inquiry, order, _empty_forms())
+    card = render_customer_addresses_card(
+        inquiry, order, _empty_forms(), context=legacy_office_context()
+    )
     assert "Rechnungsadresse" in card
     assert "Bürostraße 1" in card
     assert "Abweichende Lieferadresse" in card
@@ -138,7 +141,9 @@ def test_address_card_same_as_invoice_distinguishes_stored_vs_effective() -> Non
         created_at=datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
         updated_at=datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
     )
-    card = render_customer_addresses_card(inquiry, order, _empty_forms())
+    card = render_customer_addresses_card(
+        inquiry, order, _empty_forms(), context=legacy_office_context()
+    )
     assert "Wie Rechnungsadresse" in card
     assert "keine separate Adresse" in card
     assert card.count("Bürostraße 1") >= 2
@@ -164,7 +169,9 @@ def test_address_card_unknown_has_no_effective_delivery() -> None:
         created_at=datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
         updated_at=datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
     )
-    card = render_customer_addresses_card(inquiry, order, _empty_forms())
+    card = render_customer_addresses_card(
+        inquiry, order, _empty_forms(), context=legacy_office_context()
+    )
     assert "Unbekannt" in card
     assert "keine separate Adresse" in card
     assert "nicht festgelegt" in card
@@ -252,7 +259,7 @@ def test_order_detail_shows_separate_addresses_after_service_write(
         delivery_address=_DELIVERY,
         delivery_address_mode="SEPARATE",
     )
-    page = panel.render_order(order_id)
+    page = panel.render_order(order_id, context=legacy_office_context())
     assert page is not None
     assert "Kundenadressen" in page
     assert "Bürostraße 1" in page
@@ -277,7 +284,7 @@ def test_mode_changes_update_stored_and_effective_labels(tmp_path: Path) -> None
         delivery_address=_DELIVERY,
         delivery_address_mode="SAME_AS_INVOICE",
     )
-    page = panel.render_order(order_id)
+    page = panel.render_order(order_id, context=legacy_office_context())
     assert page is not None
     assert "Wie Rechnungsadresse" in page
     assert "keine separate Adresse" in page
@@ -289,7 +296,7 @@ def test_mode_changes_update_stored_and_effective_labels(tmp_path: Path) -> None
         delivery_address=None,
         delivery_address_mode="UNKNOWN",
     )
-    page = panel.render_order(order_id)
+    page = panel.render_order(order_id, context=legacy_office_context())
     assert page is not None
     assert "Unbekannt" in page
     assert "nicht festgelegt" in page
@@ -327,7 +334,7 @@ def test_contact_completion_after_address_form_preserves_addresses(
     panel.complete_inquiry_contacts(
         inquiry_id, {"contact_email": "neu@example.invalid"}
     )
-    page = panel.render_order(order_id)
+    page = panel.render_order(order_id, context=legacy_office_context())
     assert page is not None
     assert "Eventplatz 9" in page
     assert "Abweichende Lieferadresse" in page

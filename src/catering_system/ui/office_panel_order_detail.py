@@ -31,6 +31,7 @@ from catering_system.services.order_confirmation_document_service import (
 from catering_system.services.order_confirmation_outbound_service import (
     OutboundSendEligibility,
 )
+from catering_system.ui.office_panel_views import OfficePageContext
 from catering_system.ui.operational_pause_labels import (
     PAUSE_REASON_LABELS,
     pause_reason_label,
@@ -304,6 +305,8 @@ def _primary_action(
     target: OrderVersion | None,
     next_action: Mapping[str, str] | None,
     forms: OrderDetailFormFields,
+    *,
+    context: OfficePageContext,
 ) -> str:
     if order.cancelled_at is not None:
         return (
@@ -323,6 +326,11 @@ def _primary_action(
         )
     action = next_action.get("action")
     if action == "print-confirm":
+        if (
+            not context.can("orders.print.confirm")
+            or target.order_version_id not in forms.print_confirm_command_fields
+        ):
+            return ""
         command_fields = forms.print_confirm_command_fields.get(
             target.order_version_id, ""
         )
@@ -346,6 +354,11 @@ def _primary_action(
             "</form></div></section>"
         )
     if action == "effective":
+        if (
+            not context.can("orders.effective.set")
+            or target.order_version_id not in forms.effective_command_fields
+        ):
+            return ""
         command_fields = forms.effective_command_fields.get(target.order_version_id, "")
         return (
             '<section class="order-next-step">'
@@ -381,6 +394,8 @@ def _operational_progress(
     target: OrderVersion | None,
     ready: ReadyToSendEvaluation,
     forms: OrderDetailFormFields,
+    *,
+    context: OfficePageContext,
 ) -> str:
     if target is None:
         steps = '<p class="order-section-note">Keine Auftragsstände vorhanden.</p>'
@@ -434,7 +449,7 @@ def _operational_progress(
             f"<ul>{reasons}</ul></div>"
         )
     ready_form = ""
-    if order.cancelled_at is None:
+    if order.cancelled_at is None and context.can("orders.ready.release"):
         ready_form = (
             f'<form class="order-ready-form" method="post" '
             f'action="/order/{_e(order.order_id)}/ready">'
@@ -453,6 +468,8 @@ def _version_actions(
     order: Order,
     version: OrderVersion,
     forms: OrderDetailFormFields,
+    *,
+    context: OfficePageContext,
 ) -> str:
     actions = [
         f'<a class="order-button ghost" target="_blank" rel="noopener" '
@@ -463,7 +480,7 @@ def _version_actions(
         f'{_e(version.order_version_id)}">Buffetschilder öffnen</a>',
     ]
     print_fields = forms.print_confirm_command_fields.get(version.order_version_id)
-    if print_fields is not None:
+    if print_fields is not None and context.can("orders.print.confirm"):
         actions.append(
             f'<form method="post" action="/order/{_e(order.order_id)}/print-confirm">'
             f"{forms.csrf_input}{print_fields}"
@@ -473,7 +490,7 @@ def _version_actions(
             "Druck bestätigen</button></form>"
         )
     effective_fields = forms.effective_command_fields.get(version.order_version_id)
-    if effective_fields is not None:
+    if effective_fields is not None and context.can("orders.effective.set"):
         actions.append(
             f'<form method="post" action="/order/{_e(order.order_id)}/effective">'
             f"{forms.csrf_input}{effective_fields}"
@@ -489,6 +506,8 @@ def _version_history(
     order: Order,
     versions: Sequence[OrderVersion],
     forms: OrderDetailFormFields,
+    *,
+    context: OfficePageContext,
 ) -> str:
     rows = []
     target = _target_version(order, versions)
@@ -543,7 +562,7 @@ def _version_history(
                 if version.change_reason is not None
                 else ""
             )
-            + f"{_version_actions(order, version, forms)}</article>"
+            + f"{_version_actions(order, version, forms, context=context)}</article>"
         )
     return (
         '<details class="order-history">'
@@ -562,8 +581,12 @@ def _payment_form(
     order: Order,
     payment: PaymentReminderView,
     forms: OrderDetailFormFields,
+    *,
+    context: OfficePageContext,
 ) -> str:
     if order.cancelled_at is not None:
+        return ""
+    if not context.can("orders.payment.reminder"):
         return ""
     options = ['<option value="">Bitte wählen</option>']
     for method in PAYMENT_METHODS:
@@ -601,6 +624,8 @@ def _payment_card(
     order: Order,
     payment: PaymentReminderView,
     forms: OrderDetailFormFields,
+    *,
+    context: OfficePageContext,
 ) -> str:
     facts = [
         ("Zahlungsart", payment.payment_method_label),
@@ -625,7 +650,7 @@ def _payment_card(
         + "</dl>"
         '<div class="order-payment-next"><span>Nächste Zahlungsaufgabe</span>'
         f"<strong>{_e(next_step)}</strong></div>"
-        + _payment_form(order, payment, forms)
+        + _payment_form(order, payment, forms, context=context)
         + "</section>"
     )
 
@@ -649,6 +674,8 @@ def _confirmation_card(
     confirmation: OrderConfirmationDocumentEligibility,
     forms: OrderDetailFormFields,
     live_preview: ConfirmationLivePreviewView,
+    *,
+    context: OfficePageContext,
 ) -> str:
     state_label = _confirmation_state_label(confirmation.state)
     facts: list[tuple[str, str]] = [("Status", state_label)]
@@ -678,7 +705,7 @@ def _confirmation_card(
         and live_preview.preview is not None
         and live_preview.preview.eligible
     )
-    if can_create:
+    if can_create and context.can("documents.prepare"):
         actions.append(
             f'<form method="post" action="/order/{_e(order.order_id)}/confirmation-document">'
             f"{forms.csrf_input}{forms.confirmation_command_fields}"
@@ -850,8 +877,10 @@ def render_customer_addresses_card(
     forms: OrderDetailFormFields,
     *,
     editable: bool = True,
+    context: OfficePageContext | None = None,
 ) -> str:
     """Show stored vs effective delivery addresses for confirmation context."""
+    page_context = context or OfficePageContext()
     if inquiry is None:
         return (
             '<section class="order-card order-content-card order-addresses-card">'
@@ -884,7 +913,12 @@ def render_customer_addresses_card(
     )
     form = (
         _customer_addresses_form(inquiry, order, forms)
-        if editable and order.cancelled_at is None
+        if (
+            editable
+            and order.cancelled_at is None
+            and page_context.can("inquiries.view")
+            and page_context.can("customers.edit")
+        )
         else ""
     )
     return (
@@ -925,8 +959,10 @@ def render_fulfillment_mode_card(
     forms: OrderDetailFormFields,
     *,
     editable: bool = True,
+    context: OfficePageContext | None = None,
 ) -> str:
     """Auftragsart (Lieferung/Abholung) — never guessed, always explicit."""
+    page_context = context or OfficePageContext()
     if inquiry is None:
         return (
             '<section class="order-card order-content-card order-fulfillment-card">'
@@ -939,7 +975,11 @@ def render_fulfillment_mode_card(
     )
     form = (
         _fulfillment_mode_form(inquiry, order, forms)
-        if editable and order.cancelled_at is None
+        if (
+            editable
+            and order.cancelled_at is None
+            and page_context.can("inquiries.edit")
+        )
         else ""
     )
     return (
@@ -957,9 +997,14 @@ def render_confirmation_card(
     confirmation: OrderConfirmationDocumentEligibility,
     forms: OrderDetailFormFields,
     live_preview: ConfirmationLivePreviewView,
+    *,
+    context: OfficePageContext | None = None,
 ) -> str:
     """Shared Auftragsbestätigung card for v2 and legacy Order Detail."""
-    return _confirmation_card(order, confirmation, forms, live_preview)
+    page_context = context or OfficePageContext()
+    return _confirmation_card(
+        order, confirmation, forms, live_preview, context=page_context
+    )
 
 
 def render_confirmation_outbound_card(
@@ -969,8 +1014,10 @@ def render_confirmation_outbound_card(
     forms: OrderDetailFormFields,
     *,
     operational_pause: Mapping[str, object] | None = None,
+    context: OfficePageContext | None = None,
 ) -> str:
     """Fake-outbox test send card — never implies real customer delivery."""
+    page_context = context or OfficePageContext()
     pause_view = operational_pause or {"active": False}
     state_label = _OUTBOUND_STATE_LABELS.get(outbound.state, outbound.state)
     facts: list[tuple[str, str]] = [("Status", state_label)]
@@ -993,7 +1040,11 @@ def render_confirmation_outbound_card(
             '<p class="order-context-note blocked">'
             "Testversand blockiert: Auftrag pausiert</p>"
         )
-    elif outbound.can_send and confirmation.snapshot is not None:
+    elif (
+        outbound.can_send
+        and confirmation.snapshot is not None
+        and page_context.can("documents.send")
+    ):
         actions.append(
             '<p class="order-context-note">Es wird keine E-Mail an den Kunden gesendet.</p>'
         )
@@ -1040,9 +1091,11 @@ def _planning_mode_select(selected: str) -> str:
 def _version_change_form(
     order: Order,
     forms: OrderDetailFormFields,
+    *,
+    context: OfficePageContext,
 ) -> str:
     prefill = forms.version_change_prefill
-    if prefill is None:
+    if prefill is None or not context.can("orders.version.create"):
         return ""
     return (
         '<details class="order-version-edit"><summary>Neuen Stand anlegen</summary>'
@@ -1095,8 +1148,11 @@ def render_operational_pause_card(
     order: Order,
     operational_pause: Mapping[str, object],
     forms: OrderDetailFormFields,
+    *,
+    context: OfficePageContext | None = None,
 ) -> str:
     """Shared pause/resume card for legacy and v2 Order Detail."""
+    page_context = context or OfficePageContext()
     if order.cancelled_at is not None:
         return ""
     if operational_pause.get("active"):
@@ -1112,6 +1168,17 @@ def render_operational_pause_card(
         actor = operational_pause.get("actor_reference")
         if actor:
             facts.append(("Bearbeiter", str(actor)))
+        resume_form = ""
+        if page_context.can("orders.pause"):
+            resume_form = (
+                f'<form method="post" action="/order/{_e(order.order_id)}/resume">'
+                f"{forms.csrf_input}{forms.resume_command_fields}"
+                "<p><label>Fortsetzungsgrund</label>"
+                f"{_resume_reason_select()}</p>"
+                '<p><label>Notiz</label><textarea name="note" maxlength="2000"></textarea></p>'
+                '<button type="submit">Pause aufheben</button>'
+                "</form>"
+            )
         return (
             '<section class="order-card order-content-card order-pause-card">'
             '<div class="order-paused-banner">Auftrag pausiert</div>'
@@ -1122,14 +1189,11 @@ def render_operational_pause_card(
                 for label, value in facts
             )
             + "</dl>"
-            f'<form method="post" action="/order/{_e(order.order_id)}/resume">'
-            f"{forms.csrf_input}{forms.resume_command_fields}"
-            "<p><label>Fortsetzungsgrund</label>"
-            f"{_resume_reason_select()}</p>"
-            '<p><label>Notiz</label><textarea name="note" maxlength="2000"></textarea></p>'
-            '<button type="submit">Pause aufheben</button>'
-            "</form></section>"
+            + resume_form
+            + "</section>"
         )
+    if not page_context.can("orders.pause"):
+        return ""
     return (
         '<section class="order-card order-content-card order-pause-card">'
         "<h2>Operative Pause</h2>"
@@ -1149,8 +1213,12 @@ def _operational_pause_controls(
     order: Order,
     operational_pause: Mapping[str, object],
     forms: OrderDetailFormFields,
+    *,
+    context: OfficePageContext,
 ) -> str:
-    return render_operational_pause_card(order, operational_pause, forms)
+    return render_operational_pause_card(
+        order, operational_pause, forms, context=context
+    )
 
 
 def _secondary_actions(
@@ -1158,6 +1226,7 @@ def _secondary_actions(
     forms: OrderDetailFormFields,
     *,
     operational_pause: Mapping[str, object],
+    context: OfficePageContext,
 ) -> str:
     inquiry_link = (
         f'<a class="order-text-link" href="/inquiry/{_e(order.source_inquiry_id)}">'
@@ -1169,19 +1238,25 @@ def _secondary_actions(
             "<h2>Weitere Informationen</h2>"
             f"<p>{inquiry_link}</p></section>"
         )
+    cancel_block = ""
+    if context.can("orders.cancel"):
+        cancel_block = (
+            '<details class="order-danger"><summary>Auftrag stornieren</summary>'
+            "<p>Dieser Schritt kann nicht rückgängig gemacht werden. Historie und "
+            "Küchenzettel bleiben zur Einsicht erhalten.</p>"
+            f'<form method="post" action="/order/{_e(order.order_id)}/cancel">'
+            f"{forms.csrf_input}{forms.cancel_command_fields}"
+            '<button type="submit">Auftrag endgültig stornieren</button>'
+            "</form></details>"
+        )
     return (
         '<section class="order-card order-content-card">'
         "<h2>Weitere Aktionen</h2>"
         f"<p>{inquiry_link}</p>"
-        + _version_change_form(order, forms)
-        + _operational_pause_controls(order, operational_pause, forms)
-        + '<details class="order-danger"><summary>Auftrag stornieren</summary>'
-        "<p>Dieser Schritt kann nicht rückgängig gemacht werden. Historie und "
-        "Küchenzettel bleiben zur Einsicht erhalten.</p>"
-        f'<form method="post" action="/order/{_e(order.order_id)}/cancel">'
-        f"{forms.csrf_input}{forms.cancel_command_fields}"
-        '<button type="submit">Auftrag endgültig stornieren</button>'
-        "</form></details></section>"
+        + _version_change_form(order, forms, context=context)
+        + _operational_pause_controls(order, operational_pause, forms, context=context)
+        + cancel_block
+        + "</section>"
     )
 
 
@@ -1200,8 +1275,10 @@ def render_order_detail(
     operational_pause: Mapping[str, object] | None = None,
     versions_total_count: int,
     versions_truncated: bool,
+    context: OfficePageContext | None = None,
 ) -> OrderDetailPage:
     """Render existing Order facts and actions without performing any reads."""
+    page_context = context or OfficePageContext()
 
     pause_view = operational_pause or {"active": False}
     target = _target_version(order, versions)
@@ -1271,19 +1348,32 @@ def render_order_detail(
         '<section class="order-card order-content-card">'
         "<h2>Aktueller Veranstaltungsstand</h2>"
         f"{event_facts}</section>"
-        + _operational_progress(order, target, ready, forms)
-        + _version_history(order, versions, forms)
+        + _operational_progress(order, target, ready, forms, context=page_context)
+        + _version_history(order, versions, forms, context=page_context)
         + "</div>"
         '<aside class="order-detail-side">'
-        + _primary_action(order, target, next_action, forms)
-        + render_fulfillment_mode_card(source_inquiry, order, forms)
-        + render_customer_addresses_card(source_inquiry, order, forms)
-        + _confirmation_card(order, confirmation, forms, live_preview)
-        + render_confirmation_outbound_card(
-            order, confirmation, outbound, forms, operational_pause=pause_view
+        + _primary_action(order, target, next_action, forms, context=page_context)
+        + render_fulfillment_mode_card(
+            source_inquiry, order, forms, context=page_context
         )
-        + _payment_card(order, payment, forms)
-        + _secondary_actions(order, forms, operational_pause=pause_view)
+        + render_customer_addresses_card(
+            source_inquiry, order, forms, context=page_context
+        )
+        + _confirmation_card(
+            order, confirmation, forms, live_preview, context=page_context
+        )
+        + render_confirmation_outbound_card(
+            order,
+            confirmation,
+            outbound,
+            forms,
+            operational_pause=pause_view,
+            context=page_context,
+        )
+        + _payment_card(order, payment, forms, context=page_context)
+        + _secondary_actions(
+            order, forms, operational_pause=pause_view, context=page_context
+        )
         + "</aside></div>"
     )
     return OrderDetailPage(title=title, body=body)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from tests.helpers.office_panel_context import legacy_office_context
 from tests.helpers.order_seed import seed_order
 
 import sqlite3
@@ -81,8 +82,8 @@ def test_legacy_and_v2_pause_card_parity(tmp_path: Path) -> None:
     db, doc_service, _core, orders, order_id, _version_id = _sqlite_world(tmp_path)
     legacy = _panel(db, ui_version="legacy")
     v2 = _panel(db, ui_version="v2")
-    inactive_legacy = legacy.render_order(order_id)
-    inactive_v2 = v2.render_order(order_id)
+    inactive_legacy = legacy.render_order(order_id, context=legacy_office_context())
+    inactive_v2 = v2.render_order(order_id, context=legacy_office_context())
     assert inactive_legacy is not None and inactive_v2 is not None
     assert "Auftrag pausieren" in inactive_legacy
     assert "Auftrag pausieren" in inactive_v2
@@ -95,8 +96,8 @@ def test_legacy_and_v2_pause_card_parity(tmp_path: Path) -> None:
         actor_reference="office-panel",
         command_id=str(uuid4()),
     )
-    active_legacy = legacy.render_order(order_id)
-    active_v2 = v2.render_order(order_id)
+    active_legacy = legacy.render_order(order_id, context=legacy_office_context())
+    active_v2 = v2.render_order(order_id, context=legacy_office_context())
     assert active_legacy is not None and active_v2 is not None
     for page in (active_legacy, active_v2):
         assert "Auftrag pausiert" in page

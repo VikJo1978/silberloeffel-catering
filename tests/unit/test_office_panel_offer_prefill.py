@@ -31,6 +31,7 @@ from catering_system.ui.office_panel_offer_prefill import (
     normalize_configurator_url,
     offer_prefill_payload,
 )
+from tests.helpers.office_panel_context import legacy_office_context
 
 
 def _inquiry(*, guest_count: int | None = 42) -> Inquiry:
@@ -78,7 +79,7 @@ def test_payload_maps_labelled_context_without_creating_core_records() -> None:
         order_repo,
         configurator_url="http://127.0.0.1:5173",
     )
-    page = panel.render_inquiry(inquiry.inquiry_id)
+    page = panel.render_inquiry(inquiry.inquiry_id, context=legacy_office_context())
 
     assert page is not None
     assert "Angebot mit Anfragedaten vorbereiten" in page
@@ -202,7 +203,8 @@ def test_empty_configurator_url_keeps_handoff_dormant() -> None:
     order_repo = InMemoryOrderRepository()
     inquiry_repo.save(_inquiry())
     page = OfficePanel(inquiry_repo, order_repo).render_inquiry(
-        "11111111-1111-1111-1111-111111111111"
+        "11111111-1111-1111-1111-111111111111",
+        context=legacy_office_context(),
     )
     assert page is not None
     assert "Angebot mit Anfragedaten vorbereiten" not in page
@@ -228,7 +230,7 @@ def test_v2_inquiry_detail_has_action_or_safe_unavailable_state(
         InMemoryOrderRepository(),
         configurator_url=configurator_url,
         ui_version="v2",
-    ).render_inquiry(inquiry.inquiry_id)
+    ).render_inquiry(inquiry.inquiry_id, context=legacy_office_context())
 
     assert page is not None
     assert expected in page
@@ -247,7 +249,7 @@ def test_blocked_inquiry_never_renders_configurator_link() -> None:
         inquiry_repo,
         order_repo,
         configurator_url="https://angebote.example.test",
-    ).render_inquiry(inquiry.inquiry_id)
+    ).render_inquiry(inquiry.inquiry_id, context=legacy_office_context())
 
     assert page is not None
     assert "https://angebote.example.test" not in page

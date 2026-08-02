@@ -30,7 +30,6 @@ from catering_system.repositories.in_memory_order_repository import (
 )
 from catering_system.ui import office_api_views
 from catering_system.ui.office_panel import (
-    OfficePageContext,
     OfficePanel,
     create_office_panel_server,
     parse_proposal_payload,
@@ -39,6 +38,7 @@ from catering_system.ui.office_panel import (
 from catering_system.ui.office_panel_http import csrf_token_for_password
 from catering_system.ui.office_panel_shell import OFFICE_PANEL_STYLE
 from catering_system.ui.office_panel_views import _page
+from tests.helpers.office_panel_context import legacy_office_context
 
 _PASSWORD = "test-pw"
 _AUTH = "Basic " + base64.b64encode(f"office:{_PASSWORD}".encode()).decode()
@@ -165,16 +165,21 @@ def _convert(base: str, inquiry_id: str) -> str:
 
 def test_page_context_badge_does_not_leak_between_renders() -> None:
     with_badge = render_proposal_preview_form(
-        context=OfficePageContext(rueckruf_count=3)
+        context=legacy_office_context(rueckruf_count=3)
     )
-    without_badge = render_proposal_preview_form()
+    without_badge = render_proposal_preview_form(context=legacy_office_context())
 
     assert '<span class="badge">3</span>' in with_badge
     assert '<span class="badge">' not in without_badge
 
 
 def test_v2_shell_uses_explicit_active_section_and_semantic_landmarks() -> None:
-    body = _page("Anfragen", "<p>Inhalt</p>", active_section="orders")
+    body = _page(
+        "Anfragen",
+        "<p>Inhalt</p>",
+        active_section="orders",
+        context=legacy_office_context(),
+    )
 
     assert '<nav class="office-nav" aria-label="Office Panel">' in body
     assert '<main class="office-workspace">' in body
@@ -186,7 +191,12 @@ def test_v2_shell_uses_explicit_active_section_and_semantic_landmarks() -> None:
 
 
 def test_v2_shell_is_local_no_js_and_has_complete_inline_icon_sprite() -> None:
-    body = _page("Büro-Übersicht", "<p>Inhalt</p>", active_section="home")
+    body = _page(
+        "Büro-Übersicht",
+        "<p>Inhalt</p>",
+        active_section="home",
+        context=legacy_office_context(),
+    )
 
     assert "<script" not in body
     assert "fonts.googleapis.com" not in body
@@ -1881,7 +1891,7 @@ def _panel_with_order():
 
 def test_next_step_targets_latest_version_when_no_candidate_set() -> None:
     panel, order, v1 = _panel_with_order()
-    action_html = panel._next_step_action(order)
+    action_html = panel._next_step_action(order, context=legacy_office_context())
     assert "Druck bestätigen" in action_html
     assert f'value="{v1.order_version_id}"' in action_html
 
@@ -1898,7 +1908,7 @@ def test_next_step_prefers_candidate_over_latest_version() -> None:
     )
     panel.order_service.set_candidate_order_version(order.order_id, v1.order_version_id)
     order = panel._orders.get_order(order.order_id)
-    action_html = panel._next_step_action(order)
+    action_html = panel._next_step_action(order, context=legacy_office_context())
     # Candidate is v1, not the higher version_number v2 -> v1 wins.
     assert f'value="{v1.order_version_id}"' in action_html
     assert v2.order_version_id not in action_html
@@ -1908,13 +1918,13 @@ def test_next_step_never_offers_effective_before_print_confirmed() -> None:
     """The real invariant this resolution exists to protect: Core itself
     refuses make_order_version_effective() for an unprinted version."""
     panel, order, v1 = _panel_with_order()
-    action_html = panel._next_step_action(order)
+    action_html = panel._next_step_action(order, context=legacy_office_context())
     assert "print-confirm" in action_html
     assert "effective" not in action_html
 
     panel.core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     order = panel._orders.get_order(order.order_id)
-    action_html = panel._next_step_action(order)
+    action_html = panel._next_step_action(order, context=legacy_office_context())
     assert "Wirksam machen" in action_html
     assert f'action="/order/{order.order_id}/effective"' in action_html
 
@@ -1926,7 +1936,7 @@ def test_next_step_falls_back_to_latest_when_candidate_is_foreign() -> None:
 
     panel, order, v1 = _panel_with_order()
     broken = replace(order, candidate_order_version_id="does-not-exist")
-    action_html = panel._next_step_action(broken)
+    action_html = panel._next_step_action(broken, context=legacy_office_context())
     assert f'value="{v1.order_version_id}"' in action_html
 
 
@@ -1935,7 +1945,7 @@ def test_next_step_empty_when_order_has_no_versions() -> None:
 
     panel, order, _v1 = _panel_with_order()
     fake_order = replace(order, order_id="unknown-order-id")
-    assert panel._next_step_action(fake_order) == ""
+    assert panel._next_step_action(fake_order, context=legacy_office_context()) == ""
 
 
 # -- proposal preview (CONFIGURATOR_OFFICE_MANUAL_HANDOFF_PACK_V1) --------
@@ -2495,7 +2505,9 @@ def test_website_intake_to_office_verification_and_conversion_workflow() -> None
     )
 
     queue = office.render_queue(None)
-    detail = office.render_inquiry(inquiry.inquiry_id)
+    from tests.helpers.office_panel_context import legacy_office_context
+
+    detail = office.render_inquiry(inquiry.inquiry_id, context=legacy_office_context())
     assert inquiry.inquiry_id[:8] in queue
     assert detail is not None
     assert "Website-Anfrage" in detail

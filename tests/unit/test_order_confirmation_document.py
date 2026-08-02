@@ -67,6 +67,7 @@ from catering_system.ui.office_panel_order_detail import (
 from catering_system.services.order_confirmation_outbound_service import (
     OutboundSendEligibility,
 )
+from tests.helpers.office_panel_context import legacy_office_context
 from tests.unit.test_offer_service import (
     _INQUIRY_ID,
     _POSITION_ID,
@@ -843,6 +844,7 @@ def test_office_panel_confirmation_block_renders() -> None:
         live_preview=live,
         versions_total_count=1,
         versions_truncated=False,
+        context=legacy_office_context(),
     )
     assert "Auftragsbestätigung" in page.body
     assert "Auftragsbestätigung erstellen" in page.body
@@ -892,6 +894,7 @@ def test_office_panel_confirmation_block_renders() -> None:
         live_preview=live,
         versions_total_count=1,
         versions_truncated=False,
+        context=legacy_office_context(),
     )
     assert snapshot.document_reference in page_created.body
     assert "Vorschau öffnen" in page_created.body
