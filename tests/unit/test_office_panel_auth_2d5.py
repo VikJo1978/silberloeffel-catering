@@ -11,6 +11,7 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -149,6 +150,13 @@ def _expect_updated_at_from(html: str) -> str:
     return match.group(1)
 
 
+def _catalog_dish_updated_at(panel: PanelHarness, dish_id: str) -> str:
+    assert panel.catalog is not None
+    dish = panel.catalog.get_dish(dish_id)
+    assert dish is not None
+    return dish.updated_at.isoformat()
+
+
 def _seed_catalog() -> InMemoryCatalogRepository:
     catalog = InMemoryCatalogRepository()
     catalog.insert_dish_if_absent(
@@ -193,7 +201,7 @@ def _create_panel(
     catalog: InMemoryCatalogRepository | None = None,
     auerswald_url: str | None = None,
 ) -> PanelHarness:
-    db = tmp_path / "core.db"
+    db = tmp_path / f"employee-auth-{uuid.uuid4().hex}.sqlite3"
     connection = sqlite3.connect(str(db), check_same_thread=False)
     repo = SQLiteEmployeeAuthRepository.from_connection(connection)
     service = EmployeeAuthService(
@@ -430,6 +438,14 @@ def super_jar(employee_panel: PanelHarness) -> http.cookiejar.CookieJar:
 
 
 @pytest.fixture()
+def rueckruf_super_jar(
+    rueckruf_panel: tuple[PanelHarness, list[str], HTTPServer],
+) -> http.cookiejar.CookieJar:
+    panel, _resolved, _stub = rueckruf_panel
+    return _ready_superadmin(panel)
+
+
+@pytest.fixture()
 def rueckruf_panel(tmp_path: Path) -> tuple[PanelHarness, list[str], HTTPServer]:
     resolved: list[str] = []
     stub = _make_auerswald_stub(resolved)
@@ -446,6 +462,19 @@ def rueckruf_panel(tmp_path: Path) -> tuple[PanelHarness, list[str], HTTPServer]
     stub.shutdown()
     stub.server_close()
     stub_thread.join(timeout=5)
+
+
+def test_sequential_panel_instances_do_not_lock_database(tmp_path: Path) -> None:
+    panels: list[PanelHarness] = []
+    try:
+        for _ in range(3):
+            panels.append(_create_panel(tmp_path, auth_mode="employee"))
+        assert len(panels) == 3
+        for panel in panels:
+            assert panel.service.repository.count_accounts() == 1
+    finally:
+        for panel in panels:
+            _shutdown(panel)
 
 
 # --- registry ----------------------------------------------------------------
@@ -477,12 +506,12 @@ def test_queue_resolve_role_ceilings_and_defaults() -> None:
 
 def test_rueckruf_view_without_resolve_hides_button_but_shows_list(
     rueckruf_panel: tuple[PanelHarness, list[str], HTTPServer],
-    super_jar: http.cookiejar.CookieJar,
+    rueckruf_super_jar: http.cookiejar.CookieJar,
 ) -> None:
     panel, _resolved, _stub = rueckruf_panel
     jar = _employee_jar(
         panel,
-        super_jar,
+        rueckruf_super_jar,
         username="queue.view.only",
         permissions=frozenset({"queue.view"}),
     )
@@ -495,12 +524,12 @@ def test_rueckruf_view_without_resolve_hides_button_but_shows_list(
 
 def test_rueckruf_resolve_allowed_with_queue_resolve(
     rueckruf_panel: tuple[PanelHarness, list[str], HTTPServer],
-    super_jar: http.cookiejar.CookieJar,
+    rueckruf_super_jar: http.cookiejar.CookieJar,
 ) -> None:
     panel, resolved, _stub = rueckruf_panel
     jar = _employee_jar(
         panel,
-        super_jar,
+        rueckruf_super_jar,
         username="queue.resolver",
         permissions=frozenset({"queue.view", "queue.resolve"}),
     )
@@ -522,12 +551,12 @@ def test_rueckruf_resolve_allowed_with_queue_resolve(
 
 def test_rueckruf_resolve_denied_without_queue_resolve(
     rueckruf_panel: tuple[PanelHarness, list[str], HTTPServer],
-    super_jar: http.cookiejar.CookieJar,
+    rueckruf_super_jar: http.cookiejar.CookieJar,
 ) -> None:
     panel, resolved, _stub = rueckruf_panel
     jar = _employee_jar(
         panel,
-        super_jar,
+        rueckruf_super_jar,
         username="queue.view.denied",
         permissions=frozenset({"queue.view"}),
     )
@@ -544,28 +573,37 @@ def test_rueckruf_resolve_denied_without_queue_resolve(
     assert resolved == []
 
 
-def test_rueckruf_resolve_anonymous_redirects_to_login(
-    rueckruf_panel: tuple[PanelHarness, list[str], HTTPServer],
-) -> None:
-    panel, _resolved, _stub = rueckruf_panel
-    status, url, _body, _headers = _request(
-        panel.base,
-        "/rueckruf/resolve",
-        method="POST",
-        data={"call_id": "x", "_csrf_token": "bad"},
-    )
-    assert status == 303
-    assert "/login" in url
+def test_rueckruf_resolve_anonymous_redirects_to_login(tmp_path: Path) -> None:
+    panel = _create_panel(tmp_path, auth_mode="employee")
+    try:
+        payload = urllib.parse.urlencode(
+            {"call_id": "x", "_csrf_token": "bad"}
+        ).encode()
+        request = urllib.request.Request(
+            f"{panel.base}/rueckruf/resolve",
+            data=payload,
+            method="POST",
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+        )
+        opener = urllib.request.build_opener(_NoRedirect)
+        try:
+            opener.open(request)
+            raise AssertionError("expected redirect to login")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 303
+            assert exc.headers["Location"].startswith("/login")
+    finally:
+        _shutdown(panel)
 
 
 def test_rueckruf_resolve_employee_basic_headers_do_not_bypass(
     rueckruf_panel: tuple[PanelHarness, list[str], HTTPServer],
-    super_jar: http.cookiejar.CookieJar,
+    rueckruf_super_jar: http.cookiejar.CookieJar,
 ) -> None:
     panel, resolved, _stub = rueckruf_panel
     jar = _employee_jar(
         panel,
-        super_jar,
+        rueckruf_super_jar,
         username="queue.view.basic",
         permissions=frozenset({"queue.view"}),
     )
@@ -918,22 +956,24 @@ def test_catalog_activate_denied_without_catalog_edit(
         username="catalog.viewer.activate",
         permissions=frozenset({"catalog.view"}),
     )
-    _status, _url, detail, _headers = _request(
-        employee_panel.base, f"/gerichte/{_INACTIVE_ID}", jar=jar
-    )
+    before = employee_panel.catalog.get_dish(_INACTIVE_ID)  # type: ignore[union-attr]
     _assert_post_forbidden(
         employee_panel,
         f"/gerichte/{_INACTIVE_ID}/activate",
         jar=jar,
         data={
             "_csrf_token": _csrf(jar),
-            "_expect_updated_at": _expect_updated_at_from(detail),
+            "_expect_updated_at": _catalog_dish_updated_at(
+                employee_panel, _INACTIVE_ID
+            ),
         },
         patch_target=(
             "catering_system.ui.office_panel.OfficePanel.set_catalog_dish_active"
         ),
     )
-    assert employee_panel.catalog.get_dish(_INACTIVE_ID).active is False  # type: ignore[union-attr]
+    after = employee_panel.catalog.get_dish(_INACTIVE_ID)  # type: ignore[union-attr]
+    assert after.active is False
+    assert after.updated_at == before.updated_at
 
 
 def test_catalog_activate_controls_hidden_without_catalog_edit(
@@ -1040,7 +1080,6 @@ def test_unmapped_catalog_post_returns_404(
     employee_panel: PanelHarness,
     super_jar: http.cookiejar.CookieJar,
 ) -> None:
-    jar = _ready_superadmin(employee_panel)
     with patch(
         "catering_system.ui.office_panel.OfficePanel.update_catalog_dish",
         autospec=True,
@@ -1049,8 +1088,8 @@ def test_unmapped_catalog_post_returns_404(
             employee_panel.base,
             f"/gerichte/{_MODERN_ID}/unknown-action",
             method="POST",
-            data={"_csrf_token": _csrf(jar)},
-            jar=jar,
+            data={"_csrf_token": _csrf(super_jar)},
+            jar=super_jar,
         )
     assert status == 404
     update_mock.assert_not_called()
