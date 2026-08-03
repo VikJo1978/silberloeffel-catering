@@ -137,7 +137,7 @@ def render_gerichte_list(
         "aktivieren.</p>"
         + (
             '<p><a href="/gerichte/new">Neues Gericht anlegen</a></p>'
-            if context.can("catalog.edit")
+            if context.can("catalog.edit") and context.can("prices.edit")
             else ""
         )
         + _search_form(search_query, status_filter)

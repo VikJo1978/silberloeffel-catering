@@ -62,11 +62,14 @@ def _status_command_form(
     *,
     active: bool,
     command_fields: str,
+    show_commands: bool,
 ) -> str:
     """CATALOG_ADMIN_PANEL_V1: exactly one status command is offered at a
     time — the one that would actually change something. Both carry the same
     optimistic-concurrency token the edit form uses, so a stale page cannot
     flip a status that somebody else already changed."""
+    if not show_commands:
+        return ""
     action = "deactivate" if active else "activate"
     label = "Deaktivieren" if active else "Aktivieren"
     return (
@@ -92,7 +95,12 @@ def render_gericht_detail(
     body = (
         error_html
         + f'<p class="subtitle">Status: {_e(status)}</p>'
-        + _status_command_form(dish_id, active=active, command_fields=command_fields)
+        + _status_command_form(
+            dish_id,
+            active=active,
+            command_fields=command_fields,
+            show_commands=context.can("catalog.edit"),
+        )
         + _text_block("Beschreibung", detail.get("description"))
         + _text_block("Zusammensetzung", detail.get("composition"))
         + _text_block("Hinweise", detail.get("notes"))
@@ -109,7 +117,7 @@ def render_gericht_detail(
         + _price_history_block(detail.get("price_history"))
         + (
             f'<p><a href="/gerichte/{_e(dish_id)}/edit">Bearbeiten</a></p>'
-            if context.can("catalog.edit")
+            if context.can("catalog.edit") or context.can("prices.edit")
             else ""
         )
         + '<p><a href="/gerichte">← Zurück zu Gerichte</a></p>'
