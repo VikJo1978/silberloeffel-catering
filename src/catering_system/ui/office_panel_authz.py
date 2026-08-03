@@ -142,7 +142,7 @@ def _allergens_from_detail(detail: dict[str, object]) -> tuple[AllergenCode, ...
     for item in raw:
         code = str(item).upper()
         if code in ALLERGEN_CODES:
-            codes.append(code)  # type: ignore[arg-type]
+            codes.append(code)
     return tuple(code for code in ALLERGEN_CODES if code in codes)
 
 

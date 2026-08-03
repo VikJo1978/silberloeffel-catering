@@ -770,7 +770,7 @@ def make_office_panel_handler(
             if auth.kind != "employee" or auth.employee is None:
                 return True
             try:
-                if requirements is DYNAMIC_CATALOG_UPDATE_AUTH:
+                if isinstance(requirements, DynamicCatalogUpdateAuth):
                     require_any_business_permissions_post(
                         auth, ("catalog.edit", "prices.edit")
                     )
