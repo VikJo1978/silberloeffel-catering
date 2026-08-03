@@ -30,7 +30,7 @@ def _textarea(
             f"{_e(text)}</textarea></p>"
         )
     return (
-        f'<p><strong>{_e(label)}:</strong> {_e(text) if text else "–"}</p>'
+        f"<p><strong>{_e(label)}:</strong> {_e(text) if text else '–'}</p>"
         f'<input type="hidden" name="{_e(name)}" value="{_e(text)}">'
     )
 
@@ -48,7 +48,7 @@ def _text_input(
             f'<input id="{_e(name)}" name="{_e(name)}" value="{_e(value)}" size="60"></p>'
         )
     return (
-        f'<p><strong>{_e(label)}:</strong> {_e(value)}</p>'
+        f"<p><strong>{_e(label)}:</strong> {_e(value)}</p>"
         f'<input type="hidden" name="{_e(name)}" value="{_e(value)}">'
     )
 
@@ -68,9 +68,7 @@ def _allergen_checkboxes(selected: object, *, editable: bool) -> str:
             for code in ALLERGEN_CODES
             if code in selected_codes
         )
-        return (
-            f"<p><strong>Allergene:</strong> {display}</p>{hidden}"
-        )
+        return f"<p><strong>Allergene:</strong> {display}</p>{hidden}"
     items = []
     for code in ALLERGEN_CODES:
         checked = " checked" if code in selected_codes else ""

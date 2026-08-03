@@ -698,9 +698,7 @@ def test_catalog_create_denied_with_prices_edit_only(
         data=_valid_create_fields(_csrf(jar)),
         patch_target="catering_system.ui.office_panel.OfficePanel.create_catalog_dish",
     )
-    status, _url, body, _headers = _request(
-        employee_panel.base, "/gerichte", jar=jar
-    )
+    status, _url, body, _headers = _request(employee_panel.base, "/gerichte", jar=jar)
     assert status == 200
     assert 'href="/gerichte/new"' not in body
 
@@ -715,9 +713,7 @@ def test_catalog_create_ui_hidden_without_full_permission_set(
         username="catalog.edit.nav",
         permissions=frozenset({"catalog.view", "catalog.edit"}),
     )
-    status, _url, body, _headers = _request(
-        employee_panel.base, "/gerichte", jar=jar
-    )
+    status, _url, body, _headers = _request(employee_panel.base, "/gerichte", jar=jar)
     assert status == 200
     assert 'href="/gerichte/new"' not in body
 
@@ -838,9 +834,7 @@ def test_catalog_combined_update_requires_both_permissions(
         employee_panel,
         super_jar,
         username="catalog.full",
-        permissions=frozenset(
-            {"catalog.view", "catalog.edit", "prices.edit"}
-        ),
+        permissions=frozenset({"catalog.view", "catalog.edit", "prices.edit"}),
     )
     _status, _url, edit, _headers = _request(
         employee_panel.base, f"/gerichte/{_MODERN_ID}/edit", jar=jar
@@ -849,9 +843,7 @@ def test_catalog_combined_update_requires_both_permissions(
         employee_panel.base,
         f"/gerichte/{_MODERN_ID}/update",
         method="POST",
-        data=_update_fields_from_edit(
-            edit, name="Bruschetta Deluxe", price_net="4,20"
-        ),
+        data=_update_fields_from_edit(edit, name="Bruschetta Deluxe", price_net="4,20"),
         jar=jar,
     )
     assert status == 303
@@ -878,9 +870,7 @@ def test_catalog_combined_drift_denied_with_prices_edit_only(
         employee_panel,
         f"/gerichte/{_MODERN_ID}/update",
         jar=jar,
-        data=_update_fields_from_edit(
-            edit, name="Tampered", price_net="4,20"
-        ),
+        data=_update_fields_from_edit(edit, name="Tampered", price_net="4,20"),
         patch_target="catering_system.ui.office_panel.OfficePanel.update_catalog_dish",
     )
     after = employee_panel.catalog.get_dish(_MODERN_ID)  # type: ignore[union-attr]
@@ -975,9 +965,7 @@ def test_catalog_update_invalid_csrf_skips_mutation(
         employee_panel,
         super_jar,
         username="catalog.csrf",
-        permissions=frozenset(
-            {"catalog.view", "catalog.edit", "prices.edit"}
-        ),
+        permissions=frozenset({"catalog.view", "catalog.edit", "prices.edit"}),
     )
     _status, _url, edit, _headers = _request(
         employee_panel.base, f"/gerichte/{_MODERN_ID}/edit", jar=jar
