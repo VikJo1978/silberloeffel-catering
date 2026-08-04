@@ -630,6 +630,31 @@ class EmployeeAuthService:
         )
 
     def authenticate_session(self, session_token: str) -> AuthenticatedEmployee:
+        return self._resolve_authenticated_session(
+            session_token,
+            touch_last_seen=True,
+            revoke_on_invalid=True,
+        )
+
+    def resolve_session_for_introspection(
+        self, session_token: str
+    ) -> AuthenticatedEmployee | None:
+        try:
+            return self._resolve_authenticated_session(
+                session_token,
+                touch_last_seen=False,
+                revoke_on_invalid=False,
+            )
+        except AuthenticationError:
+            return None
+
+    def _resolve_authenticated_session(
+        self,
+        session_token: str,
+        *,
+        touch_last_seen: bool,
+        revoke_on_invalid: bool,
+    ) -> AuthenticatedEmployee:
         session = self.repository.get_session_by_token_hash(_token_hash(session_token))
         if session is None:
             raise AuthenticationError("session not found")
@@ -637,26 +662,28 @@ class EmployeeAuthService:
         if session.revoked_at is not None:
             raise AuthenticationError("session revoked")
         if session.expires_at <= now:
-            revoked = replace(
-                session,
-                revoked_at=now,
-                revoked_reason="expired",
-            )
-            self.repository.update_session(revoked)
+            if revoke_on_invalid:
+                revoked = replace(
+                    session,
+                    revoked_at=now,
+                    revoked_reason="expired",
+                )
+                self.repository.update_session(revoked)
             raise AuthenticationError("session expired")
         account = self._require_account(session.account_id)
         if not account.is_active:
             raise AuthenticationError("account is inactive")
         if session.auth_version != account.auth_version:
-            revoked = replace(
-                session,
-                revoked_at=now,
-                revoked_reason="auth_version_changed",
-            )
-            self.repository.update_session(revoked)
+            if revoke_on_invalid:
+                revoked = replace(
+                    session,
+                    revoked_at=now,
+                    revoked_reason="auth_version_changed",
+                )
+                self.repository.update_session(revoked)
             raise AuthenticationError("session invalidated")
         touched = session
-        if now - session.last_seen_at >= _LAST_SEEN_WRITE_INTERVAL:
+        if touch_last_seen and now - session.last_seen_at >= _LAST_SEEN_WRITE_INTERVAL:
             touched = replace(session, last_seen_at=now)
             self.repository.update_session(touched)
         resolved_permissions = self.repository.get_explicit_permissions(account.id)
