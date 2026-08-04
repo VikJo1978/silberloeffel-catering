@@ -11,6 +11,7 @@ from catering_system.intake.intake_contact import labelled_intake_context
 
 OFFER_PREFILL_SCHEMA_VERSION = "core_inquiry_offer_prefill_v1"
 _FRAGMENT_KEY = "core-inquiry"
+_HANDOFF_FRAGMENT_KEY = "core-handoff"
 _MAX_SHORT_TEXT = 500
 _MAX_REMARKS = 4000
 
@@ -109,3 +110,10 @@ def build_offer_prefill_url(configurator_url: str, inquiry: Inquiry) -> str:
     ).encode("utf-8")
     encoded = base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
     return f"{base_url}#{_FRAGMENT_KEY}={encoded}"
+
+
+def build_configurator_handoff_url(configurator_url: str, code: str) -> str:
+    base_url = normalize_configurator_url(configurator_url)
+    if not base_url:
+        return ""
+    return f"{base_url}#{_HANDOFF_FRAGMENT_KEY}={code}"

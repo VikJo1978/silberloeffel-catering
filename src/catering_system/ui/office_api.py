@@ -22,7 +22,7 @@ import sqlite3
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TypeVar
 from urllib.parse import parse_qsl, unquote, urlparse
@@ -83,6 +83,9 @@ from catering_system.domain.order_payment_reminder import (
 from catering_system.repositories.bootstrap_customer_identity_schema import (
     bootstrap_customer_identity_schema,
 )
+from catering_system.repositories.bootstrap_employee_auth_schema import (
+    bootstrap_employee_auth_schema,
+)
 from catering_system.repositories.core_transaction import (
     CoreBusyError,
     CoreCommandExecutor,
@@ -98,6 +101,9 @@ from catering_system.repositories.office_api_ledger import (
 )
 from catering_system.repositories.sqlite_catalog_repository import (
     SQLiteCatalogRepository,
+)
+from catering_system.repositories.sqlite_configurator_handoff_repository import (
+    SQLiteConfiguratorHandoffRepository,
 )
 from catering_system.repositories.sqlite_employee_auth_repository import (
     SQLiteEmployeeAuthRepository,
@@ -135,6 +141,10 @@ from catering_system.services.calendar_projection_service import (
 )
 from catering_system.services.catalog_dish_service import CatalogDishService
 from catering_system.services.catalog_dish_write_service import CatalogDishWriteService
+from catering_system.services.configurator_handoff_service import (
+    HANDOFF_OPERATION_PREPARE_FIRST_OFFER,
+    ConfiguratorHandoffService,
+)
 from catering_system.services.contact_projection_service import ContactProjectionService
 from catering_system.services.customer_document_preview import (
     CustomerDocumentPreviewNotFoundError,
@@ -143,7 +153,10 @@ from catering_system.services.customer_document_preview import (
 from catering_system.services.email_intake_projection_service import (
     EmailIntakeProjectionService,
 )
-from catering_system.services.employee_auth_service import EmployeeAuthService
+from catering_system.services.employee_auth_service import (
+    AuthenticationError,
+    EmployeeAuthService,
+)
 from catering_system.services.inquiry_service import (
     InquiryService,
     validate_inquiry_source,
@@ -196,16 +209,19 @@ from catering_system.services.work_center_service import WorkCenterService
 from catering_system.ui import office_api_views as views
 from catering_system.ui.office_api_employee_introspect import (
     EMPLOYEE_INTROSPECT_PATH,
+    parse_employee_session_header_values,
     perform_employee_introspection,
 )
 from catering_system.ui.office_api_service_auth import (
     OfficeApiServiceAuth,
     read_introspection_service_tokens_from_env,
 )
+from catering_system.ui.office_panel_offer_prefill import offer_prefill_payload
 
 _log = logging.getLogger(__name__)
 
 CLIENT_ID = "office-panel"  # per-client token identity (pack §6.1)
+CONFIGURATOR_HANDOFF_SERVICE_ID = "configurator-handoff"
 _MAX_BODY_BYTES = 64 * 1024
 _MAX_PREPARE_OFFER_BODY_BYTES = 256 * 1024
 _MAX_RESPONSE_BYTES = 512 * 1024  # pack §4.0 hard response cap
@@ -465,9 +481,28 @@ class OfficeApi:
         self.offer_pdf_static_content = offer_pdf_static_content
         self.inquiries = SQLiteInquiryRepository.from_connection(connection)
         bootstrap_customer_identity_schema(connection)
+        bootstrap_employee_auth_schema(connection)
         self.orders = SQLiteOrderRepository.from_connection(connection)
         self.offers = SQLiteOfferRepository.from_connection(connection)
         self.catalog = SQLiteCatalogRepository.from_connection(connection)
+        self.employee_auth_repository = SQLiteEmployeeAuthRepository.from_connection(
+            connection
+        )
+        if employee_auth_now is not None:
+            self.employee_auth_service = EmployeeAuthService(
+                self.employee_auth_repository,
+                now=employee_auth_now,
+            )
+        else:
+            self.employee_auth_service = EmployeeAuthService(
+                self.employee_auth_repository
+            )
+        self.configurator_handoffs = (
+            SQLiteConfiguratorHandoffRepository.from_connection(connection)
+        )
+        self.configurator_handoff_service = ConfiguratorHandoffService(
+            self.configurator_handoffs
+        )
         self.payment_reminders = SQLitePaymentReminderRepository.from_connection(
             connection
         )
@@ -580,14 +615,65 @@ class OfficeApi:
         )
         self.catalog_dish_service = CatalogDishService(self.catalog)
         self.catalog_dish_write_service = CatalogDishWriteService(self.catalog)
-        employee_auth_repo = SQLiteEmployeeAuthRepository.from_connection(connection)
-        if employee_auth_now is not None:
-            self.employee_auth_service = EmployeeAuthService(
-                employee_auth_repo,
-                now=employee_auth_now,
+
+    def exchange_configurator_handoff(
+        self,
+        *,
+        code: str,
+        employee_session_token: str,
+    ) -> dict[str, object]:
+        try:
+            employee = self.employee_auth_service.authenticate_session(
+                employee_session_token
             )
-        else:
-            self.employee_auth_service = EmployeeAuthService(employee_auth_repo)
+        except AuthenticationError as exc:
+            raise ApiError(401, "unauthorized") from exc
+        if not employee.application_access_allowed:
+            raise ApiError(403, "forbidden")
+        record = self.configurator_handoff_service.lookup(code)
+        if record is None or record.operation != HANDOFF_OPERATION_PREPARE_FIRST_OFFER:
+            raise ApiError(404, "not_found")
+        if not hmac.compare_digest(record.issued_for_account_id, employee.account.id):
+            raise ApiError(403, "forbidden")
+        if "offers.prepare" not in employee.effective_permissions:
+            raise ApiError(403, "forbidden")
+        inquiry = self.inquiries.get_by_id(record.inquiry_id)
+        if inquiry is None:
+            raise ApiError(404, "not_found")
+        now = datetime.now(UTC)
+        if record.expires_at <= now:
+            raise ApiError(404, "not_found")
+        if record.consumed_at is not None:
+            raise ApiError(410, "gone")
+
+        def work() -> dict[str, object]:
+            current = self.configurator_handoffs.get_by_token_hash(record.token_hash)
+            if (
+                current is None
+                or current.operation != HANDOFF_OPERATION_PREPARE_FIRST_OFFER
+            ):
+                raise ApiError(404, "not_found")
+            if current.expires_at <= now:
+                raise ApiError(404, "not_found")
+            if current.consumed_at is not None:
+                raise ApiError(410, "gone")
+            if not self.configurator_handoffs.consume(
+                handoff_id=current.id,
+                consumed_at=now,
+                consumed_by_account_id=employee.account.id,
+            ):
+                raise ApiError(410, "gone")
+            return {
+                "handoff_id": current.id,
+                "operation": current.operation,
+                "inquiry": {
+                    "inquiry_id": inquiry.inquiry_id,
+                    "transfer": offer_prefill_payload(inquiry)["transfer"],
+                },
+                "expires_at": current.expires_at.isoformat(),
+            }
+
+        return self.executor.run(work)
 
     # -- reads -----------------------------------------------------------
 
@@ -2404,6 +2490,11 @@ _COMMANDS: dict[str, _CommandSpec] = {
 
 # route table: (regex, template, {method: kind})
 _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
+    (
+        re.compile(r"^/office/v1/auth/configurator-handoff/exchange$"),
+        "/office/v1/auth/configurator-handoff/exchange",
+        {"POST": "configurator-handoff-exchange"},
+    ),
     (re.compile(r"^/office/v1/queue$"), "/office/v1/queue", {"GET": "queue"}),
     (
         re.compile(r"^/office/v1/work-center$"),
@@ -2800,6 +2891,14 @@ def make_office_api_handler(
             presented = self.headers.get("Authorization", "")
             return hmac.compare_digest(presented, expected_auth)
 
+        def _configurator_service_auth(self) -> tuple[bool, bool]:
+            result = service_auth.authenticate_introspection(
+                self.headers.get("Authorization")
+            )
+            if result.outcome != "allowed":
+                return False, False
+            return True, result.client_id == CONFIGURATOR_HANDOFF_SERVICE_ID
+
         def _auth_or_401(self) -> bool:
             if self._authorized():
                 return True
@@ -2959,6 +3058,8 @@ def make_office_api_handler(
 
         def _handle(self, method: str) -> None:
             path = urlparse(self.path).path
+            if path == "/office/v1/auth/configurator-handoff/exchange":
+                self._handle_configurator_handoff_exchange(method)
             if self._is_introspect_path(path):
                 if method != "POST":
                     self._error(405, "method_not_allowed")
@@ -2993,6 +3094,52 @@ def make_office_api_handler(
                 )
             except Exception:
                 _log.exception("internal error route=%s", template)
+                self._error(500, "internal")
+
+        def _handle_configurator_handoff_exchange(self, method: str) -> None:
+            service_authenticated, correct_service = self._configurator_service_auth()
+            if not service_authenticated:
+                self._error(401, "unauthorized")
+                return
+            if not correct_service:
+                self._error(403, "forbidden")
+                return
+            if method != "POST":
+                self._error(405, "method_not_allowed")
+                return
+            try:
+                raw = self._read_command_body(_MAX_BODY_BYTES)
+                body = strict_json_loads(raw)
+                _exact_keys(body, {"code"})
+                code = _v_str(body["code"], 1024).strip()
+                if not code:
+                    raise _invalid()
+                employee_session_token = parse_employee_session_header_values(
+                    self.headers.get_all("X-Employee-Session")
+                )
+                if employee_session_token == "malformed":
+                    raise _invalid()
+                if employee_session_token is None:
+                    self._error(401, "unauthorized")
+                    return
+                payload = api.exchange_configurator_handoff(
+                    code=code,
+                    employee_session_token=employee_session_token,
+                )
+                self._respond(200, payload)
+            except CoreBusyError:
+                self._error(503, "core_busy", retry_after=True)
+            except ApiError as exc:
+                self._error(
+                    exc.status,
+                    exc.code,
+                    reasons=exc.reasons,
+                    offer_id=exc.offer_id,
+                )
+            except Exception:
+                _log.exception(
+                    "internal error route=/office/v1/auth/configurator-handoff/exchange"
+                )
                 self._error(500, "internal")
 
         def _get(self, kind: str, path_ids: dict[str, str]) -> None:
@@ -3254,6 +3401,7 @@ def create_office_api_server(
     *,
     offer_pdf_static_content: OfferPdfStaticContent,
     introspection_service_tokens: dict[str, str] | None = None,
+    employee_auth_service_tokens: dict[str, str] | None = None,
     employee_auth_now: Callable[[], datetime] | None = None,
 ) -> HTTPServer:
     """Build connection, repositories and server in the calling thread —
@@ -3263,12 +3411,18 @@ def create_office_api_server(
         offer_pdf_static_content=offer_pdf_static_content,
         employee_auth_now=employee_auth_now,
     )
+    effective_introspection_tokens = introspection_service_tokens
+    if (
+        effective_introspection_tokens is None
+        and employee_auth_service_tokens is not None
+    ):
+        effective_introspection_tokens = employee_auth_service_tokens
     return HTTPServer(
         (host, port),
         make_office_api_handler(
             api,
             token,
-            introspection_service_tokens=introspection_service_tokens,
+            introspection_service_tokens=effective_introspection_tokens,
         ),
     )
 
@@ -3297,7 +3451,6 @@ def main() -> None:
     )
 
     offer_pdf_static_content = offer_pdf_static_content_from_env()
-
     introspection_tokens = read_introspection_service_tokens_from_env(
         office_panel_token=token,
     )

@@ -2,18 +2,24 @@ from __future__ import annotations
 
 import base64
 import json
+import sqlite3
 from dataclasses import replace
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
+from pathlib import Path
 
 import pytest
 
+from catering_system.domain.configurator_handoff import ConfiguratorHandoffRecord
 from catering_system.domain.inquiry import (
     Inquiry,
-    InquiryOfficeState,
     InquiryOfferProjection,
+    InquiryOfficeState,
 )
 from catering_system.domain.inquiry_customer_snapshot import (
     InquiryCustomerSnapshot,
+)
+from catering_system.repositories import (
+    sqlite_configurator_handoff_repository as handoff_repo_module,
 )
 from catering_system.repositories.in_memory_inquiry_repository import (
     InMemoryInquiryRepository,
@@ -21,21 +27,63 @@ from catering_system.repositories.in_memory_inquiry_repository import (
 from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
 )
+from catering_system.repositories.sqlite_configurator_handoff_repository import (
+    SQLiteConfiguratorHandoffRepository,
+    _apply_migrations_in_current_transaction,
+    _validate_operation,
+)
+from catering_system.services.configurator_handoff_service import (
+    ConfiguratorHandoffService,
+)
 from catering_system.ui.office_panel import OfficePanel
 from catering_system.ui.office_panel_inquiry_detail import (
     InquiryDetailFormFields,
     render_inquiry_detail,
 )
 from catering_system.ui.office_panel_offer_prefill import (
+    build_configurator_handoff_url,
     build_offer_prefill_url,
     normalize_configurator_url,
     offer_prefill_payload,
 )
+from catering_system.ui.office_panel_views import OfficePageContext
 from tests.helpers.office_panel_context import legacy_office_context
 
 
+def _employee_context(account_id: str = "employee-1"):
+    return OfficePageContext(
+        legacy_shared_access=False,
+        employee_account_id=account_id,
+        employee_effective_permissions=frozenset({"offers.prepare"}),
+    )
+
+
+def _handoff_service(db_path: Path) -> ConfiguratorHandoffService:
+    return ConfiguratorHandoffService(SQLiteConfiguratorHandoffRepository(db_path))
+
+
+def _handoff_record(
+    *,
+    token_hash: str = "hash-1",
+    consumed_at: datetime | None = None,
+    consumed_by_account_id: str | None = None,
+) -> ConfiguratorHandoffRecord:
+    now = datetime(2026, 7, 13, 12, tzinfo=UTC)
+    return ConfiguratorHandoffRecord(
+        id="handoff-1",
+        token_hash=token_hash,
+        operation="prepare_first_offer",
+        inquiry_id="11111111-1111-1111-1111-111111111111",
+        issued_for_account_id="employee-1",
+        issued_at=now,
+        expires_at=now,
+        consumed_at=consumed_at,
+        consumed_by_account_id=consumed_by_account_id,
+    )
+
+
 def _inquiry(*, guest_count: int | None = 42) -> Inquiry:
-    now = datetime(2026, 7, 13, 12, tzinfo=timezone.utc)
+    now = datetime(2026, 7, 13, 12, tzinfo=UTC)
     return Inquiry(
         inquiry_id="11111111-1111-1111-1111-111111111111",
         event_date=date(2026, 10, 3),
@@ -176,6 +224,201 @@ def test_fragment_round_trip_preserves_unicode_and_stays_out_of_request_url() ->
     decoded = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
     assert decoded["schema_version"] == "core_inquiry_offer_prefill_v1"
     assert decoded["transfer"]["orderContextPrefill"]["contactPerson"] == "Jörg Weiß"
+
+
+def test_employee_mode_first_offer_uses_core_handoff_only(tmp_path: Path) -> None:
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    inquiry = _inquiry()
+    inquiry_repo.save(inquiry)
+    panel = OfficePanel(
+        inquiry_repo,
+        order_repo,
+        configurator_url="https://angebote.example.test/app",
+        configurator_handoff_service=_handoff_service(tmp_path / "handoff.db"),
+    )
+
+    page = panel.render_inquiry(inquiry.inquiry_id, context=_employee_context())
+
+    assert page is not None
+    assert 'href="https://angebote.example.test/app#core-handoff=' in page
+    assert "#core-inquiry=" not in page
+    assert inquiry.inquiry_id not in page
+
+
+def test_raw_handoff_code_is_not_stored_in_db(tmp_path: Path) -> None:
+    service = _handoff_service(tmp_path / "handoff.db")
+    minted = service.mint_first_offer(
+        inquiry_id="11111111-1111-1111-1111-111111111111",
+        issued_for_account_id="employee-1",
+    )
+
+    row = (
+        sqlite3.connect(tmp_path / "handoff.db")
+        .execute(
+            "SELECT token_hash FROM configurator_handoffs WHERE id = ?",
+            (minted.record.id,),
+        )
+        .fetchone()
+    )
+
+    assert row is not None
+    assert row[0] != minted.code
+    assert minted.code not in row[0]
+
+
+def test_build_configurator_handoff_url_uses_opaque_fragment_only() -> None:
+    url = build_configurator_handoff_url(
+        "https://angebote.example.test/app/",
+        "opaque-code-123",
+    )
+
+    assert url == "https://angebote.example.test/app#core-handoff=opaque-code-123"
+
+
+def test_blank_configurator_url_returns_empty_prefill_and_handoff_urls() -> None:
+    assert build_offer_prefill_url("", _inquiry()) == ""
+    assert build_configurator_handoff_url("", "opaque-code-123") == ""
+
+
+def test_handoff_repository_commits_add_and_consume_from_shared_connection() -> None:
+    connection = sqlite3.connect(":memory:")
+    repository = SQLiteConfiguratorHandoffRepository.from_connection(connection)
+    record = _handoff_record()
+    consumed_at = datetime(2026, 7, 13, 13, tzinfo=UTC)
+
+    repository.add(record)
+    assert repository.get_by_token_hash(record.token_hash) == record
+
+    assert repository.consume(
+        handoff_id=record.id,
+        consumed_at=consumed_at,
+        consumed_by_account_id="employee-2",
+    )
+
+    consumed = repository.get_by_token_hash(record.token_hash)
+    assert consumed is not None
+    assert consumed.consumed_at == consumed_at
+    assert consumed.consumed_by_account_id == "employee-2"
+    connection.close()
+
+
+def test_handoff_repository_file_backed_consume_commits_and_lookup_miss(
+    tmp_path: Path,
+) -> None:
+    repository = SQLiteConfiguratorHandoffRepository(tmp_path / "handoff.db")
+    record = _handoff_record(token_hash="hash-2")
+
+    repository.add(record)
+    assert repository.get_by_token_hash("missing-hash") is None
+    assert repository.consume(
+        handoff_id=record.id,
+        consumed_at=datetime(2026, 7, 13, 14, tzinfo=UTC),
+        consumed_by_account_id="employee-3",
+    )
+
+    repository.close()
+
+
+def test_handoff_repository_rejects_unknown_operation_and_migration_name_mismatch() -> (
+    None
+):
+    with pytest.raises(ValueError, match="unknown configurator handoff operation"):
+        _validate_operation("unexpected")
+
+    connection = sqlite3.connect(":memory:")
+    connection.execute(
+        """
+        CREATE TABLE schema_migrations (
+            component TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            applied_at TEXT NOT NULL,
+            PRIMARY KEY (component, version)
+        )
+        """
+    )
+    connection.execute(
+        "INSERT INTO schema_migrations (component, version, name, applied_at) "
+        "VALUES (?, ?, ?, ?)",
+        ("configurator_handoff", 1, "wrong_name", "2026-07-13T12:00:00Z"),
+    )
+
+    with pytest.raises(RuntimeError, match="name mismatch"):
+        _apply_migrations_in_current_transaction(connection)
+
+    connection.close()
+
+
+def test_handoff_repository_closes_connection_when_migration_setup_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeConnection:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    fake_connection = FakeConnection()
+    monkeypatch.setattr(
+        handoff_repo_module.sqlite3,
+        "connect",
+        lambda _path: fake_connection,
+    )
+    monkeypatch.setattr(
+        handoff_repo_module,
+        "apply_migrations",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+
+    with pytest.raises(RuntimeError, match="boom"):
+        SQLiteConfiguratorHandoffRepository("handoff.db")
+
+    assert fake_connection.closed is True
+
+
+def test_handoff_service_consume_updates_record_and_rejects_replay() -> None:
+    class StubRepository:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, datetime, str]] = []
+            self.result = True
+
+        def consume(
+            self,
+            *,
+            handoff_id: str,
+            consumed_at: datetime,
+            consumed_by_account_id: str,
+        ) -> bool:
+            self.calls.append((handoff_id, consumed_at, consumed_by_account_id))
+            return self.result
+
+    consumed_at = datetime(2026, 7, 13, 13, tzinfo=UTC)
+    repository = StubRepository()
+    service = ConfiguratorHandoffService(repository, now=lambda: consumed_at)
+    record = _handoff_record()
+
+    consumed = service.consume(record=record, consumed_by_account_id="employee-2")
+
+    assert repository.calls == [(record.id, consumed_at, "employee-2")]
+    assert consumed.consumed_at == consumed_at
+    assert consumed.consumed_by_account_id == "employee-2"
+
+    repository.result = False
+    with pytest.raises(RuntimeError, match="already consumed"):
+        service.consume(record=record, consumed_by_account_id="employee-2")
+
+
+def test_handoff_service_lookup_round_trips_minted_code(tmp_path: Path) -> None:
+    service = _handoff_service(tmp_path / "handoff.db")
+    minted = service.mint_first_offer(
+        inquiry_id="11111111-1111-1111-1111-111111111111",
+        issued_for_account_id="employee-1",
+    )
+
+    assert service.lookup(minted.code) == minted.record
+    assert service.lookup("missing-code") is None
 
 
 def test_unknown_guest_count_remains_null() -> None:
