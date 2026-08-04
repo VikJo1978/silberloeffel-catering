@@ -3412,7 +3412,10 @@ def create_office_api_server(
         employee_auth_now=employee_auth_now,
     )
     effective_introspection_tokens = introspection_service_tokens
-    if effective_introspection_tokens is None and employee_auth_service_tokens is not None:
+    if (
+        effective_introspection_tokens is None
+        and employee_auth_service_tokens is not None
+    ):
         effective_introspection_tokens = employee_auth_service_tokens
     return HTTPServer(
         (host, port),
