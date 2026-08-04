@@ -326,6 +326,14 @@ def render_rueckruf(
     rows = []
     for it in items:
         contact = _format_rueckruf_contact_cell(it)
+        resolve_cell = ""
+        if context.can("queue.resolve"):
+            resolve_cell = (
+                '<form class="inline" method="post" action="/rueckruf/resolve">'
+                f"{_csrf_input(context)}"
+                f'<input type="hidden" name="call_id" value="{_e(it.get("call_id", ""))}">'
+                "<button>Erledigt</button></form>"
+            )
         rows.append(
             "<tr>"
             f"<td>{_e(it.get('date', ''))}</td>"
@@ -333,12 +341,7 @@ def render_rueckruf(
             f"<td>{_e(it.get('phone', ''))}</td>"
             f"<td>{_e(it.get('reason', ''))}</td>"
             f"<td>{contact}</td>"
-            "<td>"
-            '<form class="inline" method="post" action="/rueckruf/resolve">'
-            f"{_csrf_input(context)}"
-            f'<input type="hidden" name="call_id" value="{_e(it.get("call_id", ""))}">'
-            "<button>Erledigt</button></form>"
-            "</td></tr>"
+            f"<td>{resolve_cell}</td></tr>"
         )
     body = _RUECKRUF_SUBTITLE + (
         "<table><tr><th>Datum</th><th>Zeit</th><th>Nummer</th>"
@@ -2062,13 +2065,18 @@ class OfficePanel:
             for it in rueckruf_items[:5]:
                 contact = _format_rueckruf_contact_cell(it)
                 phone = it.get("phone", "")
+                resolve_form = ""
+                if context.can("queue.resolve"):
+                    resolve_form = (
+                        '<form class="inline" method="post" action="/rueckruf/resolve">'
+                        f"{_csrf_input(context)}"
+                        f'<input type="hidden" name="call_id" value="{_e(it.get("call_id", ""))}">'
+                        "<button>Erledigt</button></form> "
+                    )
                 rows.append(
                     f"<li>{_e(it.get('date', ''))} {_e(it.get('time', ''))} — "
                     f"{_e(phone)} ({contact}) "
-                    '<form class="inline" method="post" action="/rueckruf/resolve">'
-                    f"{_csrf_input(context)}"
-                    f'<input type="hidden" name="call_id" value="{_e(it.get("call_id", ""))}">'
-                    "<button>Erledigt</button></form> "
+                    f"{resolve_form}"
                     f'<a href="/inquiry/new?phone={quote(phone)}">Anfrage erfassen</a></li>'
                 )
             rueckruf_section = (
@@ -2215,13 +2223,18 @@ class OfficePanel:
             for item in rueckruf_items[:5]:
                 contact = _format_rueckruf_contact_cell(item)
                 phone = item.get("phone", "")
+                resolve_form = ""
+                if context.can("queue.resolve"):
+                    resolve_form = (
+                        '<form class="inline" method="post" action="/rueckruf/resolve">'
+                        f"{_csrf_input(context)}"
+                        f'<input type="hidden" name="call_id" value="{_e(item.get("call_id", ""))}">'
+                        "<button>Erledigt</button></form> "
+                    )
                 rows.append(
                     f"<li>{_e(item.get('date', ''))} {_e(item.get('time', ''))} — "
                     f"{_e(phone)} ({contact}) "
-                    '<form class="inline" method="post" action="/rueckruf/resolve">'
-                    f"{_csrf_input(context)}"
-                    f'<input type="hidden" name="call_id" value="{_e(item.get("call_id", ""))}">'
-                    "<button>Erledigt</button></form> "
+                    f"{resolve_form}"
                     f'<a href="/inquiry/new?phone={quote(phone)}">Anfrage erfassen</a></li>'
                 )
             rueckruf_section = (

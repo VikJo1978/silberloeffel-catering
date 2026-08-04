@@ -207,7 +207,15 @@ from catering_system.services.task_projection_service import TaskProjectionServi
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
 from catering_system.services.work_center_service import WorkCenterService
 from catering_system.ui import office_api_views as views
-from catering_system.ui.employee_auth_http import bearer_token_from_headers
+from catering_system.ui.office_api_employee_introspect import (
+    EMPLOYEE_INTROSPECT_PATH,
+    parse_employee_session_header_values,
+    perform_employee_introspection,
+)
+from catering_system.ui.office_api_service_auth import (
+    OfficeApiServiceAuth,
+    read_introspection_service_tokens_from_env,
+)
 from catering_system.ui.office_panel_offer_prefill import offer_prefill_payload
 
 _log = logging.getLogger(__name__)
@@ -467,7 +475,7 @@ class OfficeApi:
         connection: sqlite3.Connection,
         *,
         offer_pdf_static_content: OfferPdfStaticContent,
-        employee_auth_service_tokens: dict[str, str] | None = None,
+        employee_auth_now: Callable[[], datetime] | None = None,
     ) -> None:
         self._conn = connection
         self.offer_pdf_static_content = offer_pdf_static_content
@@ -480,10 +488,15 @@ class OfficeApi:
         self.employee_auth_repository = SQLiteEmployeeAuthRepository.from_connection(
             connection
         )
-        self.employee_auth_service = EmployeeAuthService(
-            self.employee_auth_repository,
-            service_tokens=employee_auth_service_tokens,
-        )
+        if employee_auth_now is not None:
+            self.employee_auth_service = EmployeeAuthService(
+                self.employee_auth_repository,
+                now=employee_auth_now,
+            )
+        else:
+            self.employee_auth_service = EmployeeAuthService(
+                self.employee_auth_repository
+            )
         self.configurator_handoffs = (
             SQLiteConfiguratorHandoffRepository.from_connection(connection)
         )
@@ -1145,7 +1158,7 @@ class OfficeApi:
 
     # -- command helpers ---------------------------------------------------
 
-    def _require_inquiry(self, inquiry_id: str):  # noqa: ANN202
+    def _require_inquiry(self, inquiry_id: str):
         inquiry = self.inquiries.get_by_id(inquiry_id)
         if inquiry is None:
             raise ApiError(404, "not_found")
@@ -2768,17 +2781,17 @@ def _resolve_route(path: str) -> tuple[str, dict[str, str], dict[str, str]] | No
     return None
 
 
-def _employee_session_header(headers: object) -> str | None:
-    getter = getattr(headers, "get", None)
-    if getter is None:
-        return None
-    raw = getter("X-Employee-Session", "")
-    value = raw.strip() if isinstance(raw, str) else ""
-    return value or None
-
-
-def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestHandler]:
+def make_office_api_handler(
+    api: OfficeApi,
+    token: str,
+    *,
+    introspection_service_tokens: dict[str, str] | None = None,
+) -> type[BaseHTTPRequestHandler]:
     expected_auth = f"Bearer {token}"
+    service_auth = OfficeApiServiceAuth(
+        office_panel_token=token,
+        introspection_clients=introspection_service_tokens or {},
+    )
 
     class OfficeApiHandler(BaseHTTPRequestHandler):
         server_version = "CoreOfficeAPI/1.0"
@@ -2786,7 +2799,7 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
         # undrained, which under keep-alive corrupts the next request on the
         # same connection (observed in the courier repo); 1.0 closes it.
 
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        def log_message(self, format: str, *args: object) -> None:
             pass
 
         # -- plumbing --------------------------------------------------
@@ -2879,18 +2892,47 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             return hmac.compare_digest(presented, expected_auth)
 
         def _configurator_service_auth(self) -> tuple[bool, bool]:
-            introspection = api.employee_auth_service.introspect(
-                session_token=None,
-                bearer_token=bearer_token_from_headers(self.headers),
+            result = service_auth.authenticate_introspection(
+                self.headers.get("Authorization")
             )
-            if introspection.kind != "service_token" or not introspection.authenticated:
+            if result.outcome != "allowed":
                 return False, False
-            return True, introspection.service_id == CONFIGURATOR_HANDOFF_SERVICE_ID
+            return True, result.client_id == CONFIGURATOR_HANDOFF_SERVICE_ID
 
         def _auth_or_401(self) -> bool:
             if self._authorized():
                 return True
             self._error(401, "unauthorized")
+            return False
+
+        def _is_introspect_path(self, path: str) -> bool:
+            return path == EMPLOYEE_INTROSPECT_PATH
+
+        def _employee_introspect(self) -> None:
+            status, response, error_code = perform_employee_introspection(
+                service_auth=service_auth,
+                authorization=self.headers.get("Authorization"),
+                content_length=self.headers.get("Content-Length"),
+                transfer_encoding=self.headers.get("Transfer-Encoding"),
+                session_header_values=self.headers.get_all("X-Employee-Session"),
+                employee_auth=api.employee_auth_service,
+            )
+            if error_code is not None:
+                self._error(status, error_code)
+                return
+            assert response is not None
+            self._respond(status, response.to_json())
+
+        def _introspect_service_auth_or_respond(self) -> bool:
+            result = service_auth.authenticate_introspection(
+                self.headers.get("Authorization")
+            )
+            if result.outcome == "allowed":
+                return True
+            if result.outcome in {"forbidden", "ambiguous"}:
+                self._error(403, "forbidden")
+            else:
+                self._error(401, "unauthorized")
             return False
 
         def _read_command_body(self, max_bytes: int) -> bytes:
@@ -2940,24 +2982,42 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
 
         # -- HTTP methods ----------------------------------------------
 
-        def do_GET(self) -> None:  # noqa: N802
+        def do_GET(self) -> None:
             self._handle("GET")
 
-        def do_POST(self) -> None:  # noqa: N802
+        def do_POST(self) -> None:
             self._handle("POST")
 
-        def do_PUT(self) -> None:  # noqa: N802
+        def do_PUT(self) -> None:
             self._method_not_allowed_or_404()
 
-        def do_DELETE(self) -> None:  # noqa: N802
+        def do_DELETE(self) -> None:
             self._method_not_allowed_or_404()
 
-        def do_PATCH(self) -> None:  # noqa: N802
+        def do_PATCH(self) -> None:
             self._method_not_allowed_or_404()
 
-        def do_HEAD(self) -> None:  # noqa: N802
+        def do_HEAD(self) -> None:
             # Explicit handler (pack §4.0): auth first, then 405/404 with
             # full headers; body suppressed but Content-Length preserved.
+            path = urlparse(self.path).path
+            if self._is_introspect_path(path):
+                if not self._introspect_service_auth_or_respond():
+                    return
+                payload = json.dumps(
+                    {
+                        "authenticated": False,
+                        "application_access_allowed": False,
+                        "principal": None,
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                return
             if not self._authorized():
                 payload = json.dumps({"error": "unauthorized"}).encode("utf-8")
                 self.send_response(401)
@@ -2972,7 +3032,13 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             error = "method_not_allowed" if code == 405 else "not_found"
             self._respond(code, {"error": error}, suppress_body=True)
 
-        def do_OPTIONS(self) -> None:  # noqa: N802
+        def do_OPTIONS(self) -> None:
+            path = urlparse(self.path).path
+            if self._is_introspect_path(path):
+                if not self._introspect_service_auth_or_respond():
+                    return
+                self._error(405, "method_not_allowed")
+                return
             if not self._auth_or_401():
                 return
             path = urlparse(self.path).path
@@ -2994,6 +3060,11 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             path = urlparse(self.path).path
             if path == "/office/v1/auth/configurator-handoff/exchange":
                 self._handle_configurator_handoff_exchange(method)
+            if self._is_introspect_path(path):
+                if method != "POST":
+                    self._error(405, "method_not_allowed")
+                    return
+                self._employee_introspect()
                 return
             if not self._auth_or_401():
                 return
@@ -3043,7 +3114,11 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
                 code = _v_str(body["code"], 1024).strip()
                 if not code:
                     raise _invalid()
-                employee_session_token = _employee_session_header(self.headers)
+                employee_session_token = parse_employee_session_header_values(
+                    self.headers.get_all("X-Employee-Session")
+                )
+                if employee_session_token == "malformed":
+                    raise _invalid()
                 if employee_session_token is None:
                     self._error(401, "unauthorized")
                     return
@@ -3325,16 +3400,28 @@ def create_office_api_server(
     port: int = 0,
     *,
     offer_pdf_static_content: OfferPdfStaticContent,
+    introspection_service_tokens: dict[str, str] | None = None,
     employee_auth_service_tokens: dict[str, str] | None = None,
+    employee_auth_now: Callable[[], datetime] | None = None,
 ) -> HTTPServer:
     """Build connection, repositories and server in the calling thread —
     single-threaded on purpose (sqlite3 thread affinity, Entry 048)."""
     api = OfficeApi(
         open_core_connection(db_path),
         offer_pdf_static_content=offer_pdf_static_content,
-        employee_auth_service_tokens=employee_auth_service_tokens,
+        employee_auth_now=employee_auth_now,
     )
-    return HTTPServer((host, port), make_office_api_handler(api, token))
+    effective_introspection_tokens = introspection_service_tokens
+    if effective_introspection_tokens is None and employee_auth_service_tokens is not None:
+        effective_introspection_tokens = employee_auth_service_tokens
+    return HTTPServer(
+        (host, port),
+        make_office_api_handler(
+            api,
+            token,
+            introspection_service_tokens=effective_introspection_tokens,
+        ),
+    )
 
 
 def main() -> None:
@@ -3361,17 +3448,9 @@ def main() -> None:
     )
 
     offer_pdf_static_content = offer_pdf_static_content_from_env()
-    raw_service_tokens = os.environ.get("EMPLOYEE_AUTH_SERVICE_TOKENS_JSON", "")
-    service_tokens: dict[str, str] | None = None
-    if raw_service_tokens:
-        parsed = json.loads(raw_service_tokens)
-        if not isinstance(parsed, dict):
-            raise SystemExit("EMPLOYEE_AUTH_SERVICE_TOKENS_JSON must be a JSON object")
-        service_tokens = {
-            key: value
-            for key, value in parsed.items()
-            if isinstance(key, str) and isinstance(value, str) and value
-        }
+    introspection_tokens = read_introspection_service_tokens_from_env(
+        office_panel_token=token,
+    )
 
     server = create_office_api_server(
         args.db,
@@ -3379,7 +3458,7 @@ def main() -> None:
         args.host,
         args.port,
         offer_pdf_static_content=offer_pdf_static_content,
-        employee_auth_service_tokens=service_tokens,
+        introspection_service_tokens=introspection_tokens,
     )
     print(f"Core Office API on http://{args.host}:{args.port}/office/v1/")
     server.serve_forever()

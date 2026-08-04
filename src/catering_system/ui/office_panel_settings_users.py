@@ -82,6 +82,7 @@ PERMISSION_LABELS: dict[str, str] = {
     "prices.edit": "Preise bearbeiten",
     "calendar.view": "Kalender ansehen",
     "queue.view": "Warteschlange ansehen",
+    "queue.resolve": "Rückrufe erledigen",
     "documents.view": "Dokumente ansehen",
     "documents.prepare": "Dokumente vorbereiten",
     "documents.send": "Dokumente versenden",
