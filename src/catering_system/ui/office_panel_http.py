@@ -16,18 +16,28 @@ from typing import TYPE_CHECKING, Literal, cast
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from catering_system.domain.employee_auth import AuthenticatedEmployee, validate_role
-from catering_system.repositories.inquiry_repository import InquiryRepository
-from catering_system.repositories.offer_repository import OfferRepository
-from catering_system.repositories.catalog_repository import CatalogRepository
-from catering_system.repositories.order_repository import OrderRepository
-from catering_system.repositories.payment_reminder_repository import (
-    PaymentReminderRepository,
+from catering_system.domain.offer_pdf import OfferPdfStaticContent
+from catering_system.domain.order_commercial_snapshot import (
+    MissingCommercialSnapshotError,
 )
+from catering_system.integration.auerswald_sync import (
+    fetch_missed_board,
+    resolve_missed_call,
+)
+from catering_system.repositories.catalog_repository import CatalogRepository
 from catering_system.repositories.contact_internal_note_repository import (
     ContactInternalNoteRepository,
 )
 from catering_system.repositories.contact_profile_repository import (
     ContactProfileRepository,
+)
+from catering_system.repositories.inquiry_repository import InquiryRepository
+from catering_system.repositories.offer_document_snapshot_repository import (
+    OfferDocumentSnapshotRepository,
+)
+from catering_system.repositories.offer_repository import OfferRepository
+from catering_system.repositories.order_commercial_snapshot_repository import (
+    OrderCommercialSnapshotRepository,
 )
 from catering_system.repositories.order_confirmation_document_repository import (
     OrderConfirmationDocumentRepository,
@@ -35,15 +45,48 @@ from catering_system.repositories.order_confirmation_document_repository import 
 from catering_system.repositories.order_confirmation_outbound_repository import (
     OrderConfirmationOutboundRepository,
 )
-from catering_system.repositories.order_commercial_snapshot_repository import (
-    OrderCommercialSnapshotRepository,
-)
 from catering_system.repositories.order_operational_pause_repository import (
     OrderOperationalPauseRepository,
 )
-from catering_system.integration.auerswald_sync import (
-    fetch_missed_board,
-    resolve_missed_call,
+from catering_system.repositories.order_repository import OrderRepository
+from catering_system.repositories.payment_reminder_repository import (
+    PaymentReminderRepository,
+)
+from catering_system.repositories.sqlite_configurator_handoff_repository import (
+    SQLiteConfiguratorHandoffRepository,
+)
+from catering_system.services.buffet_cards_service import BuffetCardsService
+from catering_system.services.configurator_handoff_service import (
+    ConfiguratorHandoffService,
+)
+from catering_system.services.employee_auth_service import (
+    AccountConflictError,
+    AccountNotFoundError,
+    AuthenticationError,
+    AuthorizationError,
+    CsrfValidationError,
+    EmployeeAuthService,
+    LastActiveSuperadminError,
+)
+from catering_system.services.order_confirmation_document_preview import (
+    build_preview,
+    render_preview_html,
+)
+from catering_system.services.order_confirmation_document_service import (
+    OrderConfirmationDocumentNotFoundError,
+)
+from catering_system.services.order_print_projection_service import (
+    OrderPrintProjectionService,
+    PrintProjectionNotFoundError,
+)
+from catering_system.ui.employee_auth_http import (
+    CSRF_COOKIE_NAME,
+    SESSION_COOKIE_NAME,
+    clear_cookie_header,
+    csrf_cookie_header,
+    csrf_token_from_headers,
+    session_cookie_header,
+    session_token_from_headers,
 )
 from catering_system.ui.office_panel import (
     CatalogCommandError,
@@ -55,42 +98,18 @@ from catering_system.ui.office_panel import (
     _page,
     fetch_rueckruf_count,
     parse_proposal_payload,
-    render_print_sheet,
     render_buffet_cards,
+    render_print_sheet,
     render_proposal_preview,
     render_proposal_preview_form,
     render_rueckruf,
 )
-from catering_system.domain.offer_pdf import OfferPdfStaticContent
-from catering_system.repositories.offer_document_snapshot_repository import (
-    OfferDocumentSnapshotRepository,
+from catering_system.ui.office_panel_authz import (
+    BusinessAccessDenied,
+    require_all_business_permissions_post,
+    require_business_permission,
+    require_business_permission_post,
 )
-from catering_system.domain.order_commercial_snapshot import (
-    MissingCommercialSnapshotError,
-)
-from catering_system.services.order_print_projection_service import (
-    OrderPrintProjectionService,
-    PrintProjectionNotFoundError,
-)
-from catering_system.services.order_confirmation_document_preview import (
-    build_preview,
-    render_preview_html,
-)
-from catering_system.services.order_confirmation_document_service import (
-    OrderConfirmationDocumentNotFoundError,
-)
-from catering_system.services.buffet_cards_service import BuffetCardsService
-from catering_system.services.employee_auth_service import (
-    AccountConflictError,
-    AccountNotFoundError,
-    AuthenticationError,
-    AuthorizationError,
-    CsrfValidationError,
-    EmployeeAuthService,
-    LastActiveSuperadminError,
-)
-from catering_system.ui.remote_core_client import RemoteCoreError
-from catering_system.ui.office_panel_shell import OfficeSection
 from catering_system.ui.office_panel_settings_users import (
     SettingsUsersAccessDenied,
     parse_selected_permissions,
@@ -102,21 +121,8 @@ from catering_system.ui.office_panel_settings_users import (
     settings_users_error_message,
     show_users_nav_for,
 )
-from catering_system.ui.office_panel_authz import (
-    BusinessAccessDenied,
-    require_all_business_permissions_post,
-    require_business_permission,
-    require_business_permission_post,
-)
-from catering_system.ui.employee_auth_http import (
-    CSRF_COOKIE_NAME,
-    SESSION_COOKIE_NAME,
-    clear_cookie_header,
-    csrf_cookie_header,
-    csrf_token_from_headers,
-    session_cookie_header,
-    session_token_from_headers,
-)
+from catering_system.ui.office_panel_shell import OfficeSection
+from catering_system.ui.remote_core_client import RemoteCoreError
 
 if TYPE_CHECKING:
     from catering_system.repositories.core_transaction import CoreCommandExecutor
@@ -346,8 +352,8 @@ def make_office_panel_handler(
     kiosk_url: str = "",
     configurator_url: str = "",
     *,
-    remote: "RemoteCoreClient | None" = None,
-    command_executor: "CoreCommandExecutor | None" = None,
+    remote: RemoteCoreClient | None = None,
+    command_executor: CoreCommandExecutor | None = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
     confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
     confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
@@ -369,11 +375,19 @@ def make_office_panel_handler(
         raise ValueError(
             "employee auth service is required for migration/employee mode"
         )
+    configurator_handoff_service: ConfiguratorHandoffService | None = None
+    if validated_auth_mode in {"migration", "employee"} and auth_service is not None:
+        repository = getattr(auth_service.repository, "_conn", None)
+        if isinstance(repository, sqlite3.Connection):
+            configurator_handoff_service = ConfiguratorHandoffService(
+                SQLiteConfiguratorHandoffRepository.from_connection(repository)
+            )
     panel = OfficePanel(
         inquiry_repo,
         order_repo,
         kiosk_url,
         configurator_url,
+        configurator_handoff_service=configurator_handoff_service,
         remote=remote,
         command_executor=command_executor,
         payment_reminder_repo=payment_reminder_repo,
@@ -569,6 +583,14 @@ def make_office_panel_handler(
                 else False,
                 show_users_nav=show_users_nav,
                 employee_effective_permissions=employee_effective_permissions,
+                employee_account_id=(
+                    auth.employee.account.id
+                    if auth is not None
+                    and auth.kind == "employee"
+                    and auth.employee is not None
+                    and not auth.legacy_shared_access
+                    else ""
+                ),
             )
 
         def _require_settings_users_actor(
@@ -2162,8 +2184,8 @@ def create_office_panel_server(
     kiosk_url: str = "",
     configurator_url: str = "",
     *,
-    remote: "RemoteCoreClient | None" = None,
-    command_executor: "CoreCommandExecutor | None" = None,
+    remote: RemoteCoreClient | None = None,
+    command_executor: CoreCommandExecutor | None = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
     confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
     confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,

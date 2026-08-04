@@ -22,11 +22,24 @@ import sqlite3
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TypeVar
 from urllib.parse import parse_qsl, unquote, urlparse
 
+from catering_system.domain.catalog import (
+    AllergenCode,
+    CatalogDishAlreadyExistsError,
+    CatalogDishCreatePayload,
+    CatalogDishNotFoundError,
+    CatalogDishStaleError,
+    CatalogDishUpdatePayload,
+    validate_allergen_codes,
+    validate_pricing_unit,
+)
+from catering_system.domain.customer_document_eligibility import (
+    CustomerDocumentCreationBlocked,
+)
 from catering_system.domain.inquiry import (
     ACTIVE_ORDER_CRM_STAGE,
     CRM_PIPELINE,
@@ -67,6 +80,12 @@ from catering_system.domain.order_payment_reminder import (
     OrderPaymentReminder,
     validate_payment_method,
 )
+from catering_system.repositories.bootstrap_customer_identity_schema import (
+    bootstrap_customer_identity_schema,
+)
+from catering_system.repositories.bootstrap_employee_auth_schema import (
+    bootstrap_employee_auth_schema,
+)
 from catering_system.repositories.core_transaction import (
     CoreBusyError,
     CoreCommandExecutor,
@@ -80,6 +99,15 @@ from catering_system.repositories.office_api_ledger import (
     OfficeCommandLedger,
     command_fingerprint,
 )
+from catering_system.repositories.sqlite_catalog_repository import (
+    SQLiteCatalogRepository,
+)
+from catering_system.repositories.sqlite_configurator_handoff_repository import (
+    SQLiteConfiguratorHandoffRepository,
+)
+from catering_system.repositories.sqlite_employee_auth_repository import (
+    SQLiteEmployeeAuthRepository,
+)
 from catering_system.repositories.sqlite_inquiry_repository import (
     SQLiteInquiryRepository,
 )
@@ -89,29 +117,45 @@ from catering_system.repositories.sqlite_offer_document_snapshot_repository impo
 from catering_system.repositories.sqlite_offer_repository import (
     SQLiteOfferRepository,
 )
-from catering_system.repositories.sqlite_catalog_repository import (
-    SQLiteCatalogRepository,
-)
-from catering_system.repositories.bootstrap_customer_identity_schema import (
-    bootstrap_customer_identity_schema,
-)
-from catering_system.repositories.sqlite_order_repository import (
-    SQLiteOrderRepository,
-)
-from catering_system.repositories.sqlite_order_operational_pause_repository import (
-    SQLiteOrderOperationalPauseRepository,
-)
-from catering_system.repositories.sqlite_payment_reminder_repository import (
-    SQLitePaymentReminderRepository,
+from catering_system.repositories.sqlite_order_commercial_snapshot_repository import (
+    SQLiteOrderCommercialSnapshotRepository,
 )
 from catering_system.repositories.sqlite_order_confirmation_document_repository import (
     SQLiteOrderConfirmationDocumentRepository,
 )
-from catering_system.repositories.sqlite_order_commercial_snapshot_repository import (
-    SQLiteOrderCommercialSnapshotRepository,
-)
 from catering_system.repositories.sqlite_order_confirmation_outbound_repository import (
     SQLiteOrderConfirmationOutboundRepository,
+)
+from catering_system.repositories.sqlite_order_operational_pause_repository import (
+    SQLiteOrderOperationalPauseRepository,
+)
+from catering_system.repositories.sqlite_order_repository import (
+    SQLiteOrderRepository,
+)
+from catering_system.repositories.sqlite_payment_reminder_repository import (
+    SQLitePaymentReminderRepository,
+)
+from catering_system.services.buffet_cards_service import BuffetCardsService
+from catering_system.services.calendar_projection_service import (
+    CalendarProjectionService,
+)
+from catering_system.services.catalog_dish_service import CatalogDishService
+from catering_system.services.catalog_dish_write_service import CatalogDishWriteService
+from catering_system.services.configurator_handoff_service import (
+    HANDOFF_OPERATION_PREPARE_FIRST_OFFER,
+    ConfiguratorHandoffService,
+)
+from catering_system.services.contact_projection_service import ContactProjectionService
+from catering_system.services.customer_document_preview import (
+    CustomerDocumentPreviewNotFoundError,
+    CustomerDocumentPreviewService,
+)
+from catering_system.services.email_intake_projection_service import (
+    EmailIntakeProjectionService,
+)
+from catering_system.services.employee_auth_service import (
+    AuthenticationError,
+    EmployeeAuthService,
 )
 from catering_system.services.inquiry_service import (
     InquiryService,
@@ -125,19 +169,17 @@ from catering_system.services.offer_pdf_renderer import (
     offer_document_pdf_filename,
     render_offer_document_pdf,
 )
+from catering_system.services.offer_queue_projection_service import (
+    OfferQueueProjectionService,
+)
 from catering_system.services.offer_service import (
     OfferPreparationBlockedError,
     OfferService,
 )
 from catering_system.services.operational_core_service import OperationalCoreService
-from catering_system.services.order_service import OrderService
-from catering_system.services.payment_reminder_service import PaymentReminderService
-from catering_system.domain.customer_document_eligibility import (
-    CustomerDocumentCreationBlocked,
-)
-from catering_system.services.customer_document_preview import (
-    CustomerDocumentPreviewNotFoundError,
-    CustomerDocumentPreviewService,
+from catering_system.services.order_confirmation_document_preview import (
+    build_preview,
+    render_preview_html,
 )
 from catering_system.services.order_confirmation_document_service import (
     OrderConfirmationDocumentBlockedError,
@@ -154,46 +196,24 @@ from catering_system.services.order_confirmation_outbound_service import (
     OrderConfirmationOutboundService,
     OrderConfirmationOutboundStaleVersionError,
 )
-from catering_system.services.order_confirmation_document_preview import (
-    build_preview,
-    render_preview_html,
-)
-from catering_system.services.wochenuebersicht_service import WochenuebersichtService
-from catering_system.services.contact_projection_service import ContactProjectionService
-from catering_system.services.email_intake_projection_service import (
-    EmailIntakeProjectionService,
-)
-from catering_system.services.calendar_projection_service import (
-    CalendarProjectionService,
-)
-from catering_system.services.task_projection_service import TaskProjectionService
-from catering_system.services.offer_queue_projection_service import (
-    OfferQueueProjectionService,
-)
-from catering_system.services.work_center_service import WorkCenterService
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjectionService,
     PrintFinalRequiresEffectiveError,
     PrintProjectionNotFoundError,
 )
-from catering_system.services.buffet_cards_service import BuffetCardsService
-from catering_system.services.catalog_dish_service import CatalogDishService
-from catering_system.services.catalog_dish_write_service import CatalogDishWriteService
-from catering_system.domain.catalog import (
-    AllergenCode,
-    CatalogDishAlreadyExistsError,
-    CatalogDishCreatePayload,
-    CatalogDishNotFoundError,
-    CatalogDishStaleError,
-    CatalogDishUpdatePayload,
-    validate_allergen_codes,
-    validate_pricing_unit,
-)
+from catering_system.services.order_service import OrderService
+from catering_system.services.payment_reminder_service import PaymentReminderService
+from catering_system.services.task_projection_service import TaskProjectionService
+from catering_system.services.wochenuebersicht_service import WochenuebersichtService
+from catering_system.services.work_center_service import WorkCenterService
 from catering_system.ui import office_api_views as views
+from catering_system.ui.employee_auth_http import bearer_token_from_headers
+from catering_system.ui.office_panel_offer_prefill import offer_prefill_payload
 
 _log = logging.getLogger(__name__)
 
 CLIENT_ID = "office-panel"  # per-client token identity (pack §6.1)
+CONFIGURATOR_HANDOFF_SERVICE_ID = "configurator-handoff"
 _MAX_BODY_BYTES = 64 * 1024
 _MAX_PREPARE_OFFER_BODY_BYTES = 256 * 1024
 _MAX_RESPONSE_BYTES = 512 * 1024  # pack §4.0 hard response cap
@@ -447,14 +467,29 @@ class OfficeApi:
         connection: sqlite3.Connection,
         *,
         offer_pdf_static_content: OfferPdfStaticContent,
+        employee_auth_service_tokens: dict[str, str] | None = None,
     ) -> None:
         self._conn = connection
         self.offer_pdf_static_content = offer_pdf_static_content
         self.inquiries = SQLiteInquiryRepository.from_connection(connection)
         bootstrap_customer_identity_schema(connection)
+        bootstrap_employee_auth_schema(connection)
         self.orders = SQLiteOrderRepository.from_connection(connection)
         self.offers = SQLiteOfferRepository.from_connection(connection)
         self.catalog = SQLiteCatalogRepository.from_connection(connection)
+        self.employee_auth_repository = SQLiteEmployeeAuthRepository.from_connection(
+            connection
+        )
+        self.employee_auth_service = EmployeeAuthService(
+            self.employee_auth_repository,
+            service_tokens=employee_auth_service_tokens,
+        )
+        self.configurator_handoffs = (
+            SQLiteConfiguratorHandoffRepository.from_connection(connection)
+        )
+        self.configurator_handoff_service = ConfiguratorHandoffService(
+            self.configurator_handoffs
+        )
         self.payment_reminders = SQLitePaymentReminderRepository.from_connection(
             connection
         )
@@ -567,6 +602,65 @@ class OfficeApi:
         )
         self.catalog_dish_service = CatalogDishService(self.catalog)
         self.catalog_dish_write_service = CatalogDishWriteService(self.catalog)
+
+    def exchange_configurator_handoff(
+        self,
+        *,
+        code: str,
+        employee_session_token: str,
+    ) -> dict[str, object]:
+        try:
+            employee = self.employee_auth_service.authenticate_session(
+                employee_session_token
+            )
+        except AuthenticationError as exc:
+            raise ApiError(401, "unauthorized") from exc
+        if not employee.application_access_allowed:
+            raise ApiError(403, "forbidden")
+        record = self.configurator_handoff_service.lookup(code)
+        if record is None or record.operation != HANDOFF_OPERATION_PREPARE_FIRST_OFFER:
+            raise ApiError(404, "not_found")
+        if not hmac.compare_digest(record.issued_for_account_id, employee.account.id):
+            raise ApiError(403, "forbidden")
+        if "offers.prepare" not in employee.effective_permissions:
+            raise ApiError(403, "forbidden")
+        inquiry = self.inquiries.get_by_id(record.inquiry_id)
+        if inquiry is None:
+            raise ApiError(404, "not_found")
+        now = datetime.now(UTC)
+        if record.expires_at <= now:
+            raise ApiError(404, "not_found")
+        if record.consumed_at is not None:
+            raise ApiError(410, "gone")
+
+        def work() -> dict[str, object]:
+            current = self.configurator_handoffs.get_by_token_hash(record.token_hash)
+            if (
+                current is None
+                or current.operation != HANDOFF_OPERATION_PREPARE_FIRST_OFFER
+            ):
+                raise ApiError(404, "not_found")
+            if current.expires_at <= now:
+                raise ApiError(404, "not_found")
+            if current.consumed_at is not None:
+                raise ApiError(410, "gone")
+            if not self.configurator_handoffs.consume(
+                handoff_id=current.id,
+                consumed_at=now,
+                consumed_by_account_id=employee.account.id,
+            ):
+                raise ApiError(410, "gone")
+            return {
+                "handoff_id": current.id,
+                "operation": current.operation,
+                "inquiry": {
+                    "inquiry_id": inquiry.inquiry_id,
+                    "transfer": offer_prefill_payload(inquiry)["transfer"],
+                },
+                "expires_at": current.expires_at.isoformat(),
+            }
+
+        return self.executor.run(work)
 
     # -- reads -----------------------------------------------------------
 
@@ -2383,6 +2477,11 @@ _COMMANDS: dict[str, _CommandSpec] = {
 
 # route table: (regex, template, {method: kind})
 _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
+    (
+        re.compile(r"^/office/v1/auth/configurator-handoff/exchange$"),
+        "/office/v1/auth/configurator-handoff/exchange",
+        {"POST": "configurator-handoff-exchange"},
+    ),
     (re.compile(r"^/office/v1/queue$"), "/office/v1/queue", {"GET": "queue"}),
     (
         re.compile(r"^/office/v1/work-center$"),
@@ -2669,6 +2768,15 @@ def _resolve_route(path: str) -> tuple[str, dict[str, str], dict[str, str]] | No
     return None
 
 
+def _employee_session_header(headers: object) -> str | None:
+    getter = getattr(headers, "get", None)
+    if getter is None:
+        return None
+    raw = getter("X-Employee-Session", "")
+    value = raw.strip() if isinstance(raw, str) else ""
+    return value or None
+
+
 def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestHandler]:
     expected_auth = f"Bearer {token}"
 
@@ -2769,6 +2877,15 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
         def _authorized(self) -> bool:
             presented = self.headers.get("Authorization", "")
             return hmac.compare_digest(presented, expected_auth)
+
+        def _configurator_service_auth(self) -> tuple[bool, bool]:
+            introspection = api.employee_auth_service.introspect(
+                session_token=None,
+                bearer_token=bearer_token_from_headers(self.headers),
+            )
+            if introspection.kind != "service_token" or not introspection.authenticated:
+                return False, False
+            return True, introspection.service_id == CONFIGURATOR_HANDOFF_SERVICE_ID
 
         def _auth_or_401(self) -> bool:
             if self._authorized():
@@ -2874,9 +2991,12 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
                 self._error(404, "not_found")
 
         def _handle(self, method: str) -> None:
+            path = urlparse(self.path).path
+            if path == "/office/v1/auth/configurator-handoff/exchange":
+                self._handle_configurator_handoff_exchange(method)
+                return
             if not self._auth_or_401():
                 return
-            path = urlparse(self.path).path
             resolved = _resolve_route(path)
             if resolved is None:
                 self._error(404, "not_found")
@@ -2903,6 +3023,48 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
                 )
             except Exception:
                 _log.exception("internal error route=%s", template)
+                self._error(500, "internal")
+
+        def _handle_configurator_handoff_exchange(self, method: str) -> None:
+            service_authenticated, correct_service = self._configurator_service_auth()
+            if not service_authenticated:
+                self._error(401, "unauthorized")
+                return
+            if not correct_service:
+                self._error(403, "forbidden")
+                return
+            if method != "POST":
+                self._error(405, "method_not_allowed")
+                return
+            try:
+                raw = self._read_command_body(_MAX_BODY_BYTES)
+                body = strict_json_loads(raw)
+                _exact_keys(body, {"code"})
+                code = _v_str(body["code"], 1024).strip()
+                if not code:
+                    raise _invalid()
+                employee_session_token = _employee_session_header(self.headers)
+                if employee_session_token is None:
+                    self._error(401, "unauthorized")
+                    return
+                payload = api.exchange_configurator_handoff(
+                    code=code,
+                    employee_session_token=employee_session_token,
+                )
+                self._respond(200, payload)
+            except CoreBusyError:
+                self._error(503, "core_busy", retry_after=True)
+            except ApiError as exc:
+                self._error(
+                    exc.status,
+                    exc.code,
+                    reasons=exc.reasons,
+                    offer_id=exc.offer_id,
+                )
+            except Exception:
+                _log.exception(
+                    "internal error route=/office/v1/auth/configurator-handoff/exchange"
+                )
                 self._error(500, "internal")
 
         def _get(self, kind: str, path_ids: dict[str, str]) -> None:
@@ -3163,12 +3325,14 @@ def create_office_api_server(
     port: int = 0,
     *,
     offer_pdf_static_content: OfferPdfStaticContent,
+    employee_auth_service_tokens: dict[str, str] | None = None,
 ) -> HTTPServer:
     """Build connection, repositories and server in the calling thread —
     single-threaded on purpose (sqlite3 thread affinity, Entry 048)."""
     api = OfficeApi(
         open_core_connection(db_path),
         offer_pdf_static_content=offer_pdf_static_content,
+        employee_auth_service_tokens=employee_auth_service_tokens,
     )
     return HTTPServer((host, port), make_office_api_handler(api, token))
 
@@ -3197,6 +3361,17 @@ def main() -> None:
     )
 
     offer_pdf_static_content = offer_pdf_static_content_from_env()
+    raw_service_tokens = os.environ.get("EMPLOYEE_AUTH_SERVICE_TOKENS_JSON", "")
+    service_tokens: dict[str, str] | None = None
+    if raw_service_tokens:
+        parsed = json.loads(raw_service_tokens)
+        if not isinstance(parsed, dict):
+            raise SystemExit("EMPLOYEE_AUTH_SERVICE_TOKENS_JSON must be a JSON object")
+        service_tokens = {
+            key: value
+            for key, value in parsed.items()
+            if isinstance(key, str) and isinstance(value, str) and value
+        }
 
     server = create_office_api_server(
         args.db,
@@ -3204,6 +3379,7 @@ def main() -> None:
         args.host,
         args.port,
         offer_pdf_static_content=offer_pdf_static_content,
+        employee_auth_service_tokens=service_tokens,
     )
     print(f"Core Office API on http://{args.host}:{args.port}/office/v1/")
     server.serve_forever()

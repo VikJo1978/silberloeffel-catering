@@ -127,6 +127,7 @@ class OfficePageContext:
     legacy_shared_access: bool = False
     show_users_nav: bool = False
     employee_effective_permissions: frozenset[str] = frozenset()
+    employee_account_id: str = ""
 
     def can(self, permission_code: str) -> bool:
         if permission_code not in PERMISSION_SET:

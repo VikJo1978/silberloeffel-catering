@@ -17,17 +17,32 @@ from datetime import date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import quote, urlencode
+from uuid import uuid4
 
-
+from catering_system.domain.catalog import (
+    ALLERGEN_CODES,
+    AllergenCode,
+    CatalogDishAlreadyExistsError,
+    CatalogDishCreatePayload,
+    CatalogDishNotFoundError,
+    CatalogDishStaleError,
+    CatalogDishUpdatePayload,
+    validate_category,
+    validate_pricing_unit,
+)
+from catering_system.domain.customer_document_projection import (
+    CustomerAddress,
+    canonicalize_customer_address,
+)
 from catering_system.domain.inquiry import (
     ACTIVE_ORDER_CRM_STAGE,
     CRM_PIPELINE,
     PLANNING_MODES,
     Inquiry,
     InquiryOfficeState,
+    inquiry_allows_convert_accepted_command,
     inquiry_crm_stage_is_compatible_with_active_order,
     inquiry_shows_convert_accepted_button,
-    inquiry_allows_convert_accepted_command,
     validate_crm_stage,
 )
 from catering_system.domain.inquiry_contact_completeness import (
@@ -36,16 +51,16 @@ from catering_system.domain.inquiry_contact_completeness import (
     derive_inquiry_contact_completeness,
     missing_contact_fields,
 )
-from catering_system.domain.customer_document_projection import (
-    CustomerAddress,
-    canonicalize_customer_address,
-)
-from catering_system.services.offer_service import OfferService
 from catering_system.domain.offer import (
     ACCEPTANCE_CHANNELS,
     SENT_CHANNELS,
     AcceptanceChannel,
     SentChannel,
+)
+from catering_system.domain.offer_pdf import (
+    OfferPdfRenderError,
+    OfferPdfStaticContent,
+    OfferPdfUnsupportedCharacterError,
 )
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_payment_reminder import (
@@ -54,29 +69,13 @@ from catering_system.domain.order_payment_reminder import (
     OrderPaymentReminder,
     validate_payment_method,
 )
-from catering_system.domain.offer_pdf import (
-    OfferPdfRenderError,
-    OfferPdfStaticContent,
-    OfferPdfUnsupportedCharacterError,
+from catering_system.domain.work_center import WorkCenterSnapshot
+from catering_system.repositories.catalog_repository import CatalogRepository
+from catering_system.repositories.contact_internal_note_repository import (
+    ContactInternalNoteRepository,
 )
-from catering_system.services.offer_document_snapshot_service import (
-    OfferDocumentSnapshotService,
-)
-from catering_system.services.offer_pdf_renderer import (
-    offer_document_pdf_filename,
-    render_offer_document_pdf,
-)
-from catering_system.repositories.in_memory_offer_repository import (
-    InMemoryOfferRepository,
-)
-from catering_system.repositories.in_memory_offer_document_snapshot_repository import (
-    InMemoryOfferDocumentSnapshotRepository,
-)
-from catering_system.repositories.offer_document_snapshot_repository import (
-    OfferDocumentSnapshotRepository,
-)
-from catering_system.repositories.in_memory_order_commercial_snapshot_repository import (
-    InMemoryOrderCommercialSnapshotRepository,
+from catering_system.repositories.contact_profile_repository import (
+    ContactProfileRepository,
 )
 from catering_system.repositories.in_memory_catalog_repository import (
     InMemoryCatalogRepository,
@@ -87,14 +86,14 @@ from catering_system.repositories.in_memory_contact_internal_note_repository imp
 from catering_system.repositories.in_memory_contact_profile_repository import (
     InMemoryContactProfileRepository,
 )
-from catering_system.repositories.in_memory_payment_reminder_repository import (
-    InMemoryPaymentReminderRepository,
+from catering_system.repositories.in_memory_offer_document_snapshot_repository import (
+    InMemoryOfferDocumentSnapshotRepository,
 )
-from catering_system.repositories.contact_internal_note_repository import (
-    ContactInternalNoteRepository,
+from catering_system.repositories.in_memory_offer_repository import (
+    InMemoryOfferRepository,
 )
-from catering_system.repositories.contact_profile_repository import (
-    ContactProfileRepository,
+from catering_system.repositories.in_memory_order_commercial_snapshot_repository import (
+    InMemoryOrderCommercialSnapshotRepository,
 )
 from catering_system.repositories.in_memory_order_confirmation_document_repository import (
     InMemoryOrderConfirmationDocumentRepository,
@@ -102,22 +101,25 @@ from catering_system.repositories.in_memory_order_confirmation_document_reposito
 from catering_system.repositories.in_memory_order_confirmation_outbound_repository import (
     InMemoryOrderConfirmationOutboundRepository,
 )
+from catering_system.repositories.in_memory_order_operational_pause_repository import (
+    InMemoryOrderOperationalPauseRepository,
+)
+from catering_system.repositories.in_memory_payment_reminder_repository import (
+    InMemoryPaymentReminderRepository,
+)
+from catering_system.repositories.inquiry_repository import InquiryRepository
+from catering_system.repositories.offer_document_snapshot_repository import (
+    OfferDocumentSnapshotRepository,
+)
+from catering_system.repositories.offer_repository import OfferRepository
+from catering_system.repositories.order_commercial_snapshot_repository import (
+    OrderCommercialSnapshotRepository,
+)
 from catering_system.repositories.order_confirmation_document_repository import (
     OrderConfirmationDocumentRepository,
 )
 from catering_system.repositories.order_confirmation_outbound_repository import (
     OrderConfirmationOutboundRepository,
-)
-from catering_system.repositories.catalog_repository import CatalogRepository
-from catering_system.repositories.inquiry_repository import InquiryRepository
-from catering_system.repositories.offer_repository import OfferRepository
-from catering_system.repositories.order_commercial_snapshot_repository import (
-    OrderCommercialSnapshotRepository,
-)
-from uuid import uuid4
-
-from catering_system.repositories.in_memory_order_operational_pause_repository import (
-    InMemoryOrderOperationalPauseRepository,
 )
 from catering_system.repositories.order_operational_pause_repository import (
     OrderOperationalPauseRepository,
@@ -126,82 +128,85 @@ from catering_system.repositories.order_repository import OrderRepository
 from catering_system.repositories.payment_reminder_repository import (
     PaymentReminderRepository,
 )
-from catering_system.services.inquiry_service import InquiryService
-from catering_system.services.operational_core_service import OperationalCoreService
-from catering_system.services.order_service import OrderService
+from catering_system.services.calendar_projection_service import (
+    CalendarProjectionService,
+)
+from catering_system.services.catalog_dish_service import CatalogDishService
+from catering_system.services.catalog_dish_write_service import CatalogDishWriteService
+from catering_system.services.configurator_handoff_service import (
+    ConfiguratorHandoffService,
+)
 from catering_system.services.contact_internal_note_service import (
     ContactInternalNoteService,
 )
 from catering_system.services.contact_profile_service import ContactProfileService
-from catering_system.services.payment_reminder_service import PaymentReminderService
-from catering_system.services.order_confirmation_document_service import (
-    OrderConfirmationDocumentService,
-)
+from catering_system.services.contact_projection_service import ContactProjectionService
 from catering_system.services.customer_document_preview import (
     CustomerDocumentPreviewNotFoundError,
     CustomerDocumentPreviewService,
+)
+from catering_system.services.email_intake_projection_service import (
+    EmailIntakeProjectionService,
+)
+from catering_system.services.inquiry_service import InquiryService
+from catering_system.services.offer_document_snapshot_service import (
+    OfferDocumentSnapshotService,
+)
+from catering_system.services.offer_pdf_renderer import (
+    offer_document_pdf_filename,
+    render_offer_document_pdf,
+)
+from catering_system.services.offer_service import OfferService
+from catering_system.services.operational_core_service import OperationalCoreService
+from catering_system.services.order_confirmation_document_service import (
+    OrderConfirmationDocumentService,
 )
 from catering_system.services.order_confirmation_outbound_service import (
     OrderConfirmationOutboundAlreadySentError,
     OrderConfirmationOutboundService,
 )
+from catering_system.services.order_service import OrderService
+from catering_system.services.payment_reminder_service import PaymentReminderService
 from catering_system.services.progression_service import ProgressionService
-from catering_system.services.wochenuebersicht_service import WochenuebersichtService
-from catering_system.ui import office_api_views as api_views
-from catering_system.domain.work_center import WorkCenterSnapshot
-from catering_system.services.contact_projection_service import ContactProjectionService
-from catering_system.services.catalog_dish_service import CatalogDishService
-from catering_system.services.catalog_dish_write_service import CatalogDishWriteService
-from catering_system.domain.catalog import (
-    AllergenCode,
-    ALLERGEN_CODES,
-    CatalogDishAlreadyExistsError,
-    CatalogDishCreatePayload,
-    CatalogDishNotFoundError,
-    CatalogDishStaleError,
-    CatalogDishUpdatePayload,
-    validate_category,
-    validate_pricing_unit,
-)
-from catering_system.services.email_intake_projection_service import (
-    EmailIntakeProjectionService,
-)
-from catering_system.services.calendar_projection_service import (
-    CalendarProjectionService,
-)
 from catering_system.services.task_projection_service import TaskProjectionService
+from catering_system.services.wochenuebersicht_service import WochenuebersichtService
 from catering_system.services.work_center_service import WorkCenterService
+from catering_system.ui import office_api_views as api_views
 from catering_system.ui.callback_contact_resolution import (
     enrich_missed_board_with_core_contacts,
 )
+from catering_system.ui.office_panel_calendar_list import render_kalender_list
+from catering_system.ui.office_panel_catalog_detail import render_gericht_detail
+from catering_system.ui.office_panel_catalog_edit import render_gericht_edit
+from catering_system.ui.office_panel_catalog_list import render_gerichte_list
+from catering_system.ui.office_panel_catalog_new import render_gericht_new
+from catering_system.ui.office_panel_contact_detail import render_kontakt_detail
+from catering_system.ui.office_panel_contacts_list import render_kontakte_list
 from catering_system.ui.office_panel_dashboard import (
     ArbeitszentraleData,
     render_arbeitszentrale,
 )
-from catering_system.ui.office_panel_contact_detail import render_kontakt_detail
-from catering_system.ui.office_panel_contacts_list import render_kontakte_list
-from catering_system.ui.office_panel_catalog_list import render_gerichte_list
-from catering_system.ui.office_panel_catalog_detail import render_gericht_detail
-from catering_system.ui.office_panel_catalog_edit import render_gericht_edit
-from catering_system.ui.office_panel_catalog_new import render_gericht_new
 from catering_system.ui.office_panel_email_detail import render_email_detail
 from catering_system.ui.office_panel_emails_list import render_email_list
-from catering_system.ui.office_panel_calendar_list import render_kalender_list
-from catering_system.ui.office_panel_tasks_list import render_aufgaben_list
+from catering_system.ui.office_panel_inquiry_detail import (
+    InquiryDetailFormFields,
+    render_inquiry_detail,
+)
 from catering_system.ui.office_panel_offer_detail import (
     OfferDetailFormFields,
     render_offer_detail,
     surface_version_id,
 )
-from catering_system.ui.office_panel_offers_list import render_angebote_queue
-from catering_system.ui.office_panel_inquiry_detail import (
-    InquiryDetailFormFields,
-    render_inquiry_detail,
+from catering_system.ui.office_panel_offer_prefill import (
+    build_configurator_handoff_url,
+    build_offer_prefill_url,
+    normalize_configurator_url,
 )
+from catering_system.ui.office_panel_offers_list import render_angebote_queue
 from catering_system.ui.office_panel_order_detail import (
+    _DOCUMENT_BLOCKER_LABELS,
     ConfirmationLivePreviewView,
     OrderDetailFormFields,
-    _DOCUMENT_BLOCKER_LABELS,
     render_confirmation_card,
     render_confirmation_outbound_card,
     render_customer_addresses_card,
@@ -215,30 +220,27 @@ from catering_system.ui.office_panel_proposal import (
     render_proposal_preview,
     render_proposal_preview_form,
 )
-from catering_system.ui.office_panel_offer_prefill import (
-    build_offer_prefill_url,
-    normalize_configurator_url,
-)
+from catering_system.ui.office_panel_tasks_list import render_aufgaben_list
 from catering_system.ui.office_panel_views import (
+    _EMPTY_PAGE_CONTEXT,
     CALL_VERIFICATION_STATUS_LABELS,
     PROGRESSION_BLOCKER_LABELS,
     READY_TO_SEND_BLOCKER_LABELS,
     SOURCE_LABELS,
     OfficePageContext,
+    _crm_stage_select,
     _csrf_input,
     _e,
-    _EMPTY_PAGE_CONTEXT,
-    parse_datetime_local_berlin,
-    format_datetime_utc_iso,
-    _crm_stage_select,
     _page,
     _planning_mode_select,
     _progression_blocker_label,
     _ready_to_send_blocker_label,
     _source_label,
     _verification_label,
-    render_print_sheet,
+    format_datetime_utc_iso,
+    parse_datetime_local_berlin,
     render_buffet_cards,
+    render_print_sheet,
 )
 
 if TYPE_CHECKING:
@@ -446,8 +448,9 @@ class OfficePanel:
         kiosk_url: str = "",
         configurator_url: str = "",
         *,
-        remote: "RemoteCoreClient | None" = None,
-        command_executor: "CoreCommandExecutor | None" = None,
+        configurator_handoff_service: ConfiguratorHandoffService | None = None,
+        remote: RemoteCoreClient | None = None,
+        command_executor: CoreCommandExecutor | None = None,
         payment_reminder_repo: PaymentReminderRepository | None = None,
         confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
         confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
@@ -579,6 +582,23 @@ class OfficePanel:
         # The payload travels in a URL fragment (never an HTTP request) and
         # opening it performs no Core write.
         self.configurator_url = normalize_configurator_url(configurator_url)
+        self._configurator_handoff_service = configurator_handoff_service
+
+    def _build_first_offer_url(
+        self, inquiry: Inquiry, context: OfficePageContext
+    ) -> str:
+        if (
+            self._configurator_handoff_service is not None
+            and context.employee_account_id
+            and not context.legacy_shared_access
+            and context.can("offers.prepare")
+        ):
+            minted = self._configurator_handoff_service.mint_first_offer(
+                inquiry_id=inquiry.inquiry_id,
+                issued_for_account_id=context.employee_account_id,
+            )
+            return build_configurator_handoff_url(self.configurator_url, minted.code)
+        return build_offer_prefill_url(self.configurator_url, inquiry)
 
     def _operational_pause_view(self, order_id: str) -> dict[str, object]:
         getter = getattr(self.core, "get_operational_pause_projection", None)
@@ -2806,7 +2826,7 @@ class OfficePanel:
         ev = self.progression.evaluate_inquiry_to_order_progression(inq)
         if self._ui_version == "v2":
             offer_url = (
-                build_offer_prefill_url(self.configurator_url, inq)
+                self._build_first_offer_url(inq, context)
                 if self.configurator_url and state.next_action == "prepare-offer"
                 else None
             )
@@ -2936,7 +2956,7 @@ class OfficePanel:
                 "Angebot öffnen →</strong></a></p>"
             )
         elif self.configurator_url and state.next_action == "prepare-offer":
-            offer_url = build_offer_prefill_url(self.configurator_url, inq)
+            offer_url = self._build_first_offer_url(inq, context)
             offer_prefill = (
                 "<h2>Angebot</h2>"
                 f'<p><a href="{_e(offer_url)}"><strong>Angebot mit '
@@ -3867,8 +3887,8 @@ def make_office_panel_handler(
     kiosk_url: str = "",
     configurator_url: str = "",
     *,
-    remote: "RemoteCoreClient | None" = None,
-    command_executor: "CoreCommandExecutor | None" = None,
+    remote: RemoteCoreClient | None = None,
+    command_executor: CoreCommandExecutor | None = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
     confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
     confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
@@ -3921,8 +3941,8 @@ def create_office_panel_server(
     kiosk_url: str = "",
     configurator_url: str = "",
     *,
-    remote: "RemoteCoreClient | None" = None,
-    command_executor: "CoreCommandExecutor | None" = None,
+    remote: RemoteCoreClient | None = None,
+    command_executor: CoreCommandExecutor | None = None,
     payment_reminder_repo: PaymentReminderRepository | None = None,
     confirmation_document_repo: OrderConfirmationDocumentRepository | None = None,
     confirmation_outbound_repo: OrderConfirmationOutboundRepository | None = None,
@@ -4130,21 +4150,33 @@ def main() -> None:
         # no file created, no migration applied, no repository constructed.
         offer_pdf_static_content = offer_pdf_static_content_from_env()
 
+        from catering_system.repositories.bootstrap_customer_identity_schema import (
+            bootstrap_customer_identity_schema,
+        )
         from catering_system.repositories.core_transaction import (
             CoreCommandExecutor,
             open_core_connection,
         )
+        from catering_system.repositories.sqlite_catalog_repository import (
+            SQLiteCatalogRepository,
+        )
+        from catering_system.repositories.sqlite_contact_internal_note_repository import (
+            SQLiteContactInternalNoteRepository,
+        )
+        from catering_system.repositories.sqlite_contact_profile_repository import (
+            SQLiteContactProfileRepository,
+        )
         from catering_system.repositories.sqlite_inquiry_repository import (
             SQLiteInquiryRepository,
+        )
+        from catering_system.repositories.sqlite_offer_document_snapshot_repository import (
+            SQLiteOfferDocumentSnapshotRepository,
         )
         from catering_system.repositories.sqlite_offer_repository import (
             SQLiteOfferRepository,
         )
-        from catering_system.repositories.sqlite_order_repository import (
-            SQLiteOrderRepository,
-        )
-        from catering_system.repositories.sqlite_payment_reminder_repository import (
-            SQLitePaymentReminderRepository,
+        from catering_system.repositories.sqlite_order_commercial_snapshot_repository import (
+            SQLiteOrderCommercialSnapshotRepository,
         )
         from catering_system.repositories.sqlite_order_confirmation_document_repository import (
             SQLiteOrderConfirmationDocumentRepository,
@@ -4155,23 +4187,11 @@ def main() -> None:
         from catering_system.repositories.sqlite_order_operational_pause_repository import (
             SQLiteOrderOperationalPauseRepository,
         )
-        from catering_system.repositories.sqlite_contact_internal_note_repository import (
-            SQLiteContactInternalNoteRepository,
+        from catering_system.repositories.sqlite_order_repository import (
+            SQLiteOrderRepository,
         )
-        from catering_system.repositories.sqlite_contact_profile_repository import (
-            SQLiteContactProfileRepository,
-        )
-        from catering_system.repositories.sqlite_catalog_repository import (
-            SQLiteCatalogRepository,
-        )
-        from catering_system.repositories.sqlite_order_commercial_snapshot_repository import (
-            SQLiteOrderCommercialSnapshotRepository,
-        )
-        from catering_system.repositories.sqlite_offer_document_snapshot_repository import (
-            SQLiteOfferDocumentSnapshotRepository,
-        )
-        from catering_system.repositories.bootstrap_customer_identity_schema import (
-            bootstrap_customer_identity_schema,
+        from catering_system.repositories.sqlite_payment_reminder_repository import (
+            SQLitePaymentReminderRepository,
         )
 
         connection = open_core_connection(args.db)

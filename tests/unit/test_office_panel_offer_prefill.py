@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import base64
 import json
+import sqlite3
 from dataclasses import replace
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
+from pathlib import Path
 
 import pytest
 
 from catering_system.domain.inquiry import (
     Inquiry,
-    InquiryOfficeState,
     InquiryOfferProjection,
+    InquiryOfficeState,
 )
 from catering_system.domain.inquiry_customer_snapshot import (
     InquiryCustomerSnapshot,
@@ -21,21 +23,41 @@ from catering_system.repositories.in_memory_inquiry_repository import (
 from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
 )
+from catering_system.repositories.sqlite_configurator_handoff_repository import (
+    SQLiteConfiguratorHandoffRepository,
+)
+from catering_system.services.configurator_handoff_service import (
+    ConfiguratorHandoffService,
+)
 from catering_system.ui.office_panel import OfficePanel
 from catering_system.ui.office_panel_inquiry_detail import (
     InquiryDetailFormFields,
     render_inquiry_detail,
 )
 from catering_system.ui.office_panel_offer_prefill import (
+    build_configurator_handoff_url,
     build_offer_prefill_url,
     normalize_configurator_url,
     offer_prefill_payload,
 )
+from catering_system.ui.office_panel_views import OfficePageContext
 from tests.helpers.office_panel_context import legacy_office_context
 
 
+def _employee_context(account_id: str = "employee-1"):
+    return OfficePageContext(
+        legacy_shared_access=False,
+        employee_account_id=account_id,
+        employee_effective_permissions=frozenset({"offers.prepare"}),
+    )
+
+
+def _handoff_service(db_path: Path) -> ConfiguratorHandoffService:
+    return ConfiguratorHandoffService(SQLiteConfiguratorHandoffRepository(db_path))
+
+
 def _inquiry(*, guest_count: int | None = 42) -> Inquiry:
-    now = datetime(2026, 7, 13, 12, tzinfo=timezone.utc)
+    now = datetime(2026, 7, 13, 12, tzinfo=UTC)
     return Inquiry(
         inquiry_id="11111111-1111-1111-1111-111111111111",
         event_date=date(2026, 10, 3),
@@ -176,6 +198,56 @@ def test_fragment_round_trip_preserves_unicode_and_stays_out_of_request_url() ->
     decoded = json.loads(base64.urlsafe_b64decode(padded).decode("utf-8"))
     assert decoded["schema_version"] == "core_inquiry_offer_prefill_v1"
     assert decoded["transfer"]["orderContextPrefill"]["contactPerson"] == "Jörg Weiß"
+
+
+def test_employee_mode_first_offer_uses_core_handoff_only(tmp_path: Path) -> None:
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    inquiry = _inquiry()
+    inquiry_repo.save(inquiry)
+    panel = OfficePanel(
+        inquiry_repo,
+        order_repo,
+        configurator_url="https://angebote.example.test/app",
+        configurator_handoff_service=_handoff_service(tmp_path / "handoff.db"),
+    )
+
+    page = panel.render_inquiry(inquiry.inquiry_id, context=_employee_context())
+
+    assert page is not None
+    assert 'href="https://angebote.example.test/app#core-handoff=' in page
+    assert "#core-inquiry=" not in page
+    assert inquiry.inquiry_id not in page
+
+
+def test_raw_handoff_code_is_not_stored_in_db(tmp_path: Path) -> None:
+    service = _handoff_service(tmp_path / "handoff.db")
+    minted = service.mint_first_offer(
+        inquiry_id="11111111-1111-1111-1111-111111111111",
+        issued_for_account_id="employee-1",
+    )
+
+    row = (
+        sqlite3.connect(tmp_path / "handoff.db")
+        .execute(
+            "SELECT token_hash FROM configurator_handoffs WHERE id = ?",
+            (minted.record.id,),
+        )
+        .fetchone()
+    )
+
+    assert row is not None
+    assert row[0] != minted.code
+    assert minted.code not in row[0]
+
+
+def test_build_configurator_handoff_url_uses_opaque_fragment_only() -> None:
+    url = build_configurator_handoff_url(
+        "https://angebote.example.test/app/",
+        "opaque-code-123",
+    )
+
+    assert url == "https://angebote.example.test/app#core-handoff=opaque-code-123"
 
 
 def test_unknown_guest_count_remains_null() -> None:

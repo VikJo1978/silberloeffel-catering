@@ -3,10 +3,6 @@
 
 from __future__ import annotations
 
-from tests.helpers.commercial_snapshot_seed import seed_commercial_snapshot
-from tests.helpers.offer_pdf_static_content import fake_offer_pdf_static_content
-from tests.helpers.order_seed import seed_order
-
 import hashlib
 import json
 import queue
@@ -22,8 +18,19 @@ from pathlib import Path
 
 import pytest
 
+from catering_system.domain.catalog import CatalogDish
 from catering_system.domain.customer_document_projection import CustomerAddress
 from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot
+from catering_system.domain.offer_snapshot import compute_snapshot_hash
+from catering_system.repositories.sqlite_catalog_repository import (
+    SQLiteCatalogRepository,
+)
+from catering_system.repositories.sqlite_configurator_handoff_repository import (
+    SQLiteConfiguratorHandoffRepository,
+)
+from catering_system.repositories.sqlite_employee_auth_repository import (
+    SQLiteEmployeeAuthRepository,
+)
 from catering_system.repositories.sqlite_inquiry_repository import (
     SQLiteInquiryRepository,
 )
@@ -36,15 +43,17 @@ from catering_system.repositories.sqlite_order_commercial_snapshot_repository im
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
-from catering_system.repositories.sqlite_catalog_repository import (
-    SQLiteCatalogRepository,
+from catering_system.services.configurator_handoff_service import (
+    ConfiguratorHandoffService,
 )
-from catering_system.domain.catalog import CatalogDish
-from catering_system.domain.offer_snapshot import compute_snapshot_hash
+from catering_system.services.employee_auth_service import EmployeeAuthService
 from catering_system.services.inquiry_service import InquiryService
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
 from catering_system.ui.remote_core_client import RemoteCoreClient, RemoteCoreError
+from tests.helpers.commercial_snapshot_seed import seed_commercial_snapshot
+from tests.helpers.offer_pdf_static_content import fake_offer_pdf_static_content
+from tests.helpers.order_seed import seed_order
 
 _SNAPSHOT_ID = "77777777-7777-4777-8777-777777777771"
 _VARIANT_ID = "44444444-4444-4444-8444-444444444441"
@@ -52,6 +61,12 @@ _POSITION_ID = "88888888-8888-4888-8888-888888888881"
 
 _TOKEN = "test-office-api-token"
 _AUTH = {"Authorization": f"Bearer {_TOKEN}"}
+_SERVICE_TOKENS = {
+    "office-api": "svc-office-token",
+    "configurator-handoff": "svc-configurator-token",
+}
+_CONFIGURATOR_AUTH = {"Authorization": "Bearer svc-configurator-token"}
+_WRONG_SERVICE_AUTH = {"Authorization": "Bearer svc-office-token"}
 
 
 def _seed(db_path: Path) -> dict[str, str]:
@@ -147,6 +162,55 @@ def _seed(db_path: Path) -> dict[str, str]:
     return ids
 
 
+def _seed_employee_auth(db_path: Path) -> dict[str, str]:
+    repo = SQLiteEmployeeAuthRepository(db_path)
+    service = EmployeeAuthService(repo, service_tokens=_SERVICE_TOKENS)
+    account = service.bootstrap_superadmin(
+        username="auth.handoff",
+        display_name="Auth Handoff",
+        password="TempPassw0rd!",
+    )
+    initial_login = service.authenticate(
+        username="auth.handoff", password="TempPassw0rd!"
+    )
+    service.change_password(
+        service.authenticate_session(initial_login.session_token),
+        current_password="TempPassw0rd!",
+        new_password="ChangedPassw0rd!",
+    )
+    final_login = service.authenticate(
+        username="auth.handoff", password="ChangedPassw0rd!"
+    )
+    repo.close()
+    return {
+        "account_id": account.id,
+        "session_token": final_login.session_token,
+    }
+
+
+def _employee_auth(db_path: Path) -> dict[str, str]:
+    repo = SQLiteEmployeeAuthRepository(db_path)
+    service = EmployeeAuthService(repo, service_tokens=_SERVICE_TOKENS)
+    account = repo.get_account_by_username("auth.handoff")
+    assert account is not None
+    login = service.authenticate(username="auth.handoff", password="ChangedPassw0rd!")
+    repo.close()
+    return {"account_id": account.id, "session_token": login.session_token}
+
+
+def _mint_first_offer_handoff(
+    db_path: Path, *, inquiry_id: str, account_id: str
+) -> tuple[str, str]:
+    repo = SQLiteConfiguratorHandoffRepository(db_path)
+    service = ConfiguratorHandoffService(repo)
+    minted = service.mint_first_offer(
+        inquiry_id=inquiry_id,
+        issued_for_account_id=account_id,
+    )
+    repo.close()
+    return minted.code, minted.record.id
+
+
 def _start_api_server(db: Path) -> tuple[HTTPServer, threading.Thread, str]:
     ready: queue.Queue[HTTPServer] = queue.Queue()
 
@@ -159,6 +223,7 @@ def _start_api_server(db: Path) -> tuple[HTTPServer, threading.Thread, str]:
             "127.0.0.1",
             0,
             offer_pdf_static_content=fake_offer_pdf_static_content(),
+            employee_auth_service_tokens=_SERVICE_TOKENS,
         )
         ready.put(server)
         server.serve_forever()
@@ -181,6 +246,7 @@ def api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     )
     db = tmp_path / "core.db"
     ids = _seed(db)
+    _seed_employee_auth(db)
     server, thread, base = _start_api_server(db)
     yield base, ids, db
     server.shutdown()
@@ -227,6 +293,34 @@ def _post(
         return exc.code, json.loads(exc.read().decode() or "{}"), dict(exc.headers)
 
 
+def _exchange_handoff(
+    base: str,
+    *,
+    code: str,
+    session_token: str | None,
+    headers: dict[str, str] | None = None,
+    raw_body: bytes | None = None,
+) -> tuple[int, dict, dict]:
+    request_headers = {"Content-Type": "application/json"}
+    request_headers.update(headers if headers is not None else _CONFIGURATOR_AUTH)
+    if session_token is not None:
+        request_headers["X-Employee-Session"] = session_token
+    body = (
+        raw_body if raw_body is not None else json.dumps({"code": code}).encode("utf-8")
+    )
+    req = urllib.request.Request(
+        f"{base}/office/v1/auth/configurator-handoff/exchange",
+        data=body,
+        headers=request_headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:
+            return resp.status, json.loads(resp.read().decode()), dict(resp.headers)
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode() or "{}"), dict(exc.headers)
+
+
 _CREATE_ARGS = {
     "event_date": "2026-11-11",
     "inquiry_source": "manual",
@@ -266,6 +360,205 @@ def test_error_responses_carry_security_headers(api) -> None:
     assert headers["Cache-Control"] == "no-store"
     assert headers["X-Content-Type-Options"] == "nosniff"
     assert headers["Content-Type"] == "application/json; charset=utf-8"
+
+
+def test_valid_first_offer_handoff_exchange(api) -> None:
+    base, ids, db = api
+    auth = _employee_auth(db)
+    code, handoff_id = _mint_first_offer_handoff(
+        db,
+        inquiry_id=ids["inquiry_offer_ready"],
+        account_id=auth["account_id"],
+    )
+
+    status, body, _headers = _exchange_handoff(
+        base,
+        code=code,
+        session_token=auth["session_token"],
+    )
+
+    assert status == 200
+    assert body["handoff_id"] == handoff_id
+    assert body["operation"] == "prepare_first_offer"
+    assert body["inquiry"]["inquiry_id"] == ids["inquiry_offer_ready"]
+    assert "transfer" in body["inquiry"]
+    row = (
+        sqlite3.connect(db)
+        .execute(
+            "SELECT token_hash, consumed_at, consumed_by_account_id FROM configurator_handoffs WHERE id = ?",
+            (handoff_id,),
+        )
+        .fetchone()
+    )
+    assert row is not None
+    assert row[0] != code
+    assert row[1] is not None
+    assert row[2] == auth["account_id"]
+
+
+def test_expired_handoff_rejected(api) -> None:
+    base, ids, db = api
+    auth = _employee_auth(db)
+    code, handoff_id = _mint_first_offer_handoff(
+        db,
+        inquiry_id=ids["inquiry_offer_ready"],
+        account_id=auth["account_id"],
+    )
+    connection = sqlite3.connect(db)
+    connection.execute(
+        "UPDATE configurator_handoffs SET expires_at = ? WHERE id = ?",
+        ("2000-01-01T00:00:00+00:00", handoff_id),
+    )
+    connection.commit()
+    connection.close()
+
+    status, body, _headers = _exchange_handoff(
+        base,
+        code=code,
+        session_token=auth["session_token"],
+    )
+
+    assert (status, body["error"]) == (404, "not_found")
+
+
+def test_replay_handoff_rejected(api) -> None:
+    base, ids, db = api
+    auth = _employee_auth(db)
+    code, _handoff_id = _mint_first_offer_handoff(
+        db,
+        inquiry_id=ids["inquiry_offer_ready"],
+        account_id=auth["account_id"],
+    )
+
+    first_status, _first_body, _headers = _exchange_handoff(
+        base,
+        code=code,
+        session_token=auth["session_token"],
+    )
+    second_status, second_body, _headers = _exchange_handoff(
+        base,
+        code=code,
+        session_token=auth["session_token"],
+    )
+
+    assert first_status == 200
+    assert (second_status, second_body["error"]) == (410, "gone")
+
+
+def test_different_employee_handoff_rejected_without_consuming(api) -> None:
+    base, ids, db = api
+    auth = _employee_auth(db)
+    code, handoff_id = _mint_first_offer_handoff(
+        db,
+        inquiry_id=ids["inquiry_offer_ready"],
+        account_id=auth["account_id"],
+    )
+    repo = SQLiteEmployeeAuthRepository(db)
+    service = EmployeeAuthService(repo, service_tokens=_SERVICE_TOKENS)
+    actor = service.authenticate_session(auth["session_token"])
+    other = service.create_account(
+        actor,
+        username="other.employee",
+        display_name="Other Employee",
+        password="OtherPassw0rd!",
+        role="USER",
+        explicit_permissions={"offers.prepare"},
+        must_change_password=False,
+    )
+    other_login = service.authenticate(
+        username="other.employee", password="OtherPassw0rd!"
+    )
+    repo.close()
+
+    status, body, _headers = _exchange_handoff(
+        base,
+        code=code,
+        session_token=other_login.session_token,
+    )
+
+    assert (status, body["error"]) == (403, "forbidden")
+    row = (
+        sqlite3.connect(db)
+        .execute(
+            "SELECT consumed_at, consumed_by_account_id FROM configurator_handoffs WHERE id = ?",
+            (handoff_id,),
+        )
+        .fetchone()
+    )
+    assert row == (None, None)
+    assert other.id != auth["account_id"]
+
+
+def test_permission_revoked_after_mint_rejected(api) -> None:
+    base, ids, db = api
+    auth = _employee_auth(db)
+    code, handoff_id = _mint_first_offer_handoff(
+        db,
+        inquiry_id=ids["inquiry_offer_ready"],
+        account_id=auth["account_id"],
+    )
+    repo = SQLiteEmployeeAuthRepository(db)
+    repo.set_explicit_permissions(auth["account_id"], {"offers.view"})
+    repo.close()
+
+    refreshed = _employee_auth(db)
+    status, body, _headers = _exchange_handoff(
+        base,
+        code=code,
+        session_token=refreshed["session_token"],
+    )
+
+    assert (status, body["error"]) == (403, "forbidden")
+    row = (
+        sqlite3.connect(db)
+        .execute(
+            "SELECT consumed_at FROM configurator_handoffs WHERE id = ?",
+            (handoff_id,),
+        )
+        .fetchone()
+    )
+    assert row == (None,)
+
+
+def test_unknown_handoff_rejected(api) -> None:
+    base, _ids, db = api
+    auth = _employee_auth(db)
+
+    status, body, _headers = _exchange_handoff(
+        base,
+        code="missing-code",
+        session_token=auth["session_token"],
+    )
+
+    assert (status, body["error"]) == (404, "not_found")
+
+
+def test_ordinary_service_token_cannot_exchange_handoff(api) -> None:
+    base, ids, db = api
+    auth = _employee_auth(db)
+    code, handoff_id = _mint_first_offer_handoff(
+        db,
+        inquiry_id=ids["inquiry_offer_ready"],
+        account_id=auth["account_id"],
+    )
+
+    status, body, _headers = _exchange_handoff(
+        base,
+        code=code,
+        session_token=auth["session_token"],
+        headers=_WRONG_SERVICE_AUTH,
+    )
+
+    assert (status, body["error"]) == (403, "forbidden")
+    row = (
+        sqlite3.connect(db)
+        .execute(
+            "SELECT consumed_at FROM configurator_handoffs WHERE id = ?",
+            (handoff_id,),
+        )
+        .fetchone()
+    )
+    assert row == (None,)
 
 
 # --- methods: HEAD/OPTIONS/PUT (pack §4.0) ------------------------------------
