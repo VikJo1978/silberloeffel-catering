@@ -27,6 +27,19 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TypeVar
 from urllib.parse import parse_qsl, unquote, urlparse
 
+from catering_system.domain.catalog import (
+    AllergenCode,
+    CatalogDishAlreadyExistsError,
+    CatalogDishCreatePayload,
+    CatalogDishNotFoundError,
+    CatalogDishStaleError,
+    CatalogDishUpdatePayload,
+    validate_allergen_codes,
+    validate_pricing_unit,
+)
+from catering_system.domain.customer_document_eligibility import (
+    CustomerDocumentCreationBlocked,
+)
 from catering_system.domain.inquiry import (
     ACTIVE_ORDER_CRM_STAGE,
     CRM_PIPELINE,
@@ -67,6 +80,9 @@ from catering_system.domain.order_payment_reminder import (
     OrderPaymentReminder,
     validate_payment_method,
 )
+from catering_system.repositories.bootstrap_customer_identity_schema import (
+    bootstrap_customer_identity_schema,
+)
 from catering_system.repositories.core_transaction import (
     CoreBusyError,
     CoreCommandExecutor,
@@ -80,6 +96,12 @@ from catering_system.repositories.office_api_ledger import (
     OfficeCommandLedger,
     command_fingerprint,
 )
+from catering_system.repositories.sqlite_catalog_repository import (
+    SQLiteCatalogRepository,
+)
+from catering_system.repositories.sqlite_employee_auth_repository import (
+    SQLiteEmployeeAuthRepository,
+)
 from catering_system.repositories.sqlite_inquiry_repository import (
     SQLiteInquiryRepository,
 )
@@ -89,30 +111,39 @@ from catering_system.repositories.sqlite_offer_document_snapshot_repository impo
 from catering_system.repositories.sqlite_offer_repository import (
     SQLiteOfferRepository,
 )
-from catering_system.repositories.sqlite_catalog_repository import (
-    SQLiteCatalogRepository,
-)
-from catering_system.repositories.bootstrap_customer_identity_schema import (
-    bootstrap_customer_identity_schema,
-)
-from catering_system.repositories.sqlite_order_repository import (
-    SQLiteOrderRepository,
-)
-from catering_system.repositories.sqlite_order_operational_pause_repository import (
-    SQLiteOrderOperationalPauseRepository,
-)
-from catering_system.repositories.sqlite_payment_reminder_repository import (
-    SQLitePaymentReminderRepository,
+from catering_system.repositories.sqlite_order_commercial_snapshot_repository import (
+    SQLiteOrderCommercialSnapshotRepository,
 )
 from catering_system.repositories.sqlite_order_confirmation_document_repository import (
     SQLiteOrderConfirmationDocumentRepository,
 )
-from catering_system.repositories.sqlite_order_commercial_snapshot_repository import (
-    SQLiteOrderCommercialSnapshotRepository,
-)
 from catering_system.repositories.sqlite_order_confirmation_outbound_repository import (
     SQLiteOrderConfirmationOutboundRepository,
 )
+from catering_system.repositories.sqlite_order_operational_pause_repository import (
+    SQLiteOrderOperationalPauseRepository,
+)
+from catering_system.repositories.sqlite_order_repository import (
+    SQLiteOrderRepository,
+)
+from catering_system.repositories.sqlite_payment_reminder_repository import (
+    SQLitePaymentReminderRepository,
+)
+from catering_system.services.buffet_cards_service import BuffetCardsService
+from catering_system.services.calendar_projection_service import (
+    CalendarProjectionService,
+)
+from catering_system.services.catalog_dish_service import CatalogDishService
+from catering_system.services.catalog_dish_write_service import CatalogDishWriteService
+from catering_system.services.contact_projection_service import ContactProjectionService
+from catering_system.services.customer_document_preview import (
+    CustomerDocumentPreviewNotFoundError,
+    CustomerDocumentPreviewService,
+)
+from catering_system.services.email_intake_projection_service import (
+    EmailIntakeProjectionService,
+)
+from catering_system.services.employee_auth_service import EmployeeAuthService
 from catering_system.services.inquiry_service import (
     InquiryService,
     validate_inquiry_source,
@@ -125,19 +156,17 @@ from catering_system.services.offer_pdf_renderer import (
     offer_document_pdf_filename,
     render_offer_document_pdf,
 )
+from catering_system.services.offer_queue_projection_service import (
+    OfferQueueProjectionService,
+)
 from catering_system.services.offer_service import (
     OfferPreparationBlockedError,
     OfferService,
 )
 from catering_system.services.operational_core_service import OperationalCoreService
-from catering_system.services.order_service import OrderService
-from catering_system.services.payment_reminder_service import PaymentReminderService
-from catering_system.domain.customer_document_eligibility import (
-    CustomerDocumentCreationBlocked,
-)
-from catering_system.services.customer_document_preview import (
-    CustomerDocumentPreviewNotFoundError,
-    CustomerDocumentPreviewService,
+from catering_system.services.order_confirmation_document_preview import (
+    build_preview,
+    render_preview_html,
 )
 from catering_system.services.order_confirmation_document_service import (
     OrderConfirmationDocumentBlockedError,
@@ -154,42 +183,25 @@ from catering_system.services.order_confirmation_outbound_service import (
     OrderConfirmationOutboundService,
     OrderConfirmationOutboundStaleVersionError,
 )
-from catering_system.services.order_confirmation_document_preview import (
-    build_preview,
-    render_preview_html,
-)
-from catering_system.services.wochenuebersicht_service import WochenuebersichtService
-from catering_system.services.contact_projection_service import ContactProjectionService
-from catering_system.services.email_intake_projection_service import (
-    EmailIntakeProjectionService,
-)
-from catering_system.services.calendar_projection_service import (
-    CalendarProjectionService,
-)
-from catering_system.services.task_projection_service import TaskProjectionService
-from catering_system.services.offer_queue_projection_service import (
-    OfferQueueProjectionService,
-)
-from catering_system.services.work_center_service import WorkCenterService
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjectionService,
     PrintFinalRequiresEffectiveError,
     PrintProjectionNotFoundError,
 )
-from catering_system.services.buffet_cards_service import BuffetCardsService
-from catering_system.services.catalog_dish_service import CatalogDishService
-from catering_system.services.catalog_dish_write_service import CatalogDishWriteService
-from catering_system.domain.catalog import (
-    AllergenCode,
-    CatalogDishAlreadyExistsError,
-    CatalogDishCreatePayload,
-    CatalogDishNotFoundError,
-    CatalogDishStaleError,
-    CatalogDishUpdatePayload,
-    validate_allergen_codes,
-    validate_pricing_unit,
-)
+from catering_system.services.order_service import OrderService
+from catering_system.services.payment_reminder_service import PaymentReminderService
+from catering_system.services.task_projection_service import TaskProjectionService
+from catering_system.services.wochenuebersicht_service import WochenuebersichtService
+from catering_system.services.work_center_service import WorkCenterService
 from catering_system.ui import office_api_views as views
+from catering_system.ui.office_api_employee_introspect import (
+    EMPLOYEE_INTROSPECT_PATH,
+    perform_employee_introspection,
+)
+from catering_system.ui.office_api_service_auth import (
+    OfficeApiServiceAuth,
+    read_introspection_service_tokens_from_env,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -447,6 +459,7 @@ class OfficeApi:
         connection: sqlite3.Connection,
         *,
         offer_pdf_static_content: OfferPdfStaticContent,
+        employee_auth_now: Callable[[], datetime] | None = None,
     ) -> None:
         self._conn = connection
         self.offer_pdf_static_content = offer_pdf_static_content
@@ -567,6 +580,14 @@ class OfficeApi:
         )
         self.catalog_dish_service = CatalogDishService(self.catalog)
         self.catalog_dish_write_service = CatalogDishWriteService(self.catalog)
+        employee_auth_repo = SQLiteEmployeeAuthRepository.from_connection(connection)
+        if employee_auth_now is not None:
+            self.employee_auth_service = EmployeeAuthService(
+                employee_auth_repo,
+                now=employee_auth_now,
+            )
+        else:
+            self.employee_auth_service = EmployeeAuthService(employee_auth_repo)
 
     # -- reads -----------------------------------------------------------
 
@@ -1051,7 +1072,7 @@ class OfficeApi:
 
     # -- command helpers ---------------------------------------------------
 
-    def _require_inquiry(self, inquiry_id: str):  # noqa: ANN202
+    def _require_inquiry(self, inquiry_id: str):
         inquiry = self.inquiries.get_by_id(inquiry_id)
         if inquiry is None:
             raise ApiError(404, "not_found")
@@ -2669,8 +2690,17 @@ def _resolve_route(path: str) -> tuple[str, dict[str, str], dict[str, str]] | No
     return None
 
 
-def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestHandler]:
+def make_office_api_handler(
+    api: OfficeApi,
+    token: str,
+    *,
+    introspection_service_tokens: dict[str, str] | None = None,
+) -> type[BaseHTTPRequestHandler]:
     expected_auth = f"Bearer {token}"
+    service_auth = OfficeApiServiceAuth(
+        office_panel_token=token,
+        introspection_clients=introspection_service_tokens or {},
+    )
 
     class OfficeApiHandler(BaseHTTPRequestHandler):
         server_version = "CoreOfficeAPI/1.0"
@@ -2678,7 +2708,7 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
         # undrained, which under keep-alive corrupts the next request on the
         # same connection (observed in the courier repo); 1.0 closes it.
 
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        def log_message(self, format: str, *args: object) -> None:
             pass
 
         # -- plumbing --------------------------------------------------
@@ -2776,6 +2806,36 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             self._error(401, "unauthorized")
             return False
 
+        def _is_introspect_path(self, path: str) -> bool:
+            return path == EMPLOYEE_INTROSPECT_PATH
+
+        def _employee_introspect(self) -> None:
+            status, response, error_code = perform_employee_introspection(
+                service_auth=service_auth,
+                authorization=self.headers.get("Authorization"),
+                content_length=self.headers.get("Content-Length"),
+                transfer_encoding=self.headers.get("Transfer-Encoding"),
+                session_header_values=self.headers.get_all("X-Employee-Session"),
+                employee_auth=api.employee_auth_service,
+            )
+            if error_code is not None:
+                self._error(status, error_code)
+                return
+            assert response is not None
+            self._respond(status, response.to_json())
+
+        def _introspect_service_auth_or_respond(self) -> bool:
+            result = service_auth.authenticate_introspection(
+                self.headers.get("Authorization")
+            )
+            if result.outcome == "allowed":
+                return True
+            if result.outcome in {"forbidden", "ambiguous"}:
+                self._error(403, "forbidden")
+            else:
+                self._error(401, "unauthorized")
+            return False
+
         def _read_command_body(self, max_bytes: int) -> bytes:
             content_type = self.headers.get("Content-Type", "")
             if content_type.split(";")[0].strip() != "application/json":
@@ -2823,24 +2883,42 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
 
         # -- HTTP methods ----------------------------------------------
 
-        def do_GET(self) -> None:  # noqa: N802
+        def do_GET(self) -> None:
             self._handle("GET")
 
-        def do_POST(self) -> None:  # noqa: N802
+        def do_POST(self) -> None:
             self._handle("POST")
 
-        def do_PUT(self) -> None:  # noqa: N802
+        def do_PUT(self) -> None:
             self._method_not_allowed_or_404()
 
-        def do_DELETE(self) -> None:  # noqa: N802
+        def do_DELETE(self) -> None:
             self._method_not_allowed_or_404()
 
-        def do_PATCH(self) -> None:  # noqa: N802
+        def do_PATCH(self) -> None:
             self._method_not_allowed_or_404()
 
-        def do_HEAD(self) -> None:  # noqa: N802
+        def do_HEAD(self) -> None:
             # Explicit handler (pack §4.0): auth first, then 405/404 with
             # full headers; body suppressed but Content-Length preserved.
+            path = urlparse(self.path).path
+            if self._is_introspect_path(path):
+                if not self._introspect_service_auth_or_respond():
+                    return
+                payload = json.dumps(
+                    {
+                        "authenticated": False,
+                        "application_access_allowed": False,
+                        "principal": None,
+                    }
+                ).encode("utf-8")
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(payload)))
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.end_headers()
+                return
             if not self._authorized():
                 payload = json.dumps({"error": "unauthorized"}).encode("utf-8")
                 self.send_response(401)
@@ -2855,7 +2933,13 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
             error = "method_not_allowed" if code == 405 else "not_found"
             self._respond(code, {"error": error}, suppress_body=True)
 
-        def do_OPTIONS(self) -> None:  # noqa: N802
+        def do_OPTIONS(self) -> None:
+            path = urlparse(self.path).path
+            if self._is_introspect_path(path):
+                if not self._introspect_service_auth_or_respond():
+                    return
+                self._error(405, "method_not_allowed")
+                return
             if not self._auth_or_401():
                 return
             path = urlparse(self.path).path
@@ -2874,9 +2958,15 @@ def make_office_api_handler(api: OfficeApi, token: str) -> type[BaseHTTPRequestH
                 self._error(404, "not_found")
 
         def _handle(self, method: str) -> None:
+            path = urlparse(self.path).path
+            if self._is_introspect_path(path):
+                if method != "POST":
+                    self._error(405, "method_not_allowed")
+                    return
+                self._employee_introspect()
+                return
             if not self._auth_or_401():
                 return
-            path = urlparse(self.path).path
             resolved = _resolve_route(path)
             if resolved is None:
                 self._error(404, "not_found")
@@ -3163,14 +3253,24 @@ def create_office_api_server(
     port: int = 0,
     *,
     offer_pdf_static_content: OfferPdfStaticContent,
+    introspection_service_tokens: dict[str, str] | None = None,
+    employee_auth_now: Callable[[], datetime] | None = None,
 ) -> HTTPServer:
     """Build connection, repositories and server in the calling thread —
     single-threaded on purpose (sqlite3 thread affinity, Entry 048)."""
     api = OfficeApi(
         open_core_connection(db_path),
         offer_pdf_static_content=offer_pdf_static_content,
+        employee_auth_now=employee_auth_now,
     )
-    return HTTPServer((host, port), make_office_api_handler(api, token))
+    return HTTPServer(
+        (host, port),
+        make_office_api_handler(
+            api,
+            token,
+            introspection_service_tokens=introspection_service_tokens,
+        ),
+    )
 
 
 def main() -> None:
@@ -3198,12 +3298,17 @@ def main() -> None:
 
     offer_pdf_static_content = offer_pdf_static_content_from_env()
 
+    introspection_tokens = read_introspection_service_tokens_from_env(
+        office_panel_token=token,
+    )
+
     server = create_office_api_server(
         args.db,
         token,
         args.host,
         args.port,
         offer_pdf_static_content=offer_pdf_static_content,
+        introspection_service_tokens=introspection_tokens,
     )
     print(f"Core Office API on http://{args.host}:{args.port}/office/v1/")
     server.serve_forever()
