@@ -88,7 +88,6 @@ PROGRESSION_BLOCKER_LABELS: dict[str, str] = {
 # value, same convention as the other three label dicts.
 SOURCE_LABELS: dict[str, str] = {
     "website_form": "Website-Anfrage",
-    "configurator": "Angebots-Import",
     "manual": "Manuell erfasst",
     "phone_by_office": "Telefon (Büro)",
     "email": "E-Mail",
@@ -229,16 +228,6 @@ def _page(
                 "callbacks",
                 active_section,
                 badge=context.rueckruf_count,
-            )
-        )
-    if _nav_visible(context, "inquiries.create"):
-        betrieb.append(
-            _nav_link(
-                "/proposal-preview",
-                "Angebots-Import",
-                "import",
-                "proposal",
-                active_section,
             )
         )
     verwaltung: list[str] = []

@@ -32,8 +32,6 @@ from catering_system.ui import office_api_views
 from catering_system.ui.office_panel import (
     OfficePanel,
     create_office_panel_server,
-    parse_proposal_payload,
-    render_proposal_preview_form,
 )
 from catering_system.ui.office_panel_http import csrf_token_for_password
 from catering_system.ui.office_panel_shell import OFFICE_PANEL_STYLE
@@ -135,7 +133,6 @@ def _post(
 def _create_inquiry(base: str, **overrides: str) -> str:
     data = {
         "event_date": "2026-10-01",
-        "inquiry_source": "phone",
         "time_window_text": "mittags",
         "location_text": "Hamburg",
         "guest_count_estimate": "25",
@@ -146,6 +143,24 @@ def _create_inquiry(base: str, **overrides: str) -> str:
     data.update(overrides)
     _status, url, _body = _post(f"{base}/inquiry/new", data)
     return url.rsplit("/", 1)[-1]  # inquiry id from redirect target
+
+
+def _create_website_form_inquiry(base: str) -> str:
+    inquiries, orders, _snapshots = _PANEL_REPOS[base]
+    office = OfficePanel(inquiries, orders)
+    inquiry = intake_from_website_form(
+        office.inquiry_service,
+        {
+            "event_date": date(2026, 10, 1),
+            "location_text": "Hamburg",
+            "guest_count_estimate": 25,
+            "company": "Website Anfrage GmbH",
+            "email": "kunde@example.com",
+            "phone": "040 123456",
+            "submission_id": "web-42",
+        },
+    )
+    return inquiry.inquiry_id
 
 
 def _convert(base: str, inquiry_id: str) -> str:
@@ -161,16 +176,6 @@ def _convert(base: str, inquiry_id: str) -> str:
         replace(inquiry, crm_stage="Bestätigt / Auftrag")  # type: ignore[arg-type]
     )
     return order.order_id
-
-
-def test_page_context_badge_does_not_leak_between_renders() -> None:
-    with_badge = render_proposal_preview_form(
-        context=legacy_office_context(rueckruf_count=3)
-    )
-    without_badge = render_proposal_preview_form(context=legacy_office_context())
-
-    assert '<span class="badge">3</span>' in with_badge
-    assert '<span class="badge">' not in without_badge
 
 
 def test_v2_shell_uses_explicit_active_section_and_semantic_landmarks() -> None:
@@ -210,7 +215,6 @@ def test_v2_shell_is_local_no_js_and_has_complete_inline_icon_sprite() -> None:
         'href="/auftraege"',
         'href="/#diese-woche"',
         'href="/rueckruf"',
-        'href="/proposal-preview"',
     ):
         assert target in body
 
@@ -227,12 +231,29 @@ def test_v2_shell_is_local_no_js_and_has_complete_inline_icon_sprite() -> None:
         "office-i-briefcase",
         "office-i-calendar",
         "office-i-phone",
-        "office-i-import",
         "office-i-users",
         "office-i-printer",
         "office-i-check",
     }
     assert all(body.count(f'<symbol id="{symbol}"') == 1 for symbol in symbols)
+
+
+def test_page_context_badge_does_not_leak_between_renders() -> None:
+    with_badge = _page(
+        "Neue Anfrage",
+        "<p>Inhalt</p>",
+        active_section="inquiries",
+        context=legacy_office_context(rueckruf_count=3),
+    )
+    without_badge = _page(
+        "Neue Anfrage",
+        "<p>Inhalt</p>",
+        active_section="inquiries",
+        context=legacy_office_context(),
+    )
+
+    assert '<span class="badge">3</span>' in with_badge
+    assert '<span class="badge">' not in without_badge
 
 
 def test_v2_mobile_navigation_is_visible_without_javascript() -> None:
@@ -255,7 +276,6 @@ def test_v2_mobile_navigation_is_visible_without_javascript() -> None:
         ("/auftraege", "/auftraege"),
         ("/inquiry/new", "/anfragen"),
         ("/rueckruf", "/rueckruf"),
-        ("/proposal-preview", "/proposal-preview"),
     ),
 )
 def test_shell_marks_current_navigation_for_route_groups(
@@ -347,21 +367,6 @@ def test_http_rendered_post_forms_include_csrf_token(panel: str) -> None:
     _status, order_page = _get(f"{panel}/order/{order_id}")
     _assert_all_post_forms_have_csrf(order_page)
 
-    payload = json.dumps(
-        {
-            "schema_version": "proposal_payload_v1",
-            "source": "fingerfood-configurator",
-            "title": "CSRF preview",
-            "event_date": "2026-10-01",
-            "guest_count": 10,
-            "selected_items": [],
-        }
-    )
-    _status, _url, preview_page = _post(
-        f"{panel}/proposal-preview", {"payload_json": payload}
-    )
-    _assert_all_post_forms_have_csrf(preview_page)
-
 
 def test_office_panel_sets_security_headers(panel: str) -> None:
     request = urllib.request.Request(f"{panel}/")
@@ -382,7 +387,17 @@ def test_office_panel_sets_security_headers(panel: str) -> None:
 
 def test_office_panel_rejects_oversized_form_body(panel: str) -> None:
     with pytest.raises(urllib.error.HTTPError) as exc:
-        _post(f"{panel}/proposal-preview", {"payload_json": "x" * (300 * 1024)})
+        _post(
+            f"{panel}/inquiry/new",
+            {
+                "event_date": "2026-10-01",
+                "guest_count_estimate": "25",
+                "location_text": "Hamburg",
+                "time_window_text": "mittags",
+                "planning_mode": "caterer_suggestion",
+                "intake_message": "x" * (300 * 1024),
+            },
+        )
     assert exc.value.code == 413
 
 
@@ -701,25 +716,102 @@ def test_open_queue_shows_actual_crm_stage(panel: str) -> None:
 # -- intake context (INQUIRY_INTAKE_CONTEXT_FIELDS_IMPLEMENTATION_PACK_V1) --
 
 
-def test_new_inquiry_form_shows_office_safe_source_dropdown_and_warning(
-    panel: str,
-) -> None:
+def test_new_inquiry_form_hides_kanal_and_source_field(panel: str) -> None:
     status, body = _get(f"{panel}/inquiry/new")
     assert status == 200
     assert "Intake-Kontext — keine Auftrags-/Küchenfreigabe." in body
-    kanal_select = re.search(r'name="inquiry_source">(.*?)</select>', body, re.DOTALL)
-    assert kanal_select is not None
-    options = re.findall(r'<option value="([^"]+)">', kanal_select.group(1))
-    assert options == [
-        "manual",
-        "phone_by_office",
-        "email",
-        "website_form",
-        "configurator",
-    ]
-    # legacy/adapter-only/future sources deliberately not office-offered
-    for hidden in ("phone", "wix_form", "missed_call", "ai_telefonist"):
-        assert f'value="{hidden}"' not in body
+    assert "Kanal" not in body
+    assert 'name="inquiry_source"' not in body
+
+
+def test_inquiry_form_prefills_from_query(panel: str) -> None:
+    status, body = _get(
+        f"{panel}/inquiry/new?event_date=2026-09-12&guest_count_estimate=30"
+    )
+    assert status == 200
+    assert 'name="event_date" value="2026-09-12"' in body
+    assert 'name="guest_count_estimate" inputmode="numeric" value="30"' in body
+    assert "Anfrage anlegen" in body
+
+
+def test_inquiry_form_without_query_renders_empty_prefill(panel: str) -> None:
+    status, body = _get(f"{panel}/inquiry/new")
+    assert status == 200
+    assert 'name="event_date" value=""' in body
+    assert 'name="guest_count_estimate" inputmode="numeric" value=""' in body
+
+
+def test_prepare_link_get_creates_nothing_in_core() -> None:
+    """Following the inquiry/new GET (with query hints) must not create anything."""
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    server = create_office_panel_server(
+        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    try:
+        status, _body = _get(
+            f"http://{host}:{port}/inquiry/new?event_date=2026-09-12&guest_count_estimate=30"
+        )
+        assert status == 200
+        assert inquiry_repo.list_all() == []
+        assert order_repo.list_orders() == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_manual_submit_wins_over_query_hints() -> None:
+    """Query hints are prefill only: submitted form values create the Inquiry."""
+    inquiry_repo = InMemoryInquiryRepository()
+    order_repo = InMemoryOrderRepository()
+    server = create_office_panel_server(
+        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    base = f"http://{host}:{port}"
+    try:
+        _status, _url, _body = _post(
+            f"{base}/inquiry/new",
+            {
+                "event_date": "2026-10-05",
+                "time_window_text": "",
+                "location_text": "",
+                "guest_count_estimate": "25",
+                "planning_mode": "caterer_suggestion",
+                "contact_email": "kunde@example.com",
+                "contact_phone": "030 1234567",
+            },
+        )
+        inquiries = inquiry_repo.list_all()
+        assert len(inquiries) == 1
+        assert inquiries[0].event_date.isoformat() == "2026-10-05"
+        assert inquiries[0].guest_count_estimate == 25
+        assert inquiries[0].inquiry_source == "phone_by_office"
+        assert order_repo.list_orders() == []
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_post_new_inquiry_creates_phone_by_office_source(panel: str) -> None:
+    inquiry_id = _create_inquiry(panel)
+    inquiries, _orders, _snapshots = _PANEL_REPOS[panel]
+    inquiry = inquiries.get_by_id(inquiry_id)
+    assert inquiry is not None
+    assert inquiry.inquiry_source == "phone_by_office"
+
+
+def test_post_new_inquiry_ignores_tampered_source(panel: str) -> None:
+    inquiry_id = _create_inquiry(panel, inquiry_source="email")
+    inquiries, _orders, _snapshots = _PANEL_REPOS[panel]
+    inquiry = inquiries.get_by_id(inquiry_id)
+    assert inquiry is not None
+    assert inquiry.inquiry_source == "phone_by_office"
 
 
 def test_create_inquiry_without_intake_fields_still_works(panel: str) -> None:
@@ -1605,9 +1697,8 @@ def test_queue_tables_put_id_last_not_first(panel: str) -> None:
     oid = _convert(panel, iid)
     _status, anfragen_body = _get(f"{panel}/anfragen")
     assert (
-        "<th>Datum</th><th>Ort</th><th>Kanal</th><th>Betreff</th>"
-        "<th>CRM-Stufe</th><th>Verifizierung</th>"
-        "<th>Auftrag</th><th>ID</th>"
+        "<th>Datum</th><th>Ort</th><th>Betreff</th><th>CRM-Stufe</th>"
+        "<th>Verifizierung</th><th>Auftrag</th><th>ID</th>"
     ) in anfragen_body
     assert iid[:8] in anfragen_body
 
@@ -1948,543 +2039,8 @@ def test_next_step_empty_when_order_has_no_versions() -> None:
     assert panel._next_step_action(fake_order, context=legacy_office_context()) == ""
 
 
-# -- proposal preview (CONFIGURATOR_OFFICE_MANUAL_HANDOFF_PACK_V1) --------
-# Read-only import preview for proposal_payload_v1: parse and render only.
-# Nothing here may create an Inquiry, Order, or OrderVersion.
-
-_VALID_PROPOSAL: dict = {
-    "schema_version": "proposal_payload_v1",
-    "source": "fingerfood-configurator",
-    "proposal_id": "local-42",
-    "title": "Angebot Sommerfest",
-    "event_date": "2026-09-12",
-    "guest_count": 30,
-    "selected_items": [
-        {
-            "name": "Mini Wraps",
-            "quantity": 30,
-            "unit_price": 2.9,
-            "total_price": 87.0,
-            "notes": "vegetarisch",
-        }
-    ],
-    "calculated_total_net": 87.0,
-    "calculated_total_gross": 103.53,
-    "notes": "Freitext aus Angebotsphase",
-}
-
-
-def _proposal(remove: tuple[str, ...] = (), **overrides: object) -> str:
-    data = {k: v for k, v in _VALID_PROPOSAL.items() if k not in remove}
-    data.update(overrides)
-    return json.dumps(data)
-
-
-# parser --
-
-
-def test_parse_proposal_valid() -> None:
-    payload = parse_proposal_payload(_proposal())
-    assert payload["title"] == "Angebot Sommerfest"
-    assert payload["selected_items"][0]["name"] == "Mini Wraps"
-
-
-def test_parse_proposal_invalid_json() -> None:
-    with pytest.raises(ValueError) as exc:
-        parse_proposal_payload("{not json")
-    message = str(exc.value)
-    # human-friendly hint first, technical detail preserved after it
-    assert "Ungültiges JSON" in message
-    assert ".json-Datei" in message
-    assert "nicht den Dateinamen" in message
-    assert "Technisches Detail:" in message
-
-
-def test_parse_proposal_not_an_object() -> None:
-    with pytest.raises(ValueError) as exc:
-        parse_proposal_payload('["a", "b"]')
-    message = str(exc.value)
-    assert "JSON-Objekt" in message
-    assert ".json-Datei" in message
-
-
-def test_parse_proposal_schema_version_missing_or_wrong() -> None:
-    with pytest.raises(ValueError, match="schema_version"):
-        parse_proposal_payload(_proposal(remove=("schema_version",)))
-    with pytest.raises(ValueError, match="schema_version"):
-        parse_proposal_payload(_proposal(schema_version="proposal_payload_v2"))
-
-
-def test_parse_proposal_source_missing_or_wrong() -> None:
-    with pytest.raises(ValueError, match="source"):
-        parse_proposal_payload(_proposal(remove=("source",)))
-    with pytest.raises(ValueError, match="source"):
-        parse_proposal_payload(_proposal(source="somewhere-else"))
-
-
-def test_parse_proposal_title_missing_or_empty() -> None:
-    with pytest.raises(ValueError, match="title"):
-        parse_proposal_payload(_proposal(remove=("title",)))
-    with pytest.raises(ValueError, match="title"):
-        parse_proposal_payload(_proposal(title="   "))
-
-
-def test_parse_proposal_event_date_missing_or_invalid() -> None:
-    with pytest.raises(ValueError, match="event_date"):
-        parse_proposal_payload(_proposal(remove=("event_date",)))
-    with pytest.raises(ValueError, match="event_date"):
-        parse_proposal_payload(_proposal(event_date="12.09.2026"))
-
-
-def test_parse_proposal_guest_count_missing_or_invalid() -> None:
-    with pytest.raises(ValueError, match="guest_count"):
-        parse_proposal_payload(_proposal(remove=("guest_count",)))
-    with pytest.raises(ValueError, match="guest_count"):
-        parse_proposal_payload(_proposal(guest_count="30"))
-    # >= 1: no evidence anywhere in domain/services that 0 guests is a
-    # supported value, so the preview refuses it.
-    with pytest.raises(ValueError, match="guest_count"):
-        parse_proposal_payload(_proposal(guest_count=0))
-    # bool is an int subclass and must not slip through.
-    with pytest.raises(ValueError, match="guest_count"):
-        parse_proposal_payload(_proposal(guest_count=True))
-
-
-def test_parse_proposal_selected_items_missing_or_invalid() -> None:
-    with pytest.raises(ValueError, match="selected_items"):
-        parse_proposal_payload(_proposal(remove=("selected_items",)))
-    with pytest.raises(ValueError, match="selected_items"):
-        parse_proposal_payload(_proposal(selected_items="Mini Wraps"))
-    with pytest.raises(ValueError, match=r"selected_items\[1\]"):
-        parse_proposal_payload(_proposal(selected_items=["just a string"]))
-    with pytest.raises(ValueError, match="name"):
-        parse_proposal_payload(_proposal(selected_items=[{"quantity": 5}]))
-    with pytest.raises(ValueError, match="name"):
-        parse_proposal_payload(_proposal(selected_items=[{"name": "  "}]))
-
-
-def test_parse_proposal_optional_fields_absent_ok() -> None:
-    raw = _proposal(
-        remove=(
-            "proposal_id",
-            "calculated_total_net",
-            "calculated_total_gross",
-            "notes",
-        ),
-        selected_items=[{"name": "Mini Wraps"}],
-    )
-    payload = parse_proposal_payload(raw)
-    assert payload["guest_count"] == 30
-    assert payload["selected_items"] == [{"name": "Mini Wraps"}]
-
-
-# HTTP --
-
-
-def test_proposal_preview_form_renders(panel: str) -> None:
-    status, body = _get(f"{panel}/proposal-preview")
-    assert status == 200
-    assert "payload_json" in body and "<textarea" in body
-    assert "keine Core-Daten wurden erstellt oder geändert" in body
-    assert "not operational truth" in body
-    # office-user instructions (UX fix after the first live test)
-    assert "So funktioniert der Büro-Import" in body
-    assert "Export fürs Büro (JSON)" in body
-    assert "nur den Inhalt der .json-Datei" in body
-
-
-def test_proposal_preview_post_valid_renders_preview(panel: str) -> None:
-    status, _url, body = _post(
-        f"{panel}/proposal-preview", {"payload_json": _proposal()}
-    )
-    assert status == 200
-    assert "fingerfood-configurator" in body
-    assert "Angebot Sommerfest" in body
-    assert "2026-09-12" in body
-    assert "Mini Wraps" in body
-    assert "2.9" in body and "87.0" in body and "103.53" in body
-    assert "Freitext aus Angebotsphase" in body
-    # explicit not-truth marking on the preview itself
-    assert "proposal/import preview" in body
-    assert "keine Core-Daten wurden erstellt oder geändert" in body
-    assert "not operational truth" in body
-
-
-def test_proposal_preview_post_invalid_json_is_400(panel: str) -> None:
-    with pytest.raises(urllib.error.HTTPError) as exc:
-        _post(f"{panel}/proposal-preview", {"payload_json": "{not json"})
-    assert exc.value.code == 400
-    body = exc.value.read().decode("utf-8")
-    assert "Ungültiges JSON" in body
-    # human-friendly hint for the office user, not just the parser detail
-    assert ".json-Datei" in body
-    assert "nicht den Dateinamen" in body
-
-
-def test_proposal_preview_post_wrong_schema_version_is_400(panel: str) -> None:
-    with pytest.raises(urllib.error.HTTPError) as exc:
-        _post(
-            f"{panel}/proposal-preview",
-            {"payload_json": _proposal(schema_version="something_else")},
-        )
-    assert exc.value.code == 400
-    assert "schema_version" in exc.value.read().decode("utf-8")
-
-
-def test_proposal_preview_creates_nothing_in_core() -> None:
-    """The boundary test: a successful preview POST leaves Core repositories
-    completely empty — no Inquiry, no Order, no OrderVersion."""
-    inquiry_repo = InMemoryInquiryRepository()
-    order_repo = InMemoryOrderRepository()
-    server = create_office_panel_server(
-        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0
-    )
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    host, port = server.server_address[:2]
-    try:
-        status, _url, _body = _post(
-            f"http://{host}:{port}/proposal-preview", {"payload_json": _proposal()}
-        )
-        assert status == 200
-        assert inquiry_repo.list_all() == []
-        assert order_repo.list_orders() == []
-    finally:
-        server.shutdown()
-        server.server_close()
-
-
-# -- "Anfrage aus Vorschau vorbereiten" (PROPOSAL_PREVIEW_MANUAL_INQUIRY_
-# PACK_V1 §4, narrowed): GET-only link from a rendered preview into the
-# existing /inquiry/new form, carrying only event_date + guest_count_estimate.
-
-
-def _prepare_form_hidden_payload(body: str) -> dict:
-    """Extract and JSON-decode the prepare form's hidden payload_json field."""
-    assert 'action="/proposal-preview/prepare"' in body
-    raw = body.split('name="payload_json" value="')[1].split('">')[0]
-    return json.loads(html.unescape(raw))
-
-
-def test_proposal_preview_contains_prepare_form_with_full_payload(panel: str) -> None:
-    """PROPOSAL_PREVIEW_INTAKE_MAPPING_IMPLEMENTATION_PACK_V1 §3/§6: the
-    prepare button is now a POST form (not a GET link with two safe hints),
-    carrying the already-validated payload re-serialized, unmodified — the
-    mapping/stripping of prices happens at prepare time (§5/§6), not here."""
-    _status, _url, body = _post(
-        f"{panel}/proposal-preview", {"payload_json": _proposal()}
-    )
-    assert "Anfrage aus Vorschau vorbereiten" in body
-    hidden = _prepare_form_hidden_payload(body)
-    assert hidden["title"] == "Angebot Sommerfest"
-    assert hidden["event_date"] == "2026-09-12"
-    assert hidden["guest_count"] == 30
-    assert hidden["selected_items"][0]["name"] == "Mini Wraps"
-    assert hidden["proposal_id"] == "local-42"
-
-
-def test_inquiry_form_prefills_from_query(panel: str) -> None:
-    status, body = _get(
-        f"{panel}/inquiry/new?event_date=2026-09-12&guest_count_estimate=30"
-    )
-    assert status == 200
-    assert 'name="event_date" value="2026-09-12"' in body
-    assert 'name="guest_count_estimate" inputmode="numeric" value="30"' in body
-    # still the existing form with its explicit submit — no new write control
-    assert "Anfrage anlegen" in body
-
-
-def test_inquiry_form_without_query_renders_empty_prefill(panel: str) -> None:
-    status, body = _get(f"{panel}/inquiry/new")
-    assert status == 200
-    assert 'name="event_date" value=""' in body
-    assert 'name="guest_count_estimate" inputmode="numeric" value=""' in body
-
-
-def test_prepare_link_get_creates_nothing_in_core() -> None:
-    """Following the prepare link (GET with hints) must not create anything."""
-    inquiry_repo = InMemoryInquiryRepository()
-    order_repo = InMemoryOrderRepository()
-    server = create_office_panel_server(
-        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0
-    )
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    host, port = server.server_address[:2]
-    try:
-        status, _body = _get(
-            f"http://{host}:{port}/inquiry/new?event_date=2026-09-12&guest_count_estimate=30"
-        )
-        assert status == 200
-        assert inquiry_repo.list_all() == []
-        assert order_repo.list_orders() == []
-    finally:
-        server.shutdown()
-        server.server_close()
-
-
-def test_manual_submit_wins_over_query_hints() -> None:
-    """Query hints are prefill only: the office-edited form values are what
-    create the Inquiry, and no Order/OrderVersion appears anywhere."""
-    inquiry_repo = InMemoryInquiryRepository()
-    order_repo = InMemoryOrderRepository()
-    server = create_office_panel_server(
-        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0
-    )
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    host, port = server.server_address[:2]
-    base = f"http://{host}:{port}"
-    try:
-        # office saw hints 2026-09-12 / 30, but edited both before submitting
-        _status, _url, body = _post(
-            f"{base}/inquiry/new",
-            {
-                "event_date": "2026-10-05",
-                "inquiry_source": "manual",
-                "time_window_text": "",
-                "location_text": "",
-                "guest_count_estimate": "25",
-                "planning_mode": "caterer_suggestion",
-            },
-        )
-        inquiries = inquiry_repo.list_all()
-        assert len(inquiries) == 1
-        assert inquiries[0].event_date.isoformat() == "2026-10-05"
-        assert inquiries[0].guest_count_estimate == 25
-        assert order_repo.list_orders() == []
-    finally:
-        server.shutdown()
-        server.server_close()
-
-
-# -- POST /proposal-preview/prepare (PROPOSAL_PREVIEW_INTAKE_MAPPING_
-# IMPLEMENTATION_PACK_V1): read-only mapping step between the preview and
-# the existing /inquiry/new form. Writes nothing; the only write anywhere
-# in this flow stays the pre-existing explicit POST /inquiry/new submit.
-
-
-def _prepare(base: str, proposal_json: str) -> tuple[int, str]:
-    status, _url, body = _post(
-        f"{base}/proposal-preview/prepare", {"payload_json": proposal_json}
-    )
-    return status, body
-
-
-def test_prepare_renders_inquiry_form_with_mapped_intake_fields(panel: str) -> None:
-    status, body = _prepare(panel, _proposal())
-    assert status == 200
-    assert "Anfrage anlegen" in body  # still the existing, unmodified form
-    assert 'name="inquiry_source"' in body
-    assert '<option value="configurator" selected>' in body
-    assert 'name="event_date" value="2026-09-12"' in body
-    assert 'name="guest_count_estimate" inputmode="numeric" value="30"' in body
-    assert 'name="intake_subject" value="Angebot Sommerfest"' in body
-    assert ">Freitext aus Angebotsphase</textarea>" in body  # intake_message from notes
-    assert ">Mini Wraps × 30</textarea>" in body  # intake_summary
-    assert 'name="intake_external_ref" value="local-42"' in body  # from proposal_id
-
-
-def test_prepare_intake_summary_falls_back_to_name_without_quantity(panel: str) -> None:
-    proposal = _proposal(
-        selected_items=[{"name": "Servietten"}, {"name": "Mini Wraps", "quantity": 10}]
-    )
-    _status, body = _prepare(panel, proposal)
-    assert ">Servietten\nMini Wraps × 10</textarea>" in body
-
-
-def test_prepare_response_contains_no_price_figures(panel: str) -> None:
-    _status, body = _prepare(panel, _proposal())
-    for forbidden in ("€", "2.9", "87.0", "103.53", "unit_price", "total_price"):
-        assert forbidden not in body
-
-
-def test_prepare_missing_notes_and_proposal_id_prefill_empty(panel: str) -> None:
-    proposal = _proposal(remove=("notes", "proposal_id"))
-    _status, body = _prepare(panel, proposal)
-    assert 'name="intake_external_ref" value=""' in body
-    assert '<textarea name="intake_message" rows="4"></textarea>' in body
-
-
-def test_prepare_invalid_json_is_400(panel: str) -> None:
-    with pytest.raises(urllib.error.HTTPError) as exc:
-        _post(f"{panel}/proposal-preview/prepare", {"payload_json": "{not json"})
-    assert exc.value.code == 400
-    body = exc.value.read().decode("utf-8")
-    assert "Ungültiges JSON" in body
-
-
-def test_prepare_wrong_schema_version_is_400(panel: str) -> None:
-    with pytest.raises(urllib.error.HTTPError) as exc:
-        _post(
-            f"{panel}/proposal-preview/prepare",
-            {"payload_json": _proposal(schema_version="something_else")},
-        )
-    assert exc.value.code == 400
-
-
-def test_prepare_handles_long_multiline_notes_and_many_items(panel: str) -> None:
-    """Regression guard for the transport decision (pack §3): a long,
-    multi-paragraph note plus many selected_items must round-trip correctly
-    through the POST body — this would be exactly the case a GET query
-    string handles awkwardly or truncates."""
-    long_note = "Kunde ruft zurück.\n\n" + ("Sehr ausführlicher Wunschtext. " * 60)
-    many_items = [{"name": f"Position {i}", "quantity": i} for i in range(1, 21)]
-    proposal = _proposal(notes=long_note, selected_items=many_items)
-    status, body = _prepare(panel, proposal)
-    assert status == 200
-    assert "Sehr ausführlicher Wunschtext." in body
-    assert "Position 1 × 1" in body
-    assert "Position 20 × 20" in body
-
-
-def test_prepare_creates_nothing_in_core() -> None:
-    inquiry_repo = InMemoryInquiryRepository()
-    order_repo = InMemoryOrderRepository()
-    server = create_office_panel_server(
-        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0
-    )
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    host, port = server.server_address[:2]
-    try:
-        status, _body = _prepare(f"http://{host}:{port}", _proposal())
-        assert status == 200
-        assert inquiry_repo.list_all() == []
-        assert order_repo.list_orders() == []
-        assert order_repo._versions == {}  # noqa: SLF001
-    finally:
-        server.shutdown()
-        server.server_close()
-
-
-def test_explicit_submit_after_prepare_uses_edited_values_not_proposal_defaults() -> (
-    None
-):
-    """The office sees prepare's prefilled values (from the proposal) but
-    edits them before submitting — the edited values must win, exactly like
-    the existing query-hint flow's test_manual_submit_wins_over_query_hints."""
-    inquiry_repo = InMemoryInquiryRepository()
-    order_repo = InMemoryOrderRepository()
-    server = create_office_panel_server(
-        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0
-    )
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    host, port = server.server_address[:2]
-    base = f"http://{host}:{port}"
-    try:
-        status, _body = _prepare(base, _proposal())
-        assert status == 200
-        _status, _url, body = _post(
-            f"{base}/inquiry/new",
-            {
-                "event_date": "2026-10-05",
-                "inquiry_source": "manual",
-                "time_window_text": "",
-                "location_text": "",
-                "guest_count_estimate": "25",
-                "planning_mode": "caterer_suggestion",
-                "intake_subject": "Vom Büro überarbeiteter Betreff",
-                "intake_message": "",
-                "intake_summary": "",
-                "intake_external_ref": "",
-            },
-        )
-        inquiries = inquiry_repo.list_all()
-        assert len(inquiries) == 1
-        assert inquiries[0].event_date.isoformat() == "2026-10-05"
-        assert inquiries[0].guest_count_estimate == 25
-        assert inquiries[0].inquiry_source == "manual"
-        assert inquiries[0].intake_subject == "Vom Büro überarbeiteter Betreff"
-        assert order_repo.list_orders() == []
-    finally:
-        server.shutdown()
-        server.server_close()
-
-
-def test_prepare_then_submit_then_convert_does_not_leak_intake_into_order(
-    panel: str,
-) -> None:
-    """Full flow: prepare -> explicit submit -> convert. selected_items never
-    become OrderVersion.items; no price ever reaches Core."""
-    _status, prepare_body = _prepare(panel, _proposal())
-    assert "Mini Wraps × 30" in prepare_body
-
-    _status, url, _body = _post(
-        f"{panel}/inquiry/new",
-        {
-            "event_date": "2026-09-12",
-            "inquiry_source": "configurator",
-            "time_window_text": "",
-            "location_text": "",
-            "guest_count_estimate": "30",
-            "planning_mode": "caterer_suggestion",
-            "contact_email": "kunde@example.com",
-            "contact_phone": "030 1234567",
-            "intake_subject": "Angebot Sommerfest",
-            "intake_message": "Freitext aus Angebotsphase",
-            "intake_summary": "Mini Wraps × 30",
-            "intake_external_ref": "local-42",
-        },
-    )
-    iid = url.rsplit("/", 1)[-1]
-    oid = _convert(panel, iid)
-    status, order_body = _get(f"{panel}/order/{oid}")
-    assert status == 200
-    assert "Mini Wraps" not in order_body
-    assert "2.9" not in order_body and "87.0" not in order_body
-
-    from dataclasses import fields
-
-    from catering_system.domain.order import Order, OrderVersion
-
-    assert not any(f.name.startswith("intake_") for f in fields(Order))
-    assert not any(f.name.startswith("intake_") for f in fields(OrderVersion))
-
-
-def test_prepare_then_submit_does_not_change_wochenuebersicht() -> None:
-    from catering_system.services.wochenuebersicht_service import (
-        WochenuebersichtService,
-    )
-
-    inquiry_repo = InMemoryInquiryRepository()
-    order_repo = InMemoryOrderRepository()
-    server = create_office_panel_server(
-        inquiry_repo, order_repo, _PASSWORD, host="127.0.0.1", port=0
-    )
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    host, port = server.server_address[:2]
-    base = f"http://{host}:{port}"
-    week = WochenuebersichtService(order_repo)
-    before = week.get_week_overview(2026, 37)
-    try:
-        _prepare(base, _proposal())
-        _post(
-            f"{base}/inquiry/new",
-            {
-                "event_date": "2026-09-12",
-                "inquiry_source": "configurator",
-                "time_window_text": "",
-                "location_text": "",
-                "guest_count_estimate": "30",
-                "planning_mode": "caterer_suggestion",
-                "contact_email": "kunde@example.com",
-                "contact_phone": "030 1234567",
-                "intake_subject": "Angebot Sommerfest",
-            },
-        )
-        after = week.get_week_overview(2026, 37)
-        assert after == before
-    finally:
-        server.shutdown()
-        server.server_close()
-
-
 # -- website_form Office UX (WEBSITE_FORM_INQUIRY_OFFICE_UX_PACK_V1) --------
-# Kanal/Betreff list columns, shared source label helper, website_form-only
-# detail banner, extended search. No verification/action-flow changes.
+# Source stays stored in Core, but Office Panel no longer renders source/Kanal.
 
 
 def test_website_intake_to_office_verification_and_conversion_workflow() -> None:
@@ -2510,7 +2066,8 @@ def test_website_intake_to_office_verification_and_conversion_workflow() -> None
     detail = office.render_inquiry(inquiry.inquiry_id, context=legacy_office_context())
     assert inquiry.inquiry_id[:8] in queue
     assert detail is not None
-    assert "Website-Anfrage" in detail
+    assert "<dt>Kanal</dt>" not in detail
+    assert "Die Angaben stammen aus dem Website-Formular" not in detail
     assert "Telefonisch verifiziert" in detail
     assert office.progression.evaluate_inquiry_to_order_progression(inquiry).blocked
     assert order_repo.list_orders() == []
@@ -2529,11 +2086,12 @@ def test_website_intake_to_office_verification_and_conversion_workflow() -> None
     assert [saved.order_id for saved in order_repo.list_orders()] == [order.order_id]
 
 
-def test_list_shows_website_form_kanal_label(panel: str) -> None:
-    _iid = _create_inquiry(panel, inquiry_source="website_form")
+def test_list_hides_kanal_for_website_form_inquiries(panel: str) -> None:
+    _iid = _create_website_form_inquiry(panel)
     _status, body = _get(f"{panel}/anfragen")
-    assert "Website-Anfrage" in body
-    assert "website_form" not in body  # raw enum never shown, label only
+    assert "Website-Anfrage" not in body
+    assert "website_form" not in body
+    assert "Kanal" not in body
 
 
 def test_list_shows_betreff_from_intake_subject(panel: str) -> None:
@@ -2556,13 +2114,11 @@ def test_list_empty_betreff_renders_dash(panel: str) -> None:
     assert "<td>–</td>" in body
 
 
-def test_source_label_helper_covers_non_website_source(panel: str) -> None:
-    """The label dict isn't a one-off for website_form — confirms it works
-    generically, using manual (an office-dropdown-visible source) as the
-    non-website case."""
-    _iid = _create_inquiry(panel, inquiry_source="manual")
+def test_list_hides_kanal_for_office_created_inquiries(panel: str) -> None:
+    _iid = _create_inquiry(panel)
     _status, body = _get(f"{panel}/anfragen")
-    assert "Manuell erfasst" in body
+    assert "Telefon (Büro)" not in body
+    assert "phone_by_office" not in body
 
 
 def test_list_pending_required_verification_uses_blocked_class(panel: str) -> None:
@@ -2577,10 +2133,10 @@ def test_list_verified_or_not_required_has_no_blocked_class(panel: str) -> None:
     assert '<span class="blocked">' not in body
 
 
-def test_search_finds_by_inquiry_source(panel: str) -> None:
-    _iid = _create_inquiry(panel, inquiry_source="website_form")
+def test_search_does_not_find_by_inquiry_source(panel: str) -> None:
+    _iid = _create_website_form_inquiry(panel)
     _status, body = _get(f"{panel}/anfragen?q=website_form")
-    assert "Website-Anfrage" in body
+    assert _iid[:8] not in body
 
 
 def test_search_finds_by_intake_subject(panel: str) -> None:
@@ -2589,33 +2145,34 @@ def test_search_finds_by_intake_subject(panel: str) -> None:
     assert iid[:8] in body
 
 
-def test_detail_shows_website_anfrage_label(panel: str) -> None:
-    iid = _create_inquiry(panel, inquiry_source="website_form")
+def test_detail_hides_source_row_for_website_form(panel: str) -> None:
+    iid = _create_website_form_inquiry(panel)
     _status, body = _get(f"{panel}/inquiry/{iid}")
-    assert "Website-Anfrage" in body
+    assert "<dt>Kanal</dt>" not in body
 
 
-def test_detail_website_form_banner_present(panel: str) -> None:
-    iid = _create_inquiry(panel, inquiry_source="website_form")
+def test_detail_hides_website_form_banner(panel: str) -> None:
+    iid = _create_website_form_inquiry(panel)
     _status, body = _get(f"{panel}/inquiry/{iid}")
-    assert (
-        "Website-Anfrage — noch kein Auftrag. Nur Intake-Kontext, "
-        "keine Küchenfreigabe." in body
-    )
-    assert 'class="proposal-banner"' in body
+    assert "Die Angaben stammen aus dem Website-Formular" not in body
+    assert "proposal-banner" not in body
 
 
 def test_detail_banner_absent_for_non_website_source(panel: str) -> None:
-    iid = _create_inquiry(panel, inquiry_source="manual")
+    iid = _create_inquiry(panel)
     _status, body = _get(f"{panel}/inquiry/{iid}")
     assert "noch kein Auftrag" not in body
 
 
 def test_detail_intake_message_remains_escaped(panel: str) -> None:
-    iid = _create_inquiry(
-        panel,
-        inquiry_source="website_form",
-        intake_message="<script>alert(1)</script> & special",
+    from dataclasses import replace
+
+    iid = _create_website_form_inquiry(panel)
+    inquiries, _orders, _snapshots = _PANEL_REPOS[panel]
+    inquiry = inquiries.get_by_id(iid)
+    assert inquiry is not None
+    inquiries.update(
+        replace(inquiry, intake_message="<script>alert(1)</script> & special")
     )
     _status, body = _get(f"{panel}/inquiry/{iid}")
     assert "<script>alert(1)</script>" not in body
@@ -2623,9 +2180,7 @@ def test_detail_intake_message_remains_escaped(panel: str) -> None:
 
 
 def test_verification_button_text_unchanged_for_website_form(panel: str) -> None:
-    iid = _create_inquiry(
-        panel, inquiry_source="website_form", call_verification_required="1"
-    )
+    iid = _create_website_form_inquiry(panel)
     _status, body = _get(f"{panel}/inquiry/{iid}")
     assert "Telefonisch verifiziert" in body
     assert "Rückruf erledigt" not in body
@@ -2642,7 +2197,19 @@ def test_viewing_list_and_detail_creates_no_order_or_orderversion() -> None:
     host, port = server.server_address[:2]
     base = f"http://{host}:{port}"
     try:
-        iid = _create_inquiry(base, inquiry_source="website_form")
+        office = OfficePanel(inquiry_repo, order_repo)
+        iid = intake_from_website_form(
+            office.inquiry_service,
+            {
+                "event_date": date(2026, 10, 1),
+                "location_text": "Hamburg",
+                "guest_count_estimate": 25,
+                "company": "Website Anfrage GmbH",
+                "email": "kunde@example.com",
+                "phone": "040 123456",
+                "submission_id": "web-42",
+            },
+        ).inquiry_id
         _get(f"{base}/anfragen")
         _get(f"{base}/inquiry/{iid}")
         assert order_repo.list_orders() == []
@@ -2655,9 +2222,7 @@ def test_viewing_list_and_detail_creates_no_order_or_orderversion() -> None:
 def test_conversion_still_blocked_for_unverified_website_form_inquiry(
     panel: str,
 ) -> None:
-    iid = _create_inquiry(
-        panel, inquiry_source="website_form", call_verification_required="1"
-    )
+    iid = _create_website_form_inquiry(panel)
     with pytest.raises(urllib.error.HTTPError) as exc:
         _post(f"{panel}/inquiry/{iid}/convert", {})
     assert exc.value.code == 400

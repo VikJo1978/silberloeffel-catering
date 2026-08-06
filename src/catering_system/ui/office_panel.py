@@ -215,11 +215,6 @@ from catering_system.ui.office_panel_order_detail import (
     render_order_detail,
     version_change_prefill,
 )
-from catering_system.ui.office_panel_proposal import (
-    parse_proposal_payload,
-    render_proposal_preview,
-    render_proposal_preview_form,
-)
 from catering_system.ui.office_panel_tasks_list import render_aufgaben_list
 from catering_system.ui.office_panel_views import (
     _EMPTY_PAGE_CONTEXT,
@@ -235,7 +230,6 @@ from catering_system.ui.office_panel_views import (
     _planning_mode_select,
     _progression_blocker_label,
     _ready_to_send_blocker_label,
-    _source_label,
     _verification_label,
     format_datetime_utc_iso,
     parse_datetime_local_berlin,
@@ -252,21 +246,9 @@ __all__ = [
     "PROGRESSION_BLOCKER_LABELS",
     "READY_TO_SEND_BLOCKER_LABELS",
     "SOURCE_LABELS",
-    "parse_proposal_payload",
     "render_print_sheet",
     "render_buffet_cards",
-    "render_proposal_preview",
-    "render_proposal_preview_form",
 ]
-
-# Office-visible subset of InquirySource (domain/inquiry.py) — deliberately
-# narrower than InquiryService._ALLOWED_SOURCES (INQUIRY_INTAKE_CONTEXT_FIELDS
-# _IMPLEMENTATION_PACK_V1 §3/§6): phone/wix_form stay legacy/adapter-only
-# (src/catering_system/intake/phone_adapter.py, wix_form_adapter.py already
-# write them through the validated path), missed_call/ai_telefonist stay
-# adapter-only until their own integration exists — nothing writes them yet,
-# so offering them here would be misleading.
-_OFFICE_SOURCES = ("manual", "phone_by_office", "email", "website_form", "configurator")
 
 # -- Rückrufe: read-only pull from the separate auerswald-sync call-log
 # service (own repo/server, NOT Core, NOT EspoCRM). Pre-inquiry office signal
@@ -2375,7 +2357,6 @@ class OfficePanel:
                 inq.location_text,
                 inq.event_date.isoformat(),
                 inq.crm_stage,
-                inq.inquiry_source,
                 inq.intake_subject or "",
             ):
                 continue
@@ -2396,17 +2377,16 @@ class OfficePanel:
                 verif_cell += ' <span class="blocked">Kontaktdaten fehlen</span>'
             rows.append(
                 f"<tr><td>{_e(inq.event_date.isoformat())}</td><td>{_e(inq.location_text)}</td>"
-                f"<td>{_e(_source_label(inq.inquiry_source))}</td><td>{_e(betreff)}</td>"
-                f"<td>{_e(inq.crm_stage)}</td><td>{verif_cell}</td>"
+                f"<td>{_e(betreff)}</td><td>{_e(inq.crm_stage)}</td><td>{verif_cell}</td>"
                 f"<td>{has_order}</td>"
                 f'<td><a href="/inquiry/{_e(inq.inquiry_id)}">{_e(inq.inquiry_id[:8])}</a></td></tr>'
             )
 
         body = (
             search_box + '<p><a href="/inquiry/new">+ Neue Anfrage erfassen</a></p>'
-            "<table><tr><th>Datum</th><th>Ort</th><th>Kanal</th><th>Betreff</th>"
+            "<table><tr><th>Datum</th><th>Ort</th><th>Betreff</th>"
             "<th>CRM-Stufe</th><th>Verifizierung</th><th>Auftrag</th><th>ID</th></tr>"
-            + "".join(rows or ['<tr><td colspan="8">keine</td></tr>'])
+            + "".join(rows or ['<tr><td colspan="7">keine</td></tr>'])
             + "</table>"
         )
         return _page("Anfragen", body, active_section="inquiries", context=context)
@@ -2625,7 +2605,6 @@ class OfficePanel:
         phone: str = "",
         event_date: str = "",
         guest_count_estimate: str = "",
-        inquiry_source: str = "",
         intake_subject: str = "",
         intake_message: str = "",
         intake_summary: str = "",
@@ -2633,10 +2612,6 @@ class OfficePanel:
         *,
         context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
     ) -> str:
-        src_opts = "".join(
-            f'<option value="{s}"{" selected" if s == inquiry_source else ""}>{s}</option>'
-            for s in _OFFICE_SOURCES
-        )
         # Rückruf -> Inquiry hint only (§11 addendum §14): Inquiry has no
         # phone/contact field at all (domain/inquiry.py), so this is never
         # written anywhere — it's page context for the office worker, shown
@@ -2650,19 +2625,11 @@ class OfficePanel:
                 active_section="inquiries",
                 context=context,
             )
-        # event_date / guest_count_estimate / inquiry_source / intake_*:
-        # optional prefill hints, from either the proposal preview's GET hint
-        # (event_date/guest_count_estimate only, PROPOSAL_PREVIEW_MANUAL_
-        # INQUIRY_PACK_V1 §4) or the POST prepare step (all seven,
-        # PROPOSAL_PREVIEW_INTAKE_MAPPING_IMPLEMENTATION_PACK_V1 §5/§6).
-        # Prefill only — every field stays editable and the submitted form
-        # values are what create_inquiry sees; hints never override office
-        # input and are never written anywhere by themselves.
+        # event_date / guest_count_estimate / intake_*: optional prefill hints.
         body = (
             phone_hint
             + f"""<form method="post" action="/inquiry/new">{_csrf_input(context)}{self._command_fields()}<fieldset>
 <p><label>Datum*</label><input type="date" name="event_date" value="{_e(event_date)}" required></p>
-<p><label>Kanal</label><select name="inquiry_source">{src_opts}</select></p>
 <p><label>Zeitfenster</label><input name="time_window_text"></p>
 <p><label>Ort</label><input name="location_text"></p>
 <p><label>Gäste (ca.)</label><input name="guest_count_estimate" inputmode="numeric" value="{_e(guest_count_estimate)}"></p>
@@ -2735,7 +2702,7 @@ class OfficePanel:
         required = form.get("call_verification_required") == "1"
         return self.inquiry_service.create_inquiry(
             event_date=date.fromisoformat(form["event_date"]),
-            inquiry_source=form.get("inquiry_source", "manual"),
+            inquiry_source="phone_by_office",
             crm_stage=CRM_PIPELINE[0],
             customer_linkage={},
             time_window_text=form.get("time_window_text", ""),
@@ -2952,15 +2919,6 @@ class OfficePanel:
             )
             if value
         )
-        # Website-only context banner (WEBSITE_FORM_INQUIRY_OFFICE_UX_PACK_V1
-        # §5) — reuses .proposal-banner, no new style. Never shown for any
-        # other source.
-        website_banner = (
-            '<p class="proposal-banner">Website-Anfrage — noch kein Auftrag. '
-            "Nur Intake-Kontext, keine Küchenfreigabe.</p>"
-            if inq.inquiry_source == "website_form"
-            else ""
-        )
         offer_prefill = ""
         if state.offer is not None:
             offer_prefill = (
@@ -3010,10 +2968,8 @@ class OfficePanel:
 </fieldset></form>"""
         body = (
             inquiry_truncation_warning
-            + website_banner
             + f"""<table>
 <tr><th>Datum</th><td>{_e(inq.event_date.isoformat())}</td></tr>
-<tr><th>Kanal</th><td>{_e(_source_label(inq.inquiry_source))}</td></tr>
 <tr><th>Zeitfenster</th><td>{_e(inq.time_window_text)}</td></tr>
 <tr><th>Ort</th><td>{_e(inq.location_text)}</td></tr>
 <tr><th>Gäste</th><td>{_e(guests or "–")}</td></tr>
