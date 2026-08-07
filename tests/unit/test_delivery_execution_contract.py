@@ -22,8 +22,10 @@ from catering_system.repositories.in_memory_order_repository import (
 from catering_system.services.kitchen_execution_service import KitchenExecutionService
 from catering_system.services.operational_core_service import OperationalCoreService
 from tests.helpers.delivery_queue_contract import build_delivery_queue_projection
-from tests.helpers.delivery_snapshot_contract import (
+from catering_system.repositories.in_memory_order_delivery_snapshot_repository import (
     InMemoryOrderDeliverySnapshotRepository,
+)
+from tests.helpers.delivery_snapshot_contract import (
     seed_delivery_snapshot,
 )
 from tests.helpers.kitchen_queue_contract import build_kitchen_queue_projection

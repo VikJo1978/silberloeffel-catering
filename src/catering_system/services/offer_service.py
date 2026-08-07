@@ -51,15 +51,24 @@ from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.repositories.in_memory_order_commercial_snapshot_repository import (
     InMemoryOrderCommercialSnapshotRepository,
 )
+from catering_system.repositories.in_memory_order_delivery_snapshot_repository import (
+    InMemoryOrderDeliverySnapshotRepository,
+)
 from catering_system.repositories.offer_repository import OfferRepository
 from catering_system.repositories.order_commercial_snapshot_repository import (
     OrderCommercialSnapshotRepository,
+)
+from catering_system.repositories.order_delivery_snapshot_repository import (
+    OrderDeliverySnapshotRepository,
 )
 from catering_system.repositories.order_repository import OrderRepository
 from catering_system.services.order_service import OrderService
 from catering_system.services.offer_snapshot_validation import validate_offer_snapshot
 from catering_system.domain.order_commercial_snapshot import (
     build_order_commercial_snapshot,
+)
+from catering_system.domain.order_delivery_snapshot import (
+    build_order_delivery_snapshot,
 )
 
 _log = logging.getLogger(__name__)
@@ -99,6 +108,7 @@ class OfferService:
         inquiry_repository: InquiryRepository,
         order_repository: OrderRepository,
         commercial_snapshot_repository: OrderCommercialSnapshotRepository | None = None,
+        delivery_snapshot_repository: OrderDeliverySnapshotRepository | None = None,
         *,
         now: Callable[[], datetime] | None = None,
         today: Callable[[], date] | None = None,
@@ -109,6 +119,10 @@ class OfferService:
         self._commercial_snapshots = (
             commercial_snapshot_repository
             or InMemoryOrderCommercialSnapshotRepository()
+        )
+        self._delivery_snapshots = (
+            delivery_snapshot_repository
+            or InMemoryOrderDeliverySnapshotRepository()
         )
         self._order_service = OrderService(order_repository)
         self._now = now or (lambda: datetime.now(UTC))
@@ -599,6 +613,12 @@ class OfferService:
             created_at=created_at,
         )
         self._commercial_snapshots.create(snapshot)
+        delivery_snapshot = build_order_delivery_snapshot(
+            order_id=order.order_id,
+            order_version=order_version,
+            inquiry=inquiry,
+        )
+        self._delivery_snapshots.create(delivery_snapshot)
         conversion_link = ConversionLink(
             offer_id=offer_id,
             offer_version_id=offer_version_id,

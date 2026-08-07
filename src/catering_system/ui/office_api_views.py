@@ -23,6 +23,9 @@ from catering_system.domain.inquiry_customer_snapshot import (
 )
 from catering_system.domain.email_intake_projection import EmailIntakeProjection
 from catering_system.domain.kitchen_completion_evidence import KitchenCompletionEvidence
+from catering_system.domain.dispatch_evidence import DispatchEvidence
+from catering_system.domain.delivery_completion_evidence import DeliveryCompletionEvidence
+from catering_system.domain.order_delivery_snapshot import OrderDeliverySnapshot
 from catering_system.domain.inquiry import (
     Inquiry,
     InquiryOfferProjection,
@@ -57,6 +60,9 @@ from catering_system.services.order_print_projection_service import (
 from catering_system.services.buffet_cards_service import BuffetCard, BuffetCardsView
 from catering_system.services.kitchen_queue_projection_service import (
     KitchenQueueProjectionEntry,
+)
+from catering_system.services.delivery_queue_projection_service import (
+    DeliveryQueueProjectionEntry,
 )
 from catering_system.domain.catalog import allergen_labels
 from catering_system.services.catalog_dish_service import (
@@ -1301,6 +1307,65 @@ def kitchen_queue_view(
                 "order_id": entry.order_id,
                 "order_version_id": entry.order_version_id,
                 "projection": order_print_projection_shape(entry.projection),
+            }
+            for entry in entries
+        ]
+    }
+
+
+def order_delivery_snapshot_shape(
+    snapshot: OrderDeliverySnapshot,
+) -> dict[str, object]:
+    return {
+        "snapshot_id": snapshot.snapshot_id,
+        "order_id": snapshot.order_id,
+        "order_version_id": snapshot.order_version_id,
+        "fulfillment_mode": snapshot.fulfillment_mode,
+        "delivery_address": snapshot.delivery_address,
+        "delivery_contact": snapshot.delivery_contact,
+        "time_window_text": snapshot.time_window_text,
+        "location_text": snapshot.location_text,
+        "created_from": snapshot.created_from,
+    }
+
+
+def dispatch_evidence_shape(evidence: DispatchEvidence) -> dict[str, object]:
+    return {
+        "dispatch_evidence_id": evidence.dispatch_evidence_id,
+        "order_id": evidence.order_id,
+        "order_version_id": evidence.order_version_id,
+        "dispatched_at": evidence.dispatched_at.isoformat(),
+        "recorded_at": evidence.recorded_at.isoformat(),
+        "recorded_by": evidence.recorded_by,
+        "evidence_reference": evidence.evidence_reference,
+    }
+
+
+def delivery_completion_evidence_shape(
+    evidence: DeliveryCompletionEvidence,
+) -> dict[str, object]:
+    return {
+        "delivery_completion_evidence_id": evidence.delivery_completion_evidence_id,
+        "order_id": evidence.order_id,
+        "order_version_id": evidence.order_version_id,
+        "completed_at": evidence.completed_at.isoformat(),
+        "recorded_at": evidence.recorded_at.isoformat(),
+        "recorded_by": evidence.recorded_by,
+        "evidence_reference": evidence.evidence_reference,
+    }
+
+
+def delivery_queue_view(
+    entries: tuple[DeliveryQueueProjectionEntry, ...],
+) -> dict[str, object]:
+    return {
+        "entries": [
+            {
+                "order_id": entry.order_id,
+                "order_version_id": entry.order_version_id,
+                "delivery_snapshot": order_delivery_snapshot_shape(
+                    entry.delivery_snapshot
+                ),
             }
             for entry in entries
         ]

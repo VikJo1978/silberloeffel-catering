@@ -132,6 +132,15 @@ from catering_system.repositories.sqlite_order_operational_pause_repository impo
 from catering_system.repositories.sqlite_kitchen_completion_evidence_repository import (
     SQLiteKitchenCompletionEvidenceRepository,
 )
+from catering_system.repositories.sqlite_dispatch_evidence_repository import (
+    SQLiteDispatchEvidenceRepository,
+)
+from catering_system.repositories.sqlite_delivery_completion_evidence_repository import (
+    SQLiteDeliveryCompletionEvidenceRepository,
+)
+from catering_system.repositories.sqlite_order_delivery_snapshot_repository import (
+    SQLiteOrderDeliverySnapshotRepository,
+)
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
@@ -171,6 +180,14 @@ from catering_system.services.kitchen_execution_service import (
 )
 from catering_system.services.kitchen_queue_projection_service import (
     KitchenQueueProjectionService,
+)
+from catering_system.services.delivery_execution_service import (
+    DeliveryEvidenceConflictError,
+    DeliveryExecutionBlockedError,
+    DeliveryExecutionService,
+)
+from catering_system.services.delivery_queue_projection_service import (
+    DeliveryQueueProjectionService,
 )
 from catering_system.services.offer_document_snapshot_service import (
     OfferDocumentNotFoundError,
@@ -523,6 +540,9 @@ class OfficeApi:
         self.commercial_snapshots = (
             SQLiteOrderCommercialSnapshotRepository.from_connection(connection)
         )
+        self.delivery_snapshots = SQLiteOrderDeliverySnapshotRepository.from_connection(
+            connection
+        )
         self.confirmation_outbound = (
             SQLiteOrderConfirmationOutboundRepository.from_connection(connection)
         )
@@ -531,6 +551,12 @@ class OfficeApi:
         )
         self.kitchen_completion_evidence = (
             SQLiteKitchenCompletionEvidenceRepository.from_connection(connection)
+        )
+        self.dispatch_evidence = SQLiteDispatchEvidenceRepository.from_connection(
+            connection
+        )
+        self.delivery_completion_evidence = (
+            SQLiteDeliveryCompletionEvidenceRepository.from_connection(connection)
         )
         self.offer_documents = SQLiteOfferDocumentSnapshotRepository.from_connection(
             connection
@@ -546,6 +572,7 @@ class OfficeApi:
             self.inquiries,
             self.orders,
             self.commercial_snapshots,
+            self.delivery_snapshots,
             today=views.berlin_today,
         )
         self.offer_document_service = OfferDocumentSnapshotService(
@@ -635,6 +662,20 @@ class OfficeApi:
         self.kitchen_execution_service = KitchenExecutionService(
             self.orders,
             self.kitchen_completion_evidence,
+            pause_repository=self.operational_pauses,
+        )
+        self.delivery_queue_projection_service = DeliveryQueueProjectionService(
+            self.orders,
+            self.kitchen_completion_evidence,
+            self.delivery_snapshots,
+            pause_repository=self.operational_pauses,
+        )
+        self.delivery_execution_service = DeliveryExecutionService(
+            self.orders,
+            self.kitchen_completion_evidence,
+            self.delivery_snapshots,
+            self.dispatch_evidence,
+            self.delivery_completion_evidence,
             pause_repository=self.operational_pauses,
         )
         self.catalog_dish_service = CatalogDishService(self.catalog)
@@ -1999,6 +2040,98 @@ class OfficeApi:
             "evidence": views.kitchen_completion_evidence_shape(result.evidence),
         }
 
+    def delivery_queue(self) -> dict[str, object]:
+        entries = self.delivery_queue_projection_service.list_queue()
+        return views.delivery_queue_view(entries)
+
+    def cmd_dispatch(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        order = self._require_active_order(path_ids["id"])
+        expected = expect["current_effective_order_version_id"]
+        if expected is not None and not isinstance(expected, str):
+            raise _invalid()
+        if expected != order.effective_order_version_id:
+            raise ApiError(409, "stale_state")
+        version = self._owned_version(
+            order.order_id,
+            _v_uuid(args["order_version_id"]),
+        )
+        dispatched_at = (
+            _v_datetime(args["dispatched_at"])
+            if "dispatched_at" in args
+            else datetime.now(UTC)
+        )
+        try:
+            result = self.delivery_execution_service.record_dispatch(
+                order.order_id,
+                version.order_version_id,
+                dispatched_at=dispatched_at,
+                recorded_by=_v_str(args["recorded_by"], 200),
+                evidence_reference=_v_str(args["evidence_reference"], 500),
+            )
+        except DeliveryExecutionBlockedError as exc:
+            raise ApiError(422, "dispatch_blocked") from exc
+        except DeliveryEvidenceConflictError as exc:
+            raise ApiError(409, "dispatch_conflict") from exc
+        except ValueError as exc:
+            message = str(exc)
+            if message == "order version is not effective":
+                raise ApiError(422, "order_version_not_effective") from exc
+            if message == "order version not owned":
+                raise ApiError(422, "version_not_owned") from exc
+            raise ApiError(422, "dispatch_blocked") from exc
+        status = 200 if result.replay else 201
+        return status, {
+            "order_id": order.order_id,
+            "order_version_id": version.order_version_id,
+            "evidence": views.dispatch_evidence_shape(result.evidence),
+        }
+
+    def cmd_delivery_completion(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        order = self._require_active_order(path_ids["id"])
+        expected = expect["current_effective_order_version_id"]
+        if expected is not None and not isinstance(expected, str):
+            raise _invalid()
+        if expected != order.effective_order_version_id:
+            raise ApiError(409, "stale_state")
+        version = self._owned_version(
+            order.order_id,
+            _v_uuid(args["order_version_id"]),
+        )
+        completed_at = (
+            _v_datetime(args["completed_at"])
+            if "completed_at" in args
+            else datetime.now(UTC)
+        )
+        try:
+            result = self.delivery_execution_service.record_delivery_completion(
+                order.order_id,
+                version.order_version_id,
+                completed_at=completed_at,
+                recorded_by=_v_str(args["recorded_by"], 200),
+                evidence_reference=_v_str(args["evidence_reference"], 500),
+            )
+        except DeliveryExecutionBlockedError as exc:
+            raise ApiError(422, "delivery_completion_blocked") from exc
+        except DeliveryEvidenceConflictError as exc:
+            raise ApiError(409, "delivery_completion_conflict") from exc
+        except ValueError as exc:
+            message = str(exc)
+            if message == "order version is not effective":
+                raise ApiError(422, "order_version_not_effective") from exc
+            if message == "order version not owned":
+                raise ApiError(422, "version_not_owned") from exc
+            raise ApiError(422, "delivery_completion_blocked") from exc
+        status = 200 if result.replay else 201
+        return status, {
+            "order_id": order.order_id,
+            "order_version_id": version.order_version_id,
+            "evidence": views.delivery_completion_evidence_shape(result.evidence),
+        }
+
     def _pause_actor_reference(self, args: dict[str, object]) -> str:
         if "actor_reference" in args:
             return _v_str(args["actor_reference"], 200)
@@ -2440,6 +2573,18 @@ _KITCHEN_COMPLETION_ARGS = _ArgKeys(
     ),
     optional=frozenset({"completed_at"}),
 )
+_DISPATCH_ARGS = _ArgKeys(
+    required=frozenset(
+        {"order_version_id", "recorded_by", "evidence_reference"},
+    ),
+    optional=frozenset({"dispatched_at"}),
+)
+_DELIVERY_COMPLETION_ARGS = _ArgKeys(
+    required=frozenset(
+        {"order_version_id", "recorded_by", "evidence_reference"},
+    ),
+    optional=frozenset({"completed_at"}),
+)
 _CONFIRMATION_DOCUMENT_SEND_ARGS = _ArgKeys(
     required=frozenset({"document_snapshot_id", "requested_by"})
 )
@@ -2533,6 +2678,16 @@ _COMMANDS: dict[str, _CommandSpec] = {
         _KITCHEN_COMPLETION_ARGS,
         {"current_effective_order_version_id"},
     ),
+    "dispatch": _CommandSpec(
+        "cmd_dispatch",
+        _DISPATCH_ARGS,
+        {"current_effective_order_version_id"},
+    ),
+    "delivery-completion": _CommandSpec(
+        "cmd_delivery_completion",
+        _DELIVERY_COMPLETION_ARGS,
+        {"current_effective_order_version_id"},
+    ),
     "pause": _CommandSpec(
         "cmd_pause",
         _PAUSE_ARGS,
@@ -2587,6 +2742,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/kitchen-queue$"),
         "/office/v1/kitchen-queue",
         {"GET": "kitchen_queue"},
+    ),
+    (
+        re.compile(r"^/office/v1/delivery-queue$"),
+        "/office/v1/delivery-queue",
+        {"GET": "delivery_queue"},
     ),
     (
         re.compile(r"^/office/v1/work-center$"),
@@ -2812,6 +2972,16 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/kitchen-completion$"),
         "/office/v1/orders/{id}/kitchen-completion",
         {"POST": "kitchen-completion"},
+    ),
+    (
+        re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/dispatch$"),
+        "/office/v1/orders/{id}/dispatch",
+        {"POST": "dispatch"},
+    ),
+    (
+        re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/delivery-completion$"),
+        "/office/v1/orders/{id}/delivery-completion",
+        {"POST": "delivery-completion"},
     ),
     (
         re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/pause$"),
@@ -3247,6 +3417,9 @@ def make_office_api_handler(
             elif kind == "kitchen_queue":
                 self._query(set())
                 self._respond(200, api.kitchen_queue())
+            elif kind == "delivery_queue":
+                self._query(set())
+                self._respond(200, api.delivery_queue())
             elif kind == "work_center":
                 self._query(set())
                 self._respond(200, api.work_center())
