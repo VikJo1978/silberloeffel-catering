@@ -209,6 +209,41 @@ Kitchen Print uses OrderPrintProjection:
 
 Operational consumers must not read live Offer data.
 
+## Kitchen execution boundary
+
+Kitchen execution starts only from READY_TO_SEND operational facts.
+
+READY_TO_SEND is a derived release decision. It is not stored and it does not
+create an order state transition.
+
+The kitchen execution layer consumes an OrderPrintProjection generated from:
+
+- OrderVersion operational facts;
+- OrderCommercialSnapshot frozen at offer conversion.
+
+Kitchen execution must not read live OfferVersion data.
+
+Flow:
+
+```text
+Order facts
+    |
+    v
+READY_TO_SEND evaluation
+    |
+    v
+Kitchen Queue projection
+    |
+    v
+Production execution facts
+    |
+    v
+KitchenCompletionEvidence (append-only)
+```
+
+Kitchen completion is recorded as evidence. It does not mutate historical
+commercial facts or rewrite OrderVersion snapshots.
+
 ## Trust boundaries
 
 | Surface | Exposure | Authentication | Writes production? |
