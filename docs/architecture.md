@@ -154,6 +154,21 @@ Accepted offers may be converted into Orders.
 Order operational states (READY_TO_SEND, kitchen, courier)
 are separate from commercial offer lifecycle.
 
+## Offer sent evidence
+
+Marking an offer as sent appends a SentEvidence record only.
+
+The OfferVersion snapshot is immutable after preparation:
+- positions are not rewritten;
+- prices are not changed;
+- snapshot_hash remains unchanged.
+
+Prepared → Sent is a commercial lifecycle transition represented
+by append-only evidence, not by modifying the OfferVersion itself.
+
+The sent actor, channel, recipient reference and timestamp are stored
+as evidence of the communication event.
+
 ## Trust boundaries
 
 | Surface | Exposure | Authentication | Writes production? |
