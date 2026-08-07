@@ -244,6 +244,43 @@ KitchenCompletionEvidence (append-only)
 Kitchen completion is recorded as evidence. It does not mutate historical
 commercial facts or rewrite OrderVersion snapshots.
 
+## Delivery execution boundary
+
+Delivery execution starts from kitchen completion facts.
+
+`KitchenCompletionEvidence` is the handoff fact between kitchen execution
+and delivery execution.
+
+Delivery execution does not read OfferVersion or Configurator state.
+
+`DeliveryQueueProjection` consumes frozen operational delivery data from
+`OrderDeliverySnapshot` and does not use live Inquiry data.
+
+The existing courier feed based on Wochenübersicht and effective
+`OrderVersion` facts remains unchanged. Migration of courier visibility to
+`DeliveryQueueProjection` is a future slice.
+
+Flow:
+
+```text
+KitchenCompletionEvidence
+    |
+    v
+Delivery Queue projection
+    |
+    v
+Dispatch execution facts
+    |
+    v
+DispatchEvidence (append-only)
+    |
+    v
+DeliveryCompletionEvidence (append-only)
+```
+
+Dispatch and delivery completion are recorded as evidence. They do not mutate
+`OrderVersion`, `OrderCommercialSnapshot`, or kitchen completion facts.
+
 ## Trust boundaries
 
 | Surface | Exposure | Authentication | Writes production? |
