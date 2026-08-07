@@ -386,28 +386,6 @@ def _assert_post_forbidden(
             "denied.inquiry.new",
         ),
         (
-            "/proposal-preview",
-            {"payload_json": "{}"},
-            frozenset({"inquiries.view"}),
-            {
-                "parse_proposal_payload": (
-                    "catering_system.ui.office_panel_http.parse_proposal_payload"
-                )
-            },
-            "denied.proposal.preview",
-        ),
-        (
-            "/proposal-preview/prepare",
-            {"payload_json": "{}"},
-            frozenset({"inquiries.view"}),
-            {
-                "parse_proposal_payload": (
-                    "catering_system.ui.office_panel_http.parse_proposal_payload"
-                )
-            },
-            "denied.proposal.prepare",
-        ),
-        (
             "/kontakt/test%40example.invalid/notizen",
             {"category": "Allgemein", "note_text": "Intern"},
             frozenset({"customers.view"}),

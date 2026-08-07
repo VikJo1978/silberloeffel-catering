@@ -97,11 +97,8 @@ from catering_system.ui.office_panel import (
     _e,
     _page,
     fetch_rueckruf_count,
-    parse_proposal_payload,
     render_buffet_cards,
     render_print_sheet,
-    render_proposal_preview,
-    render_proposal_preview_form,
     render_rueckruf,
 )
 from catering_system.ui.office_panel_authz import (
@@ -676,11 +673,6 @@ def make_office_panel_handler(
             return True
 
         def _post_active_section(self, parts: list[str]) -> OfficeSection:
-            if parts == ["proposal-preview"] or parts == [
-                "proposal-preview",
-                "prepare",
-            ]:
-                return "proposal"
             if parts == ["inquiry", "new"] or (
                 len(parts) == 3 and parts[0] == "inquiry"
             ):
@@ -727,10 +719,6 @@ def make_office_panel_handler(
                 if action == "convert-accepted":
                     return ("offers.view", "orders.version.create")
                 return None
-            if parts == ["proposal-preview"]:
-                return ("inquiries.create",)
-            if parts == ["proposal-preview", "prepare"]:
-                return ("inquiries.create",)
             if len(parts) == 3 and parts[0] == "kontakt" and parts[2] == "notizen":
                 return ("customers.edit",)
             if len(parts) == 3 and parts[0] == "offer":
@@ -1166,13 +1154,6 @@ def make_office_panel_handler(
                         context=context,
                     )
                 )
-            elif parts == ["proposal-preview"]:
-                if not self._require_business_permission_get(
-                    auth, "inquiries.create", active_section="proposal"
-                ):
-                    return
-                context = self._page_context()
-                self._html(render_proposal_preview_form(context=context))
             elif parts == ["inquiry", "new"]:
                 if not self._require_business_permission_get(
                     auth, "inquiries.create", active_section="inquiries"
@@ -1693,31 +1674,6 @@ def make_office_panel_handler(
             ):
                 panel.send_confirmation_test(parts[1], self._form())
                 self._redirect(f"/order/{parts[1]}")
-            elif parts == ["proposal-preview"]:
-                payload = parse_proposal_payload(self._form().get("payload_json", ""))
-                self._html(
-                    render_proposal_preview(payload, context=self._page_context())
-                )
-            elif parts == ["proposal-preview", "prepare"]:
-                payload = parse_proposal_payload(self._form().get("payload_json", ""))
-                summary_lines = "\n".join(
-                    f"{item['name']} × {item['quantity']}"
-                    if item.get("quantity") is not None
-                    else item["name"]
-                    for item in payload["selected_items"]
-                )
-                self._html(
-                    panel.render_inquiry_form(
-                        event_date=payload["event_date"],
-                        guest_count_estimate=str(payload["guest_count"]),
-                        inquiry_source="configurator",
-                        intake_subject=payload["title"],
-                        intake_message=payload.get("notes") or "",
-                        intake_summary=summary_lines,
-                        intake_external_ref=payload.get("proposal_id") or "",
-                        context=self._page_context(),
-                    )
-                )
             elif parts == ["rueckruf", "resolve"]:
                 call_id = self._form()["call_id"]
                 resolve_missed_call(

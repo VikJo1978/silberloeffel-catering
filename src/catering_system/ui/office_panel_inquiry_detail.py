@@ -23,7 +23,6 @@ from catering_system.ui.office_panel_views import OfficePageContext
 
 _SOURCE_LABELS = {
     "website_form": "Website-Anfrage",
-    "configurator": "Angebots-Import",
     "manual": "Manuell erfasst",
     "phone_by_office": "Telefon (Büro)",
     "email": "E-Mail",
@@ -462,7 +461,6 @@ def render_inquiry_detail(
 
     subject = (inquiry.intake_subject or "").strip()
     title = subject or f"Anfrage vom {_date_text(inquiry)}"
-    source = _source_label(inquiry.inquiry_source)
     guests = (
         f"ca. {inquiry.guest_count_estimate} Gäste"
         if inquiry.guest_count_estimate is not None
@@ -479,12 +477,6 @@ def render_inquiry_detail(
             f"Nicht alle {_e(linked_orders_total_count or '')} verknüpften "
             "Aufträge sind in der Detailansicht enthalten.</div>"
         )
-    website_banner = (
-        '<div class="inquiry-notice">Die Angaben stammen aus dem Website-Formular '
-        "und müssen geprüft werden.</div>"
-        if inquiry.inquiry_source == "website_form"
-        else ""
-    )
     message = inquiry.intake_message or "Keine Nachricht übermittelt."
     summary = ""
     if inquiry.intake_summary or inquiry.intake_external_ref:
@@ -541,9 +533,7 @@ def render_inquiry_detail(
     body = (
         '<a class="inquiry-back" href="/anfragen">← Zurück zu den Anfragen</a>'
         + warning
-        + website_banner
         + '<section class="inquiry-hero"><div>'
-        f'<div class="inquiry-eyebrow">{_e(source)}</div>'
         f"<h1>{_e(title)}</h1>"
         '<div class="inquiry-hero-facts">'
         f"<span>Datum: {_e(_date_text(inquiry))}</span>"

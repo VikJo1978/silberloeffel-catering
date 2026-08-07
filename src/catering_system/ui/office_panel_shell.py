@@ -15,7 +15,6 @@ OfficeSection = Literal[
     "orders",
     "week",
     "callbacks",
-    "proposal",
     "catalog",
     "settings",
 ]
@@ -42,9 +41,6 @@ stroke-linejoin="round"><path d="M4 6h16v14H4zM8 3v6M16 3v6M4
 stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
 stroke-linejoin="round"><path d="M7 4H4v4c0 6.6 5.4 12 12 12h4v-3l-4-2-2
 2c-3.4-1.1-5.9-3.6-7-7l2-2-2-4Z"/></symbol>
-<symbol id="office-i-import" viewBox="0 0 24 24" fill="none"
-stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
-stroke-linejoin="round"><path d="M12 3v12M7 8l5-5 5 5M5 15v5h14v-5"/></symbol>
 <symbol id="office-i-users" viewBox="0 0 24 24" fill="none"
 stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
 stroke-linejoin="round"><path d="M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1M12
@@ -373,15 +369,6 @@ button.office-account-link:hover {
   margin: -12px 0 20px;
   color: var(--muted);
   font-size: 13px;
-}
-.office-content .proposal-banner {
-  margin-bottom: 20px;
-  padding: 12px 15px;
-  border: 1px solid #e5cfab;
-  border-radius: var(--radius-small);
-  color: #76501c;
-  background: var(--warning-soft);
-  font-weight: 700;
 }
 .office-global-banner {
   margin: 0 0 20px;
