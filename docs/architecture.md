@@ -187,6 +187,28 @@ Offer and Order remain linked through ConversionLink.
 The originating Inquiry remains available through
 Order.source_inquiry_id.
 
+## Order operational release (READY_TO_SEND)
+
+READY_TO_SEND is a derived operational state and is never stored.
+
+An order becomes ready only when operational facts allow release:
+
+- the order is not cancelled;
+- an effective OrderVersion exists;
+- the effective version has confirmed kitchen print;
+- no pending candidate version blocks release;
+- no operational pause blocks execution.
+
+The `request_ready_to_send` operation evaluates current facts and emits
+the operational event. It does not mutate the order into a stored ready state.
+
+Kitchen print projections are built from:
+
+- OrderVersion for operational event facts;
+- OrderCommercialSnapshot for frozen accepted commercial facts.
+
+Operational consumers must not read live Offer data.
+
 ## Trust boundaries
 
 | Surface | Exposure | Authentication | Writes production? |
