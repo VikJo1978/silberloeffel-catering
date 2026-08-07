@@ -191,21 +191,21 @@ Order.source_inquiry_id.
 
 READY_TO_SEND is a derived operational state and is never stored.
 
-An order becomes ready only when operational facts allow release:
+An order is ready only when operational facts satisfy all release conditions:
 
-- the order is not cancelled;
+- order is not cancelled;
 - an effective OrderVersion exists;
 - the effective version has confirmed kitchen print;
-- no pending candidate version blocks release;
-- no operational pause blocks execution.
+- no pending candidate version blocks execution;
+- no operational pause blocks release.
 
-The `request_ready_to_send` operation evaluates current facts and emits
-the operational event. It does not mutate the order into a stored ready state.
+`request_ready_to_send` evaluates current operational facts and emits the
+corresponding event. It does not mutate the order into a stored ready state.
 
-Kitchen print projections are built from:
+Kitchen Print uses OrderPrintProjection:
 
-- OrderVersion for operational event facts;
-- OrderCommercialSnapshot for frozen accepted commercial facts.
+- OrderVersion provides operational event facts;
+- OrderCommercialSnapshot provides frozen accepted commercial facts.
 
 Operational consumers must not read live Offer data.
 
