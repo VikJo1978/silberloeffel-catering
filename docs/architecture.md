@@ -115,6 +115,45 @@ The former manual JSON proposal export/import workflow
 
 Core remains the source of truth for inquiries, offers, and orders.
 
+## Configurator and Offer boundary
+
+The Configurator owns the draft phase:
+- browser editing state
+- catalog selection
+- price calculation
+- temporary proposal preparation
+
+The Core system does not store configurator drafts.
+
+A commercial commitment starts only when a validated offer snapshot
+is prepared through the trusted handoff flow.
+
+Core owns:
+- Offer
+- OfferVersion
+- immutable snapshot data
+- commercial lifecycle evidence
+
+Lifecycle:
+
+Configurator draft
+        |
+        | trusted handoff
+        v
+OfferVersion (Prepared)
+        |
+        v
+Sent
+        |
+        +--> Accepted
+        |
+        +--> Rejected
+
+Accepted offers may be converted into Orders.
+
+Order operational states (READY_TO_SEND, kitchen, courier)
+are separate from commercial offer lifecycle.
+
 ## Trust boundaries
 
 | Surface | Exposure | Authentication | Writes production? |
