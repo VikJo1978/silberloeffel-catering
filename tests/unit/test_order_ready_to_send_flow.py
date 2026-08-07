@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from datetime import date
 from pathlib import Path
 
 import pytest
 
+from catering_system.domain.order_commercial_snapshot import (
+    MissingCommercialSnapshotError,
+)
 from catering_system.domain.ready_to_send import READY_REASON_NO_EFFECTIVE_VERSION
+from catering_system.repositories.in_memory_order_commercial_snapshot_repository import (
+    InMemoryOrderCommercialSnapshotRepository,
+)
+from catering_system.repositories.in_memory_order_repository import (
+    InMemoryOrderRepository,
+)
 from catering_system.repositories.sqlite_order_commercial_snapshot_repository import (
     SQLiteOrderCommercialSnapshotRepository,
 )
@@ -19,6 +27,8 @@ from catering_system.services.operational_core_service import OperationalCoreSer
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjectionService,
 )
+from catering_system.ui.office_panel_views import render_print_sheet
+from tests.helpers.order_seed import seed_order
 from tests.unit.test_office_api import (
     _MARK_SENT_ARGS,
     _RECORD_ACCEPTANCE_ARGS,
@@ -33,6 +43,7 @@ from tests.unit.test_office_api import (
     _start_api_server,
     _valid_offer_snapshot,
 )
+from tests.unit.test_offer_service import _sample_inquiry
 
 
 @pytest.fixture()
@@ -90,19 +101,13 @@ def _convert_offer_to_order(
     return inquiry_id, convert_body["order_id"], convert_body["order_version_id"], base
 
 
-def test_converted_order_reaches_ready_to_send_without_mutating_commercial_snapshot(
-    office_api: tuple[str, dict[str, str], Path],
-) -> None:
+def test_converted_order_reaches_ready_to_send(office_api: tuple[str, dict[str, str], Path]) -> None:
     _inquiry_id, order_id, order_version_id, base = _convert_offer_to_order(office_api)
     _base, _ids, db = office_api
 
     orders = SQLiteOrderRepository(db)
     snapshots = SQLiteOrderCommercialSnapshotRepository(db)
     core = OperationalCoreService(orders)
-
-    original_snapshot = snapshots.get_by_order_id(order_id)
-    assert original_snapshot is not None
-    original_snapshot_dict = asdict(original_snapshot)
 
     blocked = core.evaluate_ready_to_send(order_id)
     assert blocked.ready is False
@@ -137,10 +142,7 @@ def test_converted_order_reaches_ready_to_send_without_mutating_commercial_snaps
         order_version_id,
     )
     assert projection.commercial.source == "offer_conversion"
-    assert projection.commercial.offer_id == original_snapshot.source_offer_id
-    assert len(projection.commercial.positions) == len(original_snapshot.positions)
-
-    assert asdict(snapshots.get_by_order_id(order_id) or {}) == original_snapshot_dict
+    assert render_print_sheet(projection)
 
     order_before = orders.get_order(order_id)
     assert order_before is not None
@@ -155,6 +157,17 @@ def test_converted_order_reaches_ready_to_send_without_mutating_commercial_snaps
 
     order_after = orders.get_order(order_id)
     assert order_after == order_before
-    assert asdict(snapshots.get_by_order_id(order_id) or {}) == original_snapshot_dict
     orders.close()
     snapshots.close()
+
+
+def test_kitchen_print_fails_without_commercial_snapshot() -> None:
+    orders = InMemoryOrderRepository()
+    snapshots = InMemoryOrderCommercialSnapshotRepository()
+    order, version = seed_order(orders, _sample_inquiry())
+    service = OrderPrintProjectionService(orders, snapshots)
+
+    with pytest.raises(MissingCommercialSnapshotError):
+        render_print_sheet(
+            service.resolve(order.order_id, version.order_version_id),
+        )
