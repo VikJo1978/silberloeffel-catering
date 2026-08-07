@@ -106,6 +106,15 @@ flowchart TD
   SQLite indexes and triggers.
 - Take a verified backup before deploying code that may open the database.
 
+## Configurator integration boundary
+
+Configurator ↔ Core communication uses trusted handoff only.
+
+The former manual JSON proposal export/import workflow
+(`proposal_payload_v1` / `proposal-preview`) has been removed.
+
+Core remains the source of truth for inquiries, offers, and orders.
+
 ## Trust boundaries
 
 | Surface | Exposure | Authentication | Writes production? |
