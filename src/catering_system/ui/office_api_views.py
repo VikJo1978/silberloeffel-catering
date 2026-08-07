@@ -22,6 +22,7 @@ from catering_system.domain.inquiry_customer_snapshot import (
     customer_snapshot_to_mapping,
 )
 from catering_system.domain.email_intake_projection import EmailIntakeProjection
+from catering_system.domain.kitchen_completion_evidence import KitchenCompletionEvidence
 from catering_system.domain.inquiry import (
     Inquiry,
     InquiryOfferProjection,
@@ -54,6 +55,9 @@ from catering_system.services.order_print_projection_service import (
     PrintPositionLine,
 )
 from catering_system.services.buffet_cards_service import BuffetCard, BuffetCardsView
+from catering_system.services.kitchen_queue_projection_service import (
+    KitchenQueueProjectionEntry,
+)
 from catering_system.domain.catalog import allergen_labels
 from catering_system.services.catalog_dish_service import (
     AllergenCodeDefinition,
@@ -1270,5 +1274,34 @@ def allergen_codes_view(
     return {
         "allergen_codes": [
             {"code": item.code, "label": item.label} for item in definitions
+        ]
+    }
+
+
+def kitchen_completion_evidence_shape(
+    evidence: KitchenCompletionEvidence,
+) -> dict[str, object]:
+    return {
+        "kitchen_completion_evidence_id": evidence.kitchen_completion_evidence_id,
+        "order_id": evidence.order_id,
+        "order_version_id": evidence.order_version_id,
+        "completed_at": evidence.completed_at.isoformat(),
+        "recorded_at": evidence.recorded_at.isoformat(),
+        "recorded_by": evidence.recorded_by,
+        "evidence_reference": evidence.evidence_reference,
+    }
+
+
+def kitchen_queue_view(
+    entries: tuple[KitchenQueueProjectionEntry, ...],
+) -> dict[str, object]:
+    return {
+        "entries": [
+            {
+                "order_id": entry.order_id,
+                "order_version_id": entry.order_version_id,
+                "projection": order_print_projection_shape(entry.projection),
+            }
+            for entry in entries
         ]
     }

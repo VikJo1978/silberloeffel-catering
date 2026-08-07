@@ -129,6 +129,9 @@ from catering_system.repositories.sqlite_order_confirmation_outbound_repository 
 from catering_system.repositories.sqlite_order_operational_pause_repository import (
     SQLiteOrderOperationalPauseRepository,
 )
+from catering_system.repositories.sqlite_kitchen_completion_evidence_repository import (
+    SQLiteKitchenCompletionEvidenceRepository,
+)
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
@@ -160,6 +163,14 @@ from catering_system.services.employee_auth_service import (
 from catering_system.services.inquiry_service import (
     InquiryService,
     validate_inquiry_source,
+)
+from catering_system.services.kitchen_execution_service import (
+    KitchenCompletionBlockedError,
+    KitchenCompletionConflictError,
+    KitchenExecutionService,
+)
+from catering_system.services.kitchen_queue_projection_service import (
+    KitchenQueueProjectionService,
 )
 from catering_system.services.offer_document_snapshot_service import (
     OfferDocumentNotFoundError,
@@ -518,6 +529,9 @@ class OfficeApi:
         self.operational_pauses = SQLiteOrderOperationalPauseRepository.from_connection(
             connection
         )
+        self.kitchen_completion_evidence = (
+            SQLiteKitchenCompletionEvidenceRepository.from_connection(connection)
+        )
         self.offer_documents = SQLiteOfferDocumentSnapshotRepository.from_connection(
             connection
         )
@@ -612,6 +626,16 @@ class OfficeApi:
         self.buffet_cards_service = BuffetCardsService(
             self.orders,
             self.print_projection_service,
+        )
+        self.kitchen_queue_projection_service = KitchenQueueProjectionService(
+            self.orders,
+            self.commercial_snapshots,
+            pause_repository=self.operational_pauses,
+        )
+        self.kitchen_execution_service = KitchenExecutionService(
+            self.orders,
+            self.kitchen_completion_evidence,
+            pause_repository=self.operational_pauses,
         )
         self.catalog_dish_service = CatalogDishService(self.catalog)
         self.catalog_dish_write_service = CatalogDishWriteService(self.catalog)
@@ -1923,6 +1947,58 @@ class OfficeApi:
             }
         }
 
+    def kitchen_queue(self) -> dict[str, object]:
+        entries = self.kitchen_queue_projection_service.list_queue()
+        return views.kitchen_queue_view(entries)
+
+    def cmd_kitchen_completion(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        order = self._require_active_order(path_ids["id"])
+        expected = expect["current_effective_order_version_id"]
+        if expected is not None and not isinstance(expected, str):
+            raise _invalid()
+        if expected != order.effective_order_version_id:
+            raise ApiError(409, "stale_state")
+        version = self._owned_version(
+            order.order_id,
+            _v_uuid(args["order_version_id"]),
+        )
+        completed_at = (
+            _v_datetime(args["completed_at"])
+            if "completed_at" in args
+            else datetime.now(UTC)
+        )
+        try:
+            result = self.kitchen_execution_service.record_kitchen_completion(
+                order.order_id,
+                version.order_version_id,
+                completed_at=completed_at,
+                recorded_by=_v_str(args["recorded_by"], 200),
+                evidence_reference=_v_str(args["evidence_reference"], 500),
+            )
+        except KitchenCompletionBlockedError as exc:
+            raise ApiError(
+                422,
+                "kitchen_completion_blocked",
+                reasons=list(exc.reasons),
+            ) from exc
+        except KitchenCompletionConflictError as exc:
+            raise ApiError(409, "kitchen_completion_conflict") from exc
+        except ValueError as exc:
+            message = str(exc)
+            if message == "order version is not effective":
+                raise ApiError(422, "order_version_not_effective") from exc
+            if message == "order version not owned":
+                raise ApiError(422, "version_not_owned") from exc
+            raise ApiError(422, "kitchen_completion_blocked") from exc
+        status = 200 if result.replay else 201
+        return status, {
+            "order_id": order.order_id,
+            "order_version_id": version.order_version_id,
+            "evidence": views.kitchen_completion_evidence_shape(result.evidence),
+        }
+
     def _pause_actor_reference(self, args: dict[str, object]) -> str:
         if "actor_reference" in args:
             return _v_str(args["actor_reference"], 200)
@@ -2358,6 +2434,12 @@ _PAYMENT_REMINDER_ARGS = _ArgKeys(
     )
 )
 _CONFIRMATION_DOCUMENT_ARGS = _ArgKeys(required=frozenset({"created_by"}))
+_KITCHEN_COMPLETION_ARGS = _ArgKeys(
+    required=frozenset(
+        {"order_version_id", "recorded_by", "evidence_reference"},
+    ),
+    optional=frozenset({"completed_at"}),
+)
 _CONFIRMATION_DOCUMENT_SEND_ARGS = _ArgKeys(
     required=frozenset({"document_snapshot_id", "requested_by"})
 )
@@ -2446,6 +2528,11 @@ _COMMANDS: dict[str, _CommandSpec] = {
         },
     ),
     "ready": _CommandSpec("cmd_ready", _NO_ARGS, set()),
+    "kitchen-completion": _CommandSpec(
+        "cmd_kitchen_completion",
+        _KITCHEN_COMPLETION_ARGS,
+        {"current_effective_order_version_id"},
+    ),
     "pause": _CommandSpec(
         "cmd_pause",
         _PAUSE_ARGS,
@@ -2496,6 +2583,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         {"POST": "configurator-handoff-exchange"},
     ),
     (re.compile(r"^/office/v1/queue$"), "/office/v1/queue", {"GET": "queue"}),
+    (
+        re.compile(r"^/office/v1/kitchen-queue$"),
+        "/office/v1/kitchen-queue",
+        {"GET": "kitchen_queue"},
+    ),
     (
         re.compile(r"^/office/v1/work-center$"),
         "/office/v1/work-center",
@@ -2715,6 +2807,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/ready$"),
         "/office/v1/orders/{id}/ready",
         {"POST": "ready"},
+    ),
+    (
+        re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/kitchen-completion$"),
+        "/office/v1/orders/{id}/kitchen-completion",
+        {"POST": "kitchen-completion"},
     ),
     (
         re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/pause$"),
@@ -3147,6 +3244,9 @@ def make_office_api_handler(
             if kind == "queue":
                 self._query(set())
                 self._respond(200, api.queue_view())
+            elif kind == "kitchen_queue":
+                self._query(set())
+                self._respond(200, api.kitchen_queue())
             elif kind == "work_center":
                 self._query(set())
                 self._respond(200, api.work_center())
