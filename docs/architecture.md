@@ -169,6 +169,24 @@ by append-only evidence, not by modifying the OfferVersion itself.
 The sent actor, channel, recipient reference and timestamp are stored
 as evidence of the communication event.
 
+## Offer acceptance and order conversion
+
+Acceptance appends AcceptanceEvidence only.
+The accepted OfferVersion remains immutable.
+
+Conversion creates a new operational Order.
+Accepted commercial facts are copied into an immutable
+OrderCommercialSnapshot.
+
+Operational consumers (confirmation, print, kitchen workflow)
+must read OrderCommercialSnapshot and must not depend on
+live Offer data.
+
+Offer and Order remain linked through ConversionLink.
+
+The originating Inquiry remains available through
+Order.source_inquiry_id.
+
 ## Trust boundaries
 
 | Surface | Exposure | Authentication | Writes production? |
