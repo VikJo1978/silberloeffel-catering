@@ -8,13 +8,16 @@ same SQLite transaction; no second store or status column is introduced.
 from __future__ import annotations
 
 import sqlite3
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
+from typing import Iterator
 
 from catering_system.domain.kitchen_print_job import (
     KITCHEN_PRINT_REJECTION_CODES,
     KitchenPrintJob,
+    KitchenPrintPolicy,
     validate_kitchen_print_job_transition,
 )
 from catering_system.domain.order import OrderVersion
@@ -217,6 +220,7 @@ class SQLiteKitchenPrintJobRepository:
     def __init__(self, db_path: str | Path) -> None:
         self._conn = sqlite3.connect(str(db_path))
         self._manage_transactions = True
+        self._transaction_depth = 0
         try:
             apply_migrations(self._conn, "kitchen_print", _MIGRATIONS)
         except Exception:
@@ -230,8 +234,28 @@ class SQLiteKitchenPrintJobRepository:
         repo = cls.__new__(cls)
         repo._conn = connection
         repo._manage_transactions = False
+        repo._transaction_depth = 0
         apply_migrations(connection, "kitchen_print", _MIGRATIONS)
         return repo
+
+    @contextmanager
+    def _immediate_transaction(self) -> Iterator[sqlite3.Connection]:
+        if not self._manage_transactions:
+            yield self._conn
+            return
+        self._transaction_depth += 1
+        if self._transaction_depth == 1:
+            self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield self._conn
+            if self._transaction_depth == 1:
+                self._conn.commit()
+        except Exception:
+            if self._transaction_depth == 1:
+                self._conn.rollback()
+            raise
+        finally:
+            self._transaction_depth -= 1
 
     def _write_scope(self):  # noqa: ANN202
         return self._conn if self._manage_transactions else nullcontext()
@@ -336,6 +360,49 @@ class SQLiteKitchenPrintJobRepository:
                 if updated != 1:
                     raise ValueError("stale kitchen print confirmation")
             self._update_facts(job)
+
+    def claim_next_eligible(
+        self, now: datetime, policy: KitchenPrintPolicy
+    ) -> KitchenPrintJob | None:
+        now_iso = now.isoformat()
+        ack_deadline_at = now + policy.acknowledgment_timeout
+        ack_deadline_iso = ack_deadline_at.isoformat()
+        with self._immediate_transaction():
+            row = self._conn.execute(
+                """
+                SELECT * FROM kitchen_print_jobs
+                WHERE acknowledged_at IS NULL
+                  AND rejected_at IS NULL
+                  AND superseded_at IS NULL
+                  AND accepted_at IS NULL
+                  AND julianday(accept_deadline_at) > julianday(?)
+                ORDER BY accept_deadline_at ASC, requested_at ASC, print_job_id ASC
+                LIMIT 1
+                """,
+                (now_iso,),
+            ).fetchone()
+            if row is None:
+                return None
+            job = self._row_to_job(row)
+            updated = self._conn.execute(
+                """
+                UPDATE kitchen_print_jobs
+                SET accepted_at = ?, ack_deadline_at = ?
+                WHERE print_job_id = ?
+                  AND accepted_at IS NULL
+                  AND rejected_at IS NULL
+                  AND superseded_at IS NULL
+                  AND acknowledged_at IS NULL
+                """,
+                (now_iso, ack_deadline_iso, job.print_job_id),
+            ).rowcount
+            if updated != 1:
+                return None
+        return replace(
+            job,
+            accepted_at=now,
+            ack_deadline_at=ack_deadline_at,
+        )
 
     def _insert(self, job: KitchenPrintJob) -> None:
         self._conn.execute(

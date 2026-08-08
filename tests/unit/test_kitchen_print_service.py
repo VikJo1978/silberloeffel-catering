@@ -286,3 +286,21 @@ def test_acceptance_deadline_and_cancelled_state_are_pure_derivations() -> None:
     )
     with pytest.raises(ValueError, match="deadline has passed"):
         service.accept_print_job(JOB_1)
+
+
+def test_claim_next_eligible_records_order_cancelled_after_atomic_accept() -> None:
+    orders, service, core, _clock, order_id, version_id, _events = _setup()
+    service.request_print(order_id, version_id, print_job_id=JOB_1)
+    core.cancel_order(order_id)
+
+    claimed = service.claim_next_eligible()
+    stored = service.get_print_job(JOB_1)
+    version = orders.get_order_version(version_id)
+
+    assert claimed is None
+    assert stored is not None
+    assert stored.accepted_at is not None
+    assert stored.rejected_at is not None
+    assert stored.rejection_code == "order_cancelled"
+    assert version is not None
+    assert version.kitchen_print_confirmed_at is None

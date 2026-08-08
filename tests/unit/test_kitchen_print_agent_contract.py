@@ -161,7 +161,6 @@ def test_claim_next_eligible_is_atomic_under_concurrency() -> None:
         service, second_order.order_id, second_version.order_version_id, _JOB_B
     )
 
-    lock = threading.Lock()
     barrier = threading.Barrier(2)
     results: list[KitchenPrintJob | None] = []
     errors: list[BaseException] = []
@@ -171,7 +170,7 @@ def test_claim_next_eligible_is_atomic_under_concurrency() -> None:
             barrier.wait(timeout=5)
             results.append(
                 claim_next_eligible(
-                    orders, jobs, now=_NOW, policy=_POLICY, lock=lock
+                    orders, jobs, now=_NOW, policy=_POLICY
                 )
             )
         except BaseException as exc:  # pragma: no cover - surfaced below

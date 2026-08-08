@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import replace
+from datetime import datetime
 
 from catering_system.domain.kitchen_print_job import (
     KitchenPrintJob,
+    KitchenPrintPolicy,
     validate_kitchen_print_job_transition,
 )
 from catering_system.domain.order import OrderVersion
@@ -16,6 +19,7 @@ class InMemoryKitchenPrintJobRepository:
     def __init__(self, order_repository: OrderRepository) -> None:
         self._orders = order_repository
         self._jobs: dict[str, KitchenPrintJob] = {}
+        self._claim_lock = threading.Lock()
 
     def save(self, job: KitchenPrintJob) -> None:
         self._validate_new_job(job)
@@ -108,6 +112,40 @@ class InMemoryKitchenPrintJobRepository:
         next_jobs = dict(self._jobs)
         next_jobs[job.print_job_id] = job
         self._jobs = next_jobs
+
+    def claim_next_eligible(
+        self, now: datetime, policy: KitchenPrintPolicy
+    ) -> KitchenPrintJob | None:
+        with self._claim_lock:
+            eligible = sorted(
+                (
+                    job
+                    for job in self._jobs.values()
+                    if job.accepted_at is None
+                    and job.rejected_at is None
+                    and job.superseded_at is None
+                    and job.acknowledged_at is None
+                    and now < job.accept_deadline_at
+                ),
+                key=lambda row: (
+                    row.accept_deadline_at,
+                    row.requested_at,
+                    row.print_job_id,
+                ),
+            )
+            if not eligible:
+                return None
+            target = eligible[0]
+            accepted = replace(
+                target,
+                accepted_at=now,
+                ack_deadline_at=now + policy.acknowledgment_timeout,
+            )
+            validate_kitchen_print_job_transition(target, accepted)
+            next_jobs = dict(self._jobs)
+            next_jobs[target.print_job_id] = accepted
+            self._jobs = next_jobs
+            return accepted
 
     def _validate_new_job(
         self, job: KitchenPrintJob, *, replacing: str | None = None

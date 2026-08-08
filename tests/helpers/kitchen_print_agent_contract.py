@@ -14,7 +14,7 @@ import base64
 import hashlib
 import json
 import threading
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
@@ -31,6 +31,7 @@ from catering_system.repositories.order_commercial_snapshot_repository import (
     OrderCommercialSnapshotRepository,
 )
 from catering_system.repositories.order_repository import OrderRepository
+from catering_system.services.kitchen_print_service import KitchenPrintService
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjection,
     PrintFlagsBlock,
@@ -39,7 +40,6 @@ from catering_system.services.order_print_projection_service import (
 
 _CLAIM_ROUTE = "POST /kitchen/v1/print-jobs/claim-next"
 _AGENT_CLIENT_ID = "kitchen-print-agent"
-_CLAIM_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -147,12 +147,6 @@ def is_eligible_for_claim(
     }
 
 
-def _all_jobs(job_repository: KitchenPrintJobRepository) -> tuple[KitchenPrintJob, ...]:
-    if hasattr(job_repository, "_jobs"):
-        return tuple(job_repository._jobs.values())  # type: ignore[attr-defined]
-    raise TypeError("contract claim requires in-memory job repository for reference scan")
-
-
 def claim_next_eligible(
     order_repository: OrderRepository,
     job_repository: KitchenPrintJobRepository,
@@ -161,29 +155,16 @@ def claim_next_eligible(
     policy: KitchenPrintPolicy,
     lock: threading.Lock | None = None,
 ) -> KitchenPrintJob | None:
-    """Reference atomic claim — production replaces with repo.claim_next_eligible()."""
+    """Delegate atomic claim to production KitchenPrintService."""
 
-    active_lock = lock or _CLAIM_LOCK
-    with active_lock:
-        eligible: list[KitchenPrintJob] = []
-        for job in sorted(
-            _all_jobs(job_repository),
-            key=lambda row: (row.accept_deadline_at, row.requested_at, row.print_job_id),
-        ):
-            order = order_repository.get_order(job.order_id)
-            if not is_eligible_for_claim(job, now=now, order=order):
-                continue
-            eligible.append(job)
-        if not eligible:
-            return None
-        target = eligible[0]
-        accepted = replace(
-            target,
-            accepted_at=now,
-            ack_deadline_at=now + policy.acknowledgment_timeout,
-        )
-        job_repository.update(accepted)
-        return accepted
+    del lock  # repository implementations own concurrency primitives
+    service = KitchenPrintService(
+        order_repository,
+        job_repository,
+        policy=policy,
+        clock=lambda: now,
+    )
+    return service.claim_next_eligible()
 
 
 def resolve_kitchen_job_projection(
