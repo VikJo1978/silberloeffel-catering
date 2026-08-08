@@ -215,7 +215,9 @@ def _canonical_projection_json(projection: OrderPrintProjection) -> str:
             "is_stale": flags.is_stale,
         },
     }
-    return json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(
+        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )
 
 
 def create_kitchen_print_document(
