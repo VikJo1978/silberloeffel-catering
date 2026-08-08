@@ -312,8 +312,8 @@ def _page(
         "</a>"
         '<div class="office-nav-label">Navigation</div>'
         f'<nav class="office-nav" aria-label="Office Panel">{nav}</nav>'
-        '<div class="office-user"><strong>Office Panel</strong>'
-        "<span>Tägliche Arbeitszentrale</span></div></aside>"
+        f'<div class="office-user"><strong>{_e(context.current_user_name or "Office Panel")}</strong>'
+        f"<span>{_e(context.current_user_role_label or 'Tägliche Arbeitszentrale')}</span></div></aside>"
         '<main class="office-workspace">'
         f'<header class="office-topbar"><span class="office-crumb">{_e(title)}</span>'
         f'<div class="office-account">{account_meta}{account_actions}</div></header>'
