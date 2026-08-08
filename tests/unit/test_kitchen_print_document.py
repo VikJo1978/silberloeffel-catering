@@ -185,7 +185,9 @@ def test_store_is_append_only_and_rejects_conflicting_artifact() -> None:
     document = factory.create_for_print_job(job)
     assert store.save(document) == document
 
-    with pytest.raises(ValueError, match="print_job_id already has a different document"):
+    with pytest.raises(
+        ValueError, match="print_job_id already has a different document"
+    ):
         store.save(
             replace(
                 document,
