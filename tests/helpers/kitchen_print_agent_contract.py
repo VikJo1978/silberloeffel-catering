@@ -34,8 +34,7 @@ from catering_system.repositories.order_repository import OrderRepository
 from catering_system.services.kitchen_print_service import KitchenPrintService
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjection,
-    PrintFlagsBlock,
-    PrintProjectionNotFoundError,
+    OrderPrintProjectionService,
 )
 
 _CLAIM_ROUTE = "POST /kitchen/v1/print-jobs/claim-next"
@@ -174,33 +173,12 @@ def resolve_kitchen_job_projection(
     order_id: str,
     order_version_id: str,
 ) -> OrderPrintProjection:
-    """Reference kitchen_job intent — production uses intent='kitchen_job'."""
+    """Delegate kitchen_job intent to production OrderPrintProjectionService."""
 
-    order = order_repository.get_order(order_id)
-    version = order_repository.get_order_version(order_version_id)
-    if order is None or version is None or version.order_id != order_id:
-        raise PrintProjectionNotFoundError(order_version_id)
-
-    snapshot = commercial_snapshot_repository.get_by_order_id(order_id)
-    if snapshot is None:
-        raise PrintProjectionNotFoundError(order_id)
-
-    from catering_system.services.order_print_projection_service import (
-        _commercial_from_snapshot,
-        _event_block,
-    )
-
-    return OrderPrintProjection(
-        event=_event_block(order, version),
-        commercial=_commercial_from_snapshot(snapshot, version.guest_count_estimate),
-        flags=PrintFlagsBlock(
-            intent="kitchen_job",  # type: ignore[arg-type]
-            is_preview=False,
-            is_final_allowed=False,
-            is_stale=False,
-            watermark=None,
-        ),
-    )
+    return OrderPrintProjectionService(
+        order_repository,
+        commercial_snapshot_repository,
+    ).resolve(order_id, order_version_id, intent="kitchen_job")
 
 
 def _canonical_projection_json(projection: OrderPrintProjection) -> str:
@@ -237,7 +215,9 @@ def _canonical_projection_json(projection: OrderPrintProjection) -> str:
             "is_stale": flags.is_stale,
         },
     }
-    return json.dumps(payload, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    return json.dumps(
+        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
+    )
 
 
 def create_kitchen_print_document(

@@ -161,7 +161,9 @@ def test_sqlite_claim_orders_by_deadline_then_requested_at(tmp_path: Path) -> No
     second = jobs.claim_next_eligible(_NOW, _POLICY)
     third = jobs.claim_next_eligible(_NOW, _POLICY)
 
-    assert [row.print_job_id if row is not None else None for row in (first, second, third)] == [
+    assert [
+        row.print_job_id if row is not None else None for row in (first, second, third)
+    ] == [
         _JOB_C,
         _JOB_A,
         _JOB_B,
@@ -217,7 +219,9 @@ def test_accept_print_job_after_claim_is_idempotent(tmp_path: Path) -> None:
     orders.close()
 
 
-def test_sqlite_repository_claim_does_not_filter_cancelled_order(tmp_path: Path) -> None:
+def test_sqlite_repository_claim_does_not_filter_cancelled_order(
+    tmp_path: Path,
+) -> None:
     db = tmp_path / "core.db"
     orders, jobs, service = _sqlite_claim_world(db)
     order, version = seed_order(orders, _inquiry())
@@ -225,9 +229,7 @@ def test_sqlite_repository_claim_does_not_filter_cancelled_order(tmp_path: Path)
     service.request_print(order.order_id, version.order_version_id, print_job_id=_JOB_A)
     cancelled = orders.get_order(order.order_id)
     assert cancelled is not None
-    orders.update_order(
-        replace(cancelled, cancelled_at=_NOW, updated_at=_NOW)
-    )
+    orders.update_order(replace(cancelled, cancelled_at=_NOW, updated_at=_NOW))
 
     claimed = jobs.claim_next_eligible(_NOW, _POLICY)
 

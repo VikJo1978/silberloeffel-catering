@@ -112,9 +112,15 @@ def _eligible_job_setup() -> tuple[
     jobs = InMemoryKitchenPrintJobRepository(orders)
     service = _print_service(orders, jobs)
 
-    job_a = _requested_job(service, order_a.order_id, version_a.order_version_id, _JOB_A)
-    job_b = _requested_job(service, order_b.order_id, version_b.order_version_id, _JOB_B)
-    job_c = _requested_job(service, order_c.order_id, version_c.order_version_id, _JOB_C)
+    job_a = _requested_job(
+        service, order_a.order_id, version_a.order_version_id, _JOB_A
+    )
+    job_b = _requested_job(
+        service, order_b.order_id, version_b.order_version_id, _JOB_B
+    )
+    job_c = _requested_job(
+        service, order_c.order_id, version_c.order_version_id, _JOB_C
+    )
     _requested_job(service, order_d.order_id, version_d.order_version_id, _JOB_D)
 
     service.accept_print_job(_JOB_B)
@@ -155,7 +161,9 @@ def test_claim_next_eligible_is_atomic_under_concurrency() -> None:
     second_order, second_version = seed_order(orders, _inquiry(location="second"))
     jobs = InMemoryKitchenPrintJobRepository(orders)
     service = _print_service(orders, jobs)
-    _requested_job(service, first_order.order_id, first_version.order_version_id, _JOB_A)
+    _requested_job(
+        service, first_order.order_id, first_version.order_version_id, _JOB_A
+    )
     _requested_job(
         service, second_order.order_id, second_version.order_version_id, _JOB_B
     )
@@ -167,11 +175,7 @@ def test_claim_next_eligible_is_atomic_under_concurrency() -> None:
     def worker() -> None:
         try:
             barrier.wait(timeout=5)
-            results.append(
-                claim_next_eligible(
-                    orders, jobs, now=_NOW, policy=_POLICY
-                )
-            )
+            results.append(claim_next_eligible(orders, jobs, now=_NOW, policy=_POLICY))
         except BaseException as exc:  # pragma: no cover - surfaced below
             errors.append(exc)
 
@@ -377,10 +381,7 @@ def test_only_acknowledge_print_job_sets_kitchen_print_confirmed_at() -> None:
 
     assert acknowledged.acknowledged_at == _NOW
     assert confirmed_version.kitchen_print_confirmed_at == _NOW
-    assert (
-        orders.get_order_version(job_a.order_version_id)
-        == confirmed_version
-    )
+    assert orders.get_order_version(job_a.order_version_id) == confirmed_version
 
 
 def test_kitchen_print_agent_contract_must_not_import_offer_or_catalog() -> None:

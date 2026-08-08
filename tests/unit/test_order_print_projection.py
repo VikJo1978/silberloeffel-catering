@@ -642,3 +642,151 @@ def test_print_and_confirmation_services_must_not_depend_on_offer_or_conversion_
         text = (root / name).read_text(encoding="utf-8")
         assert "OfferRepository" not in text, name
         assert "conversion_link" not in text, name
+
+
+def _kitchen_job_setup():
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        offers,
+        orders,
+        _inq,
+        offer_service,
+    ) = _accepted_offer_state()
+    _converted, order, v1 = offer_service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
+    )
+    order_service = OrderService(orders)
+    core = OperationalCoreService(orders)
+    core.confirm_kitchen_print(order.order_id, v1.order_version_id)
+    core.make_order_version_effective(order.order_id, v1.order_version_id)
+    v2 = order_service.create_relevant_order_change_version(
+        order,
+        event_date=date(2026, 9, 1),
+        time_window_text="abends",
+        location_text="Lübeck",
+        guest_count_estimate=40,
+        planning_mode="caterer_suggestion",
+    )
+    order_service.set_candidate_order_version(order.order_id, v2.order_version_id)
+    service = _projection_service(orders, offer_service._commercial_snapshots)
+    return offer, order, v1, v2, offers, service
+
+
+def test_kitchen_job_intent_uses_requested_version_not_effective() -> None:
+    _offer, order, v1, v2, _offers, service = _kitchen_job_setup()
+
+    projection = service.resolve(
+        order.order_id,
+        v2.order_version_id,
+        intent="kitchen_job",
+    )
+
+    assert projection.event.order_version_id == v2.order_version_id
+    assert projection.event.version_number == 2
+    assert projection.event.location_text == "Lübeck"
+    assert projection.event.is_effective is False
+    assert projection.event.is_candidate is True
+
+
+def test_kitchen_job_intent_has_no_ui_watermarks() -> None:
+    _offer, order, _v1, v2, _offers, service = _kitchen_job_setup()
+
+    projection = service.resolve(
+        order.order_id,
+        v2.order_version_id,
+        intent="kitchen_job",
+    )
+
+    assert projection.flags.intent == "kitchen_job"
+    assert projection.flags.watermark is None
+    assert projection.flags.is_preview is False
+    assert projection.flags.is_stale is False
+    assert projection.flags.is_final_allowed is False
+    assert "ENTWURF" not in render_print_sheet(projection)
+    assert "VERALTET" not in render_print_sheet(projection)
+    assert "ÄNDERUNG" not in render_print_sheet(projection)
+
+
+def test_kitchen_job_intent_keeps_frozen_commercial_snapshot() -> None:
+    from dataclasses import replace
+
+    offer, order, _v1, v2, offers, service = _kitchen_job_setup()
+    stored = offers.get(offer.offer_id)
+    assert stored is not None
+    version = stored.versions[0]
+    variant = version.variants[0]
+    mutated = replace(
+        stored,
+        versions=(
+            replace(
+                version,
+                variants=(
+                    replace(
+                        variant,
+                        positions=(
+                            replace(variant.positions[0], name="MUTATED LIVE OFFER"),
+                        ),
+                    ),
+                ),
+            ),
+        ),
+    )
+    offers._offers[stored.offer_id] = mutated
+
+    projection = service.resolve(
+        order.order_id,
+        v2.order_version_id,
+        intent="kitchen_job",
+    )
+
+    assert projection.commercial.positions[0].name == "Fingerfood Paket"
+    assert "MUTATED LIVE OFFER" not in render_print_sheet(projection)
+
+
+def test_kitchen_job_does_not_change_preview_change_preview_or_final_intents() -> None:
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        _offers,
+        orders,
+        _inq,
+        offer_service,
+    ) = _accepted_offer_state()
+    _converted, order, v1 = offer_service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
+    )
+    core = OperationalCoreService(orders)
+    core.confirm_kitchen_print(order.order_id, v1.order_version_id)
+    core.make_order_version_effective(order.order_id, v1.order_version_id)
+    v2 = OrderService(orders).propose_order_version_change(
+        order.order_id,
+        event_date=v1.event_date,
+        time_window_text="18:00",
+        location_text=v1.location_text,
+        guest_count_estimate=v1.guest_count_estimate,
+        planning_mode=v1.planning_mode,
+        actor_reference="office-panel",
+        change_reason="Beginn verschoben",
+    )
+    service = _projection_service(orders, offer_service._commercial_snapshots)
+
+    preview = service.resolve(order.order_id, v2.order_version_id, intent="preview")
+    change_preview = service.resolve(order.order_id, v2.order_version_id)
+    final = service.resolve(order.order_id, v1.order_version_id, intent="final")
+
+    assert preview.flags.intent == "change_preview"
+    assert preview.flags.watermark == "ÄNDERUNG – NOCH NICHT WIRKSAM"
+    assert change_preview.flags.intent == "change_preview"
+    assert final.flags.intent == "final"
+    assert final.flags.is_final_allowed is True

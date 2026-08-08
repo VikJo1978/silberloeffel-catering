@@ -19,7 +19,7 @@ from catering_system.repositories.order_commercial_snapshot_repository import (
 )
 from catering_system.repositories.order_repository import OrderRepository
 
-PrintIntent = Literal["preview", "change_preview", "final"]
+PrintIntent = Literal["preview", "change_preview", "final", "kitchen_job"]
 PrintWatermark = Literal["ENTWURF", "VERALTET", "ÄNDERUNG – NOCH NICHT WIRKSAM"]
 
 
@@ -176,6 +176,15 @@ class OrderPrintProjectionService:
         *,
         intent: PrintIntent,
     ) -> PrintFlagsBlock:
+        if intent == "kitchen_job":
+            return PrintFlagsBlock(
+                intent=intent,
+                is_preview=False,
+                is_final_allowed=False,
+                is_stale=False,
+                watermark=None,
+            )
+
         is_effective = version.order_version_id == order.effective_order_version_id
         if intent == "final":
             return PrintFlagsBlock(
