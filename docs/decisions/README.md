@@ -18,6 +18,7 @@ review that updates architecture, tests, runbooks, and this register.
 | ADR-011 | Core Office API supersedes the panel's in-process Core access | After cutover exactly three Lenovo processes touch `core.db`: Core Office API (read+command), kiosk (read), website-intake receiver (Inquiry create) |
 | ADR-012 | Payment method is agreed in the accepted offer; Office tracks reminders only | Keep commercial terms explicit without turning Office or operational Core into accounting software |
 | ADR-013 | Commercial Offer is a separate aggregate between Inquiry and Order | Preserve commercial history and accepted variants without mixing pricing with operational OrderVersion truth |
+| ADR-014 | Kitchen print agent gets immutable documents via claim + ledger; agent never domain-ACKs | Separates technical delivery from business confirmation; Slice 3B contract |
 
 ## ADR-001 — Core on Lenovo
 
@@ -330,6 +331,28 @@ boundaries remain unchanged until separately accepted implementation slices are
 deployed. Future storage must be additive, tolerate records without an Offer,
 and permit rollback to the legacy conversion path without altering existing
 Order or OrderVersion history.
+
+## ADR-014 — Kitchen print agent contract (Slice 3B)
+
+Full detail: [PHASE_3B_KITCHEN_PRINT_AGENT_V1.md](PHASE_3B_KITCHEN_PRINT_AGENT_V1.md)
+
+The kitchen print agent is a narrow Core API client. It claims durable
+`KitchenPrintJob` rows, receives a **frozen** print document, and may record
+technical rejection. It never opens `core.db`, never confirms
+`kitchen_print_confirmed_at`, and never selects candidate/effective versions.
+
+Consequences:
+
+- claim is one atomic repository use case (`claim_next_eligible`), not
+  list-then-accept;
+- command idempotency reuses the office command ledger; job rows store no
+  `claimed_by`;
+- `KitchenPrintDocument` is an application DTO; ledger stores refs, DocumentStore
+  stores bytes;
+- `PrintIntent.kitchen_job` resolves production sheets without UI watermarks;
+- accepted-without-document is an attention state (MVP Variant A), not a new
+  status column;
+- domain ACK remains Office/human via `acknowledge_print_job()`.
 
 ## How to add a decision
 
