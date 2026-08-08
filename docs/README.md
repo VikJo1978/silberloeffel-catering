@@ -12,6 +12,7 @@ needed.
 | Status | [Current status](current-status.md) | Live services, verified facts, open risks |
 | Design | [Architecture](architecture.md) | Components, data flow, invariants |
 | Production | [Lenovo runbook](runbooks/lenovo-production.md) | Deploy, verify, troubleshoot, roll back |
+| Production | [Kitchen print agent](runbooks/KITCHEN_PRINT_AGENT_OPERATIONS.md) | CUPS, agent systemd, fault injection, first live print |
 | Staging | [VPS runbook](runbooks/vps-staging.md) | Temporary site at the public IP |
 | Staging | [6D-3a smoke test](runbooks/STAGING_SMOKE_6D3A.md) | Catalog → Configurator → Offer → Print manual checklist |
 | Data safety | [Backup and restore](runbooks/backup-restore.md) | SQLite backup, verification, recovery |
