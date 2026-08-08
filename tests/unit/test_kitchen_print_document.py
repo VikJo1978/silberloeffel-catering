@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+
+import pytest
 
 from catering_system.domain.kitchen_print_job import KitchenPrintJob, KitchenPrintPolicy
 from catering_system.repositories.in_memory_kitchen_print_document_store import (
@@ -165,3 +168,81 @@ def test_kitchen_print_document_factory_boundary_stays_projection_only() -> None
     assert "sqlite" not in text.lower()
     assert "KitchenPrintService" not in text
     assert "OrderRepository" not in text
+
+
+def test_document_ref_is_content_addressed_by_body_hash() -> None:
+    factory, _store, job, _offer, _offers, _orders = _document_factory_world()
+    document = factory.create_for_print_job(job)
+    expected_ref = f"sha256:{hashlib.sha256(document.body).hexdigest()}"
+    assert document.document_ref == expected_ref
+    assert document.document_ref != (
+        f"sha256:{hashlib.sha256(job.order_version_id.encode()).hexdigest()}"
+    )
+
+
+def test_store_is_append_only_and_rejects_conflicting_artifact() -> None:
+    factory, store, job, _offer, _offers, _orders = _document_factory_world()
+    document = factory.create_for_print_job(job)
+    assert store.save(document) == document
+
+    with pytest.raises(ValueError, match="print_job_id already has a different document"):
+        store.save(
+            replace(
+                document,
+                document_ref="sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            )
+        )
+
+
+def test_claim_then_document_creation_does_not_mutate_job_facts() -> None:
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        _offers,
+        orders,
+        _inq,
+        offer_service,
+    ) = _accepted_offer_state()
+    _converted, order, order_version = offer_service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
+    )
+    jobs = InMemoryKitchenPrintJobRepository(orders)
+    print_service = KitchenPrintService(
+        orders,
+        jobs,
+        policy=_POLICY,
+        clock=lambda: _NOW,
+    )
+    print_service.request_print(
+        order.order_id,
+        order_version.order_version_id,
+        print_job_id=_JOB_A,
+    )
+    store = InMemoryKitchenPrintDocumentStore()
+    factory = KitchenPrintDocumentFactory(
+        OrderPrintProjectionService(orders, offer_service._commercial_snapshots),
+        store,
+        clock=lambda: _NOW,
+    )
+    before = jobs.get(_JOB_A)
+    assert before is not None
+    assert before.accepted_at is None
+
+    claimed = print_service.claim_next_eligible()
+    assert claimed is not None
+    accepted_snapshot = jobs.get(_JOB_A)
+    assert accepted_snapshot is not None
+    assert accepted_snapshot.accepted_at == _NOW
+
+    document = factory.create_for_print_job(claimed)
+    assert document.document_ref
+    after = jobs.get(_JOB_A)
+    version = orders.get_order_version(order_version.order_version_id)
+    assert after == accepted_snapshot
+    assert version is not None
+    assert version.kitchen_print_confirmed_at is None

@@ -19,17 +19,18 @@ class InMemoryKitchenPrintDocumentStore:
             return None
         return self._by_ref.get(document_ref)
 
-    def save(self, document: KitchenPrintDocument) -> None:
+    def save(self, document: KitchenPrintDocument) -> KitchenPrintDocument:
         existing_job_ref = self._ref_by_job.get(document.print_job_id)
         if existing_job_ref is not None:
             existing = self._by_ref[existing_job_ref]
             if existing != document:
                 raise ValueError("print_job_id already has a different document")
-            return
+            return existing
         if document.document_ref in self._by_ref:
             existing = self._by_ref[document.document_ref]
             if existing != document:
                 raise ValueError("document_ref conflict")
-            return
+            return existing
         self._by_ref[document.document_ref] = document
         self._ref_by_job[document.print_job_id] = document.document_ref
+        return document
