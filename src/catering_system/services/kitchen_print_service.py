@@ -50,6 +50,33 @@ class KitchenPrintService:
     def get_print_job(self, print_job_id: str) -> KitchenPrintJob | None:
         return self._jobs.get(print_job_id)
 
+    def claim_next_eligible(self) -> KitchenPrintJob | None:
+        """Atomically accept the oldest repository-eligible print attempt.
+
+        Repository eligibility covers only open attempts inside the acceptance
+        window. Domain validation (order ownership, cancellation) runs here
+        after the atomic claim; a cancelled owner order becomes an explicit
+        ``accepted_at`` + ``rejected_at`` fact via ``order_cancelled``.
+        """
+
+        now = self._clock()
+        job = self._jobs.claim_next_eligible(now, self._policy)
+        if job is None:
+            return None
+        order = self._orders.get_order(job.order_id)
+        if order is None:
+            raise ValueError(f"no order with id {job.order_id!r}")
+        version = self._orders.get_order_version(job.order_version_id)
+        if version is None or version.order_id != job.order_id:
+            raise ValueError(
+                f"order_version_id {job.order_version_id!r} is not a version "
+                f"of order {job.order_id!r}"
+            )
+        if order.cancelled_at is not None:
+            self.reject_print_job(job.print_job_id, "order_cancelled")
+            return None
+        return job
+
     def list_print_jobs_for_version(
         self, order_version_id: str
     ) -> list[KitchenPrintJob]:
@@ -116,7 +143,9 @@ class KitchenPrintService:
     ) -> KitchenPrintJob:
         """Record a technical refusal with a narrow, non-PII reason code."""
 
-        job, _order, _version = self._active_job_context(print_job_id)
+        job, _order, _version = self._active_job_context(
+            print_job_id, allow_cancelled=True
+        )
         if rejection_code not in KITCHEN_PRINT_REJECTION_CODES:
             raise ValueError(f"unsupported rejection_code {rejection_code!r}")
         if job.rejected_at is not None:
@@ -223,21 +252,23 @@ class KitchenPrintService:
         return new_job
 
     def _active_job_context(
-        self, print_job_id: str
+        self, print_job_id: str, *, allow_cancelled: bool = False
     ) -> tuple[KitchenPrintJob, Order, OrderVersion]:
         job = self._jobs.get(print_job_id)
         if job is None:
             raise ValueError(f"no print job with id {print_job_id!r}")
-        order, version = self._active_owned_version(job.order_id, job.order_version_id)
+        order, version = self._active_owned_version(
+            job.order_id, job.order_version_id, allow_cancelled=allow_cancelled
+        )
         return job, order, version
 
     def _active_owned_version(
-        self, order_id: str, order_version_id: str
+        self, order_id: str, order_version_id: str, *, allow_cancelled: bool = False
     ) -> tuple[Order, OrderVersion]:
         order = self._orders.get_order(order_id)
         if order is None:
             raise ValueError(f"no order with id {order_id!r}")
-        if order.cancelled_at is not None:
+        if not allow_cancelled and order.cancelled_at is not None:
             raise ValueError(
                 f"order {order_id!r} is cancelled (Storno); print commands refused"
             )

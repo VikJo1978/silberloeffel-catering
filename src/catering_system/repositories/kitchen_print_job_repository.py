@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 
-from catering_system.domain.kitchen_print_job import KitchenPrintJob
+from catering_system.domain.kitchen_print_job import KitchenPrintJob, KitchenPrintPolicy
 from catering_system.domain.order import OrderVersion
 
 
@@ -29,3 +30,7 @@ class KitchenPrintJobRepository(Protocol):
     def acknowledge_and_confirm(
         self, job: KitchenPrintJob, confirmed_version: OrderVersion
     ) -> None: ...
+
+    def claim_next_eligible(
+        self, now: datetime, policy: KitchenPrintPolicy
+    ) -> KitchenPrintJob | None: ...
