@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import threading
 import uuid
-from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 
 from catering_system.domain.inquiry import (
@@ -116,7 +115,7 @@ def _eligible_job_setup() -> tuple[
     job_a = _requested_job(service, order_a.order_id, version_a.order_version_id, _JOB_A)
     job_b = _requested_job(service, order_b.order_id, version_b.order_version_id, _JOB_B)
     job_c = _requested_job(service, order_c.order_id, version_c.order_version_id, _JOB_C)
-    job_d = _requested_job(service, order_d.order_id, version_d.order_version_id, _JOB_D)
+    _requested_job(service, order_d.order_id, version_d.order_version_id, _JOB_D)
 
     service.accept_print_job(_JOB_B)
     service.reject_print_job(_JOB_C, "printer_unavailable")

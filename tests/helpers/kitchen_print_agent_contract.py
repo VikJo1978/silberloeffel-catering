@@ -15,8 +15,8 @@ import hashlib
 import json
 import threading
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any, Callable
+from datetime import datetime
+from typing import Callable
 
 from catering_system.domain.kitchen_print_job import (
     KitchenPrintJob,
