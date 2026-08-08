@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import queue
+import subprocess
 import threading
 import uuid
 from datetime import UTC, date, datetime, timedelta
@@ -39,7 +40,7 @@ from catering_system.ui.kitchen_api import KitchenApi, make_kitchen_api_handler
 from kitchen_print_agent.agent import KitchenPrintAgent
 from kitchen_print_agent.client import KitchenPrintAgentClient
 from kitchen_print_agent.config import AgentConfig
-from kitchen_print_agent.printer import FakePrinterAdapter
+from kitchen_print_agent.printer import CupsPrinterAdapter, FakePrinterAdapter
 from tests.helpers.commercial_snapshot_seed import seed_commercial_snapshot
 from tests.helpers.order_seed import seed_order
 
@@ -180,6 +181,39 @@ def test_printer_failure_triggers_technical_reject(kitchen_api_server) -> None:
     assert job is not None
     assert job.rejected_at == _NOW
     assert job.rejection_code == "printer_unavailable"
+
+
+def test_cups_adapter_failure_propagates_rejection_code(kitchen_api_server) -> None:
+    base, db = kitchen_api_server
+    _order_id, version_id = _seed_claimable_job(db)
+
+    def run_lp(_command: list[str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess(
+            args=["lp"],
+            returncode=1,
+            stdout="",
+            stderr="job rejected by spooler",
+        )
+
+    agent = KitchenPrintAgent(
+        _agent_config(base),
+        KitchenPrintAgentClient(base, _TOKEN),
+        CupsPrinterAdapter("Kitchen", run_lp=run_lp),
+    )
+    agent.run_once()
+
+    jobs = SQLiteKitchenPrintJobRepository(db)
+    job = jobs.get(_JOB_A)
+    jobs.close()
+    assert job is not None
+    assert job.rejection_code == "spool_rejected"
+    assert job.rejected_at == _NOW
+
+    orders = SQLiteOrderRepository(db)
+    version = orders.get_order_version(version_id)
+    orders.close()
+    assert version is not None
+    assert version.kitchen_print_confirmed_at is None
 
 
 def test_agent_restart_has_no_local_state(kitchen_api_server) -> None:
