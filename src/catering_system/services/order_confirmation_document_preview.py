@@ -176,6 +176,12 @@ def render_preview_html(preview: OrderConfirmationDocumentPreview) -> str:
         if preview.watermark is not None
         else ""
     )
+    payment_terms_html = (
+        ""
+        if preview.payment_customer_visible_text.casefold()
+        == preview.payment_method_label.casefold()
+        else f"<p>{_e(preview.payment_customer_visible_text)}</p>"
+    )
     recipient_lines = []
     if preview.recipient_company:
         recipient_lines.append(f"<p>{_e(preview.recipient_company)}</p>")
@@ -268,7 +274,7 @@ footer{{margin-top:2rem;padding-top:1rem;border-top:1px solid #ddd;font-size:0.9
 </section>
 <section class="section"><h2>Zahlung</h2>
 <p>{_e(preview.payment_method_label)}</p>
-<p>{_e(preview.payment_customer_visible_text)}</p>
+{payment_terms_html}
 </section>
 <footer><p>{_e(preview.footer_note)}</p></footer>
 </body></html>"""

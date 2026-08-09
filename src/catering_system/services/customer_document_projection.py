@@ -26,6 +26,11 @@ from catering_system.domain.order_commercial_snapshot import (
     OrderCommercialPosition,
     OrderCommercialSnapshot,
 )
+from catering_system.domain.order_payment_reminder import (
+    PAYMENT_METHOD_LABELS,
+    OrderPaymentReminder,
+    PaymentMethod,
+)
 from catering_system.services.order_print_projection_service import (
     format_quantity_display,
 )
@@ -127,6 +132,8 @@ def build_customer_document_projection(
     commercial_snapshot: OrderCommercialSnapshot,
     recipient: CustomerDocumentRecipient,
     fulfillment_mode: FulfillmentMode = "UNKNOWN",
+    payment_method: PaymentMethod | None = None,
+    payment_customer_visible_text: str | None = None,
 ) -> CustomerDocumentProjection:
     """Assemble a frozen customer-document projection from value objects."""
     if commercial_snapshot.order_id != order_version.order_id:
@@ -137,6 +144,12 @@ def build_customer_document_projection(
     positions = tuple(
         _map_position(position, order_version.guest_count_estimate)
         for position in commercial_snapshot.positions
+    )
+    effective_payment_method = payment_method or commercial_snapshot.payment_method
+    effective_payment_text = (
+        payment_customer_visible_text
+        if payment_customer_visible_text is not None
+        else commercial_snapshot.payment_customer_visible_text
     )
     return CustomerDocumentProjection(
         document_type=document_type,
@@ -160,12 +173,33 @@ def build_customer_document_projection(
             planning_mode=order_version.planning_mode,
         ),
         positions=positions,
-        payment_method=commercial_snapshot.payment_method,
-        payment_customer_visible_text=commercial_snapshot.payment_customer_visible_text,
+        payment_method=effective_payment_method,
+        payment_customer_visible_text=effective_payment_text,
         net_total_cents=sum(p.net_total_cents for p in positions),
         vat_total_cents=sum(p.vat_amount_cents for p in positions),
         gross_total_cents=sum(p.gross_total_cents for p in positions),
         fulfillment_mode=fulfillment_mode,
+    )
+
+
+def resolve_document_payment(
+    commercial_snapshot: OrderCommercialSnapshot,
+    payment_reminder: OrderPaymentReminder | None,
+) -> tuple[PaymentMethod, str]:
+    """Resolve the customer-document payment fact for a not-yet-frozen document."""
+    if payment_reminder is None:
+        return (
+            commercial_snapshot.payment_method,
+            commercial_snapshot.payment_customer_visible_text,
+        )
+    if payment_reminder.payment_method == commercial_snapshot.payment_method:
+        return (
+            commercial_snapshot.payment_method,
+            commercial_snapshot.payment_customer_visible_text,
+        )
+    return (
+        payment_reminder.payment_method,
+        PAYMENT_METHOD_LABELS[payment_reminder.payment_method],
     )
 
 
@@ -225,6 +259,8 @@ class CustomerDocumentProjectionService:
         inquiry: Inquiry | None,
         invoice_address: CustomerAddress | None = None,
         delivery_address: CustomerAddress | None = None,
+        payment_method: PaymentMethod | None = None,
+        payment_customer_visible_text: str | None = None,
     ) -> CustomerDocumentProjection:
         fulfillment_mode = (
             inquiry.fulfillment_mode if inquiry is not None else "UNKNOWN"
@@ -243,4 +279,6 @@ class CustomerDocumentProjectionService:
             commercial_snapshot=commercial_snapshot,
             recipient=recipient,
             fulfillment_mode=fulfillment_mode,
+            payment_method=payment_method,
+            payment_customer_visible_text=payment_customer_visible_text,
         )

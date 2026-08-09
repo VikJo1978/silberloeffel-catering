@@ -19,6 +19,7 @@ from catering_system.domain.order_commercial_snapshot import (
     OrderCommercialPosition,
     OrderCommercialSnapshot,
 )
+from catering_system.domain.order_payment_reminder import OrderPaymentReminder
 from catering_system.repositories.in_memory_inquiry_repository import (
     InMemoryInquiryRepository,
 )
@@ -30,6 +31,9 @@ from catering_system.repositories.in_memory_order_confirmation_document_reposito
 )
 from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
+)
+from catering_system.repositories.in_memory_payment_reminder_repository import (
+    InMemoryPaymentReminderRepository,
 )
 from catering_system.services.customer_document_preview import (
     CustomerDocumentPreviewNotFoundError,
@@ -144,7 +148,7 @@ def _commercial() -> OrderCommercialSnapshot:
                 vat_rate_percent=7,
                 vat_amount_cents=1624,
                 gross_total_cents=24824,
-                quantity=Decimal("80"),
+                quantity=Decimal(80),
                 quantity_mode="total",
                 unit_label="Stück",
             ),
@@ -174,6 +178,23 @@ def test_valid_preview_is_eligible() -> None:
     assert preview.gross_total_cents == 24824
     assert preview.event is not None
     assert preview.event.location_text == "Hamburg"
+
+
+def test_live_preview_uses_current_cash_payment_reminder() -> None:
+    preview = build_customer_document_preview(
+        order=_order(),
+        order_version=_version(),
+        commercial_snapshot=_commercial(),
+        recipient_inquiry=_inquiry(),
+        payment_reminder=OrderPaymentReminder(
+            order_id=_ORDER_ID,
+            payment_method="BAR_VOR_ORT",
+        ),
+        now=_NOW,
+    )
+
+    assert preview.payment_method == "BAR_VOR_ORT"
+    assert preview.payment_customer_visible_text == "Bar vor Ort"
 
 
 def test_missing_contact_preview_returns_blocker_not_exception() -> None:
@@ -268,12 +289,25 @@ def test_preview_service_does_not_persist_confirmation_document() -> None:
         )
     )
     commercials.create(_commercial())
+    payment_reminders = InMemoryPaymentReminderRepository()
+    payment_reminders.save(
+        OrderPaymentReminder(
+            order_id=_ORDER_ID,
+            payment_method="BAR_VOR_ORT",
+        )
+    )
 
     preview_service = CustomerDocumentPreviewService(
-        orders, inquiries, commercials, now=lambda: _NOW
+        orders,
+        inquiries,
+        commercials,
+        payment_reminder_repository=payment_reminders,
+        now=lambda: _NOW,
     )
     preview = preview_service.preview_order_confirmation(_ORDER_ID)
     assert preview.eligible is True
+    assert preview.payment_method == "BAR_VOR_ORT"
+    assert preview.payment_customer_visible_text == "Bar vor Ort"
     assert documents.get_latest_for_order(_ORDER_ID) is None
 
     confirmation = OrderConfirmationDocumentService(
