@@ -370,7 +370,9 @@ def _v_int(value: object) -> int:
     return value
 
 
-def _v_enum(value: object, validator: Callable[[str], _EnumValue]) -> _EnumValue:
+def _v_enum(  # noqa: UP047
+    value: object, validator: Callable[[str], _EnumValue]
+) -> _EnumValue:
     if not isinstance(value, str):
         raise _invalid()
     try:
@@ -550,11 +552,13 @@ class OfficeApi:
             self.inquiries,
             self.confirmation_documents,
             self.commercial_snapshots,
+            payment_reminder_repository=self.payment_reminders,
         )
         self.customer_document_preview_service = CustomerDocumentPreviewService(
             self.orders,
             self.inquiries,
             self.commercial_snapshots,
+            payment_reminder_repository=self.payment_reminders,
         )
         self.core = OperationalCoreService(
             self.orders,
@@ -3092,7 +3096,7 @@ def make_office_api_handler(
                     reasons=exc.reasons,
                     offer_id=exc.offer_id,
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001
                 _log.exception("internal error route=%s", template)
                 self._error(500, "internal")
 
@@ -3136,7 +3140,7 @@ def make_office_api_handler(
                     reasons=exc.reasons,
                     offer_id=exc.offer_id,
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001
                 _log.exception(
                     "internal error route=/office/v1/auth/configurator-handoff/exchange"
                 )

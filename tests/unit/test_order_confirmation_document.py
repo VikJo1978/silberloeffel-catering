@@ -24,6 +24,11 @@ from catering_system.domain.order_commercial_snapshot import (
     OrderCommercialPosition,
     OrderCommercialSnapshot,
 )
+from catering_system.domain.order_payment_reminder import (
+    OrderPaymentReminder,
+    PaymentReminderView,
+)
+from catering_system.domain.ready_to_send import ReadyToSendEvaluation
 from catering_system.repositories.in_memory_inquiry_repository import (
     InMemoryInquiryRepository,
 )
@@ -36,36 +41,41 @@ from catering_system.repositories.in_memory_order_confirmation_document_reposito
 from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
 )
+from catering_system.repositories.in_memory_payment_reminder_repository import (
+    InMemoryPaymentReminderRepository,
+)
 from catering_system.repositories.sqlite_order_confirmation_document_repository import (
     SQLiteOrderConfirmationDocumentRepository,
+)
+from catering_system.services.customer_document_preview import (
+    CustomerDocumentPreviewService,
 )
 from catering_system.services.customer_document_projection import (
     CustomerDocumentProjectionService,
 )
+from catering_system.services.offer_service import OfferService
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_confirmation_document_hash import (
     compute_document_hash,
+)
+from catering_system.services.order_confirmation_document_preview import (
+    build_preview,
+    render_preview_html,
 )
 from catering_system.services.order_confirmation_document_service import (
     OrderConfirmationDocumentService,
     OrderConfirmationDocumentStaleVersionError,
     _persist_snapshot_from_projection,
 )
-from catering_system.services.order_service import OrderService
-from catering_system.services.offer_service import OfferService
-from catering_system.domain.order_payment_reminder import PaymentReminderView
-from catering_system.domain.ready_to_send import ReadyToSendEvaluation
-from catering_system.ui import office_api_views as views
-from catering_system.services.customer_document_preview import (
-    CustomerDocumentPreviewService,
+from catering_system.services.order_confirmation_outbound_service import (
+    OutboundSendEligibility,
 )
+from catering_system.services.order_service import OrderService
+from catering_system.ui import office_api_views as views
 from catering_system.ui.office_panel_order_detail import (
     ConfirmationLivePreviewView,
     OrderDetailFormFields,
     render_order_detail,
-)
-from catering_system.services.order_confirmation_outbound_service import (
-    OutboundSendEligibility,
 )
 from tests.helpers.office_panel_context import legacy_office_context
 from tests.unit.test_offer_service import (
@@ -129,7 +139,7 @@ def _services() -> tuple[
 def _effective_order(
     services: tuple[object, ...],
 ) -> tuple[object, object]:
-    orders, _offers, _inquiries, _documents, service, _core, _offer_service = services
+    orders, _offers, _inquiries, _documents, _service, _core, _offer_service = services
     order = orders.list_orders()[0]
     version = orders.get_order_version(order.effective_order_version_id)
     assert version is not None
@@ -167,9 +177,8 @@ def test_no_effective_version_blocked() -> None:
 
 def test_pending_candidate_blocked() -> None:
     services = _services()
-    orders, _offers, _inquiries, _documents, service, _core, offer_service = services
+    orders, _offers, _inquiries, _documents, service, _core, _offer_service = services
     order, version = _effective_order(services)
-    offer_service  # silence lint
     OrderService(orders).propose_order_version_change(
         order.order_id,
         event_date=date(2026, 9, 1),
@@ -195,7 +204,7 @@ def test_kitchen_print_not_confirmed_blocked() -> None:
         version_id,
         variant_id,
         acceptance_id,
-        offers,
+        _offers,
         orders,
         inquiries,
         offer_service,
@@ -236,6 +245,112 @@ def test_snapshot_uses_effective_order_version_facts() -> None:
     assert snapshot.event_date == version.event_date
     assert snapshot.location_text == "Hamburg"
     assert snapshot.guest_count_estimate == 80
+
+
+def test_confirmation_snapshot_uses_current_cash_payment_reminder() -> None:
+    services = _services()
+    order, version = _effective_order(services)
+    orders, _offers, inquiries, documents, _service, _core, offer_service = services
+    payment_reminders = InMemoryPaymentReminderRepository()
+    payment_reminders.save(
+        OrderPaymentReminder(
+            order_id=order.order_id,
+            payment_method="BAR_VOR_ORT",
+        )
+    )
+    service = OrderConfirmationDocumentService(
+        orders,
+        inquiries,
+        documents,
+        offer_service._commercial_snapshots,
+        payment_reminder_repository=payment_reminders,
+        now=lambda: datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
+    )
+
+    snapshot = service.prepare_snapshot(
+        order.order_id,
+        version.order_version_id,
+        "office-panel",
+    )
+    html = render_preview_html(build_preview(snapshot))
+
+    assert snapshot.payment_method == "BAR_VOR_ORT"
+    assert snapshot.payment_customer_visible_text == "Bar vor Ort"
+    assert "Bar vor Ort" in html
+    assert html.count("Bar vor Ort") == 1
+    assert "Zahlung per Rechnung" not in html
+
+
+def test_confirmation_snapshot_keeps_invoice_payment_reminder_text() -> None:
+    services = _services()
+    order, version = _effective_order(services)
+    orders, _offers, inquiries, documents, _service, _core, offer_service = services
+    payment_reminders = InMemoryPaymentReminderRepository()
+    payment_reminders.save(
+        OrderPaymentReminder(
+            order_id=order.order_id,
+            payment_method="RECHNUNG",
+        )
+    )
+    service = OrderConfirmationDocumentService(
+        orders,
+        inquiries,
+        documents,
+        offer_service._commercial_snapshots,
+        payment_reminder_repository=payment_reminders,
+        now=lambda: datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
+    )
+
+    snapshot = service.prepare_snapshot(
+        order.order_id,
+        version.order_version_id,
+        "office-panel",
+    )
+
+    assert snapshot.payment_method == "RECHNUNG"
+    assert snapshot.payment_customer_visible_text == "Zahlung per Rechnung"
+
+
+def test_existing_confirmation_snapshot_ignores_later_payment_reminder_change() -> None:
+    services = _services()
+    order, version = _effective_order(services)
+    orders, _offers, inquiries, documents, _service, _core, offer_service = services
+    payment_reminders = InMemoryPaymentReminderRepository()
+    payment_reminders.save(
+        OrderPaymentReminder(
+            order_id=order.order_id,
+            payment_method="RECHNUNG",
+        )
+    )
+    service = OrderConfirmationDocumentService(
+        orders,
+        inquiries,
+        documents,
+        offer_service._commercial_snapshots,
+        payment_reminder_repository=payment_reminders,
+        now=lambda: datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
+    )
+    created = service.prepare_snapshot(
+        order.order_id,
+        version.order_version_id,
+        "office-panel",
+    )
+    payment_reminders.save(
+        OrderPaymentReminder(
+            order_id=order.order_id,
+            payment_method="BAR_VOR_ORT",
+        )
+    )
+
+    existing = service.prepare_snapshot(
+        order.order_id,
+        version.order_version_id,
+        "office-panel",
+    )
+
+    assert existing is created
+    assert existing.payment_method == "RECHNUNG"
+    assert existing.payment_customer_visible_text == "Zahlung per Rechnung"
 
 
 def test_snapshot_uses_accepted_offer_positions() -> None:
@@ -434,7 +549,7 @@ def test_fee_position_preserved() -> None:
                 vat_rate_percent=7,
                 vat_amount_cents=1624,
                 gross_total_cents=24824,
-                quantity=Decimal("80"),
+                quantity=Decimal(80),
                 quantity_mode="total",
                 unit_label="Stück",
             ),
@@ -486,7 +601,7 @@ def test_phone_without_email_still_allows_prepare() -> None:
         version_id,
         variant_id,
         acceptance_id,
-        offers,
+        _offers,
         orders,
         inquiries,
         offer_service,
@@ -540,7 +655,7 @@ def test_missing_customer_contact_blocks_prepare() -> None:
         version_id,
         variant_id,
         acceptance_id,
-        offers,
+        _offers,
         orders,
         inquiries,
         offer_service,
@@ -622,7 +737,7 @@ def test_address_warning_flows_into_confirmation_document() -> None:
 def test_confirmation_builds_via_customer_document_projection() -> None:
     services = _services()
     order, version = _effective_order(services)
-    orders, _offers, inquiries, _documents, service, _core, offer_service = services
+    _orders, _offers, inquiries, _documents, service, _core, offer_service = services
     commercial = offer_service._commercial_snapshots.get_by_order_id(order.order_id)
     assert commercial is not None
     inquiry = inquiries.get_by_id(order.source_inquiry_id)
@@ -679,7 +794,7 @@ def test_prepare_is_idempotent_per_order_version() -> None:
 
 def test_stale_expected_version_raises() -> None:
     services = _services()
-    order, version = _effective_order(services)
+    order, _version = _effective_order(services)
     service = services[4]
     with pytest.raises(OrderConfirmationDocumentStaleVersionError):
         service.prepare_snapshot(order.order_id, str(uuid.uuid4()), "office-panel")
@@ -906,7 +1021,7 @@ def test_office_panel_confirmation_block_renders() -> None:
 def test_confirmation_uses_snapshot_when_offer_repository_unavailable() -> None:
     services = _services()
     order, version = _effective_order(services)
-    orders, offers, _inquiries, _documents, service, _core, offer_service = services
+    _orders, offers, _inquiries, _documents, service, _core, offer_service = services
     offers._offers.clear()
 
     snapshot = service.prepare_snapshot(

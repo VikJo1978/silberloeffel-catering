@@ -7,12 +7,14 @@ Create policy lives in evaluate_customer_document_eligibility only.
 from __future__ import annotations
 
 import uuid
-from typing import Callable
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from catering_system.domain.customer_document_eligibility import (
     CustomerDocumentCreationBlocked,
+)
+from catering_system.domain.customer_document_eligibility import (
     CustomerDocumentEligibility as DocumentCreateEligibility,
 )
 from catering_system.domain.customer_document_projection import (
@@ -24,14 +26,15 @@ from catering_system.domain.inquiry import FulfillmentMode
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_commercial_snapshot import OrderCommercialSnapshot
 from catering_system.domain.order_confirmation_document import (
+    SCHEMA_VERSION_V3,
     OrderConfirmationDocumentPosition,
     OrderConfirmationDocumentSnapshot,
     OrderConfirmationVatBucket,
     RecipientStatus,
-    SCHEMA_VERSION_V3,
 )
 from catering_system.domain.order_payment_reminder import (
     PAYMENT_METHOD_LABELS,
+    OrderPaymentReminder,
     validate_payment_method,
 )
 from catering_system.repositories.inquiry_repository import InquiryRepository
@@ -42,12 +45,16 @@ from catering_system.repositories.order_confirmation_document_repository import 
     OrderConfirmationDocumentRepository,
 )
 from catering_system.repositories.order_repository import OrderRepository
+from catering_system.repositories.payment_reminder_repository import (
+    PaymentReminderRepository,
+)
 from catering_system.services.customer_document_eligibility import (
     evaluate_customer_document_eligibility,
 )
 from catering_system.services.customer_document_projection import (
     CustomerDocumentProjectionService,
     build_customer_document_recipient,
+    resolve_document_payment,
 )
 from catering_system.services.order_confirmation_document_hash import (
     compute_document_hash,
@@ -107,6 +114,7 @@ class OrderConfirmationDocumentService:
         document_repository: OrderConfirmationDocumentRepository,
         commercial_snapshot_repository: OrderCommercialSnapshotRepository,
         *,
+        payment_reminder_repository: PaymentReminderRepository | None = None,
         projection_service: CustomerDocumentProjectionService | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
@@ -114,6 +122,7 @@ class OrderConfirmationDocumentService:
         self._inquiries = inquiry_repository
         self._documents = document_repository
         self._commercial_snapshots = commercial_snapshot_repository
+        self._payment_reminders = payment_reminder_repository
         self._projection = projection_service or CustomerDocumentProjectionService()
         self._now = now or (lambda: datetime.now(UTC))
 
@@ -187,6 +196,9 @@ class OrderConfirmationDocumentService:
 
         document_id = str(uuid.uuid4())
         created_at = self._now()
+        payment_method, payment_customer_visible_text = resolve_document_payment(
+            commercial, self._payment_reminder(order.order_id)
+        )
         projection = self._projection.build(
             document_type="ORDER_CONFIRMATION",
             document_id=document_id,
@@ -196,6 +208,8 @@ class OrderConfirmationDocumentService:
             inquiry=self._inquiries.get_by_id(order.source_inquiry_id),
             invoice_address=invoice_address,
             delivery_address=delivery_address,
+            payment_method=payment_method,
+            payment_customer_visible_text=payment_customer_visible_text,
         )
         draft = _persist_snapshot_from_projection(
             projection,
@@ -305,6 +319,11 @@ class OrderConfirmationDocumentService:
             fulfillment_mode=fulfillment_mode,
         )
         return version, commercial, recipient, fulfillment_mode
+
+    def _payment_reminder(self, order_id: str) -> OrderPaymentReminder | None:
+        if self._payment_reminders is None:
+            return None
+        return self._payment_reminders.get(order_id)
 
 
 def _persist_snapshot_from_projection(
