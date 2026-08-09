@@ -246,8 +246,8 @@ __all__ = [
     "PROGRESSION_BLOCKER_LABELS",
     "READY_TO_SEND_BLOCKER_LABELS",
     "SOURCE_LABELS",
-    "render_print_sheet",
     "render_buffet_cards",
+    "render_print_sheet",
 ]
 
 # -- Rückrufe: read-only pull from the separate auerswald-sync call-log
@@ -487,12 +487,13 @@ class OfficePanel:
         )
         if remote is None:
             pause_repo = pause_repository or InMemoryOrderOperationalPauseRepository()
+            payment_repo = payment_reminder_repo or InMemoryPaymentReminderRepository()
             self.inquiry_service = InquiryService(inquiry_repo)
             self.order_service = OrderService(order_repo)
             self.core = OperationalCoreService(order_repo, pause_repository=pause_repo)
             self._pause_repository = pause_repo
             self.payment_reminder_service = PaymentReminderService(
-                payment_reminder_repo or InMemoryPaymentReminderRepository(),
+                payment_repo,
                 order_repo,
                 today=api_views.berlin_today,
             )
@@ -509,11 +510,13 @@ class OfficePanel:
                 inquiry_repo,
                 document_repo,
                 self._commercial_snapshots,
+                payment_reminder_repository=payment_repo,
             )
             self.customer_document_preview_service = CustomerDocumentPreviewService(
                 order_repo,
                 inquiry_repo,
                 self._commercial_snapshots,
+                payment_reminder_repository=payment_repo,
             )
             self.confirmation_outbound_service = OrderConfirmationOutboundService(
                 order_repo,
@@ -1265,7 +1268,7 @@ class OfficePanel:
                     else "interessent"
                 )
             ),
-            inquiry_ids=tuple(),
+            inquiry_ids=(),
         )
         return self.contact_profile_service.ensure_for_projection(projection)
 

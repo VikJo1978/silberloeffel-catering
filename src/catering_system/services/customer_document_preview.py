@@ -6,8 +6,8 @@ No persistence. No Offer. No intake parsing. No PDF/HTML/email.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Callable
 
 from catering_system.domain.customer_document_preview import CustomerDocumentPreview
 from catering_system.domain.customer_document_projection import (
@@ -17,17 +17,22 @@ from catering_system.domain.customer_document_projection import (
 from catering_system.domain.inquiry import FulfillmentMode, Inquiry
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_commercial_snapshot import OrderCommercialSnapshot
+from catering_system.domain.order_payment_reminder import OrderPaymentReminder
 from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.repositories.order_commercial_snapshot_repository import (
     OrderCommercialSnapshotRepository,
 )
 from catering_system.repositories.order_repository import OrderRepository
+from catering_system.repositories.payment_reminder_repository import (
+    PaymentReminderRepository,
+)
 from catering_system.services.customer_document_eligibility import (
     evaluate_customer_document_eligibility,
 )
 from catering_system.services.customer_document_projection import (
     build_customer_document_projection,
     build_customer_document_recipient,
+    resolve_document_payment,
 )
 
 _PREVIEW_DOCUMENT_ID = "preview"
@@ -45,6 +50,7 @@ def build_customer_document_preview(
     recipient_inquiry: Inquiry | None,
     invoice_address: CustomerAddress | None = None,
     delivery_address: CustomerAddress | None = None,
+    payment_reminder: OrderPaymentReminder | None = None,
     now: datetime | None = None,
 ) -> CustomerDocumentPreview:
     """Pure assemble of live preview facts + eligibility (no repos)."""
@@ -68,6 +74,9 @@ def build_customer_document_preview(
     )
     event = _event_from_version(order_version)
     if commercial_snapshot is not None and order_version is not None:
+        payment_method, payment_customer_visible_text = resolve_document_payment(
+            commercial_snapshot, payment_reminder
+        )
         projection = build_customer_document_projection(
             document_type="ORDER_CONFIRMATION",
             document_id=_PREVIEW_DOCUMENT_ID,
@@ -76,6 +85,8 @@ def build_customer_document_preview(
             commercial_snapshot=commercial_snapshot,
             recipient=recipient,
             fulfillment_mode=fulfillment_mode,
+            payment_method=payment_method,
+            payment_customer_visible_text=payment_customer_visible_text,
         )
         return CustomerDocumentPreview(
             document_type="ORDER_CONFIRMATION",
@@ -137,11 +148,13 @@ class CustomerDocumentPreviewService:
         inquiry_repository: InquiryRepository,
         commercial_snapshot_repository: OrderCommercialSnapshotRepository,
         *,
+        payment_reminder_repository: PaymentReminderRepository | None = None,
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self._orders = order_repository
         self._inquiries = inquiry_repository
         self._commercial_snapshots = commercial_snapshot_repository
+        self._payment_reminders = payment_reminder_repository
         self._now = now or (lambda: datetime.now(UTC))
 
     def preview_order_confirmation(
@@ -159,6 +172,11 @@ class CustomerDocumentPreviewService:
             version = self._orders.get_order_version(order.effective_order_version_id)
         commercial = self._commercial_snapshots.get_by_order_id(order.order_id)
         inquiry = self._inquiries.get_by_id(order.source_inquiry_id)
+        payment_reminder = (
+            self._payment_reminders.get(order.order_id)
+            if self._payment_reminders is not None
+            else None
+        )
         return build_customer_document_preview(
             order=order,
             order_version=version,
@@ -166,5 +184,6 @@ class CustomerDocumentPreviewService:
             recipient_inquiry=inquiry,
             invoice_address=invoice_address,
             delivery_address=delivery_address,
+            payment_reminder=payment_reminder,
             now=self._now(),
         )
