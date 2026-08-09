@@ -19,6 +19,13 @@ from datetime import date, datetime
 from typing import Any, NoReturn, cast
 from urllib.parse import quote, urlencode, urlparse
 
+from catering_system.domain.catalog import (
+    CatalogDish,
+    CatalogDishCreatePayload,
+    PricingUnit,
+    validate_allergen_codes,
+    validate_pricing_unit,
+)
 from catering_system.domain.customer_document_eligibility import (
     DOCUMENT_BLOCKER_CODES,
     DocumentBlocker,
@@ -36,10 +43,10 @@ from catering_system.domain.customer_document_projection import (
     DocumentType,
 )
 from catering_system.domain.inquiry import (
+    PLANNING_MODE_SET,
     FulfillmentMode,
     Inquiry,
     InquiryOfficeNextAction,
-    PLANNING_MODE_SET,
     PlanningMode,
     set_inquiry_fulfillment_mode,
     validate_call_verification_status,
@@ -48,10 +55,6 @@ from catering_system.domain.inquiry import (
     validate_fulfillment_mode,
     validate_planning_mode,
 )
-from catering_system.domain.inquiry_offer_preparation import (
-    InquiryOfferPreparationBlocker,
-)
-from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.inquiry_contact_completeness import (
     complete_inquiry_contact_information,
 )
@@ -63,6 +66,11 @@ from catering_system.domain.inquiry_customer_snapshot import (
     set_inquiry_customer_addresses,
     snapshot_from_structured_contact,
 )
+from catering_system.domain.inquiry_offer_preparation import (
+    InquiryOfferPreparationBlocker,
+)
+from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.order_confirmation_outbound import FakeOutboxMessage
 from catering_system.domain.order_payment_reminder import (
     PAYMENT_METHODS,
     OrderPaymentReminder,
@@ -71,6 +79,8 @@ from catering_system.domain.order_payment_reminder import (
     validate_payment_method,
 )
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
+from catering_system.services.buffet_cards_service import BuffetCard, BuffetCardsView
+from catering_system.services.inquiry_service import validate_inquiry_source
 from catering_system.services.order_confirmation_document_service import (
     OrderConfirmationDocumentEligibility,
     OrderConfirmationDocumentSummary,
@@ -79,23 +89,14 @@ from catering_system.services.order_confirmation_outbound_service import (
     OutboundSendEligibility,
     OutboundSendSummary,
 )
-from catering_system.domain.order_confirmation_outbound import FakeOutboxMessage
-from catering_system.domain.catalog import (
-    CatalogDish,
-    CatalogDishCreatePayload,
-    PricingUnit,
-    validate_allergen_codes,
-    validate_pricing_unit,
-)
-from catering_system.services.inquiry_service import validate_inquiry_source
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjection,
     PrintCommercialBlock,
     PrintEventBlock,
     PrintFlagsBlock,
+    PrintPaymentBlock,
     PrintPositionLine,
 )
-from catering_system.services.buffet_cards_service import BuffetCard, BuffetCardsView
 
 _MAX_RESPONSE_BYTES = 512 * 1024
 _READ_TIMEOUT_SECONDS = 3
@@ -349,7 +350,7 @@ class InquiryDetailMeta:
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
 
 
@@ -819,7 +820,8 @@ _PRINT_FLAGS_KEYS = frozenset(
         "watermark",
     }
 )
-_PRINT_PROJECTION_KEYS = frozenset({"event", "commercial", "flags"})
+_PRINT_PAYMENT_KEYS = frozenset({"payment_method"})
+_PRINT_PROJECTION_KEYS = frozenset({"event", "commercial", "flags", "payment"})
 
 
 def _print_position_line(data: Mapping[str, object]) -> PrintPositionLine:
@@ -844,6 +846,8 @@ def _print_projection(data: Mapping[str, object]) -> OrderPrintProjection:
     _exact(commercial_data, _PRINT_COMMERCIAL_KEYS)
     flags_data = _dict(data["flags"])
     _exact(flags_data, _PRINT_FLAGS_KEYS)
+    payment_data = _dict(data["payment"])
+    _exact(payment_data, _PRINT_PAYMENT_KEYS)
     source = _str(commercial_data["source"])
     if source not in {"offer_conversion", "none"}:
         _bad_response()
@@ -861,6 +865,14 @@ def _print_projection(data: Mapping[str, object]) -> OrderPrintProjection:
         planning_mode = validate_planning_mode(_str(event_data["planning_mode"]))
     except ValueError:
         _bad_response()
+    payment_method_raw = payment_data["payment_method"]
+    if payment_method_raw is None:
+        payment_method = None
+    else:
+        try:
+            payment_method = validate_payment_method(_str(payment_method_raw))
+        except ValueError:
+            _bad_response()
     return OrderPrintProjection(
         event=PrintEventBlock(
             order_id=_uuid4(event_data["order_id"]),
@@ -902,6 +914,7 @@ def _print_projection(data: Mapping[str, object]) -> OrderPrintProjection:
             is_stale=_bool(flags_data["is_stale"]),
             watermark=watermark,  # type: ignore[arg-type]
         ),
+        payment=PrintPaymentBlock(payment_method=payment_method),
     )
 
 

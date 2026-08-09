@@ -102,8 +102,8 @@ from catering_system.ui.office_panel import (
     render_rueckruf,
 )
 from catering_system.ui.office_panel_authz import (
-    BusinessAccessDenied,
     DYNAMIC_CATALOG_UPDATE_AUTH,
+    BusinessAccessDenied,
     DynamicCatalogUpdateAuth,
     authorize_catalog_update,
     require_all_business_permissions,
@@ -953,10 +953,10 @@ def make_office_panel_handler(
             lists = getattr(self, "_form_lists_cache", {})
             return lists.get(key, [])
 
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A002
+        def log_message(self, format: str, *args: object) -> None:
             pass
 
-        def do_GET(self) -> None:  # noqa: N802
+        def do_GET(self) -> None:
             parsed = urlparse(self.path)
             parts = [part for part in parsed.path.split("/") if part]
             auth = self._resolve_request_auth()
@@ -1356,6 +1356,7 @@ def make_office_panel_handler(
             return OrderPrintProjectionService(
                 order_repo,
                 panel._commercial_snapshots,
+                payment_reminder_repo,
             ).resolve(order_id, version_id, intent="preview")
 
         def _resolve_buffet_cards_view(self, order_id: str, version_id: str):
@@ -1366,6 +1367,7 @@ def make_office_panel_handler(
                 OrderPrintProjectionService(
                     order_repo,
                     panel._commercial_snapshots,
+                    payment_reminder_repo,
                 ),
             ).resolve(order_id, version_id)
 
@@ -1465,7 +1467,7 @@ def make_office_panel_handler(
             )
             self._html(body)
 
-        def do_POST(self) -> None:  # noqa: N802
+        def do_POST(self) -> None:
             parts = [part for part in urlparse(self.path).path.split("/") if part]
             auth = self._resolve_request_auth()
             self._request_auth = auth

@@ -13,14 +13,16 @@ from __future__ import annotations
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+from catering_system.domain.calendar_entry_projection import (
+    CALENDAR_ENTRY_KIND_LABELS,
+    CalendarEntryProjection,
+)
+from catering_system.domain.catalog import (
+    CatalogDish,
+    CatalogPriceHistoryEntry,
+    allergen_labels,
+)
 from catering_system.domain.contact_projection import ContactProjection
-from catering_system.domain.inquiry_contact_completeness import (
-    derive_inquiry_contact_completeness,
-    missing_contact_fields,
-)
-from catering_system.domain.inquiry_customer_snapshot import (
-    customer_snapshot_to_mapping,
-)
 from catering_system.domain.email_intake_projection import EmailIntakeProjection
 from catering_system.domain.inquiry import (
     Inquiry,
@@ -29,16 +31,13 @@ from catering_system.domain.inquiry import (
     derive_inquiry_offer_projection,
     derive_inquiry_office_state,
 )
-from catering_system.domain.calendar_entry_projection import (
-    CALENDAR_ENTRY_KIND_LABELS,
-    CalendarEntryProjection,
+from catering_system.domain.inquiry_contact_completeness import (
+    derive_inquiry_contact_completeness,
+    missing_contact_fields,
 )
-from catering_system.domain.offer_queue import (
-    OfferQueueItem,
-    OfferQueueSection,
-    OfferQueueSnapshot,
+from catering_system.domain.inquiry_customer_snapshot import (
+    customer_snapshot_to_mapping,
 )
-from catering_system.domain.task_projection import TaskProjection
 from catering_system.domain.offer import (
     Offer,
     OfferPosition,
@@ -46,20 +45,11 @@ from catering_system.domain.offer import (
     OfferVersion,
     derive_offer_state,
 )
-from catering_system.services.offer_budget_presentation import (
-    compute_offer_budget_presentation,
+from catering_system.domain.offer_queue import (
+    OfferQueueItem,
+    OfferQueueSection,
+    OfferQueueSnapshot,
 )
-from catering_system.services.order_print_projection_service import (
-    OrderPrintProjection,
-    PrintPositionLine,
-)
-from catering_system.services.buffet_cards_service import BuffetCard, BuffetCardsView
-from catering_system.domain.catalog import allergen_labels
-from catering_system.services.catalog_dish_service import (
-    AllergenCodeDefinition,
-    CatalogDishListResult,
-)
-from catering_system.domain.catalog import CatalogDish, CatalogPriceHistoryEntry
 from catering_system.domain.order import (
     Order,
     OrderVersion,
@@ -71,8 +61,17 @@ from catering_system.domain.order_operational_pause import (
 )
 from catering_system.domain.order_payment_reminder import PaymentReminderView
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
+from catering_system.domain.task_projection import TaskProjection
 from catering_system.domain.wochenuebersicht import Wochenuebersicht
 from catering_system.domain.work_center import WorkCenterSnapshot
+from catering_system.services.buffet_cards_service import BuffetCard, BuffetCardsView
+from catering_system.services.catalog_dish_service import (
+    AllergenCodeDefinition,
+    CatalogDishListResult,
+)
+from catering_system.services.offer_budget_presentation import (
+    compute_offer_budget_presentation,
+)
 from catering_system.services.order_confirmation_document_preview import (
     OrderConfirmationDocumentPreview,
     preview_to_json,
@@ -81,8 +80,11 @@ from catering_system.services.order_confirmation_document_service import (
     OrderConfirmationDocumentEligibility,
     OrderConfirmationDocumentSummary,
 )
+from catering_system.services.order_print_projection_service import (
+    OrderPrintProjection,
+    PrintPositionLine,
+)
 from catering_system.ui.office_panel_offer_prefill import offer_prefill_payload
-
 
 BERLIN = ZoneInfo("Europe/Berlin")
 
@@ -1111,6 +1113,7 @@ def order_print_projection_shape(projection: OrderPrintProjection) -> dict[str, 
     event = projection.event
     commercial = projection.commercial
     flags = projection.flags
+    payment = projection.payment
     return {
         "event": {
             "order_id": event.order_id,
@@ -1152,6 +1155,9 @@ def order_print_projection_shape(projection: OrderPrintProjection) -> dict[str, 
             "is_final_allowed": flags.is_final_allowed,
             "is_stale": flags.is_stale,
             "watermark": flags.watermark,
+        },
+        "payment": {
+            "payment_method": payment.payment_method,
         },
     }
 

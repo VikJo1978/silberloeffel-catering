@@ -14,10 +14,14 @@ from catering_system.domain.order_commercial_snapshot import (
     OrderCommercialPosition,
     OrderCommercialSnapshot,
 )
+from catering_system.domain.order_payment_reminder import PaymentMethod
 from catering_system.repositories.order_commercial_snapshot_repository import (
     OrderCommercialSnapshotRepository,
 )
 from catering_system.repositories.order_repository import OrderRepository
+from catering_system.repositories.payment_reminder_repository import (
+    PaymentReminderRepository,
+)
 
 PrintIntent = Literal["preview", "change_preview", "final", "kitchen_job"]
 PrintWatermark = Literal["ENTWURF", "VERALTET", "ÄNDERUNG – NOCH NICHT WIRKSAM"]
@@ -81,10 +85,16 @@ class PrintFlagsBlock:
 
 
 @dataclass(frozen=True)
+class PrintPaymentBlock:
+    payment_method: PaymentMethod | None
+
+
+@dataclass(frozen=True)
 class OrderPrintProjection:
     event: PrintEventBlock
     commercial: PrintCommercialBlock
     flags: PrintFlagsBlock
+    payment: PrintPaymentBlock = PrintPaymentBlock(payment_method=None)
 
 
 class _QuantityDisplaySource(Protocol):
@@ -132,9 +142,11 @@ class OrderPrintProjectionService:
         self,
         order_repository: OrderRepository,
         commercial_snapshot_repository: OrderCommercialSnapshotRepository,
+        payment_reminder_repository: PaymentReminderRepository | None = None,
     ) -> None:
         self._orders = order_repository
         self._commercial_snapshots = commercial_snapshot_repository
+        self._payment_reminders = payment_reminder_repository
 
     def resolve(
         self,
@@ -159,6 +171,15 @@ class OrderPrintProjectionService:
             event=_event_block(order, version),
             commercial=commercial,
             flags=flags,
+            payment=self._resolve_payment(order),
+        )
+
+    def _resolve_payment(self, order: Order) -> PrintPaymentBlock:
+        if self._payment_reminders is None:
+            return PrintPaymentBlock(payment_method=None)
+        reminder = self._payment_reminders.get(order.order_id)
+        return PrintPaymentBlock(
+            payment_method=None if reminder is None else reminder.payment_method
         )
 
     def _resolve_commercial(

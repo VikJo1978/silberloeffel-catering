@@ -389,6 +389,14 @@ def render_print_sheet(projection: OrderPrintProjection) -> str:
             f'<p class="label">Geänderte Felder:</p><p class="value">'
             f"{_e(fields)}</p></div>"
         )
+    payment_warning_html = (
+        '<div class="payment-warning">'
+        "<p><strong>ACHTUNG: Barzahlung vor Ort.</strong></p>"
+        "<p>Rechnung dem Fahrer mitgeben.</p>"
+        "</div>"
+        if projection.payment.payment_method == "BAR_VOR_ORT"
+        else ""
+    )
     menu_html = _render_menu_section(projection)
     return f"""<!DOCTYPE html>
 <html lang="de"><head><meta charset="utf-8"><title>Küchenzettel</title>
@@ -406,11 +414,14 @@ hr{{border:none;border-top:2px solid #000;margin:1.25rem 0}}
 .stand{{margin-top:1rem}}
 .cancelled{{color:#a00;font-size:2rem;border:4px solid #a00;padding:0.5rem;text-align:center}}
 .watermark{{color:#666;font-size:2rem;border:3px dashed #666;padding:0.5rem;text-align:center;margin-bottom:1rem}}
+.payment-warning{{border:4px solid #000;padding:0.75rem;margin:1rem 0;font-size:1.35rem}}
+.payment-warning p{{margin:0.2rem 0}}
 button{{font-size:1rem;margin-top:1.5rem;padding:0.5rem 1rem}}
 </style></head><body>
 {cancelled_banner}
 {watermark_html}
 {change_html}
+{payment_warning_html}
 <p class="brand">SILBERLÖFFEL</p>
 <hr>
 <p class="label">Datum:</p>

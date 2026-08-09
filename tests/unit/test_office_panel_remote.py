@@ -8,9 +8,6 @@ never opening core.db in remote mode, and half-config startup rejection.
 
 from __future__ import annotations
 
-from tests.helpers.commercial_snapshot_seed import seed_commercial_snapshot
-from tests.helpers.order_seed import seed_order
-
 import base64
 import json
 import os
@@ -23,42 +20,47 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from datetime import date
+from datetime import UTC, date, datetime
 from http.server import HTTPServer
 from pathlib import Path
 
 import pytest
 
+from catering_system.domain.catalog import CatalogDish
+from catering_system.domain.offer_snapshot import compute_snapshot_hash
+from catering_system.repositories.sqlite_catalog_repository import (
+    SQLiteCatalogRepository,
+)
 from catering_system.repositories.sqlite_inquiry_repository import (
     SQLiteInquiryRepository,
 )
 from catering_system.repositories.sqlite_offer_repository import (
     SQLiteOfferRepository,
 )
-from catering_system.repositories.sqlite_catalog_repository import (
-    SQLiteCatalogRepository,
-)
-from catering_system.domain.catalog import CatalogDish
-from datetime import UTC, datetime
 from catering_system.repositories.sqlite_order_commercial_snapshot_repository import (
     SQLiteOrderCommercialSnapshotRepository,
 )
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
-from catering_system.domain.offer_snapshot import compute_snapshot_hash
 from catering_system.services.inquiry_service import InquiryService
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
 from catering_system.ui.office_api import create_office_api_server
-from tests.helpers.offer_pdf_static_content import (
-    fake_offer_pdf_static_content,
-)
 from catering_system.ui.office_panel_http import (
     create_office_panel_server,
     csrf_token_for_password,
 )
-from catering_system.ui.remote_core_client import RemoteCoreClient
+from catering_system.ui.remote_core_client import (
+    RemoteCoreClient,
+    RemoteCoreError,
+    _print_projection,
+)
+from tests.helpers.commercial_snapshot_seed import seed_commercial_snapshot
+from tests.helpers.offer_pdf_static_content import (
+    fake_offer_pdf_static_content,
+)
+from tests.helpers.order_seed import seed_order
 
 _PASSWORD = "test-pw"
 _AUTH = "Basic " + base64.b64encode(f"office:{_PASSWORD}".encode()).decode()
@@ -70,6 +72,76 @@ _SNAPSHOT_ID = "77777777-7777-4777-8777-777777777771"
 _HIDDEN_REMOTE_FIELD = re.compile(
     r'<input type="hidden" name="_(?:command_id|expect_[a-zA-Z_]+)" value="[^"]*">'
 )
+
+
+def _remote_print_projection_payload() -> dict[str, object]:
+    return {
+        "event": {
+            "order_id": "11111111-1111-4111-8111-111111111111",
+            "order_version_id": "22222222-2222-4222-8222-222222222222",
+            "version_number": 1,
+            "event_date": "2026-10-01",
+            "time_window_text": "mittags",
+            "location_text": "Hamburg",
+            "guest_count_estimate": 25,
+            "planning_mode": "caterer_suggestion",
+            "kitchen_print_confirmed_at": None,
+            "order_cancelled_at": None,
+            "is_candidate": False,
+            "is_effective": True,
+            "change_reason": None,
+            "changed_fields": [],
+        },
+        "commercial": {
+            "source": "offer_conversion",
+            "offer_id": "33333333-3333-4333-8333-333333333333",
+            "offer_version_id": "44444444-4444-4444-8444-444444444444",
+            "accepted_variant_id": "55555555-5555-4555-8555-555555555555",
+            "variant_label": "Standard",
+            "positions": [],
+        },
+        "flags": {
+            "intent": "preview",
+            "is_preview": False,
+            "is_final_allowed": True,
+            "is_stale": False,
+            "watermark": None,
+        },
+        "payment": {
+            "payment_method": None,
+        },
+    }
+
+
+def test_remote_print_projection_accepts_missing_payment_method() -> None:
+    projection = _print_projection(_remote_print_projection_payload())
+
+    assert projection.payment.payment_method is None
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    (
+        (("commercial", "source"), "invalid"),
+        (("flags", "intent"), "invalid"),
+        (("flags", "watermark"), "invalid"),
+        (("event", "planning_mode"), "invalid"),
+        (("payment", "payment_method"), "invalid"),
+    ),
+)
+def test_remote_print_projection_rejects_invalid_payment_shape(
+    path: tuple[str, str], value: object
+) -> None:
+    payload = _remote_print_projection_payload()
+    section = payload[path[0]]
+    assert isinstance(section, dict)
+    section[path[1]] = value
+
+    with pytest.raises(RemoteCoreError) as exc_info:
+        _print_projection(payload)
+
+    assert exc_info.value.status == 502
+    assert exc_info.value.code == "invalid_response"
 
 
 @pytest.fixture(autouse=True)
@@ -95,7 +167,7 @@ def _seed(db_path: Path) -> dict[str, str]:
     OrderService(orders)
     core = OperationalCoreService(orders)
 
-    def make_inquiry(**overrides):  # noqa: ANN202
+    def make_inquiry(**overrides):
         base = dict(
             event_date=date(2026, 10, 1),
             inquiry_source="manual",
@@ -970,8 +1042,9 @@ def test_v2_remote_inquiry_detail_preserves_linked_order_truncation_warning(
     core = OperationalCoreService(orders)
     first, version = seed_order(orders, inquiry)
     core.cancel_order(first.order_id)
-    from datetime import UTC, datetime
     import uuid
+    from datetime import UTC, datetime
+
     from catering_system.domain.order import Order, OrderVersion
 
     now = datetime.now(UTC)

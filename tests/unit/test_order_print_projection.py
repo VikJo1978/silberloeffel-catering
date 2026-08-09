@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from tests.helpers.order_seed import seed_order
-
 from datetime import date
 
 import pytest
@@ -11,20 +9,25 @@ import pytest
 from catering_system.domain.order_commercial_snapshot import (
     MissingCommercialSnapshotError,
 )
-from catering_system.services.order_print_projection_service import (
-    OrderPrintProjectionService,
-    PrintFinalRequiresEffectiveError,
-    PrintProjectionNotFoundError,
-)
-from catering_system.services.operational_core_service import OperationalCoreService
+from catering_system.domain.order_payment_reminder import OrderPaymentReminder
 from catering_system.repositories.in_memory_order_commercial_snapshot_repository import (
     InMemoryOrderCommercialSnapshotRepository,
 )
 from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
 )
+from catering_system.repositories.in_memory_payment_reminder_repository import (
+    InMemoryPaymentReminderRepository,
+)
+from catering_system.services.operational_core_service import OperationalCoreService
+from catering_system.services.order_print_projection_service import (
+    OrderPrintProjectionService,
+    PrintFinalRequiresEffectiveError,
+    PrintProjectionNotFoundError,
+)
 from catering_system.services.order_service import OrderService
 from catering_system.ui.office_panel_views import render_print_sheet
+from tests.helpers.order_seed import seed_order
 from tests.unit.test_offer_service import (
     _INQUIRY_ID,
     _accepted_offer_state,
@@ -36,8 +39,9 @@ from tests.unit.test_offer_service import (
 def _projection_service(
     orders,
     snapshots: InMemoryOrderCommercialSnapshotRepository,
+    payment_reminders: InMemoryPaymentReminderRepository | None = None,
 ) -> OrderPrintProjectionService:
-    return OrderPrintProjectionService(orders, snapshots)
+    return OrderPrintProjectionService(orders, snapshots, payment_reminders)
 
 
 def test_order_with_offer_conversion_has_menu_positions() -> None:
@@ -68,6 +72,68 @@ def test_order_with_offer_conversion_has_menu_positions() -> None:
     assert "Fingerfood Paket" in sheet
     assert "Frozen description" in sheet
     assert "Menge: 80 Stück" in sheet
+
+
+def test_cash_payment_warning_rendered_on_print_sheet() -> None:
+    offer, version_id, variant_id, acceptance_id, _offers, orders, _inq, service = (
+        _accepted_offer_state()
+    )
+    _converted, order, order_version = service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
+    )
+    payment_reminders = InMemoryPaymentReminderRepository()
+    payment_reminders.save(
+        OrderPaymentReminder(
+            order_id=order.order_id,
+            payment_method="BAR_VOR_ORT",
+        )
+    )
+
+    projection = _projection_service(
+        orders, service._commercial_snapshots, payment_reminders
+    ).resolve(
+        order.order_id,
+        order_version.order_version_id,
+    )
+    sheet = render_print_sheet(projection)
+
+    assert projection.payment.payment_method == "BAR_VOR_ORT"
+    assert "ACHTUNG: Barzahlung vor Ort." in sheet
+    assert "Rechnung dem Fahrer mitgeben." in sheet
+
+
+def test_invoice_payment_warning_not_rendered_on_print_sheet() -> None:
+    offer, version_id, variant_id, acceptance_id, _offers, orders, _inq, service = (
+        _accepted_offer_state()
+    )
+    _converted, order, order_version = service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
+    )
+    payment_reminders = InMemoryPaymentReminderRepository()
+    payment_reminders.save(
+        OrderPaymentReminder(
+            order_id=order.order_id,
+            payment_method="RECHNUNG",
+        )
+    )
+
+    projection = _projection_service(
+        orders, service._commercial_snapshots, payment_reminders
+    ).resolve(
+        order.order_id,
+        order_version.order_version_id,
+    )
+    sheet = render_print_sheet(projection)
+
+    assert projection.payment.payment_method == "RECHNUNG"
+    assert "ACHTUNG: Barzahlung vor Ort." not in sheet
+    assert "Rechnung dem Fahrer mitgeben." not in sheet
 
 
 def test_print_fails_when_commercial_snapshot_missing_for_seeded_order() -> None:
