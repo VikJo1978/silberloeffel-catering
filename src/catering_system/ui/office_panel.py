@@ -681,15 +681,17 @@ class OfficePanel:
                 return
             raise ValueError("kitchen print queue unavailable")
 
+        kitchen_print_service = self.kitchen_print_service
+
         def work() -> None:
             version = self._orders.get_order_version(version_id)
             if version is None or version.order_id != order_id:
                 raise ValueError("order version does not belong to order")
-            attempts = self.kitchen_print_service.list_print_jobs_for_version(
+            attempts = kitchen_print_service.list_print_jobs_for_version(
                 version_id
             )
             if not attempts:
-                self.kitchen_print_service.request_print(order_id, version_id)
+                kitchen_print_service.request_print(order_id, version_id)
                 return
             latest = attempts[-1]
             if latest.acknowledged_at is not None:
@@ -697,9 +699,9 @@ class OfficePanel:
             if (
                 latest.rejected_at is not None
                 or latest.superseded_at is not None
-                or self.kitchen_print_service.is_ack_overdue(latest)
+                or kitchen_print_service.is_ack_overdue(latest)
             ):
-                self.kitchen_print_service.reprint(latest.print_job_id)
+                kitchen_print_service.reprint(latest.print_job_id)
 
         if self._command_executor is not None:
             self._command_executor.run(work)
