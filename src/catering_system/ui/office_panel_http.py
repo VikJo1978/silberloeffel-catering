@@ -1382,7 +1382,7 @@ def make_office_panel_handler(
                 reference_type = query.get("reference_type", ["ORDER"])[0]
                 if reference_type not in {"ORDER", "INQUIRY", "CONTACT"}:
                     reference_type = "ORDER"
-                detail = remote.get_chat_thread(
+                chat_detail = remote.get_chat_thread(
                     thread_id,
                     employee_session_token=session_token,
                 )
@@ -1402,7 +1402,7 @@ def make_office_panel_handler(
                 )
                 self._html(
                     render_chat_detail(
-                        detail,
+                        chat_detail,
                         context=self._page_context(auth, rueckruf_count=None),
                         read_command_fields=panel._command_fields(),
                         send_command_fields=panel._command_fields(),
