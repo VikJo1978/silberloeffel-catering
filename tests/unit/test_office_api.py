@@ -21,6 +21,7 @@ import pytest
 from catering_system.domain.catalog import CatalogDish
 from catering_system.domain.customer_document_projection import CustomerAddress
 from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot
+from catering_system.domain.kitchen_print_job import KitchenPrintJob
 from catering_system.domain.offer_snapshot import compute_snapshot_hash
 from catering_system.repositories.sqlite_catalog_repository import (
     SQLiteCatalogRepository,
@@ -33,6 +34,9 @@ from catering_system.repositories.sqlite_employee_auth_repository import (
 )
 from catering_system.repositories.sqlite_inquiry_repository import (
     SQLiteInquiryRepository,
+)
+from catering_system.repositories.sqlite_kitchen_print_job_repository import (
+    SQLiteKitchenPrintJobRepository,
 )
 from catering_system.repositories.sqlite_offer_repository import (
     SQLiteOfferRepository,
@@ -48,6 +52,7 @@ from catering_system.services.configurator_handoff_service import (
 )
 from catering_system.services.employee_auth_service import EmployeeAuthService
 from catering_system.services.inquiry_service import InquiryService
+from catering_system.services.kitchen_print_service import KitchenPrintService
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
 from catering_system.ui.remote_core_client import RemoteCoreClient, RemoteCoreError
@@ -291,6 +296,18 @@ def _post(
             return resp.status, json.loads(resp.read().decode()), dict(resp.headers)
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read().decode() or "{}"), dict(exc.headers)
+
+
+def _ack_next_kitchen_job(db_path: Path, order_version_id: str) -> None:
+    orders = SQLiteOrderRepository(db_path)
+    jobs = SQLiteKitchenPrintJobRepository(db_path)
+    service = KitchenPrintService(orders, jobs)
+    claimed = service.claim_next_eligible()
+    assert claimed is not None
+    assert claimed.order_version_id == order_version_id
+    service.acknowledge_print_job(claimed.print_job_id)
+    jobs.close()
+    orders.close()
 
 
 def _exchange_handoff(
@@ -1600,7 +1617,7 @@ def test_versions_expect_and_cancelled_gate(api) -> None:
 
 
 def test_print_confirm_effective_and_gates(api) -> None:
-    base, ids, _db = api
+    base, ids, db = api
     order_id = ids["order_unprinted"]
     version_id = ids["version_unprinted"]
     # effective before print: existing gate
@@ -1619,7 +1636,7 @@ def test_print_confirm_effective_and_gates(api) -> None:
         args={"order_version_id": ids["version_ready"]},
     )
     assert (status, body["error"]) == (422, "version_not_owned")
-    # happy print-confirm; repeat is success (idempotent service)
+    # happy print-confirm starts the kitchen print job; it does not confirm print.
     for _round in range(2):
         status, body, _h = _post(
             f"{base}/office/v1/orders/{order_id}/print-confirm",
@@ -1630,8 +1647,20 @@ def test_print_confirm_effective_and_gates(api) -> None:
             "command_id",
             "order_id",
             "order_version_id",
+            "print_job_id",
             "kitchen_print_confirmed_at",
         }
+        assert body["kitchen_print_confirmed_at"] is None
+    status, body, _h = _post(
+        f"{base}/office/v1/orders/{order_id}/effective",
+        args={"order_version_id": version_id},
+        expect={
+            "current_effective_order_version_id": None,
+            "current_candidate_order_version_id": None,
+        },
+    )
+    assert (status, body["error"]) == (422, "kitchen_print_not_confirmed")
+    _ack_next_kitchen_job(db, version_id)
     # effective with stale pointer expectation
     status, body, _h = _post(
         f"{base}/office/v1/orders/{order_id}/effective",
@@ -1658,6 +1687,105 @@ def test_print_confirm_effective_and_gates(api) -> None:
         args={"order_version_id": ids["version_cancelled"]},
     )
     assert (status, body["error"]) == (422, "order_cancelled")
+
+
+def test_confirmed_old_version_does_not_authorize_new_candidate(api) -> None:
+    base, ids, db = api
+    order_id = ids["order_ready"]
+    v1_id = ids["version_ready"]
+    status, body, _h = _post(
+        f"{base}/office/v1/orders/{order_id}/versions",
+        args={
+            "event_date": "2026-10-02",
+            "time_window_text": "abends",
+            "location_text": "Bremen",
+            "guest_count_estimate": 30,
+            "planning_mode": "caterer_suggestion",
+        },
+        expect={
+            "latest_version_number": 1,
+            "current_effective_order_version_id": v1_id,
+            "current_candidate_order_version_id": None,
+        },
+    )
+    assert status == 201
+    v2_id = body["order_version_id"]
+
+    status, body, _h = _post(
+        f"{base}/office/v1/orders/{order_id}/effective",
+        args={"order_version_id": v2_id},
+        expect={
+            "current_effective_order_version_id": v1_id,
+            "current_candidate_order_version_id": v2_id,
+        },
+    )
+    assert (status, body["error"]) == (422, "kitchen_print_not_confirmed")
+
+    status, body, _h = _post(
+        f"{base}/office/v1/orders/{order_id}/print-confirm",
+        args={"order_version_id": v2_id},
+    )
+    assert status == 200
+    assert body["kitchen_print_confirmed_at"] is None
+    _ack_next_kitchen_job(db, str(v2_id))
+
+    status, body, _h = _post(
+        f"{base}/office/v1/orders/{order_id}/effective",
+        args={"order_version_id": v2_id},
+        expect={
+            "current_effective_order_version_id": v1_id,
+            "current_candidate_order_version_id": v2_id,
+        },
+    )
+    assert status == 200
+    assert body["effective_order_version_id"] == v2_id
+
+
+def test_stale_accepted_print_attempt_requires_explicit_reprint(api) -> None:
+    base, ids, db = api
+    order_id = ids["order_unprinted"]
+    version_id = ids["version_unprinted"]
+    stale_job_id = str(uuid.uuid4())
+    requested_at = datetime.now(UTC) - timedelta(minutes=12)
+    accepted_at = requested_at + timedelta(seconds=1)
+
+    orders = SQLiteOrderRepository(db)
+    jobs = SQLiteKitchenPrintJobRepository(db)
+    jobs.save(
+        KitchenPrintJob(
+            print_job_id=stale_job_id,
+            order_id=order_id,
+            order_version_id=version_id,
+            attempt_number=1,
+            requested_at=requested_at,
+            accept_deadline_at=requested_at + timedelta(seconds=30),
+            accepted_at=accepted_at,
+            ack_deadline_at=accepted_at + timedelta(minutes=5),
+        )
+    )
+    service = KitchenPrintService(orders, jobs)
+    with pytest.raises(ValueError, match="ACK deadline has passed"):
+        service.acknowledge_print_job(stale_job_id)
+    version = orders.get_order_version(version_id)
+    assert version is not None
+    assert version.kitchen_print_confirmed_at is None
+    jobs.close()
+    orders.close()
+
+    status, body, _h = _post(
+        f"{base}/office/v1/orders/{order_id}/print-confirm",
+        args={"order_version_id": version_id},
+    )
+
+    assert status == 200
+    assert body["kitchen_print_confirmed_at"] is None
+    assert body["print_job_id"] != stale_job_id
+    jobs = SQLiteKitchenPrintJobRepository(db)
+    attempts = jobs.list_for_version(version_id)
+    jobs.close()
+    assert [attempt.attempt_number for attempt in attempts] == [1, 2]
+    assert attempts[0].superseded_at is not None
+    assert attempts[1].supersedes_print_job_id == stale_job_id
 
 
 def test_ready_unknown_order_is_200_with_reason(api) -> None:

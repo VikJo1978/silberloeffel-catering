@@ -333,7 +333,7 @@ def test_viewer_does_not_see_operational_order_buttons(
     jar = _login(employee_panel, username="viewer.readonly", password="ViewerTemp1!")
     status, _url, body, _headers = _request(employee_panel.base, "/auftraege", jar=jar)
     assert status == 200
-    assert "Druck bestätigen" not in body
+    assert "Küchendruck starten" not in body
     assert "Auftrag stornieren" not in body
 
 

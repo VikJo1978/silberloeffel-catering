@@ -146,7 +146,7 @@ def test_claim_receives_document_and_prints_via_fake_printer(
     kitchen_api_server,
 ) -> None:
     base, db = kitchen_api_server
-    _seed_claimable_job(db)
+    _order_id, version_id = _seed_claimable_job(db)
     printer = FakePrinterAdapter()
     agent = KitchenPrintAgent(
         _agent_config(base),
@@ -161,6 +161,12 @@ def test_claim_receives_document_and_prints_via_fake_printer(
     content_type, body = printer.printed[0]
     assert content_type == "application/pdf"
     assert body.startswith(b"%PDF-")
+
+    orders = SQLiteOrderRepository(db)
+    version = orders.get_order_version(version_id)
+    orders.close()
+    assert version is not None
+    assert version.kitchen_print_confirmed_at == _NOW
 
 
 def test_printer_failure_triggers_technical_reject(kitchen_api_server) -> None:
@@ -199,6 +205,7 @@ def test_cups_adapter_failure_propagates_rejection_code(kitchen_api_server) -> N
         _agent_config(base),
         KitchenPrintAgentClient(base, _TOKEN),
         CupsPrinterAdapter("Kitchen", run_lp=run_lp),
+        clock=lambda: _NOW,
     )
     agent.run_once()
 
@@ -208,6 +215,185 @@ def test_cups_adapter_failure_propagates_rejection_code(kitchen_api_server) -> N
     assert job is not None
     assert job.rejection_code == "spool_rejected"
     assert job.rejected_at == _NOW
+    assert job.acknowledged_at is None
+
+    orders = SQLiteOrderRepository(db)
+    version = orders.get_order_version(version_id)
+    orders.close()
+    assert version is not None
+    assert version.kitchen_print_confirmed_at is None
+
+
+def test_lp_accept_without_completed_job_does_not_ack(kitchen_api_server) -> None:
+    base, db = kitchen_api_server
+    _order_id, version_id = _seed_claimable_job(db)
+
+    def run_lp(command: list[str]) -> subprocess.CompletedProcess[str]:
+        if command[0] == "lp":
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="request id is Kitchen-12 (1 file(s))",
+                stderr="",
+            )
+        if command[:4] == ["lpstat", "-W", "completed", "-o"]:
+            return subprocess.CompletedProcess(
+                args=command, returncode=0, stdout="", stderr=""
+            )
+        if command[:5] == ["lpstat", "-W", "not-completed", "-o"]:
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="Kitchen-12 viktor 1024 active",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="Kitchen-12 viktor 1024 active",
+            stderr="",
+        )
+
+    ticks = [0.0, 0.0, 301.0]
+
+    agent = KitchenPrintAgent(
+        _agent_config(base),
+        KitchenPrintAgentClient(base, _TOKEN),
+        CupsPrinterAdapter(
+            "Kitchen",
+            run_lp=run_lp,
+            sleep=lambda _seconds: None,
+            monotonic=lambda: ticks.pop(0) if ticks else 301.0,
+        ),
+        clock=lambda: _NOW,
+    )
+    agent.run_once()
+
+    jobs = SQLiteKitchenPrintJobRepository(db)
+    job = jobs.get(_JOB_A)
+    jobs.close()
+    assert job is not None
+    assert job.acknowledged_at is None
+    assert job.rejection_code == "printer_unavailable"
+
+    orders = SQLiteOrderRepository(db)
+    version = orders.get_order_version(version_id)
+    orders.close()
+    assert version is not None
+    assert version.kitchen_print_confirmed_at is None
+
+
+def test_transient_cups_state_acknowledges_without_second_print_submission(
+    kitchen_api_server,
+) -> None:
+    base, db = kitchen_api_server
+    _order_id, version_id = _seed_claimable_job(db)
+    calls: list[list[str]] = []
+    completed_checks = 0
+
+    def run_lp(command: list[str]) -> subprocess.CompletedProcess[str]:
+        nonlocal completed_checks
+        calls.append(list(command))
+        if command[0] == "lp":
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="request id is Kitchen-12 (1 file(s))",
+                stderr="",
+            )
+        if command[:4] == ["lpstat", "-W", "completed", "-o"]:
+            completed_checks += 1
+            stdout = "" if completed_checks == 1 else "Kitchen-12 viktor 1024 done"
+            return subprocess.CompletedProcess(
+                args=command, returncode=0, stdout=stdout, stderr=""
+            )
+        if command[:5] == ["lpstat", "-W", "not-completed", "-o"]:
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="Kitchen-12 viktor 1024 active",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout="Kitchen-12 viktor 1024 active",
+            stderr="",
+        )
+
+    agent = KitchenPrintAgent(
+        _agent_config(base),
+        KitchenPrintAgentClient(base, _TOKEN),
+        CupsPrinterAdapter("Kitchen", run_lp=run_lp, sleep=lambda _seconds: None),
+        clock=lambda: _NOW,
+    )
+    agent.run_once()
+
+    assert [call[0] for call in calls].count("lp") == 1
+    orders = SQLiteOrderRepository(db)
+    version = orders.get_order_version(version_id)
+    orders.close()
+    assert version is not None
+    assert version.kitchen_print_confirmed_at == _NOW
+
+
+def test_printer_status_text_without_completed_job_does_not_ack(
+    kitchen_api_server,
+) -> None:
+    base, db = kitchen_api_server
+    _order_id, version_id = _seed_claimable_job(db)
+
+    def run_lp(command: list[str]) -> subprocess.CompletedProcess[str]:
+        if command[0] == "lp":
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="request id is Kitchen-12 (1 file(s))",
+                stderr="",
+            )
+        if command[:4] == ["lpstat", "-W", "completed", "-o"]:
+            return subprocess.CompletedProcess(
+                args=command, returncode=0, stdout="", stderr=""
+            )
+        if command[:5] == ["lpstat", "-W", "not-completed", "-o"]:
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="Kitchen-12 viktor 1024 active",
+                stderr="",
+            )
+        if command[:2] == ["lpstat", "-p"]:
+            return subprocess.CompletedProcess(
+                args=command,
+                returncode=0,
+                stdout="printer Kitchen stopped paper jam",
+                stderr="",
+            )
+        return subprocess.CompletedProcess(
+            args=command, returncode=0, stdout="", stderr=""
+        )
+
+    ticks = [0.0, 0.0, 301.0]
+
+    agent = KitchenPrintAgent(
+        _agent_config(base),
+        KitchenPrintAgentClient(base, _TOKEN),
+        CupsPrinterAdapter(
+            "Kitchen",
+            run_lp=run_lp,
+            sleep=lambda _seconds: None,
+            monotonic=lambda: ticks.pop(0) if ticks else 301.0,
+        ),
+        clock=lambda: _NOW,
+    )
+    agent.run_once()
+
+    jobs = SQLiteKitchenPrintJobRepository(db)
+    job = jobs.get(_JOB_A)
+    jobs.close()
+    assert job is not None
+    assert job.acknowledged_at is None
+    assert job.rejection_code == "printer_unavailable"
 
     orders = SQLiteOrderRepository(db)
     version = orders.get_order_version(version_id)
@@ -240,6 +426,7 @@ def test_agent_restart_has_no_local_state(kitchen_api_server) -> None:
     jobs.close()
     assert job is not None
     assert job.accepted_at == _NOW
+    assert job.acknowledged_at == _NOW
     assert job.rejected_at is None
 
 
@@ -258,7 +445,7 @@ def test_duplicate_command_id_returns_same_response(kitchen_api_server) -> None:
     assert first.document.body == second.document.body
 
 
-def test_successful_print_does_not_acknowledge_order(kitchen_api_server) -> None:
+def test_successful_print_acknowledges_order(kitchen_api_server) -> None:
     base, db = kitchen_api_server
     _order_id, version_id = _seed_claimable_job(db)
     agent = KitchenPrintAgent(
@@ -273,13 +460,12 @@ def test_successful_print_does_not_acknowledge_order(kitchen_api_server) -> None
     version = orders.get_order_version(version_id)
     orders.close()
     assert version is not None
-    assert version.kitchen_print_confirmed_at is None
+    assert version.kitchen_print_confirmed_at == _NOW
 
 
-def test_agent_package_has_no_acknowledge_path() -> None:
+def test_agent_uses_transport_ack_without_core_domain_import() -> None:
     package = importlib.import_module("kitchen_print_agent")
-    for name in package.__all__:
-        assert "acknowledge" not in name.lower()
+    assert "AcknowledgeResponse" in package.__all__
 
     agent_module = importlib.import_module("kitchen_print_agent.agent")
     source = inspect.getsource(agent_module)

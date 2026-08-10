@@ -7,8 +7,14 @@ import json
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from datetime import datetime
 
-from kitchen_print_agent.models import ClaimDocument, ClaimResponse, RejectResponse
+from kitchen_print_agent.models import (
+    AcknowledgeResponse,
+    ClaimDocument,
+    ClaimResponse,
+    RejectResponse,
+)
 
 
 @dataclass(frozen=True)
@@ -35,6 +41,7 @@ class KitchenPrintAgentClient:
             return ClaimResponse(
                 command_id=str(response_command_id),
                 print_job_id=None,
+                ack_deadline_at=None,
                 document=None,
             )
         if status != 200:
@@ -55,11 +62,40 @@ class KitchenPrintAgentClient:
         print_job_id = body.get("print_job_id")
         if not isinstance(print_job_id, str):
             raise KitchenApiClientError(status, "invalid_response")
+        ack_deadline_raw = body.get("ack_deadline_at")
+        if not isinstance(ack_deadline_raw, str):
+            raise KitchenApiClientError(status, "invalid_response")
 
         return ClaimResponse(
             command_id=str(body["command_id"]),
             print_job_id=print_job_id,
+            ack_deadline_at=datetime.fromisoformat(ack_deadline_raw),
             document=document,
+        )
+
+    def acknowledge(
+        self,
+        print_job_id: str,
+        command_id: str,
+    ) -> AcknowledgeResponse:
+        status, body = self._post(
+            f"{self._api_url}/kitchen/v1/print-jobs/{print_job_id}/ack",
+            {"command_id": command_id},
+        )
+        if status != 200:
+            raise KitchenApiClientError(status, str(body.get("error", "unknown")))
+
+        response_print_job_id = body.get("print_job_id")
+        acknowledged_at = body.get("acknowledged_at")
+        if not isinstance(response_print_job_id, str) or not isinstance(
+            acknowledged_at, str
+        ):
+            raise KitchenApiClientError(status, "invalid_response")
+
+        return AcknowledgeResponse(
+            command_id=str(body["command_id"]),
+            print_job_id=response_print_job_id,
+            acknowledged_at=datetime.fromisoformat(acknowledged_at),
         )
 
     def reject(

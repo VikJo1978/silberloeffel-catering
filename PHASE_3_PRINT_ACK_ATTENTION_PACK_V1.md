@@ -43,7 +43,7 @@ The complete persisted print/effective model is currently:
 
 | Record | Field | Meaning |
 |---|---|---|
-| `OrderVersion` | `kitchen_print_confirmed_at: datetime | None` | irreversible domain fact; set manually through `ConfirmKitchenPrint` |
+| `OrderVersion` | `kitchen_print_confirmed_at: datetime | None` | irreversible domain fact; set by verified kitchen-print ACK |
 | `Order` | `candidate_order_version_id: str | None` | office-side progression hint, not operational truth |
 | `Order` | `effective_order_version_id: str | None` | the one operationally effective version |
 | `Order` | `cancelled_at: datetime | None` | irreversible Storno fact |
@@ -102,8 +102,9 @@ print service, job queue, agent heartbeat, or machine acknowledgement. The
 accepted operational-core pack explicitly deferred physical printer
 integration.
 
-The operator guide therefore relies on a manual sequence: open sheet, print,
-then click `Druck bestätigt` only after the print was actually handled.
+The operator action is now a manual start: click `Küchendruck starten`. The
+kitchen agent confirms the domain fact only after verified completion of the
+concrete CUPS job.
 
 ### 2.4 Existing statuses and blocker logic
 
@@ -141,7 +142,7 @@ The Office Panel currently shows:
 - `Versandfreigabe blockiert`;
 - an order queue with one next action;
 - per-version print-confirm timestamp, `wirksam`/`Kandidat` markers,
-  `Küchenzettel`, `Druck bestätigen`, and `Wirksam machen` controls.
+  `Küchenzettel`, `Küchendruck starten`, and `Wirksam machen` controls.
 
 The dashboard’s current `druck_fehlt` calculation counts an active Order only
 when **none of its versions has ever been print-confirmed**. This is not the
@@ -312,11 +313,10 @@ stateDiagram-v2
     AwaitingAcceptance --> AcceptanceOverdue: accept deadline passes
     AwaitingAcceptance --> Rejected: agent rejects
     Accepted --> AwaitingAck: ack deadline assigned
-    AwaitingAck --> Confirmed: office records kitchen acknowledgement
+    AwaitingAck --> Confirmed: agent records verified CUPS acknowledgement
     AwaitingAck --> AckOverdue: ack deadline passes
     AwaitingAck --> Rejected: spool/agent rejection
     AcceptanceOverdue --> Superseded: reprint
-    AckOverdue --> Confirmed: late acknowledgement remains valid
     AckOverdue --> Superseded: reprint
     Rejected --> AwaitingAcceptance: reprint creates new attempt
     Superseded --> AwaitingAcceptance: successor attempt
@@ -327,7 +327,9 @@ Rules behind the diagram:
 
 - Time-based states are derived; no sweeper is required to make an overdue
   state truthful.
-- Late acknowledgement after `ack_overdue` is allowed and clears the alert.
+- Late acknowledgement after `ack_overdue` is refused; Office must create a
+  new explicit reprint attempt. This prevents a stale job from confirming an
+  OrderVersion after the verified ACK window has already expired.
 - Agent acceptance after `acceptance_overdue` is refused; Office must create a
   new explicit reprint attempt. This prevents a stale job from printing after
   the operator has moved on.
@@ -344,7 +346,8 @@ Rules behind the diagram:
 1. `kitchen_print_confirmed_at` remains the only OrderVersion fact that can
    satisfy the existing effective-switch gate.
 2. Technical acceptance never sets `kitchen_print_confirmed_at` and never makes
-   a version effective.
+   a version effective; only verified CUPS completion followed by the agent ACK
+   may set the confirmation fact.
 3. A first domain confirmation requires an accepted, non-rejected,
    non-superseded job for that exact active OrderVersion.
 4. Acknowledging a job and setting `kitchen_print_confirmed_at` happen in one
@@ -387,7 +390,8 @@ Responsibilities:
 - obtain the immutable print data for that job;
 - hand it to a printer adapter;
 - report a small allowlisted technical rejection when it cannot proceed;
-- never confirm the domain fact automatically.
+- confirm the domain fact only after the concrete CUPS job has completed
+  successfully.
 
 Non-responsibilities:
 
@@ -397,6 +401,10 @@ Non-responsibilities:
 - no READY_TO_SEND decision;
 - no customer communication;
 - no business retry loop that hides a failure from Office;
+- no automatic duplicate print after an agent restart. If the agent crashes
+  after physical submission but before ACK, the accepted attempt becomes
+  recoverable after its ACK deadline; the operator may inspect the output and
+  explicitly choose `Erneut drucken`;
 - no write added to the existing kitchen kiosk.
 
 Recommended initial rejection codes:
@@ -622,7 +630,8 @@ separate job ledger is allowed.
 | Agent health | no heartbeat / stale / fresh | unknown / unavailable / healthy distinctly |
 | Rejection | live agent rejects | `rejected` with safe code; immediate Office attention |
 | ACK timeout | accepted job crosses persisted deadline | `ack_overdue`; OrderVersion still unconfirmed |
-| Late ACK | acknowledge after overdue | succeeds, clears alert, sets domain confirmation |
+| Late ACK | acknowledge after overdue | refused; OrderVersion still unconfirmed |
+| Overdue recovery | explicit reprint after stale ACK | new attempt created; no automatic duplicate print |
 | Atomic ACK | crash between job ACK and version update | full rollback, neither fact visible |
 | ACK idempotency | repeated ACK | same timestamps, one domain event |
 | Effective switch | accepted but unacknowledged | refused |

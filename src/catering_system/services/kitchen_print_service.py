@@ -82,6 +82,16 @@ class KitchenPrintService:
     ) -> list[KitchenPrintJob]:
         return self._jobs.list_for_version(order_version_id)
 
+    def is_ack_overdue(self, job: KitchenPrintJob) -> bool:
+        return (
+            job.accepted_at is not None
+            and job.ack_deadline_at is not None
+            and job.acknowledged_at is None
+            and job.rejected_at is None
+            and job.superseded_at is None
+            and self._clock() >= job.ack_deadline_at
+        )
+
     def request_print(
         self,
         order_id: str,
@@ -188,6 +198,9 @@ class KitchenPrintService:
             raise ValueError("superseded print job cannot be acknowledged")
 
         now = self._clock()
+        assert job.ack_deadline_at is not None
+        if now >= job.ack_deadline_at:
+            raise ValueError("print job ACK deadline has passed")
         acknowledged = replace(job, acknowledged_at=now)
         confirmation_was_new = version.kitchen_print_confirmed_at is None
         confirmed_version = (

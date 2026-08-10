@@ -52,6 +52,7 @@ _log = logging.getLogger(__name__)
 _MAX_BODY_BYTES = 4096
 _CLAIM_ROUTE = "POST /kitchen/v1/print-jobs/claim-next"
 _REJECT_ROUTE = "POST /kitchen/v1/print-jobs/{print_job_id}/reject"
+_ACK_ROUTE = "POST /kitchen/v1/print-jobs/{print_job_id}/ack"
 _UUID4 = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
@@ -175,6 +176,32 @@ class KitchenApi:
         self.ledger.record(command_id, fingerprint, 200, body)
         return 200, body
 
+    def execute_ack(self, print_job_id: str, *, command_id: str) -> tuple[int, str]:
+        fingerprint = kitchen_command_fingerprint(
+            route_template=_ACK_ROUTE,
+            command_id=command_id,
+            args={"print_job_id": print_job_id},
+        )
+        recorded = self.ledger.get(command_id)
+        if recorded is not None:
+            if not hmac.compare_digest(recorded.fingerprint, fingerprint):
+                raise ApiError(409, "command_id_conflict")
+            return recorded.result_status, recorded.result_body
+
+        acknowledged = self.application.acknowledge_print_job(print_job_id)
+        payload = {
+            "command_id": command_id,
+            "print_job_id": acknowledged.print_job_id,
+            "order_id": acknowledged.order_id,
+            "order_version_id": acknowledged.order_version_id,
+            "acknowledged_at": acknowledged.acknowledged_at.isoformat()
+            if acknowledged.acknowledged_at is not None
+            else None,
+        }
+        body = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        self.ledger.record(command_id, fingerprint, 200, body)
+        return 200, body
+
     def execute_reject(
         self, print_job_id: str, *, command_id: str, rejection_code: str
     ) -> tuple[int, str]:
@@ -274,6 +301,23 @@ def make_kitchen_api_handler(
 
                 reject_prefix = "/kitchen/v1/print-jobs/"
                 reject_suffix = "/reject"
+                ack_suffix = "/ack"
+                if self.path.startswith(reject_prefix) and self.path.endswith(
+                    ack_suffix
+                ):
+                    print_job_id = self.path[len(reject_prefix) : -len(ack_suffix)]
+                    _v_uuid(print_job_id)
+                    body = self._read_json_body()
+                    if set(body) != {"command_id"}:
+                        raise _invalid()
+                    command_id = _v_uuid(body["command_id"])
+                    status, response_body = api.execute_ack(
+                        print_job_id,
+                        command_id=command_id,
+                    )
+                    self._respond_json(status, response_body)
+                    return
+
                 if self.path.startswith(reject_prefix) and self.path.endswith(
                     reject_suffix
                 ):

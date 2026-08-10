@@ -51,7 +51,7 @@ def test_legacy_order_hides_mutation_controls_for_viewer() -> None:
         context=_employee_context("orders.view"),
     )
     assert page is not None
-    assert "Druck bestätigen" not in page
+    assert "Küchendruck starten" not in page
     assert "Wirksam machen" not in page
     assert "Freigabe anfordern" not in page
     assert "Auftrag stornieren" not in page
@@ -65,7 +65,7 @@ def test_legacy_order_shows_print_confirm_with_permission() -> None:
         context=_employee_context("orders.view", "orders.print.confirm"),
     )
     assert page is not None
-    assert "Druck bestätigen" in page
+    assert "Küchendruck starten" in page
 
 
 def test_legacy_order_shows_version_form_with_permission() -> None:
@@ -99,7 +99,7 @@ def test_legacy_order_basic_fallback_retains_controls() -> None:
     panel, order_id = _legacy_panel_with_order()
     page = panel.render_order(order_id, context=legacy_office_context())
     assert page is not None
-    assert "Druck bestätigen" in page
+    assert "Küchendruck starten" in page
     assert "Freigabe anfordern" in page
     assert "Auftrag stornieren" in page
     assert "Version anlegen" in page

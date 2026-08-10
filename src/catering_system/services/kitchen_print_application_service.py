@@ -40,3 +40,7 @@ class KitchenPrintApplicationService:
         self, print_job_id: str, rejection_code: str
     ) -> KitchenPrintJob:
         return self._print_service.reject_print_job(print_job_id, rejection_code)
+
+    def acknowledge_print_job(self, print_job_id: str) -> KitchenPrintJob:
+        job, _version = self._print_service.acknowledge_print_job(print_job_id)
+        return job

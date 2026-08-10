@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-from tests.helpers.commercial_snapshot_seed import seed_commercial_snapshot
-from tests.helpers.order_seed import seed_order
-
 import base64
 import html
 import json
@@ -13,14 +10,18 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
+from catering_system.domain.kitchen_print_job import KitchenPrintJob
 from catering_system.intake.website_form_adapter import intake_from_website_form
 from catering_system.repositories.in_memory_inquiry_repository import (
     InMemoryInquiryRepository,
+)
+from catering_system.repositories.in_memory_kitchen_print_job_repository import (
+    InMemoryKitchenPrintJobRepository,
 )
 from catering_system.repositories.in_memory_order_commercial_snapshot_repository import (
     InMemoryOrderCommercialSnapshotRepository,
@@ -36,7 +37,9 @@ from catering_system.ui.office_panel import (
 from catering_system.ui.office_panel_http import csrf_token_for_password
 from catering_system.ui.office_panel_shell import OFFICE_PANEL_STYLE
 from catering_system.ui.office_panel_views import _page
+from tests.helpers.commercial_snapshot_seed import seed_commercial_snapshot
 from tests.helpers.office_panel_context import legacy_office_context
+from tests.helpers.order_seed import seed_order
 
 _PASSWORD = "test-pw"
 _AUTH = "Basic " + base64.b64encode(f"office:{_PASSWORD}".encode()).decode()
@@ -49,6 +52,7 @@ _PANEL_REPOS: dict[
         InMemoryOrderCommercialSnapshotRepository,
     ],
 ] = {}
+_PANEL_JOBS: dict[str, InMemoryKitchenPrintJobRepository] = {}
 
 
 @pytest.fixture()
@@ -56,6 +60,7 @@ def panel():
     inquiry_repo = InMemoryInquiryRepository()
     order_repo = InMemoryOrderRepository()
     snapshots = InMemoryOrderCommercialSnapshotRepository()
+    kitchen_jobs = InMemoryKitchenPrintJobRepository(order_repo)
     server = create_office_panel_server(
         inquiry_repo,
         order_repo,
@@ -63,14 +68,17 @@ def panel():
         host="127.0.0.1",
         port=0,
         commercial_snapshot_repo=snapshots,
+        kitchen_print_job_repo=kitchen_jobs,
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     host, port = server.server_address[:2]
     base = f"http://{host}:{port}"
     _PANEL_REPOS[base] = (inquiry_repo, order_repo, snapshots)
+    _PANEL_JOBS[base] = kitchen_jobs
     yield base
     _PANEL_REPOS.pop(base, None)
+    _PANEL_JOBS.pop(base, None)
     server.shutdown()
     server.server_close()
 
@@ -80,6 +88,7 @@ def premium_panel():
     inquiry_repo = InMemoryInquiryRepository()
     order_repo = InMemoryOrderRepository()
     snapshots = InMemoryOrderCommercialSnapshotRepository()
+    kitchen_jobs = InMemoryKitchenPrintJobRepository(order_repo)
     server = create_office_panel_server(
         inquiry_repo,
         order_repo,
@@ -87,6 +96,7 @@ def premium_panel():
         host="127.0.0.1",
         port=0,
         commercial_snapshot_repo=snapshots,
+        kitchen_print_job_repo=kitchen_jobs,
         ui_version="v2",
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -94,8 +104,10 @@ def premium_panel():
     host, port = server.server_address[:2]
     base = f"http://{host}:{port}"
     _PANEL_REPOS[base] = (inquiry_repo, order_repo, snapshots)
+    _PANEL_JOBS[base] = kitchen_jobs
     yield base
     _PANEL_REPOS.pop(base, None)
+    _PANEL_JOBS.pop(base, None)
     server.shutdown()
     server.server_close()
 
@@ -176,6 +188,17 @@ def _convert(base: str, inquiry_id: str) -> str:
         replace(inquiry, crm_stage="Bestätigt / Auftrag")  # type: ignore[arg-type]
     )
     return order.order_id
+
+
+def _simulate_kitchen_agent_ack(base: str, order_version_id: str) -> None:
+    from catering_system.services.kitchen_print_service import KitchenPrintService
+
+    _inquiries, orders, _snapshots = _PANEL_REPOS[base]
+    service = KitchenPrintService(orders, _PANEL_JOBS[base])
+    claimed = service.claim_next_eligible()
+    assert claimed is not None
+    assert claimed.order_version_id == order_version_id
+    service.acknowledge_print_job(claimed.print_job_id)
 
 
 def test_v2_shell_uses_explicit_active_section_and_semantic_landmarks() -> None:
@@ -485,7 +508,7 @@ def test_order_payment_reminder_is_separate_and_truthful(panel: str) -> None:
     assert "Zahlungsart:</strong> Noch nicht gewählt" in initial
     assert "Nächster Schritt:</strong> Zahlungsart auswählen" in initial
     assert f'action="/order/{order_id}/payment-reminder"' in initial
-    assert "Druck bestätigen" in initial
+    assert "Küchendruck starten" in initial
 
     status, _url, saved = _post(
         f"{panel}/order/{order_id}/payment-reminder",
@@ -501,7 +524,7 @@ def test_order_payment_reminder_is_separate_and_truthful(panel: str) -> None:
     assert "Zahlungsart:</strong> Vorkasse" in saved
     assert "Rechnungsnummer:</strong> RE-2026-0048" in saved
     assert "Nächster Schritt:</strong> Zahlungseingang prüfen" in saved
-    assert "Druck bestätigen" in saved
+    assert "Küchendruck starten" in saved
 
 
 def test_cancelled_order_payment_reminder_is_read_only(panel: str) -> None:
@@ -1002,10 +1025,48 @@ def test_order_page_offers_effective_only_after_print_confirmation(panel: str) -
     assert "Wirksam machen" not in body
 
     _post(f"{panel}/order/{oid}/print-confirm", {"order_version_id": vid})
+    assert _PANEL_JOBS[panel].list_for_version(vid)
+    _status, body = _get(f"{panel}/order/{oid}")
+    assert f'action="/order/{oid}/print-confirm"' in body
+    assert f'action="/order/{oid}/effective"' not in body
+    assert "Wirksam machen" not in body
+
+    _simulate_kitchen_agent_ack(panel, vid)
     _status, body = _get(f"{panel}/order/{oid}")
     assert f'action="/order/{oid}/print-confirm"' not in body
     assert f'action="/order/{oid}/effective"' in body
     assert "Wirksam machen" in body
+
+
+def test_stale_print_attempt_offers_explicit_reprint(panel: str) -> None:
+    iid = _create_inquiry(panel)
+    oid = _convert(panel, iid)
+    _status, body = _get(f"{panel}/order/{oid}")
+    vid = body.split('name="order_version_id" value="')[1].split('"')[0]
+    requested_at = datetime(2026, 7, 14, 9, 0, tzinfo=UTC)
+    stale_job_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    _PANEL_JOBS[panel].save(
+        KitchenPrintJob(
+            print_job_id=stale_job_id,
+            order_id=oid,
+            order_version_id=vid,
+            attempt_number=1,
+            requested_at=requested_at,
+            accept_deadline_at=requested_at + timedelta(seconds=30),
+            accepted_at=requested_at + timedelta(seconds=1),
+            ack_deadline_at=requested_at + timedelta(minutes=5),
+        )
+    )
+
+    _status, body = _get(f"{panel}/order/{oid}")
+    assert "Erneut drucken" in body
+
+    _post(f"{panel}/order/{oid}/print-confirm", {"order_version_id": vid})
+
+    attempts = _PANEL_JOBS[panel].list_for_version(vid)
+    assert [attempt.attempt_number for attempt in attempts] == [1, 2]
+    assert attempts[0].superseded_at is not None
+    assert attempts[1].supersedes_print_job_id == stale_job_id
 
 
 def test_full_release_flow(panel: str) -> None:
@@ -1014,6 +1075,7 @@ def test_full_release_flow(panel: str) -> None:
     _status, body = _get(f"{panel}/order/{oid}")
     vid = body.split('name="order_version_id" value="')[1].split('"')[0]
     _post(f"{panel}/order/{oid}/print-confirm", {"order_version_id": vid})
+    _simulate_kitchen_agent_ack(panel, vid)
     _status, _url, body = _post(
         f"{panel}/order/{oid}/effective", {"order_version_id": vid}
     )
@@ -1069,7 +1131,7 @@ def test_v2_order_detail_guides_print_effective_and_release(
 
     assert "order-hero" in initial
     assert "<h1>Auftrag für den 01.10.2026</h1>" in initial
-    assert "Küchenzettel für Stand 1 drucken" in initial
+    assert "Küchendruck für Stand 1 starten" in initial
     assert f'action="/order/{order_id}/print-confirm"' in initial
     assert f'action="/order/{order_id}/effective"' not in initial
     assert "Noch kein Stand ist als aktueller Küchenstand festgelegt." in initial
@@ -1079,6 +1141,7 @@ def test_v2_order_detail_guides_print_effective_and_release(
         f"{premium_panel}/order/{order_id}/print-confirm",
         {"order_version_id": version_id},
     )
+    _simulate_kitchen_agent_ack(premium_panel, version_id)
     _status, printed = _get(f"{premium_panel}/order/{order_id}")
 
     assert "Stand 1 als Küchenstand festlegen" in printed
@@ -1114,6 +1177,7 @@ def test_v2_order_detail_prefers_new_candidate_over_ready_old_stand(
         f"{premium_panel}/order/{order_id}/print-confirm",
         {"order_version_id": version_id},
     )
+    _simulate_kitchen_agent_ack(premium_panel, version_id)
     _post(
         f"{premium_panel}/order/{order_id}/effective",
         {"order_version_id": version_id},
@@ -1141,7 +1205,7 @@ def test_v2_order_detail_prefers_new_candidate_over_ready_old_stand(
     _status, body = _get(f"{premium_panel}/order/{order_id}")
 
     assert "<h1>Auftrag für den 03.10.2026</h1>" in body
-    assert "Küchenzettel für Stand 2 drucken" in body
+    assert "Küchendruck für Stand 2 starten" in body
     assert "Hamburg-Altona" in body
     assert "Auswahl durch den Kunden" in body
     assert "Nächster Stand" in body
@@ -1211,7 +1275,7 @@ def test_v2_order_detail_keeps_payment_separate_and_cancelled_read_only(
     assert "Reminder-Status" in body
     assert "RE-UI4-1" in body
     assert f'action="/order/{order_id}/payment-reminder"' in body
-    assert "Küchenzettel für Stand 1 drucken" in body
+    assert "Küchendruck für Stand 1 starten" in body
 
     _post(f"{premium_panel}/order/{order_id}/cancel", {})
     _status, cancelled = _get(f"{premium_panel}/order/{order_id}")
@@ -1623,7 +1687,7 @@ def test_attention_counts_reflect_new_inquiry_and_unconfirmed_order(panel: str) 
     # evaluation for the reason text, but the button is resolved from the
     # target version's own fields, not from reasons[0] directly: right
     # after convert, print isn't confirmed yet, so the correct next step is
-    # "Druck bestätigen", never "Wirksam machen" (Core itself refuses that
+    # "Küchendruck starten", never "Wirksam machen" (Core itself refuses that
     # for an unprinted version).
     assert "Aufträge mit nächstem Schritt" in body
     assert f'/order/{oid}">{oid[:8]}</a> — keine wirksame Auftragsversion' in body
@@ -1646,6 +1710,7 @@ def test_full_release_flow_clears_attention_counts(panel: str) -> None:
     _status, body = _get(f"{panel}/order/{oid}")
     vid = body.split('name="order_version_id" value="')[1].split('"')[0]
     _post(f"{panel}/order/{oid}/print-confirm", {"order_version_id": vid})
+    _simulate_kitchen_agent_ack(panel, vid)
     _post(f"{panel}/order/{oid}/effective", {"order_version_id": vid})
     _post(f"{panel}/order/{oid}/ready", {})
     _status, body = _get(f"{panel}/")
@@ -1665,6 +1730,7 @@ def test_diese_woche_shows_only_effective_orders_in_current_iso_week(
     _status, body = _get(f"{panel}/order/{oid}")
     vid = body.split('name="order_version_id" value="')[1].split('"')[0]
     _post(f"{panel}/order/{oid}/print-confirm", {"order_version_id": vid})
+    _simulate_kitchen_agent_ack(panel, vid)
     _post(f"{panel}/order/{oid}/effective", {"order_version_id": vid})
 
     _status, body = _get(f"{panel}/")
@@ -1677,6 +1743,7 @@ def test_diese_woche_shows_only_effective_orders_in_current_iso_week(
     _status, other_body = _get(f"{panel}/order/{other_oid}")
     other_vid = other_body.split('name="order_version_id" value="')[1].split('"')[0]
     _post(f"{panel}/order/{other_oid}/print-confirm", {"order_version_id": other_vid})
+    _simulate_kitchen_agent_ack(panel, other_vid)
     _post(f"{panel}/order/{other_oid}/effective", {"order_version_id": other_vid})
     _status, body = _get(f"{panel}/")
     # Split on the unique heading id, not the text "Diese Woche" — that text
@@ -1983,7 +2050,7 @@ def _panel_with_order():
 def test_next_step_targets_latest_version_when_no_candidate_set() -> None:
     panel, order, v1 = _panel_with_order()
     action_html = panel._next_step_action(order, context=legacy_office_context())
-    assert "Druck bestätigen" in action_html
+    assert "Küchendruck starten" in action_html
     assert f'value="{v1.order_version_id}"' in action_html
 
 

@@ -280,6 +280,74 @@ def test_claim_does_not_set_kitchen_print_confirmed_at(kitchen_api) -> None:
     assert body["print_job_id"] == _JOB_A
 
 
+def test_ack_confirms_order_version_and_replays(kitchen_api) -> None:
+    base, db, ledger = kitchen_api
+    _order_id, version_id = _seed_claimable_job(db)
+    _post(
+        f"{base}/kitchen/v1/print-jobs/claim-next",
+        {"command_id": str(uuid.uuid4())},
+    )
+    command_id = str(uuid.uuid4())
+    url = f"{base}/kitchen/v1/print-jobs/{_JOB_A}/ack"
+    payload = {"command_id": command_id}
+
+    status1, body1, raw1 = _post(url, payload)
+    status2, body2, raw2 = _post(url, payload)
+
+    assert status1 == 200
+    assert (status2, body2) == (status1, body1)
+    assert raw2 == raw1
+    assert body1["print_job_id"] == _JOB_A
+    assert body1["acknowledged_at"] == _NOW.isoformat()
+    assert len(ledger._rows) == 2
+
+    jobs = SQLiteKitchenPrintJobRepository(db)
+    job = jobs.get(_JOB_A)
+    jobs.close()
+    assert job is not None
+    assert job.acknowledged_at == _NOW
+
+    orders = SQLiteOrderRepository(db)
+    version = orders.get_order_version(version_id)
+    orders.close()
+    assert version is not None
+    assert version.kitchen_print_confirmed_at == _NOW
+
+
+def test_ack_requires_agent_auth(kitchen_api) -> None:
+    base, db, _ledger = kitchen_api
+    _seed_claimable_job(db)
+    _post(
+        f"{base}/kitchen/v1/print-jobs/claim-next",
+        {"command_id": str(uuid.uuid4())},
+    )
+    data = json.dumps({"command_id": str(uuid.uuid4())}).encode("utf-8")
+    request = urllib.request.Request(
+        f"{base}/kitchen/v1/print-jobs/{_JOB_A}/ack",
+        data=data,
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(request, timeout=5)
+
+    assert exc_info.value.code == 401
+
+
+def test_ack_requires_accepted_job(kitchen_api) -> None:
+    base, db, _ledger = kitchen_api
+    _seed_claimable_job(db)
+
+    status, body, _raw = _post(
+        f"{base}/kitchen/v1/print-jobs/{_JOB_A}/ack",
+        {"command_id": str(uuid.uuid4())},
+    )
+
+    assert status == 422
+    assert body["error"] == "invalid_request"
+
+
 def test_unauthorized_request_is_rejected(kitchen_api) -> None:
     base, db, _ledger = kitchen_api
     _seed_claimable_job(db)

@@ -6,6 +6,7 @@ import logging
 import time
 import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import Protocol
 
 from kitchen_print_agent.client import KitchenPrintAgentClient
@@ -27,6 +28,8 @@ class _ClaimClient(Protocol):
         rejection_code: str,
     ) -> object: ...
 
+    def acknowledge(self, print_job_id: str, command_id: str) -> object: ...
+
 
 class KitchenPrintAgent:
     def __init__(
@@ -37,12 +40,14 @@ class KitchenPrintAgent:
         *,
         sleep: Callable[[float], None] = time.sleep,
         uuid_factory: Callable[[], str] | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         self._config = config
         self._client = client
         self._printer = printer
         self._sleep = sleep
         self._uuid_factory = uuid_factory or (lambda: str(uuid.uuid4()))
+        self._clock = clock or (lambda: datetime.now(UTC))
         self._running = False
 
     @classmethod
@@ -53,6 +58,7 @@ class KitchenPrintAgent:
         *,
         sleep: Callable[[float], None] = time.sleep,
         uuid_factory: Callable[[], str] | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> KitchenPrintAgent:
         client = KitchenPrintAgentClient(config.api_url, config.agent_token)
         return cls(
@@ -61,6 +67,7 @@ class KitchenPrintAgent:
             printer,
             sleep=sleep,
             uuid_factory=uuid_factory,
+            clock=clock,
         )
 
     def heartbeat(self) -> None:
@@ -79,9 +86,16 @@ class KitchenPrintAgent:
             return False
 
         try:
+            timeout_seconds = None
+            if result.ack_deadline_at is not None:
+                timeout_seconds = max(
+                    0.0,
+                    (result.ack_deadline_at - self._clock()).total_seconds(),
+                )
             self._printer.print_document(
                 result.document.content_type,
                 result.document.body,
+                timeout_seconds=timeout_seconds,
             )
         except PrinterError as exc:
             reject_command_id = self._uuid_factory()
@@ -90,6 +104,9 @@ class KitchenPrintAgent:
                 reject_command_id,
                 exc.rejection_code,
             )
+            return True
+        ack_command_id = self._uuid_factory()
+        self._client.acknowledge(result.print_job_id, ack_command_id)
         return True
 
     def run_forever(self) -> None:
