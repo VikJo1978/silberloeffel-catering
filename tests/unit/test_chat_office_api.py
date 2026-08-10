@@ -570,6 +570,113 @@ def test_chat_employee_picker_is_minimal_active_and_requires_create(chat_api) ->
     assert body == {"error": "forbidden"}
 
 
+def test_chat_api_validation_and_empty_result_paths(chat_api) -> None:
+    base, ids = chat_api
+    headers = _headers(ids["viktor_session"])
+
+    status, body = _post(
+        f"{base}/office/v1/chat/threads",
+        headers=headers,
+        args={
+            "thread_type": "GROUP",
+            "participant_employee_ids": [ids["anna_id"]],
+            "title": "   ",
+        },
+    )
+    assert status == 422
+    assert body == {"error": "invalid_chat_thread"}
+
+    status, body = _post(
+        f"{base}/office/v1/chat/threads",
+        headers=headers,
+        args={"thread_type": "DIRECT", "participant_employee_ids": []},
+    )
+    assert status == 422
+    assert body == {"error": "invalid_chat_thread"}
+
+    status, body = _post(
+        f"{base}/office/v1/chat/threads",
+        headers=headers,
+        args={"thread_type": "BOGUS", "participant_employee_ids": [ids["anna_id"]]},
+    )
+    assert status == 400
+    assert body == {"error": "invalid_request"}
+
+    status, body = _get(
+        f"{base}/office/v1/chat/entity-search?q=Mueller&type=BOGUS",
+        headers=headers,
+    )
+    assert status == 400
+    assert body == {"error": "invalid_request"}
+
+    for reference_type in ("ORDER", "INQUIRY", "CONTACT"):
+        status, body = _get(
+            f"{base}/office/v1/chat/entity-search?q=M&type={reference_type}",
+            headers=headers,
+        )
+        assert status == 200
+        assert body == {"results": []}
+
+    thread_id = _direct(base, ids)
+    status, body = _get(
+        f"{base}/office/v1/chat/threads/{thread_id}/participants",
+        headers=headers,
+    )
+    assert status == 200
+    assert {row["employee_id"] for row in body["participants"]} == {
+        ids["viktor_id"],
+        ids["anna_id"],
+    }
+
+    status, body = _get(
+        f"{base}/office/v1/chat/employees?q=does-not-exist",
+        headers=headers,
+    )
+    assert status == 200
+    assert body == {"employees": []}
+
+    status, body = _get(
+        f"{base}/office/v1/chat/search",
+        headers=headers,
+    )
+    assert status == 200
+    assert body == {"results": []}
+
+
+def test_entity_picker_success_for_order_inquiry_and_empty_matches(chat_api) -> None:
+    base, ids = chat_api
+    headers = _headers(ids["viktor_session"])
+
+    status, orders = _get(
+        f"{base}/office/v1/chat/entity-search?q=Mueller&type=ORDER",
+        headers=headers,
+    )
+    assert status == 200
+    assert orders["results"][0]["reference_type"] == "ORDER"
+    assert orders["results"][0]["reference_id"] == ids["order_id"]
+    assert orders["results"][0]["meta"] == {
+        "order_id": ids["order_id"],
+        "source_inquiry_id": ids["inquiry_id"],
+    }
+
+    status, inquiries = _get(
+        f"{base}/office/v1/chat/entity-search?q=Berlin&type=INQUIRY",
+        headers=headers,
+    )
+    assert status == 200
+    assert inquiries["results"][0]["reference_type"] == "INQUIRY"
+    assert inquiries["results"][0]["reference_id"] == ids["inquiry_id"]
+    assert inquiries["results"][0]["meta"] == {"inquiry_id": ids["inquiry_id"]}
+
+    for reference_type in ("ORDER", "INQUIRY", "CONTACT"):
+        status, body = _get(
+            f"{base}/office/v1/chat/entity-search?q=zz-no-match&type={reference_type}",
+            headers=headers,
+        )
+        assert status == 200
+        assert body == {"results": []}
+
+
 def test_chat_search_does_not_reveal_inaccessible_title_participants_or_reference(
     chat_api,
 ) -> None:
@@ -639,13 +746,41 @@ def test_remote_core_client_chat_methods_preserve_shapes(chat_api) -> None:
         body="ok",
         reply_to_message_id=str(message["message_id"]),
     )
+    read_marker = client.mark_chat_thread_read(
+        str(thread["thread_id"]),
+        employee_session_token=ids["viktor_session"],
+        last_read_message_id=str(message["message_id"]),
+    )
+    threads = client.list_chat_threads(employee_session_token=ids["viktor_session"])
     detail = client.get_chat_thread(
         str(thread["thread_id"]), employee_session_token=ids["viktor_session"]
+    )
+    participants = client.autocomplete_chat_participants(
+        str(thread["thread_id"]),
+        employee_session_token=ids["viktor_session"],
+    )
+    entity_results = client.search_chat_entities(
+        employee_session_token=ids["viktor_session"],
+        q="Mueller",
+        reference_type="CONTACT",
+    )
+    search_results = client.search_chat(
+        employee_session_token=ids["viktor_session"], q="@Anna"
     )
     employees = client.search_chat_employees(
         employee_session_token=ids["viktor_session"], q="Anna"
     )
     messages = cast(list[dict[str, Any]], detail["messages"])
+    assert read_marker["thread_id"] == thread["thread_id"]
+    assert read_marker["employee_id"] == ids["viktor_id"]
+    assert read_marker["last_read_message_id"] == message["message_id"]
+    assert threads[0]["thread"]["thread_id"] == thread["thread_id"]
+    assert {row["employee_id"] for row in participants} == {
+        ids["viktor_id"],
+        ids["anna_id"],
+    }
+    assert entity_results[0]["reference_id"] == ids["contact_profile_id"]
+    assert search_results[0]["thread"]["thread_id"] == thread["thread_id"]
     assert employees == [{"employee_id": ids["anna_id"], "display_name": "Anna"}]
     assert messages[0]["mentions"][0]["employee_id"] == ids["anna_id"]
     assert messages[0]["references"][0]["reference_id"] == ids["inquiry_id"]
@@ -682,6 +817,125 @@ def test_remote_core_client_rejects_malformed_chat_response() -> None:
         with pytest.raises(RemoteCoreError) as exc:
             client.list_chat_threads(employee_session_token="session")
         assert exc.value.code == "invalid_response"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_remote_core_client_rejects_malformed_chat_method_responses() -> None:
+    valid_uuid = str(uuid.uuid4())
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            payload_by_path: dict[str, object] = {
+                "/office/v1/chat/threads": {"threads": [{"thread": {}}]},
+                f"/office/v1/chat/threads/{valid_uuid}": {
+                    "thread": {},
+                    "participants": [],
+                    "current_participant": {},
+                    "messages": [],
+                },
+                f"/office/v1/chat/threads/{valid_uuid}/participants": {
+                    "participants": [{"employee_id": "not-a-uuid"}]
+                },
+                "/office/v1/chat/entity-search": {
+                    "results": [{"reference_type": "BOGUS"}]
+                },
+                "/office/v1/chat/employees": {
+                    "employees": [
+                        {
+                            "employee_id": valid_uuid,
+                            "display_name": "Anna",
+                            "username": "leak",
+                        }
+                    ]
+                },
+                "/office/v1/chat/search": {
+                    "results": [{"thread": {"thread_type": "BOGUS"}}]
+                },
+            }
+            path = self.path.split("?", 1)[0]
+            payload = json.dumps(payload_by_path[path]).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def do_POST(self) -> None:
+            length = int(self.headers["Content-Length"])
+            request = json.loads(self.rfile.read(length).decode())
+            payload_by_path: dict[str, object] = {
+                "/office/v1/chat/threads": {
+                    "command_id": request["command_id"],
+                    "thread": {"thread_type": "BOGUS"},
+                },
+                f"/office/v1/chat/threads/{valid_uuid}/messages": {
+                    "command_id": request["command_id"],
+                    "message": {"references": [{"reference_type": "BOGUS"}]},
+                },
+                f"/office/v1/chat/threads/{valid_uuid}/read": {
+                    "command_id": request["command_id"],
+                    "thread_id": valid_uuid,
+                    "employee_id": "not-a-uuid",
+                    "last_read_message_id": None,
+                },
+            }
+            payload = json.dumps(payload_by_path[self.path]).encode()
+            status = 201 if self.path.endswith("/messages") else 200
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    server = HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address[:2]
+    client = RemoteCoreClient(f"http://{host!s}:{int(port)}", _TOKEN)
+    try:
+        calls = [
+            lambda: client.create_chat_thread(
+                employee_session_token="session",
+                thread_type="DIRECT",
+                participant_employee_ids=[valid_uuid],
+            ),
+            lambda: client.get_chat_thread(
+                valid_uuid, employee_session_token="session"
+            ),
+            lambda: client.send_chat_message(
+                valid_uuid,
+                employee_session_token="session",
+                body="bad",
+            ),
+            lambda: client.mark_chat_thread_read(
+                valid_uuid,
+                employee_session_token="session",
+                last_read_message_id=None,
+            ),
+            lambda: client.autocomplete_chat_participants(
+                valid_uuid,
+                employee_session_token="session",
+            ),
+            lambda: client.search_chat_entities(
+                employee_session_token="session",
+                q="Mueller",
+                reference_type="CONTACT",
+            ),
+            lambda: client.search_chat_employees(
+                employee_session_token="session", q="Anna"
+            ),
+            lambda: client.search_chat(employee_session_token="session", q="Anna"),
+        ]
+        for call in calls:
+            with pytest.raises(RemoteCoreError) as exc:
+                call()
+            assert exc.value.code == "invalid_response"
     finally:
         server.shutdown()
         server.server_close()
