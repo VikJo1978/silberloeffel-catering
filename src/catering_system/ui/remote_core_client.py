@@ -19,6 +19,13 @@ from datetime import date, datetime
 from typing import Any, NoReturn, cast
 from urllib.parse import quote, urlencode, urlparse
 
+from catering_system.domain.catalog import (
+    CatalogDish,
+    CatalogDishCreatePayload,
+    PricingUnit,
+    validate_allergen_codes,
+    validate_pricing_unit,
+)
 from catering_system.domain.customer_document_eligibility import (
     DOCUMENT_BLOCKER_CODES,
     DocumentBlocker,
@@ -36,10 +43,10 @@ from catering_system.domain.customer_document_projection import (
     DocumentType,
 )
 from catering_system.domain.inquiry import (
+    PLANNING_MODE_SET,
     FulfillmentMode,
     Inquiry,
     InquiryOfficeNextAction,
-    PLANNING_MODE_SET,
     PlanningMode,
     set_inquiry_fulfillment_mode,
     validate_call_verification_status,
@@ -48,10 +55,6 @@ from catering_system.domain.inquiry import (
     validate_fulfillment_mode,
     validate_planning_mode,
 )
-from catering_system.domain.inquiry_offer_preparation import (
-    InquiryOfferPreparationBlocker,
-)
-from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.inquiry_contact_completeness import (
     complete_inquiry_contact_information,
 )
@@ -63,6 +66,16 @@ from catering_system.domain.inquiry_customer_snapshot import (
     set_inquiry_customer_addresses,
     snapshot_from_structured_contact,
 )
+from catering_system.domain.inquiry_offer_preparation import (
+    InquiryOfferPreparationBlocker,
+)
+from catering_system.domain.manual_task import (
+    ManualTask,
+    validate_manual_task,
+    validate_manual_task_subject_type,
+)
+from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.order_confirmation_outbound import FakeOutboxMessage
 from catering_system.domain.order_payment_reminder import (
     PAYMENT_METHODS,
     OrderPaymentReminder,
@@ -71,6 +84,8 @@ from catering_system.domain.order_payment_reminder import (
     validate_payment_method,
 )
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
+from catering_system.services.buffet_cards_service import BuffetCard, BuffetCardsView
+from catering_system.services.inquiry_service import validate_inquiry_source
 from catering_system.services.order_confirmation_document_service import (
     OrderConfirmationDocumentEligibility,
     OrderConfirmationDocumentSummary,
@@ -79,15 +94,6 @@ from catering_system.services.order_confirmation_outbound_service import (
     OutboundSendEligibility,
     OutboundSendSummary,
 )
-from catering_system.domain.order_confirmation_outbound import FakeOutboxMessage
-from catering_system.domain.catalog import (
-    CatalogDish,
-    CatalogDishCreatePayload,
-    PricingUnit,
-    validate_allergen_codes,
-    validate_pricing_unit,
-)
-from catering_system.services.inquiry_service import validate_inquiry_source
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjection,
     PrintCommercialBlock,
@@ -95,7 +101,6 @@ from catering_system.services.order_print_projection_service import (
     PrintFlagsBlock,
     PrintPositionLine,
 )
-from catering_system.services.buffet_cards_service import BuffetCard, BuffetCardsView
 
 _MAX_RESPONSE_BYTES = 512 * 1024
 _READ_TIMEOUT_SECONDS = 3
@@ -253,6 +258,7 @@ _VERSION_KEYS = frozenset(
 _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
     400: frozenset({"invalid_request"}),
     401: frozenset({"unauthorized"}),
+    403: frozenset({"forbidden"}),
     404: frozenset({"not_found"}),
     405: frozenset({"method_not_allowed"}),
     409: frozenset(
@@ -1017,6 +1023,50 @@ def _payment_reminder(value: object, order_id: str) -> PaymentReminderView:
     )
 
 
+def _manual_task(value: object) -> ManualTask:
+    data = _dict(value)
+    _exact(
+        data,
+        {
+            "task_id",
+            "title",
+            "description",
+            "due_at",
+            "status",
+            "created_at",
+            "completed_at",
+            "created_by_employee_id",
+            "assigned_to_employee_id",
+            "subject_type",
+            "subject_id",
+        },
+    )
+    try:
+        task = validate_manual_task(
+            ManualTask(
+                task_id=_uuid4(data["task_id"]),
+                title=_str(data["title"]),
+                description=_str(data["description"]),
+                due_at=_optional_datetime(data["due_at"]),
+                created_at=_datetime(data["created_at"]),
+                completed_at=_optional_datetime(data["completed_at"]),
+                created_by_employee_id=_uuid4(data["created_by_employee_id"]),
+                assigned_to_employee_id=_optional_uuid4(
+                    data["assigned_to_employee_id"]
+                ),
+                subject_type=validate_manual_task_subject_type(
+                    _str(data["subject_type"])
+                ),
+                subject_id=_optional_uuid4(data["subject_id"]),
+            )
+        )
+    except (TypeError, ValueError):
+        _bad_response()
+    if _str(data["status"]) != task.status:
+        _bad_response()
+    return task
+
+
 def _validate_offer_prefill(value: object) -> None:
     payload = _dict(value)
     _exact(payload, {"schema_version", "source", "inquiry_id", "transfer"})
@@ -1140,9 +1190,12 @@ class RemoteCoreClient:
         query: Mapping[str, object] | None = None,
         body: Mapping[str, object] | None = None,
         expected: set[int],
+        employee_session_token: str | None = None,
     ) -> dict[str, object]:
         data = None
         headers = {"Authorization": f"Bearer {self._token}"}
+        if employee_session_token is not None:
+            headers["X-Employee-Session"] = employee_session_token
         if body is not None:
             data = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode(
                 "utf-8"
@@ -1193,9 +1246,19 @@ class RemoteCoreClient:
             _bad_response()
 
     def get(
-        self, path: str, query: Mapping[str, object] | None = None
+        self,
+        path: str,
+        query: Mapping[str, object] | None = None,
+        *,
+        employee_session_token: str | None = None,
     ) -> dict[str, object]:
-        return self._request("GET", path, query=query, expected={200})
+        return self._request(
+            "GET",
+            path,
+            query=query,
+            expected={200},
+            employee_session_token=employee_session_token,
+        )
 
     def get_text(self, path: str, query: Mapping[str, object] | None = None) -> str:
         url = self._url(path, query)
@@ -1277,6 +1340,7 @@ class RemoteCoreClient:
         *,
         command_id: str | None = None,
         optional_result_keys: frozenset[str] | set[str] = frozenset(),
+        employee_session_token: str | None = None,
     ) -> dict[str, object]:
         """`result_keys` must all be present. `optional_result_keys` may be
         present — for commands whose response carries a field only in some
@@ -1294,6 +1358,7 @@ class RemoteCoreClient:
                 "args": dict(args),
             },
             expected=expected,
+            employee_session_token=employee_session_token,
         )
         required = result_keys | {"command_id"}
         if not required <= set(result) <= required | set(optional_result_keys):
@@ -2406,6 +2471,77 @@ class RemoteCoreClient:
                 _bad_response()
             _datetime(row["opened_at"])
         return body
+
+    def list_manual_tasks(
+        self,
+        *,
+        employee_session_token: str,
+        subject_type: str | None = None,
+        subject_id: str | None = None,
+    ) -> list[ManualTask]:
+        query: dict[str, object] | None = None
+        if subject_type is not None or subject_id is not None:
+            if subject_type is None or subject_id is None:
+                raise ValueError(
+                    "subject_type and subject_id must be provided together"
+                )
+            query = {"subject_type": subject_type, "subject_id": subject_id}
+        body = self.get(
+            "/office/v1/manual-tasks",
+            query=query,
+            employee_session_token=employee_session_token,
+        )
+        _exact(body, {"manual_tasks"})
+        return [_manual_task(raw) for raw in _list(body["manual_tasks"])]
+
+    def create_manual_task(
+        self,
+        *,
+        employee_session_token: str,
+        title: str,
+        description: str | None = None,
+        due_at: datetime | None = None,
+        assigned_to_employee_id: str | None = None,
+        subject_type: str = "NONE",
+        subject_id: str | None = None,
+        command_id: str | None = None,
+    ) -> ManualTask:
+        args: dict[str, object] = {
+            "title": title,
+            "description": description,
+            "due_at": due_at.isoformat() if due_at is not None else None,
+            "assigned_to_employee_id": assigned_to_employee_id,
+            "subject_type": subject_type,
+            "subject_id": subject_id,
+        }
+        result = self.command(
+            "/office/v1/manual-tasks",
+            args=args,
+            expect={},
+            expected={201},
+            result_keys={"manual_task"},
+            command_id=command_id,
+            employee_session_token=employee_session_token,
+        )
+        return _manual_task(result["manual_task"])
+
+    def complete_manual_task(
+        self,
+        task_id: str,
+        *,
+        employee_session_token: str,
+        command_id: str | None = None,
+    ) -> ManualTask:
+        result = self.command(
+            f"/office/v1/manual-tasks/{quote(task_id, safe='')}/complete",
+            args={},
+            expect={},
+            expected={200},
+            result_keys={"manual_task"},
+            command_id=command_id,
+            employee_session_token=employee_session_token,
+        )
+        return _manual_task(result["manual_task"])
 
     def list_calendar(self, from_date: date, to_date: date) -> dict[str, object]:
         params = {

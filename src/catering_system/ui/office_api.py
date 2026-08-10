@@ -40,6 +40,7 @@ from catering_system.domain.catalog import (
 from catering_system.domain.customer_document_eligibility import (
     CustomerDocumentCreationBlocked,
 )
+from catering_system.domain.employee_auth import AuthenticatedEmployee
 from catering_system.domain.inquiry import (
     ACTIVE_ORDER_CRM_STAGE,
     CRM_PIPELINE,
@@ -56,6 +57,11 @@ from catering_system.domain.inquiry_customer_snapshot import (
     customer_address_from_mapping,
     customer_snapshot_to_mapping,
     validate_delivery_address_mode,
+)
+from catering_system.domain.manual_task import (
+    ManualTask,
+    ManualTaskSubjectType,
+    validate_manual_task_subject_type,
 )
 from catering_system.domain.offer import (
     ACCEPTANCE_CHANNELS,
@@ -111,6 +117,9 @@ from catering_system.repositories.sqlite_employee_auth_repository import (
 from catering_system.repositories.sqlite_inquiry_repository import (
     SQLiteInquiryRepository,
 )
+from catering_system.repositories.sqlite_manual_task_repository import (
+    SQLiteManualTaskRepository,
+)
 from catering_system.repositories.sqlite_offer_document_snapshot_repository import (
     SQLiteOfferDocumentSnapshotRepository,
 )
@@ -161,6 +170,7 @@ from catering_system.services.inquiry_service import (
     InquiryService,
     validate_inquiry_source,
 )
+from catering_system.services.manual_task_service import ManualTaskService
 from catering_system.services.offer_document_snapshot_service import (
     OfferDocumentNotFoundError,
     OfferDocumentSnapshotService,
@@ -415,6 +425,12 @@ def _v_optional_uuid4(value: object) -> str | None:
     return _v_uuid(value)
 
 
+def _v_optional_datetime(value: object) -> datetime | None:
+    if value is None:
+        return None
+    return _v_datetime(value)
+
+
 def _v_catalog_uuid(value: object) -> str:
     if not isinstance(value, str):
         raise _invalid()
@@ -449,6 +465,24 @@ def _v_catalog_text(value: object, max_len: int) -> str | None:
         return None
     text = _v_str(value, max_len).strip()
     return text or None
+
+
+def _manual_task_shape(task: ManualTask) -> dict[str, object]:
+    return {
+        "task_id": task.task_id,
+        "title": task.title,
+        "description": task.description,
+        "due_at": task.due_at.isoformat() if task.due_at is not None else None,
+        "status": task.status,
+        "created_at": task.created_at.isoformat(),
+        "completed_at": (
+            task.completed_at.isoformat() if task.completed_at is not None else None
+        ),
+        "created_by_employee_id": task.created_by_employee_id,
+        "assigned_to_employee_id": task.assigned_to_employee_id,
+        "subject_type": task.subject_type,
+        "subject_id": task.subject_id,
+    }
 
 
 def _v_intake(
@@ -508,6 +542,7 @@ class OfficeApi:
         self.payment_reminders = SQLitePaymentReminderRepository.from_connection(
             connection
         )
+        self.manual_tasks = SQLiteManualTaskRepository.from_connection(connection)
         self.confirmation_documents = (
             SQLiteOrderConfirmationDocumentRepository.from_connection(connection)
         )
@@ -527,6 +562,7 @@ class OfficeApi:
         self.events = DeferredEventSink()
         self.executor = CoreCommandExecutor(connection, self.events)
         self._active_command_id: str | None = None
+        self._active_employee: AuthenticatedEmployee | None = None
         self.inquiry_service = InquiryService(self.inquiries, event_sink=self.events)
         self.order_service = OrderService(self.orders, event_sink=self.events)
         self.offer_service = OfferService(
@@ -546,6 +582,10 @@ class OfficeApi:
             self.payment_reminders,
             self.orders,
             today=views.berlin_today,
+        )
+        self.manual_task_service = ManualTaskService(
+            self.manual_tasks,
+            employee_exists=self._employee_account_exists,
         )
         self.confirmation_document_service = OrderConfirmationDocumentService(
             self.orders,
@@ -619,6 +659,10 @@ class OfficeApi:
         )
         self.catalog_dish_service = CatalogDishService(self.catalog)
         self.catalog_dish_write_service = CatalogDishWriteService(self.catalog)
+
+    def _employee_account_exists(self, employee_id: str) -> bool:
+        account = self.employee_auth_repository.get_account_by_id(employee_id)
+        return account is not None and account.is_active
 
     def exchange_configurator_handoff(
         self,
@@ -996,6 +1040,21 @@ class OfficeApi:
             "tasks": views.task_list_view(self.task_projection_service.list_tasks())
         }
 
+    def list_manual_tasks(
+        self,
+        subject_type: ManualTaskSubjectType | None = None,
+        subject_id: str | None = None,
+    ) -> dict[str, object]:
+        if subject_type is None:
+            tasks = self.manual_task_service.list_open_tasks()
+        else:
+            if subject_id is None:
+                raise _invalid()
+            tasks = self.manual_task_service.list_tasks_for_subject(
+                subject_type, subject_id
+            )
+        return {"manual_tasks": [_manual_task_shape(task) for task in tasks]}
+
     def list_calendar(self, from_date: date, to_date: date) -> dict[str, object]:
         return {
             "entries": views.calendar_list_view(
@@ -1193,7 +1252,50 @@ class OfficeApi:
                 return order
         return None
 
+    def _require_active_employee(self) -> AuthenticatedEmployee:
+        if self._active_employee is None:
+            raise ApiError(401, "unauthorized")
+        return self._active_employee
+
     # -- commands (run inside the executor transaction) --------------------
+
+    def cmd_create_manual_task(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        employee = self._require_active_employee()
+        subject_type = _v_enum(
+            args.get("subject_type", "NONE"), validate_manual_task_subject_type
+        )
+        subject_id = _v_optional_uuid4(args.get("subject_id"))
+        assigned_to_employee_id = _v_optional_uuid4(args.get("assigned_to_employee_id"))
+        try:
+            task = self.manual_task_service.create_task(
+                title=_v_str(args["title"], 200),
+                description=_v_optional_str(args.get("description"), 4000) or "",
+                due_at=_v_optional_datetime(args.get("due_at")),
+                created_by_employee_id=employee.account.id,
+                assigned_to_employee_id=assigned_to_employee_id,
+                subject_type=subject_type,
+                subject_id=subject_id,
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ApiError(422, "invalid_request") from exc
+        except (TypeError, ValueError) as exc:
+            raise _invalid() from exc
+        return 201, {"manual_task": _manual_task_shape(task)}
+
+    def cmd_complete_manual_task(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        self._require_active_employee()
+        task_id = _v_uuid(path_ids["task_id"])
+        try:
+            task = self.manual_task_service.complete_task(task_id)
+        except KeyError as exc:
+            raise ApiError(404, "not_found") from exc
+        except (TypeError, ValueError) as exc:
+            raise _invalid() from exc
+        return 200, {"manual_task": _manual_task_shape(task)}
 
     def cmd_create_inquiry(
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict
@@ -2365,6 +2467,18 @@ _CONFIRMATION_DOCUMENT_ARGS = _ArgKeys(required=frozenset({"created_by"}))
 _CONFIRMATION_DOCUMENT_SEND_ARGS = _ArgKeys(
     required=frozenset({"document_snapshot_id", "requested_by"})
 )
+_MANUAL_TASK_CREATE_ARGS = _ArgKeys(
+    required=frozenset({"title"}),
+    optional=frozenset(
+        {
+            "description",
+            "due_at",
+            "assigned_to_employee_id",
+            "subject_type",
+            "subject_id",
+        }
+    ),
+)
 _PAUSE_ARGS = _ArgKeys(
     required=frozenset({"reason_code"}),
     optional=frozenset({"note", "actor_reference"}),
@@ -2478,6 +2592,12 @@ _COMMANDS: dict[str, _CommandSpec] = {
         _CONFIRMATION_DOCUMENT_SEND_ARGS,
         {"current_effective_order_version_id"},
     ),
+    "create_manual_task": _CommandSpec(
+        "cmd_create_manual_task", _MANUAL_TASK_CREATE_ARGS, {"manual_task"}
+    ),
+    "complete_manual_task": _CommandSpec(
+        "cmd_complete_manual_task", _NO_ARGS, {"manual_task"}
+    ),
     "update_catalog_dish": _CommandSpec(
         "cmd_update_catalog_dish", _CATALOG_DISH_UPDATE_ARGS, {"updated_at"}
     ),
@@ -2569,6 +2689,16 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/tasks$"),
         "/office/v1/tasks",
         {"GET": "list_tasks"},
+    ),
+    (
+        re.compile(r"^/office/v1/manual-tasks$"),
+        "/office/v1/manual-tasks",
+        {"GET": "list_manual_tasks", "POST": "create_manual_task"},
+    ),
+    (
+        re.compile(r"^/office/v1/manual-tasks/(?P<task_id>[^/]+)/complete$"),
+        "/office/v1/manual-tasks/{task_id}/complete",
+        {"POST": "complete_manual_task"},
     ),
     (
         re.compile(r"^/office/v1/calendar$"),
@@ -2927,6 +3057,47 @@ def make_office_api_handler(
             assert response is not None
             self._respond(status, response.to_json())
 
+        def _employee_with_permission(
+            self, permission_code: str
+        ) -> AuthenticatedEmployee:
+            employee_session_token = parse_employee_session_header_values(
+                self.headers.get_all("X-Employee-Session")
+            )
+            if employee_session_token == "malformed":
+                raise _invalid()
+            if employee_session_token is None:
+                raise ApiError(401, "unauthorized")
+            try:
+                employee = api.employee_auth_service.authenticate_session(
+                    employee_session_token
+                )
+            except AuthenticationError as exc:
+                raise ApiError(401, "unauthorized") from exc
+            if (
+                not employee.application_access_allowed
+                or permission_code not in employee.effective_permissions
+            ):
+                raise ApiError(403, "forbidden")
+            return employee
+
+        def _manual_task_employee(
+            self, kind: str, args: dict[str, object] | None = None
+        ) -> AuthenticatedEmployee:
+            if kind == "list_manual_tasks":
+                return self._employee_with_permission("tasks.view")
+            if kind == "create_manual_task":
+                employee = self._employee_with_permission("tasks.create")
+                if (
+                    args is not None
+                    and args.get("assigned_to_employee_id") is not None
+                    and "tasks.assign" not in employee.effective_permissions
+                ):
+                    raise ApiError(403, "forbidden")
+                return employee
+            if kind == "complete_manual_task":
+                return self._employee_with_permission("tasks.complete")
+            raise ApiError(500, "internal")
+
         def _introspect_service_auth_or_respond(self) -> bool:
             result = service_auth.authenticate_introspection(
                 self.headers.get("Authorization")
@@ -3224,6 +3395,21 @@ def make_office_api_handler(
             elif kind == "list_tasks":
                 self._query(set())
                 self._respond(200, api.list_tasks())
+            elif kind == "list_manual_tasks":
+                params = self._query({"subject_type", "subject_id"})
+                self._manual_task_employee(kind)
+                subject_type: ManualTaskSubjectType | None = None
+                subject_id: str | None = None
+                if "subject_type" in params or "subject_id" in params:
+                    if "subject_type" not in params or "subject_id" not in params:
+                        raise _invalid()
+                    subject_type = _v_enum(
+                        params["subject_type"], validate_manual_task_subject_type
+                    )
+                    if subject_type == "NONE":
+                        raise _invalid()
+                    subject_id = _v_uuid(params["subject_id"])
+                self._respond(200, api.list_manual_tasks(subject_type, subject_id))
             elif kind == "list_calendar":
                 params = self._query({"from", "to"})
                 if "from" not in params or "to" not in params:
@@ -3355,6 +3541,11 @@ def make_office_api_handler(
                 raise _invalid()
             if provided - arg_spec.required - arg_spec.optional:
                 raise _invalid()
+            employee = (
+                self._manual_task_employee(kind, args)
+                if kind in {"create_manual_task", "complete_manual_task"}
+                else None
+            )
 
             fingerprint = command_fingerprint(
                 template, path_ids, args, expect, CLIENT_ID
@@ -3368,10 +3559,12 @@ def make_office_api_handler(
                         raise ApiError(409, "command_id_conflict")
                     return recorded.result_status, recorded.result_body
                 api._active_command_id = command_id
+                api._active_employee = employee
                 try:
                     status, result = handler(path_ids, args, expect)
                 finally:
                     api._active_command_id = None
+                    api._active_employee = None
                 body = json.dumps(
                     {"command_id": command_id, **result}, ensure_ascii=False
                 )
