@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import queue
 import threading
@@ -14,18 +15,18 @@ from pathlib import Path
 
 import pytest
 
-from catering_system.domain.kitchen_print_job import KitchenPrintPolicy
-from catering_system.repositories.in_memory_kitchen_print_document_store import (
-    InMemoryKitchenPrintDocumentStore,
-)
 from catering_system.domain.inquiry import (
     CALL_VERIFICATION_STATUSES,
     CRM_PIPELINE,
-    Inquiry,
     PLANNING_MODES,
+    Inquiry,
 )
 from catering_system.domain.inquiry_customer_snapshot import (
     InquiryCustomerSnapshot as _CCSnapshot,
+)
+from catering_system.domain.kitchen_print_job import KitchenPrintPolicy
+from catering_system.repositories.in_memory_kitchen_print_document_store import (
+    InMemoryKitchenPrintDocumentStore,
 )
 from catering_system.repositories.kitchen_api_ledger import InMemoryKitchenCommandLedger
 from catering_system.repositories.sqlite_kitchen_print_job_repository import (
@@ -172,8 +173,9 @@ def test_claim_returns_artifact_happy_path(kitchen_api) -> None:
     assert body["command_id"] == command_id
     assert body["print_job_id"] == _JOB_A
     assert body["document_ref"].startswith("sha256:")
-    assert body["document"]["content_type"] == "text/html; charset=utf-8"
+    assert body["document"]["content_type"] == "application/pdf"
     assert body["document"]["body_base64"]
+    assert base64.b64decode(body["document"]["body_base64"]).startswith(b"%PDF-")
 
 
 def test_repeated_command_id_replays_without_new_claim(kitchen_api) -> None:
@@ -264,7 +266,7 @@ def test_reject_unknown_code_returns_domain_validation_error(kitchen_api) -> Non
 
 def test_claim_does_not_set_kitchen_print_confirmed_at(kitchen_api) -> None:
     base, db, _ledger = kitchen_api
-    order_id, version_id = _seed_claimable_job(db)
+    _order_id, version_id = _seed_claimable_job(db)
     status, body, _raw = _post(
         f"{base}/kitchen/v1/print-jobs/claim-next",
         {"command_id": str(uuid.uuid4())},

@@ -1,0 +1,20 @@
+# Kitchen print agent — Lenovo deployment (Phase 3B edge runtime).
+# Requires kitchen-print-agent.env with API URL, token, and CUPS queue name.
+
+[Unit]
+Description=Kitchen Print Agent
+After=network-online.target cups.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=viktor
+WorkingDirectory=/opt/kitchen-print-agent
+Environment=PYTHONPATH=/opt/kitchen-print-agent/infra
+EnvironmentFile=/etc/kitchen-print-agent.env
+ExecStart=/usr/bin/python3 -m kitchen_print_agent
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

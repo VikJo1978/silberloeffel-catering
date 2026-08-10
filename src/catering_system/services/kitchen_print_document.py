@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 
 from catering_system.domain.kitchen_print_job import KitchenPrintJob
+from catering_system.services.kitchen_print_pdf_renderer import render_kitchen_print_pdf
 from catering_system.services.order_print_projection_service import OrderPrintProjection
 
 
@@ -68,35 +68,17 @@ def build_kitchen_print_document(
     job: KitchenPrintJob,
     *,
     now: datetime,
-    render_html: Callable[[OrderPrintProjection], str] | None = None,
 ) -> KitchenPrintDocument:
     projection_hash = hashlib.sha256(
         canonical_kitchen_projection_json(projection).encode("utf-8")
     ).hexdigest()
-    if render_html is not None:
-        body = render_html(projection).encode("utf-8")
-    else:
-        body = _minimal_kitchen_html(projection).encode("utf-8")
+    body = render_kitchen_print_pdf(projection, created_at=now)
     document_ref = f"sha256:{hashlib.sha256(body).hexdigest()}"
     return KitchenPrintDocument(
         document_ref=document_ref,
         print_job_id=job.print_job_id,
         projection_hash=projection_hash,
-        content_type="text/html; charset=utf-8",
+        content_type="application/pdf",
         body=body,
         created_at=now,
     )
-
-
-def _minimal_kitchen_html(projection: OrderPrintProjection) -> str:
-    event = projection.event
-    lines = [
-        "<html><body>",
-        f"<p>order_version_id={event.order_version_id}</p>",
-        f"<p>version_number={event.version_number}</p>",
-        f"<p>location={event.location_text}</p>",
-    ]
-    for position in projection.commercial.positions:
-        lines.append(f"<p>{position.name}</p>")
-    lines.append("</body></html>")
-    return "".join(lines)

@@ -10,8 +10,9 @@ from typing import Protocol
 
 from kitchen_print_agent.client import KitchenPrintAgentClient
 from kitchen_print_agent.config import AgentConfig
+from kitchen_print_agent.errors import PrinterError
 from kitchen_print_agent.models import ClaimResponse
-from kitchen_print_agent.printer import PrinterAdapter, PrinterError
+from kitchen_print_agent.printer import PrinterAdapter
 
 _log = logging.getLogger(__name__)
 
@@ -82,20 +83,24 @@ class KitchenPrintAgent:
                 result.document.content_type,
                 result.document.body,
             )
-        except PrinterError:
+        except PrinterError as exc:
             reject_command_id = self._uuid_factory()
             self._client.reject(
                 result.print_job_id,
                 reject_command_id,
-                "printer_unavailable",
+                exc.rejection_code,
             )
         return True
 
-    def run(self) -> None:
+    def run_forever(self) -> None:
+        """Poll until stop() is called."""
         self._running = True
         while self._running:
             self.run_once()
             self._sleep(self._config.poll_interval_seconds)
+
+    def run(self) -> None:
+        self.run_forever()
 
     def stop(self) -> None:
         self._running = False

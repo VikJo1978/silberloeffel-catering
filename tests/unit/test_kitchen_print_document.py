@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import io
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from pypdf import PdfReader
 
 from catering_system.domain.kitchen_print_job import KitchenPrintJob, KitchenPrintPolicy
 from catering_system.repositories.in_memory_kitchen_print_document_store import (
@@ -18,6 +20,10 @@ from catering_system.repositories.in_memory_kitchen_print_job_repository import 
 )
 from catering_system.services.kitchen_print_document_factory import (
     KitchenPrintDocumentFactory,
+)
+from catering_system.services.kitchen_print_pdf_renderer import (
+    KitchenPrintPdfUnsupportedCharacterError,
+    render_kitchen_print_pdf,
 )
 from catering_system.services.kitchen_print_service import KitchenPrintService
 from catering_system.services.operational_core_service import OperationalCoreService
@@ -35,7 +41,16 @@ _POLICY = KitchenPrintPolicy(
 )
 
 
-def _document_factory_world() -> tuple[
+def _pdf_text(pdf_bytes: bytes) -> str:
+    reader = PdfReader(io.BytesIO(pdf_bytes))
+    return " ".join(
+        text for page in reader.pages for text in (page.extract_text(),) if text
+    )
+
+
+def _document_factory_world(
+    *, accepted: bool = True
+) -> tuple[
     KitchenPrintDocumentFactory,
     InMemoryKitchenPrintDocumentStore,
     KitchenPrintJob,
@@ -66,16 +81,16 @@ def _document_factory_world() -> tuple[
         policy=_POLICY,
         clock=lambda: _NOW,
     )
-    job = print_service.request_print(
+    requested = print_service.request_print(
         order.order_id,
         order_version.order_version_id,
         print_job_id=_JOB_A,
     )
+    job = print_service.accept_print_job(_JOB_A) if accepted else requested
     store = InMemoryKitchenPrintDocumentStore()
     factory = KitchenPrintDocumentFactory(
         OrderPrintProjectionService(orders, offer_service._commercial_snapshots),
         store,
-        clock=lambda: _NOW,
     )
     return factory, store, job, offer, offers, orders
 
@@ -90,6 +105,103 @@ def test_create_for_print_job_returns_one_artifact_per_job() -> None:
     assert first.projection_hash == second.projection_hash
     assert first.body == second.body
     assert first.print_job_id == _JOB_A
+
+
+def test_pdf_render_is_byte_identical_for_same_stable_inputs() -> None:
+    factory, _store, job, _offer, _offers, _orders = _document_factory_world()
+    projection = factory._projection_service.resolve(
+        job.order_id,
+        job.order_version_id,
+        intent="kitchen_job",
+    )
+
+    first = render_kitchen_print_pdf(projection, created_at=_NOW)
+    second = render_kitchen_print_pdf(projection, created_at=_NOW)
+
+    assert first == second
+    assert first.startswith(b"%PDF-")
+    assert projection.flags.intent == "kitchen_job"
+
+
+def test_pdf_contains_kitchen_projection_content() -> None:
+    factory, _store, job, _offer, _offers, _orders = _document_factory_world()
+    projection = factory._projection_service.resolve(
+        job.order_id,
+        job.order_version_id,
+        intent="kitchen_job",
+    )
+    pdf = render_kitchen_print_pdf(projection, created_at=_NOW)
+    text = _pdf_text(pdf)
+    event = projection.event
+    first_position = projection.commercial.positions[0]
+    detail = first_position.description or first_position.composition
+
+    assert "SILBERLÖFFEL" in text
+    assert "Küchenzettel" in text
+    assert event.order_id in text
+    assert event.order_version_id in text
+    assert event.event_date.strftime("%d.%m.%Y") in text
+    assert event.time_window_text in text
+    assert event.location_text in text
+    assert str(event.guest_count_estimate) in text
+    assert event.planning_mode in text
+    assert f"Version {event.version_number}" in text
+    assert "MENÜ" in text
+    assert first_position.name in text
+    if detail is not None:
+        assert detail in text
+    if first_position.quantity_display is not None:
+        assert first_position.quantity_display in text
+
+
+def test_pdf_contains_cancelled_watermark_change_and_empty_menu_states() -> None:
+    factory, _store, job, _offer, _offers, _orders = _document_factory_world()
+    projection = factory._projection_service.resolve(
+        job.order_id,
+        job.order_version_id,
+        intent="kitchen_job",
+    )
+    projection = replace(
+        projection,
+        event=replace(
+            projection.event,
+            guest_count_estimate=None,
+            order_cancelled_at=_NOW,
+            change_reason=None,
+            changed_fields=("location_text", "guest_count_estimate"),
+        ),
+        commercial=replace(projection.commercial, positions=()),
+        flags=replace(projection.flags, watermark="VERALTET"),
+    )
+
+    text = _pdf_text(render_kitchen_print_pdf(projection, created_at=_NOW))
+
+    assert "STORNIERT" in text
+    assert "VERALTET" in text
+    assert "Gäste" in text
+    assert "-" in text
+    assert "Änderung" in text
+    assert "Grund: -" in text
+    assert "Felder: location_text, guest_count_estimate" in text
+    assert "Keine Positionen." in text
+
+
+def test_pdf_rejects_unsupported_projection_text() -> None:
+    factory, _store, job, _offer, _offers, _orders = _document_factory_world()
+    projection = factory._projection_service.resolve(
+        job.order_id,
+        job.order_version_id,
+        intent="kitchen_job",
+    )
+    projection = replace(
+        projection,
+        event=replace(projection.event, changed_fields=("emoji 🚫",)),
+    )
+
+    with pytest.raises(KitchenPrintPdfUnsupportedCharacterError) as exc_info:
+        render_kitchen_print_pdf(projection, created_at=_NOW)
+
+    assert exc_info.value.field == "changed_fields[0]"
 
 
 def test_document_is_immutable_after_live_data_changes() -> None:
@@ -150,10 +262,20 @@ def test_document_stores_snapshot_bytes_not_live_reference() -> None:
     document = factory.create_for_print_job(job)
 
     assert document.body
+    assert document.body.startswith(b"%PDF-")
     assert document.projection_hash
-    assert document.content_type == "text/html; charset=utf-8"
+    assert document.content_type == "application/pdf"
     assert document.print_job_id == job.print_job_id
     assert not hasattr(document, "order_version_id")
+
+
+def test_unaccepted_job_cannot_produce_immutable_document() -> None:
+    factory, _store, job, _offer, _offers, _orders = _document_factory_world(
+        accepted=False
+    )
+
+    with pytest.raises(ValueError, match="accepted kitchen print job is required"):
+        factory.create_for_print_job(job)
 
 
 def test_kitchen_print_document_factory_boundary_stays_projection_only() -> None:
@@ -229,7 +351,6 @@ def test_claim_then_document_creation_does_not_mutate_job_facts() -> None:
     factory = KitchenPrintDocumentFactory(
         OrderPrintProjectionService(orders, offer_service._commercial_snapshots),
         store,
-        clock=lambda: _NOW,
     )
     before = jobs.get(_JOB_A)
     assert before is not None

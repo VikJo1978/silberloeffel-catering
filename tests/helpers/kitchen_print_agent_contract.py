@@ -16,7 +16,6 @@ import json
 import threading
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable
 
 from catering_system.domain.kitchen_print_job import (
     KitchenPrintJob,
@@ -170,13 +169,11 @@ def create_kitchen_print_document(
     job: KitchenPrintJob,
     *,
     now: datetime,
-    render_html: Callable[[OrderPrintProjection], str] | None = None,
 ) -> KitchenPrintDocument:
     return build_kitchen_print_document(
         projection,
         job,
         now=now,
-        render_html=render_html,
     )
 
 
@@ -203,7 +200,6 @@ def claim_with_document(
             commercial_snapshot_repository,
         ),
         document_store,
-        clock=lambda: now,
     )
     document = factory.create_for_print_job(job)
     return AgentClaimResult(job=job, document=document)
