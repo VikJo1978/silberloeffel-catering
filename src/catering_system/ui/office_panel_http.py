@@ -2180,7 +2180,9 @@ def make_office_panel_handler(
             if action == "version":
                 panel.create_version(order_id, self._form())
             elif action == "print-confirm":
-                panel.request_kitchen_print(order_id, self._form())
+                form = self._form()
+                _ = form["order_version_id"]
+                panel.request_kitchen_print(order_id, form)
             elif action == "effective":
                 panel.core.make_order_version_effective(
                     order_id, self._form()["order_version_id"]

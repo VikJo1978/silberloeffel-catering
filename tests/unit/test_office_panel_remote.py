@@ -1310,13 +1310,21 @@ def test_full_write_flow_through_remote_panel(remote_world) -> None:
 
     status, order_html = _get(f"{base}/order/{order_id}")
     assert status == 200
-    assert "Druck bestätigt" not in order_html
+    assert re.search(
+        r"<tr><td>v1</td>.*?<td>–</td><td>",
+        order_html,
+        re.DOTALL,
+    )
     assert f'action="/order/{order_id}/effective"' not in order_html
 
     _ack_next_kitchen_job(remote_world.db, version_id)
     status, order_html = _get(f"{base}/order/{order_id}")
     assert status == 200
-    assert "Druck bestätigt" in order_html
+    assert re.search(
+        r"<tr><td>v1</td>.*?<td>\d{4}-\d{2}-\d{2}T",
+        order_html,
+        re.DOTALL,
+    )
     assert f'action="/order/{order_id}/effective"' in order_html
     assert "Wirksam machen" in order_html
 

@@ -410,7 +410,7 @@ def test_orders_view_lists_operative_row() -> None:
     assert "Alle Aufträge" in page
     assert "Business Lunch" in page
     assert "28 Gäste" in page
-    assert "Küchendruck bestätigen" in page
+    assert "Küchendruck erforderlich" in page
     assert ">Öffnen</a>" in page
     for label in ("Heute", "Diese Woche", "Dieser Monat", "Alle"):
         assert label in page

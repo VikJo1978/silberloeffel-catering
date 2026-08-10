@@ -1531,7 +1531,7 @@ def test_legacy_convert_with_expired_offer_still_requires_accepted_offer(api) ->
 
 
 def test_versions_expect_and_cancelled_gate(api) -> None:
-    base, ids, _db = api
+    base, ids, db = api
     args = {
         "event_date": "2026-10-03",
         "time_window_text": "früh",
@@ -1595,6 +1595,7 @@ def test_versions_expect_and_cancelled_gate(api) -> None:
         args={"order_version_id": body["order_version_id"]},
     )
     assert status == 200
+    _ack_next_kitchen_job(db, body["order_version_id"])
     status, switched, _h = _post(
         effective_url,
         args={"order_version_id": body["order_version_id"]},
@@ -4509,7 +4510,7 @@ def _make_effective_offer_order(
     snapshot: dict[str, object] | None = None,
     ensure_recipient_email: bool = True,
 ) -> tuple[str, str]:
-    base, ids, _db = api
+    base, ids, db = api
     resolved_inquiry = inquiry_id or ids["inquiry_offer_ready"]
     if ensure_recipient_email:
         _ensure_inquiry_recipient_email(base, resolved_inquiry)
@@ -4555,6 +4556,7 @@ def _make_effective_offer_order(
         )[0]
         == 200
     )
+    _ack_next_kitchen_job(db, order_version_id)
     assert (
         _post(
             f"{base}/office/v1/orders/{order_id}/effective",
