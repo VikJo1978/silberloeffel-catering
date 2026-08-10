@@ -16,7 +16,6 @@ import json
 import threading
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable
 
 from catering_system.domain.kitchen_print_job import (
     KitchenPrintJob,
@@ -24,6 +23,9 @@ from catering_system.domain.kitchen_print_job import (
     derive_kitchen_print_job_state,
 )
 from catering_system.domain.order import Order
+from catering_system.repositories.in_memory_kitchen_print_document_store import (
+    InMemoryKitchenPrintDocumentStore,
+)
 from catering_system.repositories.kitchen_print_job_repository import (
     KitchenPrintJobRepository,
 )
@@ -31,6 +33,13 @@ from catering_system.repositories.order_commercial_snapshot_repository import (
     OrderCommercialSnapshotRepository,
 )
 from catering_system.repositories.order_repository import OrderRepository
+from catering_system.services.kitchen_print_document import (
+    KitchenPrintDocument,
+    build_kitchen_print_document,
+)
+from catering_system.services.kitchen_print_document_factory import (
+    KitchenPrintDocumentFactory,
+)
 from catering_system.services.kitchen_print_service import KitchenPrintService
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjection,
@@ -40,17 +49,7 @@ from catering_system.services.order_print_projection_service import (
 _CLAIM_ROUTE = "POST /kitchen/v1/print-jobs/claim-next"
 _AGENT_CLIENT_ID = "kitchen-print-agent"
 
-
-@dataclass(frozen=True)
-class KitchenPrintDocument:
-    """Application DTO — immutable print artifact at claim time (ADR §2.1)."""
-
-    document_ref: str
-    print_job_id: str
-    projection_hash: str
-    content_type: str
-    body: bytes
-    created_at: datetime
+InMemoryDocumentStore = InMemoryKitchenPrintDocumentStore
 
 
 @dataclass(frozen=True)
@@ -85,22 +84,6 @@ def command_fingerprint(
         separators=(",", ":"),
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-class InMemoryDocumentStore:
-    def __init__(self) -> None:
-        self._by_ref: dict[str, KitchenPrintDocument] = {}
-
-    def save(self, document: KitchenPrintDocument) -> None:
-        if document.document_ref in self._by_ref:
-            existing = self._by_ref[document.document_ref]
-            if existing != document:
-                raise ValueError("document_ref conflict")
-            return
-        self._by_ref[document.document_ref] = document
-
-    def get(self, document_ref: str) -> KitchenPrintDocument | None:
-        return self._by_ref.get(document_ref)
 
 
 class InMemoryAgentCommandLedger:
@@ -181,89 +164,24 @@ def resolve_kitchen_job_projection(
     ).resolve(order_id, order_version_id, intent="kitchen_job")
 
 
-def _canonical_projection_json(projection: OrderPrintProjection) -> str:
-    event = projection.event
-    commercial = projection.commercial
-    flags = projection.flags
-    payload = {
-        "event": {
-            "order_id": event.order_id,
-            "order_version_id": event.order_version_id,
-            "version_number": event.version_number,
-            "event_date": event.event_date.isoformat(),
-            "time_window_text": event.time_window_text,
-            "location_text": event.location_text,
-            "guest_count_estimate": event.guest_count_estimate,
-            "planning_mode": event.planning_mode,
-        },
-        "commercial": {
-            "source": commercial.source,
-            "variant_label": commercial.variant_label,
-            "positions": [
-                {
-                    "position_id": line.position_id,
-                    "name": line.name,
-                    "quantity_display": line.quantity_display,
-                }
-                for line in commercial.positions
-            ],
-        },
-        "flags": {
-            "intent": flags.intent,
-            "watermark": flags.watermark,
-            "is_preview": flags.is_preview,
-            "is_stale": flags.is_stale,
-        },
-    }
-    return json.dumps(
-        payload, sort_keys=True, ensure_ascii=False, separators=(",", ":")
-    )
-
-
 def create_kitchen_print_document(
     projection: OrderPrintProjection,
     job: KitchenPrintJob,
     *,
     now: datetime,
-    render_html: Callable[[OrderPrintProjection], str] | None = None,
 ) -> KitchenPrintDocument:
-    projection_hash = hashlib.sha256(
-        _canonical_projection_json(projection).encode("utf-8")
-    ).hexdigest()
-    if render_html is not None:
-        body = render_html(projection).encode("utf-8")
-    else:
-        body = _minimal_kitchen_html(projection).encode("utf-8")
-    document_ref = f"sha256:{hashlib.sha256(body).hexdigest()}"
-    return KitchenPrintDocument(
-        document_ref=document_ref,
-        print_job_id=job.print_job_id,
-        projection_hash=projection_hash,
-        content_type="text/html; charset=utf-8",
-        body=body,
-        created_at=now,
+    return build_kitchen_print_document(
+        projection,
+        job,
+        now=now,
     )
-
-
-def _minimal_kitchen_html(projection: OrderPrintProjection) -> str:
-    event = projection.event
-    lines = [
-        "<html><body>",
-        f"<p>order_version_id={event.order_version_id}</p>",
-        f"<p>version_number={event.version_number}</p>",
-        f"<p>location={event.location_text}</p>",
-    ]
-    for position in projection.commercial.positions:
-        lines.append(f"<p>{position.name}</p>")
-    lines.append("</body></html>")
-    return "".join(lines)
 
 
 def claim_with_document(
     order_repository: OrderRepository,
     job_repository: KitchenPrintJobRepository,
     commercial_snapshot_repository: OrderCommercialSnapshotRepository,
-    document_store: InMemoryDocumentStore,
+    document_store: InMemoryKitchenPrintDocumentStore,
     *,
     now: datetime,
     policy: KitchenPrintPolicy,
@@ -276,14 +194,14 @@ def claim_with_document(
     )
     if job is None:
         return None
-    projection = resolve_kitchen_job_projection(
-        order_repository,
-        commercial_snapshot_repository,
-        order_id=job.order_id,
-        order_version_id=job.order_version_id,
+    factory = KitchenPrintDocumentFactory(
+        OrderPrintProjectionService(
+            order_repository,
+            commercial_snapshot_repository,
+        ),
+        document_store,
     )
-    document = create_kitchen_print_document(projection, job, now=now)
-    document_store.save(document)
+    document = factory.create_for_print_job(job)
     return AgentClaimResult(job=job, document=document)
 
 
@@ -293,7 +211,7 @@ def execute_claim_command(
     order_repository: OrderRepository,
     job_repository: KitchenPrintJobRepository,
     commercial_snapshot_repository: OrderCommercialSnapshotRepository,
-    document_store: InMemoryDocumentStore,
+    document_store: InMemoryKitchenPrintDocumentStore,
     ledger: InMemoryAgentCommandLedger,
     now: datetime,
     policy: KitchenPrintPolicy,
@@ -341,7 +259,7 @@ def execute_claim_command(
 
 
 def load_document_by_ref(
-    document_store: InMemoryDocumentStore,
+    document_store: InMemoryKitchenPrintDocumentStore,
     document_ref: str,
 ) -> KitchenPrintDocument:
     document = document_store.get(document_ref)

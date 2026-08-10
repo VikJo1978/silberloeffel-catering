@@ -111,6 +111,9 @@ from catering_system.repositories.sqlite_employee_auth_repository import (
 from catering_system.repositories.sqlite_inquiry_repository import (
     SQLiteInquiryRepository,
 )
+from catering_system.repositories.sqlite_kitchen_print_job_repository import (
+    SQLiteKitchenPrintJobRepository,
+)
 from catering_system.repositories.sqlite_offer_document_snapshot_repository import (
     SQLiteOfferDocumentSnapshotRepository,
 )
@@ -161,6 +164,7 @@ from catering_system.services.inquiry_service import (
     InquiryService,
     validate_inquiry_source,
 )
+from catering_system.services.kitchen_print_service import KitchenPrintService
 from catering_system.services.offer_document_snapshot_service import (
     OfferDocumentNotFoundError,
     OfferDocumentSnapshotService,
@@ -485,6 +489,9 @@ class OfficeApi:
         bootstrap_customer_identity_schema(connection)
         bootstrap_employee_auth_schema(connection)
         self.orders = SQLiteOrderRepository.from_connection(connection)
+        self.kitchen_print_jobs = SQLiteKitchenPrintJobRepository.from_connection(
+            connection
+        )
         self.offers = SQLiteOfferRepository.from_connection(connection)
         self.catalog = SQLiteCatalogRepository.from_connection(connection)
         self.employee_auth_repository = SQLiteEmployeeAuthRepository.from_connection(
@@ -563,6 +570,11 @@ class OfficeApi:
         self.core = OperationalCoreService(
             self.orders,
             pause_repository=self.operational_pauses,
+            event_sink=self.events,
+        )
+        self.kitchen_print_service = KitchenPrintService(
+            self.orders,
+            self.kitchen_print_jobs,
             event_sink=self.events,
         )
         self.confirmation_outbound_service = OrderConfirmationOutboundService(
@@ -1868,17 +1880,36 @@ class OfficeApi:
     ) -> tuple[int, dict[str, object]]:
         order = self._require_active_order(path_ids["id"])
         version = self._owned_version(order.order_id, _v_uuid(args["order_version_id"]))
-        confirmed = self.core.confirm_kitchen_print(
-            order.order_id, version.order_version_id
-        )
-        assert confirmed.kitchen_print_confirmed_at is not None
+        job = self._ensure_kitchen_print_job(order.order_id, version.order_version_id)
+        current_version = self.orders.get_order_version(version.order_version_id)
+        assert current_version is not None
         return 200, {
             "order_id": order.order_id,
-            "order_version_id": confirmed.order_version_id,
+            "order_version_id": version.order_version_id,
+            "print_job_id": job.print_job_id,
             "kitchen_print_confirmed_at": (
-                confirmed.kitchen_print_confirmed_at.isoformat()
+                current_version.kitchen_print_confirmed_at.isoformat()
+                if current_version.kitchen_print_confirmed_at is not None
+                else None
             ),
         }
+
+    def _ensure_kitchen_print_job(self, order_id: str, order_version_id: str):
+        attempts = self.kitchen_print_service.list_print_jobs_for_version(
+            order_version_id
+        )
+        if not attempts:
+            return self.kitchen_print_service.request_print(order_id, order_version_id)
+        latest = attempts[-1]
+        if latest.acknowledged_at is not None:
+            return latest
+        if (
+            latest.rejected_at is not None
+            or latest.superseded_at is not None
+            or self.kitchen_print_service.is_ack_overdue(latest)
+        ):
+            return self.kitchen_print_service.reprint(latest.print_job_id)
+        return latest
 
     def cmd_effective(
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict

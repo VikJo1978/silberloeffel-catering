@@ -52,7 +52,7 @@ _OFFER_ID = "11111111-1111-4111-8111-111111111111"
 
 _ORDER_POST_ACTIONS: tuple[tuple[str, str, str], ...] = (
     ("version", "orders.version.create", "create_version"),
-    ("print-confirm", "orders.print.confirm", "confirm_kitchen_print"),
+    ("print-confirm", "orders.print.confirm", "request_kitchen_print"),
     ("effective", "orders.effective.set", "make_order_version_effective"),
     ("ready", "orders.ready.release", "request_ready_to_send"),
     ("pause", "orders.pause", "pause_order"),
@@ -63,9 +63,8 @@ _ORDER_POST_ACTIONS: tuple[tuple[str, str, str], ...] = (
 
 _PATCH_TARGETS: dict[str, str] = {
     "create_version": "catering_system.ui.office_panel.OfficePanel.create_version",
-    "confirm_kitchen_print": (
-        "catering_system.services.operational_core_service."
-        "OperationalCoreService.confirm_kitchen_print"
+    "request_kitchen_print": (
+        "catering_system.ui.office_panel.OfficePanel.request_kitchen_print"
     ),
     "make_order_version_effective": (
         "catering_system.services.operational_core_service."
@@ -414,7 +413,7 @@ def test_order_operational_post_denied_without_required_permission(
             "print-confirm",
             "orders.version.create",
             "orders.print.confirm",
-            "confirm_kitchen_print",
+            "request_kitchen_print",
         ),
         (
             "effective",
@@ -743,7 +742,7 @@ def test_domain_guard_still_rejects_authorized_invalid_payload(
         username="print.invalid",
         permissions=frozenset({"orders.print.confirm", "orders.view"}),
     )
-    with patch(_PATCH_TARGETS["confirm_kitchen_print"], autospec=True) as confirm_mock:
+    with patch(_PATCH_TARGETS["request_kitchen_print"], autospec=True) as request_mock:
         status, _url, body, _headers = _request(
             employee_panel.base,
             f"/order/{_ORDER_ID}/print-confirm",
@@ -753,7 +752,7 @@ def test_domain_guard_still_rejects_authorized_invalid_payload(
         )
     assert status == 400
     assert _GERMAN_FORBIDDEN not in body
-    confirm_mock.assert_not_called()
+    request_mock.assert_not_called()
 
 
 def test_viewer_cannot_receive_order_mutation_permissions() -> None:

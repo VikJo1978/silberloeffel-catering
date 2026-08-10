@@ -32,6 +32,9 @@ from catering_system.repositories.contact_profile_repository import (
     ContactProfileRepository,
 )
 from catering_system.repositories.inquiry_repository import InquiryRepository
+from catering_system.repositories.kitchen_print_job_repository import (
+    KitchenPrintJobRepository,
+)
 from catering_system.repositories.offer_document_snapshot_repository import (
     OfferDocumentSnapshotRepository,
 )
@@ -102,8 +105,8 @@ from catering_system.ui.office_panel import (
     render_rueckruf,
 )
 from catering_system.ui.office_panel_authz import (
-    BusinessAccessDenied,
     DYNAMIC_CATALOG_UPDATE_AUTH,
+    BusinessAccessDenied,
     DynamicCatalogUpdateAuth,
     authorize_catalog_update,
     require_all_business_permissions,
@@ -368,6 +371,7 @@ def make_office_panel_handler(
     commercial_snapshot_repo: OrderCommercialSnapshotRepository | None = None,
     offer_document_repo: OfferDocumentSnapshotRepository | None = None,
     offer_pdf_static_content: OfferPdfStaticContent | None = None,
+    kitchen_print_job_repo: KitchenPrintJobRepository | None = None,
     ui_version: str = "legacy",
     auth_mode: OfficePanelAuthMode = "basic",
     auth_service: EmployeeAuthService | None = None,
@@ -404,6 +408,7 @@ def make_office_panel_handler(
         commercial_snapshot_repo=commercial_snapshot_repo,
         offer_document_repo=offer_document_repo,
         offer_pdf_static_content=offer_pdf_static_content,
+        kitchen_print_job_repo=kitchen_print_job_repo,
         ui_version=ui_version,
     )
     expected = "Basic " + base64.b64encode(f"office:{password}".encode()).decode()
@@ -2175,9 +2180,9 @@ def make_office_panel_handler(
             if action == "version":
                 panel.create_version(order_id, self._form())
             elif action == "print-confirm":
-                panel.core.confirm_kitchen_print(
-                    order_id, self._form()["order_version_id"]
-                )
+                form = self._form()
+                _ = form["order_version_id"]
+                panel.request_kitchen_print(order_id, form)
             elif action == "effective":
                 panel.core.make_order_version_effective(
                     order_id, self._form()["order_version_id"]
@@ -2227,6 +2232,7 @@ def create_office_panel_server(
     commercial_snapshot_repo: OrderCommercialSnapshotRepository | None = None,
     offer_document_repo: OfferDocumentSnapshotRepository | None = None,
     offer_pdf_static_content: OfferPdfStaticContent | None = None,
+    kitchen_print_job_repo: KitchenPrintJobRepository | None = None,
     ui_version: str = "legacy",
     auth_mode: OfficePanelAuthMode = "basic",
     auth_service: EmployeeAuthService | None = None,
@@ -2257,6 +2263,7 @@ def create_office_panel_server(
             commercial_snapshot_repo=commercial_snapshot_repo,
             offer_document_repo=offer_document_repo,
             offer_pdf_static_content=offer_pdf_static_content,
+            kitchen_print_job_repo=kitchen_print_job_repo,
             ui_version=ui_version,
             auth_mode=auth_mode,
             auth_service=auth_service,

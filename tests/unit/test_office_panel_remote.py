@@ -8,9 +8,6 @@ never opening core.db in remote mode, and half-config startup rejection.
 
 from __future__ import annotations
 
-from tests.helpers.commercial_snapshot_seed import seed_commercial_snapshot
-from tests.helpers.order_seed import seed_order
-
 import base64
 import json
 import os
@@ -23,42 +20,48 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
-from datetime import date
+from dataclasses import dataclass
+from datetime import UTC, date, datetime
 from http.server import HTTPServer
 from pathlib import Path
 
 import pytest
 
+from catering_system.domain.catalog import CatalogDish
+from catering_system.domain.offer_snapshot import compute_snapshot_hash
+from catering_system.repositories.sqlite_catalog_repository import (
+    SQLiteCatalogRepository,
+)
 from catering_system.repositories.sqlite_inquiry_repository import (
     SQLiteInquiryRepository,
+)
+from catering_system.repositories.sqlite_kitchen_print_job_repository import (
+    SQLiteKitchenPrintJobRepository,
 )
 from catering_system.repositories.sqlite_offer_repository import (
     SQLiteOfferRepository,
 )
-from catering_system.repositories.sqlite_catalog_repository import (
-    SQLiteCatalogRepository,
-)
-from catering_system.domain.catalog import CatalogDish
-from datetime import UTC, datetime
 from catering_system.repositories.sqlite_order_commercial_snapshot_repository import (
     SQLiteOrderCommercialSnapshotRepository,
 )
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
-from catering_system.domain.offer_snapshot import compute_snapshot_hash
 from catering_system.services.inquiry_service import InquiryService
+from catering_system.services.kitchen_print_service import KitchenPrintService
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
 from catering_system.ui.office_api import create_office_api_server
-from tests.helpers.offer_pdf_static_content import (
-    fake_offer_pdf_static_content,
-)
 from catering_system.ui.office_panel_http import (
     create_office_panel_server,
     csrf_token_for_password,
 )
 from catering_system.ui.remote_core_client import RemoteCoreClient
+from tests.helpers.commercial_snapshot_seed import seed_commercial_snapshot
+from tests.helpers.offer_pdf_static_content import (
+    fake_offer_pdf_static_content,
+)
+from tests.helpers.order_seed import seed_order
 
 _PASSWORD = "test-pw"
 _AUTH = "Basic " + base64.b64encode(f"office:{_PASSWORD}".encode()).decode()
@@ -72,6 +75,17 @@ _HIDDEN_REMOTE_FIELD = re.compile(
 )
 
 
+@dataclass(frozen=True)
+class RemoteWorld:
+    panel_url: str
+    api_url: str
+    db: Path
+
+    def __iter__(self):
+        yield self.panel_url
+        yield self.api_url
+
+
 @pytest.fixture(autouse=True)
 def _fixed_business_date(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
@@ -82,6 +96,18 @@ def _fixed_business_date(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _strip_remote_fields(html: str) -> str:
     return _HIDDEN_REMOTE_FIELD.sub("", html)
+
+
+def _ack_next_kitchen_job(db_path: Path, order_version_id: str) -> None:
+    orders = SQLiteOrderRepository(db_path)
+    jobs = SQLiteKitchenPrintJobRepository(db_path)
+    service = KitchenPrintService(orders, jobs)
+    claimed = service.claim_next_eligible()
+    assert claimed is not None
+    assert claimed.order_version_id == order_version_id
+    service.acknowledge_print_job(claimed.print_job_id)
+    jobs.close()
+    orders.close()
 
 
 def _seed(db_path: Path) -> dict[str, str]:
@@ -886,7 +912,7 @@ def test_remote_payment_reminder_command_and_operational_actions(parity_world) -
     assert status == 200
     assert "Zahlungsart:</strong> Rechnung" in saved
     assert "Rechnungsnummer:</strong> RE-REMOTE-1" in saved
-    assert "Druck bestätigen" in saved
+    assert "Küchendruck starten" in saved
 
 
 @pytest.mark.parametrize("ui_version", ("legacy", "v2"))
@@ -968,10 +994,11 @@ def test_v2_remote_inquiry_detail_preserves_linked_order_truncation_warning(
     )
     OrderService(orders)
     core = OperationalCoreService(orders)
-    first, version = seed_order(orders, inquiry)
+    first, _version = seed_order(orders, inquiry)
     core.cancel_order(first.order_id)
-    from datetime import UTC, datetime
+
     import uuid
+
     from catering_system.domain.order import Order, OrderVersion
 
     now = datetime.now(UTC)
@@ -1125,7 +1152,7 @@ def remote_world(tmp_path: Path):
     api_url, api_server = _start_api_server(db)
     remote = RemoteCoreClient(api_url, _API_TOKEN)
     panel_url, panel_server = _start_remote_panel(remote)
-    yield panel_url, api_url
+    yield RemoteWorld(panel_url, api_url, db)
     panel_server.shutdown()
     panel_server.server_close()
     api_server.shutdown()
@@ -1283,7 +1310,21 @@ def test_full_write_flow_through_remote_panel(remote_world) -> None:
 
     status, order_html = _get(f"{base}/order/{order_id}")
     assert status == 200
-    assert "Druck bestätigt" in order_html
+    assert re.search(
+        r"<tr><td>v1</td>.*?<td>–</td><td>",
+        order_html,
+        re.DOTALL,
+    )
+    assert f'action="/order/{order_id}/effective"' not in order_html
+
+    _ack_next_kitchen_job(remote_world.db, version_id)
+    status, order_html = _get(f"{base}/order/{order_id}")
+    assert status == 200
+    assert re.search(
+        r"<tr><td>v1</td>.*?<td>\d{4}-\d{2}-\d{2}T",
+        order_html,
+        re.DOTALL,
+    )
     assert f'action="/order/{order_id}/effective"' in order_html
     assert "Wirksam machen" in order_html
 

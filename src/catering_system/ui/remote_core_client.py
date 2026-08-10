@@ -19,6 +19,13 @@ from datetime import date, datetime
 from typing import Any, NoReturn, cast
 from urllib.parse import quote, urlencode, urlparse
 
+from catering_system.domain.catalog import (
+    CatalogDish,
+    CatalogDishCreatePayload,
+    PricingUnit,
+    validate_allergen_codes,
+    validate_pricing_unit,
+)
 from catering_system.domain.customer_document_eligibility import (
     DOCUMENT_BLOCKER_CODES,
     DocumentBlocker,
@@ -36,10 +43,10 @@ from catering_system.domain.customer_document_projection import (
     DocumentType,
 )
 from catering_system.domain.inquiry import (
+    PLANNING_MODE_SET,
     FulfillmentMode,
     Inquiry,
     InquiryOfficeNextAction,
-    PLANNING_MODE_SET,
     PlanningMode,
     set_inquiry_fulfillment_mode,
     validate_call_verification_status,
@@ -48,10 +55,6 @@ from catering_system.domain.inquiry import (
     validate_fulfillment_mode,
     validate_planning_mode,
 )
-from catering_system.domain.inquiry_offer_preparation import (
-    InquiryOfferPreparationBlocker,
-)
-from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.inquiry_contact_completeness import (
     complete_inquiry_contact_information,
 )
@@ -63,6 +66,11 @@ from catering_system.domain.inquiry_customer_snapshot import (
     set_inquiry_customer_addresses,
     snapshot_from_structured_contact,
 )
+from catering_system.domain.inquiry_offer_preparation import (
+    InquiryOfferPreparationBlocker,
+)
+from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.order_confirmation_outbound import FakeOutboxMessage
 from catering_system.domain.order_payment_reminder import (
     PAYMENT_METHODS,
     OrderPaymentReminder,
@@ -71,6 +79,8 @@ from catering_system.domain.order_payment_reminder import (
     validate_payment_method,
 )
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
+from catering_system.services.buffet_cards_service import BuffetCard, BuffetCardsView
+from catering_system.services.inquiry_service import validate_inquiry_source
 from catering_system.services.order_confirmation_document_service import (
     OrderConfirmationDocumentEligibility,
     OrderConfirmationDocumentSummary,
@@ -79,15 +89,6 @@ from catering_system.services.order_confirmation_outbound_service import (
     OutboundSendEligibility,
     OutboundSendSummary,
 )
-from catering_system.domain.order_confirmation_outbound import FakeOutboxMessage
-from catering_system.domain.catalog import (
-    CatalogDish,
-    CatalogDishCreatePayload,
-    PricingUnit,
-    validate_allergen_codes,
-    validate_pricing_unit,
-)
-from catering_system.services.inquiry_service import validate_inquiry_source
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjection,
     PrintCommercialBlock,
@@ -95,7 +96,6 @@ from catering_system.services.order_print_projection_service import (
     PrintFlagsBlock,
     PrintPositionLine,
 )
-from catering_system.services.buffet_cards_service import BuffetCard, BuffetCardsView
 
 _MAX_RESPONSE_BYTES = 512 * 1024
 _READ_TIMEOUT_SECONDS = 3
@@ -3260,6 +3260,7 @@ class _RemoteOperationalCoreService:
             result_keys={
                 "order_id",
                 "order_version_id",
+                "print_job_id",
                 "kitchen_print_confirmed_at",
             },
         )
@@ -3270,7 +3271,9 @@ class _RemoteOperationalCoreService:
             _bad_response()
         return replace(
             current,
-            kitchen_print_confirmed_at=_datetime(result["kitchen_print_confirmed_at"]),
+            kitchen_print_confirmed_at=_optional_datetime(
+                result["kitchen_print_confirmed_at"]
+            ),
         )
 
     def make_order_version_effective(

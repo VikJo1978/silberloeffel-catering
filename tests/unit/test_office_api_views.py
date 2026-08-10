@@ -61,6 +61,7 @@ def _panel_action(order: Order, repo: InMemoryOrderRepository) -> dict | None:
     panel = OfficePanel.__new__(OfficePanel)
     panel._orders = repo
     panel._remote = None
+    panel.kitchen_print_service = None
     html = panel._next_step_action(order, context=legacy_office_context())
     if not html:
         return None

@@ -9,8 +9,6 @@ in test_office_panel_remote.py.
 
 from __future__ import annotations
 
-from tests.helpers.order_seed import seed_order
-
 import json
 import queue
 import socket
@@ -31,6 +29,7 @@ from catering_system.repositories.sqlite_order_repository import (
 from catering_system.services.inquiry_service import InquiryService
 from catering_system.ui import remote_core_client as rcc
 from catering_system.ui.remote_core_client import RemoteCoreClient, RemoteCoreError
+from tests.helpers.order_seed import seed_order
 
 _TOKEN = "test-remote-token"
 
@@ -734,7 +733,7 @@ def _run_office_api_in_thread(db_path):  # noqa: ANN001, ANN202
     return f"http://{host}:{port}", server
 
 
-def test_confirm_kitchen_print_returns_the_version_not_bad_response(
+def test_confirm_kitchen_print_requests_print_job_without_false_confirmation(
     tmp_path,
 ) -> None:
     db = tmp_path / "core.db"
@@ -766,7 +765,7 @@ def test_confirm_kitchen_print_returns_the_version_not_bad_response(
             order.order_id, version.order_version_id
         )
         assert result.order_version_id == version.order_version_id
-        assert result.kitchen_print_confirmed_at is not None
+        assert result.kitchen_print_confirmed_at is None
     finally:
         server.shutdown()
         server.server_close()

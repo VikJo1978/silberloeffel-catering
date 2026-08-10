@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from tests.helpers.order_seed import seed_order
-
 from dataclasses import fields
 from datetime import date, datetime, timedelta, timezone
 
@@ -12,8 +10,11 @@ import pytest
 from catering_system.domain.inquiry import (
     CALL_VERIFICATION_STATUSES,
     CRM_PIPELINE,
-    Inquiry,
     PLANNING_MODES,
+    Inquiry,
+)
+from catering_system.domain.inquiry_customer_snapshot import (
+    InquiryCustomerSnapshot as _CCSnapshot,
 )
 from catering_system.domain.kitchen_print_job import (
     KitchenPrintJob,
@@ -29,10 +30,7 @@ from catering_system.repositories.in_memory_order_repository import (
 )
 from catering_system.services.kitchen_print_service import KitchenPrintService
 from catering_system.services.operational_core_service import OperationalCoreService
-
-from catering_system.domain.inquiry_customer_snapshot import (
-    InquiryCustomerSnapshot as _CCSnapshot,
-)
+from tests.helpers.order_seed import seed_order
 
 _CONTACT_COMPLETE_SNAPSHOT = _CCSnapshot(
     email="kunde@example.com", phone="+49301234567"
@@ -176,17 +174,30 @@ def test_ack_before_deadline_atomically_confirms_version() -> None:
     assert core.evaluate_ready_to_send(order_id).ready is False  # still not effective
 
 
-def test_ack_after_deadline_is_late_but_still_valid() -> None:
-    _orders, service, _core, clock, order_id, version_id, _events = _setup()
+def test_ack_after_deadline_is_rejected_and_explicit_reprint_is_possible() -> None:
+    orders, service, core, clock, order_id, version_id, _events = _setup()
     service.request_print(order_id, version_id, print_job_id=JOB_1)
     accepted = service.accept_print_job(JOB_1)
     clock.advance(timedelta(minutes=3))
 
     assert derive_kitchen_print_job_state(accepted, now=clock.now) == "ack_overdue"
-    acknowledged, version = service.acknowledge_print_job(JOB_1)
-    assert acknowledged.acknowledged_at == clock.now
-    assert version.kitchen_print_confirmed_at == clock.now
-    assert derive_kitchen_print_job_state(acknowledged, now=clock.now) == "confirmed"
+    stored = service.get_print_job(JOB_1)
+    assert stored is not None
+    assert service.is_ack_overdue(stored) is True
+    with pytest.raises(ValueError, match="ACK deadline has passed"):
+        service.acknowledge_print_job(JOB_1)
+
+    version = orders.get_order_version(version_id)
+    assert version is not None
+    assert version.kitchen_print_confirmed_at is None
+    with pytest.raises(ValueError, match="kitchen print not confirmed"):
+        core.make_order_version_effective(order_id, version_id)
+
+    reprint = service.reprint(JOB_1, new_print_job_id=JOB_2)
+    assert reprint.attempt_number == 2
+    assert reprint.supersedes_print_job_id == JOB_1
+    with pytest.raises(ValueError, match="superseded print job"):
+        service.acknowledge_print_job(JOB_1)
 
 
 def test_repeated_ack_keeps_original_facts_and_emits_once() -> None:

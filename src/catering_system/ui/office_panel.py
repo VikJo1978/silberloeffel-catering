@@ -86,6 +86,9 @@ from catering_system.repositories.in_memory_contact_internal_note_repository imp
 from catering_system.repositories.in_memory_contact_profile_repository import (
     InMemoryContactProfileRepository,
 )
+from catering_system.repositories.in_memory_kitchen_print_job_repository import (
+    InMemoryKitchenPrintJobRepository,
+)
 from catering_system.repositories.in_memory_offer_document_snapshot_repository import (
     InMemoryOfferDocumentSnapshotRepository,
 )
@@ -108,6 +111,9 @@ from catering_system.repositories.in_memory_payment_reminder_repository import (
     InMemoryPaymentReminderRepository,
 )
 from catering_system.repositories.inquiry_repository import InquiryRepository
+from catering_system.repositories.kitchen_print_job_repository import (
+    KitchenPrintJobRepository,
+)
 from catering_system.repositories.offer_document_snapshot_repository import (
     OfferDocumentSnapshotRepository,
 )
@@ -149,6 +155,7 @@ from catering_system.services.email_intake_projection_service import (
     EmailIntakeProjectionService,
 )
 from catering_system.services.inquiry_service import InquiryService
+from catering_system.services.kitchen_print_service import KitchenPrintService
 from catering_system.services.offer_document_snapshot_service import (
     OfferDocumentSnapshotService,
 )
@@ -447,6 +454,7 @@ class OfficePanel:
         commercial_snapshot_repo: OrderCommercialSnapshotRepository | None = None,
         offer_document_repo: OfferDocumentSnapshotRepository | None = None,
         offer_pdf_static_content: OfferPdfStaticContent | None = None,
+        kitchen_print_job_repo: KitchenPrintJobRepository | None = None,
         ui_version: str = "legacy",
     ) -> None:
         if ui_version not in {"legacy", "v2"}:
@@ -491,6 +499,13 @@ class OfficePanel:
             self.inquiry_service = InquiryService(inquiry_repo)
             self.order_service = OrderService(order_repo)
             self.core = OperationalCoreService(order_repo, pause_repository=pause_repo)
+            self.kitchen_print_service: KitchenPrintService | None = (
+                KitchenPrintService(
+                    order_repo,
+                    kitchen_print_job_repo
+                    or InMemoryKitchenPrintJobRepository(order_repo),
+                )
+            )
             self._pause_repository = pause_repo
             self.payment_reminder_service = PaymentReminderService(
                 payment_repo,
@@ -547,6 +562,7 @@ class OfficePanel:
             )
             self.confirmation_outbound_service = remote.confirmation_outbound_service  # type: ignore[assignment]
             self.catalog_dish_write_service = remote.catalog_dish_write_service  # type: ignore[assignment]
+            self.kitchen_print_service = None
             self._pause_repository = None
         self._remote = remote
         self._command_executor = command_executor
@@ -659,6 +675,58 @@ class OfficePanel:
             expected_current_pause_event_id=expected_current,
             expected_latest_pause_event_id=expected_latest,
         )
+
+    def request_kitchen_print(self, order_id: str, form: dict[str, str]) -> None:
+        version_id = form["order_version_id"]
+        if self.kitchen_print_service is None:
+            if self._remote is not None:
+                self.core.confirm_kitchen_print(order_id, version_id)
+                return
+            raise ValueError("kitchen print queue unavailable")
+
+        kitchen_print_service = self.kitchen_print_service
+
+        def work() -> None:
+            version = self._orders.get_order_version(version_id)
+            if version is None or version.order_id != order_id:
+                raise ValueError("order version does not belong to order")
+            attempts = kitchen_print_service.list_print_jobs_for_version(version_id)
+            if not attempts:
+                kitchen_print_service.request_print(order_id, version_id)
+                return
+            latest = attempts[-1]
+            if latest.acknowledged_at is not None:
+                return
+            if (
+                latest.rejected_at is not None
+                or latest.superseded_at is not None
+                or kitchen_print_service.is_ack_overdue(latest)
+            ):
+                kitchen_print_service.reprint(latest.print_job_id)
+
+        if self._command_executor is not None:
+            self._command_executor.run(work)
+            return
+        work()
+
+    def _kitchen_print_action_label(self, order_version_id: str) -> str:
+        if self.kitchen_print_service is None:
+            return "Küchendruck starten"
+        attempts = self.kitchen_print_service.list_print_jobs_for_version(
+            order_version_id
+        )
+        if not attempts:
+            return "Küchendruck starten"
+        latest = attempts[-1]
+        if latest.acknowledged_at is not None:
+            return "Küchendruck starten"
+        if (
+            latest.rejected_at is not None
+            or latest.superseded_at is not None
+            or self.kitchen_print_service.is_ack_overdue(latest)
+        ):
+            return "Erneut drucken"
+        return "Küchendruck starten"
 
     @staticmethod
     def _missed_calls_open(
@@ -1797,7 +1865,10 @@ class OfficePanel:
         if version.kitchen_print_confirmed_at is None:
             if not context.can("orders.print.confirm"):
                 return ""
-            label, action = "Druck bestätigen", "print-confirm"
+            label, action = (
+                self._kitchen_print_action_label(version.order_version_id),
+                "print-confirm",
+            )
         elif version.order_version_id != order.effective_order_version_id:
             if not context.can("orders.effective.set"):
                 return ""
@@ -2278,7 +2349,7 @@ class OfficePanel:
             if action_view is not None:
                 action_name = action_view["action"]
                 label = (
-                    "Druck bestätigen"
+                    "Küchendruck starten"
                     if action_name == "print-confirm"
                     else "Wirksam machen"
                 )
@@ -2481,7 +2552,7 @@ class OfficePanel:
         else:
             action = api_views.resolve_next_action(order, versions)
             if action is not None and action["action"] == "print-confirm":
-                schritt = "Küchendruck bestätigen"
+                schritt = "Küchendruck erforderlich"
             elif action is not None and action["action"] == "effective":
                 schritt = "Version wirksam setzen"
             else:
@@ -3191,6 +3262,7 @@ class OfficePanel:
         )
         if self._ui_version == "v2":
             print_confirm_fields: dict[str, str] = {}
+            print_confirm_labels: dict[str, str] = {}
             effective_fields: dict[str, str] = {}
             target = next(
                 (
@@ -3214,6 +3286,9 @@ class OfficePanel:
                     ):
                         print_confirm_fields[version.order_version_id] = (
                             self._command_fields()
+                        )
+                        print_confirm_labels[version.order_version_id] = (
+                            self._kitchen_print_action_label(version.order_version_id)
                         )
                     if (
                         target is not None
@@ -3351,6 +3426,7 @@ class OfficePanel:
                         else ""
                     ),
                     version_change_prefill=change_prefill if not cancelled else None,
+                    print_confirm_button_labels=print_confirm_labels,
                 ),
                 confirmation=confirmation,
                 live_preview=live_preview,
@@ -3403,11 +3479,12 @@ class OfficePanel:
                     and v.order_version_id == action_target.order_version_id
                     and context.can("orders.print.confirm")
                 ):
+                    button_label = self._kitchen_print_action_label(v.order_version_id)
                     actions.append(
                         f'<form class="inline" method="post" action="/order/{_e(order_id)}/print-confirm">'
                         f"{_csrf_input(context)}{self._command_fields()}"
                         f'<input type="hidden" name="order_version_id" value="{_e(v.order_version_id)}">'
-                        "<button>Druck bestätigen</button></form>"
+                        f"<button>{_e(button_label)}</button></form>"
                     )
                 if (
                     v.kitchen_print_confirmed_at is not None
@@ -3870,6 +3947,7 @@ def make_office_panel_handler(
     offer_repo: OfferRepository | None = None,
     catalog_repo: CatalogRepository | None = None,
     commercial_snapshot_repo: OrderCommercialSnapshotRepository | None = None,
+    kitchen_print_job_repo: KitchenPrintJobRepository | None = None,
     ui_version: str = "legacy",
 ) -> type[BaseHTTPRequestHandler]:
     """Compatibility wrapper; HTTP routing lives in office_panel_http."""
@@ -3897,6 +3975,7 @@ def make_office_panel_handler(
         offer_repo=offer_repo,
         catalog_repo=catalog_repo,
         commercial_snapshot_repo=commercial_snapshot_repo,
+        kitchen_print_job_repo=kitchen_print_job_repo,
         ui_version=ui_version,
     )
 
@@ -3926,6 +4005,7 @@ def create_office_panel_server(
     commercial_snapshot_repo: OrderCommercialSnapshotRepository | None = None,
     offer_document_repo: OfferDocumentSnapshotRepository | None = None,
     offer_pdf_static_content: OfferPdfStaticContent | None = None,
+    kitchen_print_job_repo: KitchenPrintJobRepository | None = None,
     ui_version: str = "legacy",
     auth_mode: Literal["basic", "migration", "employee"] = "basic",
     auth_service: Any | None = None,
@@ -3960,6 +4040,7 @@ def create_office_panel_server(
         commercial_snapshot_repo=commercial_snapshot_repo,
         offer_document_repo=offer_document_repo,
         offer_pdf_static_content=offer_pdf_static_content,
+        kitchen_print_job_repo=kitchen_print_job_repo,
         ui_version=ui_version,
         auth_mode=auth_mode,
         auth_service=auth_service,
@@ -4141,6 +4222,9 @@ def main() -> None:
         from catering_system.repositories.sqlite_inquiry_repository import (
             SQLiteInquiryRepository,
         )
+        from catering_system.repositories.sqlite_kitchen_print_job_repository import (
+            SQLiteKitchenPrintJobRepository,
+        )
         from catering_system.repositories.sqlite_offer_document_snapshot_repository import (
             SQLiteOfferDocumentSnapshotRepository,
         )
@@ -4196,6 +4280,9 @@ def main() -> None:
         contact_note_repo = SQLiteContactInternalNoteRepository.from_connection(
             connection
         )
+        kitchen_print_job_repo = SQLiteKitchenPrintJobRepository.from_connection(
+            connection
+        )
 
         server = create_office_panel_server(
             inquiry_repo,
@@ -4220,6 +4307,7 @@ def main() -> None:
             commercial_snapshot_repo=commercial_snapshot_repo,
             offer_document_repo=offer_document_repo,
             offer_pdf_static_content=offer_pdf_static_content,
+            kitchen_print_job_repo=kitchen_print_job_repo,
             ui_version=args.ui_version,
             auth_mode=auth_mode,
             auth_service=auth_service,

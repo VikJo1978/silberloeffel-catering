@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import html
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from catering_system.domain.customer_document_preview import CustomerDocumentPreview
@@ -170,6 +170,7 @@ class OrderDetailFormFields:
     version_command_fields: str
     payment_command_fields: str
     confirmation_command_fields: str = ""
+    print_confirm_button_labels: Mapping[str, str] = field(default_factory=dict)
     send_command_fields: str = ""
     pause_command_fields: str = ""
     resume_command_fields: str = ""
@@ -280,8 +281,8 @@ def _state_copy(
         )
     if next_action is not None and next_action.get("action") == "print-confirm":
         return (
-            "Druckbestätigung ausstehend",
-            "Den Küchenzettel öffnen, tatsächlich drucken und danach bestätigen.",
+            "Küchendruck erforderlich",
+            "Den Küchenzettel prüfen und den Küchendruck starten.",
         )
     if next_action is not None and next_action.get("action") == "effective":
         stand = target.version_number if target is not None else ""
@@ -334,11 +335,19 @@ def _primary_action(
         command_fields = forms.print_confirm_command_fields.get(
             target.order_version_id, ""
         )
+        button_label = forms.print_confirm_button_labels.get(
+            target.order_version_id, "Küchendruck starten"
+        )
+        heading = (
+            f"Küchendruck für Stand {target.version_number} erneut starten"
+            if button_label == "Erneut drucken"
+            else f"Küchendruck für Stand {target.version_number} starten"
+        )
         return (
             '<section class="order-next-step">'
             '<div class="order-eyebrow">Nächster Schritt</div>'
-            f"<h2>Küchenzettel für Stand {target.version_number} drucken</h2>"
-            "<p>Bestätigen Sie den Druck erst nach dem tatsächlichen Ausdruck.</p>"
+            f"<h2>{heading}</h2>"
+            "<p>Der Auftrag wird erst nach erfolgreicher Druckmeldung der Küche bestätigt.</p>"
             '<div class="order-next-actions">'
             f'<a class="order-button secondary" target="_blank" rel="noopener" '
             f'href="/order/{_e(order.order_id)}/print?version='
@@ -350,7 +359,7 @@ def _primary_action(
             f"{forms.csrf_input}{command_fields}"
             f'<input type="hidden" name="order_version_id" '
             f'value="{_e(target.order_version_id)}">'
-            '<button class="order-button" type="submit">Druck bestätigen</button>'
+            f'<button class="order-button" type="submit">{_e(button_label)}</button>'
             "</form></div></section>"
         )
     if action == "effective":
@@ -481,13 +490,16 @@ def _version_actions(
     ]
     print_fields = forms.print_confirm_command_fields.get(version.order_version_id)
     if print_fields is not None and context.can("orders.print.confirm"):
+        button_label = forms.print_confirm_button_labels.get(
+            version.order_version_id, "Küchendruck starten"
+        )
         actions.append(
             f'<form method="post" action="/order/{_e(order.order_id)}/print-confirm">'
             f"{forms.csrf_input}{print_fields}"
             f'<input type="hidden" name="order_version_id" '
             f'value="{_e(version.order_version_id)}">'
             '<button class="order-button ghost" type="submit">'
-            "Druck bestätigen</button></form>"
+            f"{_e(button_label)}</button></form>"
         )
     effective_fields = forms.effective_command_fields.get(version.order_version_id)
     if effective_fields is not None and context.can("orders.effective.set"):
