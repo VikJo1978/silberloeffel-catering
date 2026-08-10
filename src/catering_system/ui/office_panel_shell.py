@@ -16,6 +16,7 @@ OfficeSection = Literal[
     "week",
     "callbacks",
     "catalog",
+    "chat",
     "settings",
 ]
 
@@ -54,6 +55,9 @@ stroke-linejoin="round"><path d="M7 8V3h10v5M7 17H4v-6a1 1 0 0 1 1-1h14a1 1 0
 stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
 stroke-linejoin="round"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm-3.5
 -9 2.5 2.5 5-5"/></symbol>
+<symbol id="office-i-chat" viewBox="0 0 24 24" fill="none"
+stroke="currentColor" stroke-width="1.8" stroke-linecap="round"
+stroke-linejoin="round"><path d="M4 5h16v11H8l-4 4V5Z"/><path d="M8 9h8M8 13h5"/></symbol>
 </svg>"""
 
 OFFICE_PANEL_STYLE = """
@@ -1468,6 +1472,113 @@ button.office-account-link:hover {
   color: #fff;
   background: var(--danger);
 }
+.chat-layout {
+  display: grid;
+  grid-template-columns: minmax(280px, .8fr) minmax(0, 1.6fr);
+  gap: 18px;
+  align-items: start;
+}
+.chat-panel,
+.chat-thread-list,
+.chat-thread-view,
+.chat-composer {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.chat-panel { padding: 16px; }
+.chat-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.chat-thread-list { overflow: hidden; }
+.chat-thread-row {
+  display: grid;
+  gap: 4px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line);
+  color: inherit;
+  text-decoration: none;
+}
+.chat-thread-row:last-child { border-bottom: 0; }
+.chat-thread-row:hover { background: var(--canvas); }
+.chat-thread-row.unread {
+  background: var(--accent-soft);
+  font-weight: 720;
+}
+.chat-thread-head,
+.chat-message-head,
+.chat-reference-row,
+.chat-picker-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.chat-thread-title,
+.chat-message-author { font-weight: 760; }
+.chat-meta,
+.chat-preview,
+.chat-empty,
+.chat-reference-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+.chat-thread-view { padding: 18px; }
+.chat-participants { margin-bottom: 16px; color: var(--muted); }
+.chat-message {
+  padding: 13px 0;
+  border-top: 1px solid var(--line);
+}
+.chat-message:first-of-type { border-top: 0; }
+.chat-message-body {
+  margin: 7px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.chat-reply-quote {
+  margin: 8px 0;
+  padding: 8px 10px;
+  border-left: 3px solid var(--accent);
+  color: var(--muted);
+  background: var(--canvas);
+  font-size: 12px;
+}
+.chat-reference-list,
+.chat-picker-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+.chat-reference-row,
+.chat-picker-row {
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--canvas);
+}
+.chat-composer {
+  margin-top: 18px;
+  padding: 16px;
+}
+.chat-composer textarea { width: 100%; min-height: 96px; }
+.chat-composer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 10px;
+}
+.chat-create-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 18px;
+}
 @media (max-width: 820px) {
   .office-app { display: block; }
   .office-sidebar {
@@ -1520,6 +1631,7 @@ button.office-account-link:hover {
   .order-detail-layout { grid-template-columns: 1fr; }
   .order-detail-side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .order-next-step { grid-column: 1 / -1; }
+  .chat-layout { grid-template-columns: 1fr; }
 }
 @media (max-width: 620px) {
   .office-content > h1 { font-size: 28px; }

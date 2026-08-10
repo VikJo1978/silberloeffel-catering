@@ -116,6 +116,11 @@ from catering_system.ui.office_panel_authz import (
     require_business_permission,
     require_business_permission_post,
 )
+from catering_system.ui.office_panel_chat import (
+    render_chat_detail,
+    render_chat_list,
+    render_chat_new,
+)
 from catering_system.ui.office_panel_settings_users import (
     SettingsUsersAccessDenied,
     parse_selected_permissions,
@@ -147,6 +152,11 @@ _ROLE_LABELS = {
     "USER": "Benutzer",
     "VIEWER": "Leser",
 }
+
+
+def _int_value(value: object) -> int:
+    return value if isinstance(value, int) else 0
+
 
 _INQUIRY_COMMAND_ERROR_LABELS: dict[str, str] = {
     "conversion_blocked": (
@@ -547,6 +557,7 @@ def make_office_panel_handler(
             auth: OfficePanelRequestAuth | None = None,
             *,
             rueckruf_count: int | None | object = _RUECKRUF_COUNT_UNSET,
+            chat_unread_count: int | None | object = _RUECKRUF_COUNT_UNSET,
         ) -> OfficePageContext:
             if auth is None:
                 auth = getattr(self, "_request_auth", None)
@@ -599,7 +610,33 @@ def make_office_panel_handler(
                     and not auth.legacy_shared_access
                     else ""
                 ),
+                chat_unread_count=(
+                    self._chat_unread_count(auth)
+                    if chat_unread_count is _RUECKRUF_COUNT_UNSET
+                    else chat_unread_count
+                    if isinstance(chat_unread_count, int) or chat_unread_count is None
+                    else None
+                ),
             )
+
+        def _chat_unread_count(self, auth: OfficePanelRequestAuth | None) -> int | None:
+            if (
+                remote is None
+                or auth is None
+                or auth.kind != "employee"
+                or auth.employee is None
+                or auth.legacy_shared_access
+                or "chat.view" not in auth.employee.effective_permissions
+            ):
+                return None
+            session_token = session_token_from_headers(self.headers)
+            if session_token is None:
+                return None
+            try:
+                threads = remote.list_chat_threads(employee_session_token=session_token)
+            except RemoteCoreError:
+                return None
+            return sum(_int_value(thread.get("unread_count")) for thread in threads)
 
         def _require_settings_users_actor(
             self, auth: OfficePanelRequestAuth | None
@@ -696,6 +733,8 @@ def make_office_panel_handler(
                 return "orders"
             if parts == ["rueckruf"] or parts == ["rueckruf", "resolve"]:
                 return "callbacks"
+            if parts and parts[0] == "chat":
+                return "chat"
             if parts == ["gerichte", "new"] or (
                 len(parts) >= 2 and parts[0] == "gerichte"
             ):
@@ -762,6 +801,12 @@ def make_office_panel_handler(
                 return ("documents.send",)
             if parts == ["rueckruf", "resolve"]:
                 return ("queue.resolve",)
+            if parts == ["chat", "threads"]:
+                return ("chat.create",)
+            if len(parts) == 3 and parts[0] == "chat" and parts[2] == "messages":
+                return ("chat.send",)
+            if len(parts) == 3 and parts[0] == "chat" and parts[2] == "read":
+                return ("chat.view",)
             if parts == ["gerichte", "new"]:
                 return ("catalog.edit", "prices.edit")
             if len(parts) == 3 and parts[0] == "gerichte":
@@ -908,6 +953,24 @@ def make_office_panel_handler(
                 ),
                 status,
             )
+
+        def _chat_employee_session_or_forbidden(
+            self, auth: OfficePanelRequestAuth | None
+        ) -> str | None:
+            if (
+                remote is None
+                or auth is None
+                or auth.kind != "employee"
+                or auth.employee is None
+                or auth.legacy_shared_access
+            ):
+                self._business_forbidden(active_section="chat")
+                return None
+            session_token = session_token_from_headers(self.headers)
+            if session_token is None:
+                self._business_forbidden(active_section="chat")
+                return None
+            return session_token
 
         def _remote_error_page(self, exc: RemoteCoreError) -> None:
             """Pack §6.5 degradation: an unreachable/malformed Core Office API
@@ -1123,6 +1186,64 @@ def make_office_panel_handler(
                     return
                 context = self._page_context()
                 self._html(panel.render_email(context=context))
+            elif parts == ["chat"]:
+                if not self._require_business_permission_get(
+                    auth, "chat.view", active_section="chat"
+                ):
+                    return
+                session_token = self._chat_employee_session_or_forbidden(auth)
+                if session_token is None:
+                    return
+                assert remote is not None
+                query = parse_qs(parsed.query)
+                search_query = query.get("q", [""])[0].strip()
+                threads = remote.list_chat_threads(employee_session_token=session_token)
+                search_results = (
+                    remote.search_chat(
+                        employee_session_token=session_token,
+                        q=search_query,
+                    )
+                    if search_query
+                    else None
+                )
+                context = self._page_context(
+                    auth,
+                    rueckruf_count=None,
+                    chat_unread_count=sum(
+                        _int_value(thread.get("unread_count")) for thread in threads
+                    ),
+                )
+                self._html(
+                    render_chat_list(
+                        threads,
+                        search_results=search_results,
+                        q=search_query,
+                        context=context,
+                    )
+                )
+            elif parts == ["chat", "new"]:
+                if not self._require_business_permission_get(
+                    auth, "chat.create", active_section="chat"
+                ):
+                    return
+                session_token = self._chat_employee_session_or_forbidden(auth)
+                if session_token is None:
+                    return
+                assert remote is not None
+                query = parse_qs(parsed.query)
+                search_query = query.get("q", [""])[0].strip()
+                employees = remote.search_chat_employees(
+                    employee_session_token=session_token,
+                    q=search_query,
+                )
+                self._html(
+                    render_chat_new(
+                        employees,
+                        q=search_query,
+                        context=self._page_context(auth, rueckruf_count=None),
+                        command_fields=panel._command_fields(),
+                    )
+                )
             elif parts == ["aufgaben"]:
                 if not self._require_business_permission_get(
                     auth, "queue.view", active_section="tasks"
@@ -1245,6 +1366,54 @@ def make_office_panel_handler(
                 context = self._page_context()
                 page = panel.render_email_detail(parts[1], context=context)
                 self._html(page) if page else self.send_error(404)
+            elif len(parts) == 2 and parts[0] == "chat":
+                if not self._require_business_permission_get(
+                    auth, "chat.view", active_section="chat"
+                ):
+                    return
+                session_token = self._chat_employee_session_or_forbidden(auth)
+                if session_token is None:
+                    return
+                assert remote is not None
+                query = parse_qs(parsed.query)
+                thread_id = unquote(parts[1])
+                mention_q = query.get("mention_q", [""])[0].strip()
+                reference_q = query.get("reference_q", [""])[0].strip()
+                reference_type = query.get("reference_type", ["ORDER"])[0]
+                if reference_type not in {"ORDER", "INQUIRY", "CONTACT"}:
+                    reference_type = "ORDER"
+                detail = remote.get_chat_thread(
+                    thread_id,
+                    employee_session_token=session_token,
+                )
+                participant_results = remote.autocomplete_chat_participants(
+                    thread_id,
+                    employee_session_token=session_token,
+                    q=mention_q,
+                )
+                entity_results = (
+                    remote.search_chat_entities(
+                        employee_session_token=session_token,
+                        q=reference_q,
+                        reference_type=reference_type,
+                    )
+                    if reference_q
+                    else []
+                )
+                self._html(
+                    render_chat_detail(
+                        detail,
+                        context=self._page_context(auth, rueckruf_count=None),
+                        read_command_fields=panel._command_fields(),
+                        send_command_fields=panel._command_fields(),
+                        participant_results=participant_results,
+                        mention_q=mention_q,
+                        entity_results=entity_results,
+                        reference_q=reference_q,
+                        reference_type=reference_type,
+                        reply_to_message_id=query.get("reply_to", [""])[0],
+                    )
+                )
             elif len(parts) == 3 and parts[0] == "order" and parts[2] == "print":
                 if not self._require_business_permission_get(
                     auth, "orders.view", active_section="orders"
@@ -1688,6 +1857,12 @@ def make_office_panel_handler(
                     call_id,
                 )
                 self._redirect("/rueckruf")
+            elif parts == ["chat", "threads"]:
+                self._create_chat_thread(auth)
+            elif len(parts) == 3 and parts[0] == "chat" and parts[2] == "messages":
+                self._send_chat_message(auth, unquote(parts[1]))
+            elif len(parts) == 3 and parts[0] == "chat" and parts[2] == "read":
+                self._mark_chat_read(auth, unquote(parts[1]))
             elif parts == ["gerichte", "new"]:
                 self._create_catalog_dish()
             elif len(parts) == 3 and parts[0] == "gerichte" and parts[2] == "update":
@@ -1769,6 +1944,66 @@ def make_office_panel_handler(
                 self._settings_users_reset_password(auth, unquote(parts[2]))
             else:
                 self.send_error(404)
+
+        def _create_chat_thread(self, auth: OfficePanelRequestAuth | None) -> None:
+            session_token = self._chat_employee_session_or_forbidden(auth)
+            if session_token is None:
+                return
+            assert remote is not None
+            form = self._form()
+            thread = remote.create_chat_thread(
+                employee_session_token=session_token,
+                thread_type=form.get("thread_type", ""),
+                participant_employee_ids=self._form_list("participant_employee_id"),
+                title=form.get("title") or None,
+                command_id=form.get("_command_id") or None,
+            )
+            self._redirect(f"/chat/{quote(str(thread['thread_id']), safe='')}")
+
+        def _send_chat_message(
+            self, auth: OfficePanelRequestAuth | None, thread_id: str
+        ) -> None:
+            session_token = self._chat_employee_session_or_forbidden(auth)
+            if session_token is None:
+                return
+            assert remote is not None
+            form = self._form()
+            references = []
+            for raw in self._form_list("reference"):
+                reference_type, separator, reference_id = raw.partition(":")
+                if separator:
+                    references.append(
+                        {
+                            "reference_type": reference_type,
+                            "reference_id": reference_id,
+                        }
+                    )
+            remote.send_chat_message(
+                thread_id,
+                employee_session_token=session_token,
+                body=form.get("body", ""),
+                reply_to_message_id=form.get("reply_to_message_id") or None,
+                mention_employee_ids=self._form_list("mention_employee_id"),
+                references=references,
+                command_id=form.get("_command_id") or None,
+            )
+            self._redirect(f"/chat/{quote(thread_id, safe='')}")
+
+        def _mark_chat_read(
+            self, auth: OfficePanelRequestAuth | None, thread_id: str
+        ) -> None:
+            session_token = self._chat_employee_session_or_forbidden(auth)
+            if session_token is None:
+                return
+            assert remote is not None
+            form = self._form()
+            remote.mark_chat_thread_read(
+                thread_id,
+                employee_session_token=session_token,
+                last_read_message_id=form.get("last_read_message_id") or None,
+                command_id=form.get("_command_id") or None,
+            )
+            self._redirect(f"/chat/{quote(thread_id, safe='')}")
 
         def _settings_users_create(self, auth: OfficePanelRequestAuth | None) -> None:
             actor = self._settings_users_actor_or_forbidden(auth)
