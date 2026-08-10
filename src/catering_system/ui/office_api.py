@@ -37,9 +37,20 @@ from catering_system.domain.catalog import (
     validate_allergen_codes,
     validate_pricing_unit,
 )
+from catering_system.domain.chat import (
+    ChatMessage,
+    ChatMessageBundle,
+    ChatParticipant,
+    ChatReferenceType,
+    ChatThread,
+    ChatThreadSummary,
+    validate_chat_reference_type,
+    validate_chat_thread_type,
+)
 from catering_system.domain.customer_document_eligibility import (
     CustomerDocumentCreationBlocked,
 )
+from catering_system.domain.employee_auth import AuthenticatedEmployee
 from catering_system.domain.inquiry import (
     ACTIVE_ORDER_CRM_STAGE,
     CRM_PIPELINE,
@@ -102,8 +113,12 @@ from catering_system.repositories.office_api_ledger import (
 from catering_system.repositories.sqlite_catalog_repository import (
     SQLiteCatalogRepository,
 )
+from catering_system.repositories.sqlite_chat_repository import SQLiteChatRepository
 from catering_system.repositories.sqlite_configurator_handoff_repository import (
     SQLiteConfiguratorHandoffRepository,
+)
+from catering_system.repositories.sqlite_contact_profile_repository import (
+    SQLiteContactProfileRepository,
 )
 from catering_system.repositories.sqlite_employee_auth_repository import (
     SQLiteEmployeeAuthRepository,
@@ -144,6 +159,12 @@ from catering_system.services.calendar_projection_service import (
 )
 from catering_system.services.catalog_dish_service import CatalogDishService
 from catering_system.services.catalog_dish_write_service import CatalogDishWriteService
+from catering_system.services.chat_service import (
+    ChatAccessDenied,
+    ChatNotFoundError,
+    ChatReferenceNotFoundError,
+    ChatService,
+)
 from catering_system.services.configurator_handoff_service import (
     HANDOFF_OPERATION_PREPARE_FIRST_OFFER,
     ConfiguratorHandoffService,
@@ -455,6 +476,119 @@ def _v_catalog_text(value: object, max_len: int) -> str | None:
     return text or None
 
 
+def _chat_thread_shape(thread: ChatThread) -> dict[str, object]:
+    return {
+        "thread_id": thread.thread_id,
+        "thread_type": thread.thread_type,
+        "title": thread.title,
+        "created_by_employee_id": thread.created_by_employee_id,
+        "created_at": thread.created_at.isoformat(),
+    }
+
+
+def _chat_participant_shape(
+    participant: ChatParticipant, display_name: str
+) -> dict[str, object]:
+    return {
+        "thread_id": participant.thread_id,
+        "employee_id": participant.employee_id,
+        "display_name": display_name,
+        "joined_at": participant.joined_at.isoformat(),
+        "last_read_message_id": participant.last_read_message_id,
+    }
+
+
+def _chat_employee_shape(employee_id: str, display_name: str) -> dict[str, object]:
+    return {"employee_id": employee_id, "display_name": display_name}
+
+
+def _chat_message_preview_shape(
+    message: ChatMessage | None,
+) -> dict[str, object] | None:
+    if message is None:
+        return None
+    return {
+        "message_id": message.message_id,
+        "author_employee_id": message.author_employee_id,
+        "body": message.body,
+        "created_at": message.created_at.isoformat(),
+    }
+
+
+def _chat_message_shape(
+    bundle: ChatMessageBundle,
+    *,
+    author_display_name: str,
+    mention_display_names: dict[str, str],
+) -> dict[str, object]:
+    message = bundle.message
+    return {
+        "message_id": message.message_id,
+        "thread_id": message.thread_id,
+        "author_employee_id": message.author_employee_id,
+        "author_display_name": author_display_name,
+        "body": message.body,
+        "reply_to_message_id": message.reply_to_message_id,
+        "created_at": message.created_at.isoformat(),
+        "mentions": [
+            {
+                "employee_id": mention.employee_id,
+                "display_name": mention_display_names[mention.employee_id],
+            }
+            for mention in bundle.mentions
+        ],
+        "references": [
+            {
+                "reference_type": reference.reference_type,
+                "reference_id": reference.reference_id,
+            }
+            for reference in bundle.references
+        ],
+    }
+
+
+def _chat_reference_args(value: object) -> tuple[tuple[str, str], ...]:
+    if not isinstance(value, list):
+        raise _invalid()
+    references: list[tuple[str, str]] = []
+    for raw in value:
+        if not isinstance(raw, dict):
+            raise _invalid()
+        _exact_keys(raw, {"reference_type", "reference_id"})
+        reference_type = _v_enum(raw["reference_type"], validate_chat_reference_type)
+        references.append((reference_type, _v_uuid(raw["reference_id"])))
+    return tuple(references)
+
+
+def _chat_employee_ids(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise _invalid()
+    return tuple(_v_uuid(employee_id) for employee_id in value)
+
+
+def _chat_error(exc: Exception) -> ApiError:
+    message = str(exc)
+    if isinstance(exc, ChatNotFoundError):
+        return ApiError(404, "not_found")
+    if isinstance(exc, ChatAccessDenied):
+        if "missing permission" in message or "application access" in message:
+            return ApiError(403, "forbidden")
+        return ApiError(404, "not_found")
+    if isinstance(exc, ChatReferenceNotFoundError):
+        return ApiError(422, "invalid_chat_reference")
+    if "reply target" in message:
+        return ApiError(422, "invalid_chat_reply")
+    if "mentioned employee" in message:
+        return ApiError(422, "invalid_chat_mention")
+    if "message requires" in message or "body" in message:
+        return ApiError(422, "invalid_chat_message")
+    if "reference" in message:
+        return ApiError(422, "invalid_chat_reference")
+    if "message" in message:
+        return ApiError(422, "invalid_chat_message")
+    return ApiError(422, "invalid_chat_thread")
+
+
 def _v_intake(
     args: dict[str, object], key: str, cap: int, keep: str | None
 ) -> str | None:
@@ -494,6 +628,9 @@ class OfficeApi:
         )
         self.offers = SQLiteOfferRepository.from_connection(connection)
         self.catalog = SQLiteCatalogRepository.from_connection(connection)
+        self.contact_profiles = SQLiteContactProfileRepository.from_connection(
+            connection
+        )
         self.employee_auth_repository = SQLiteEmployeeAuthRepository.from_connection(
             connection
         )
@@ -515,6 +652,7 @@ class OfficeApi:
         self.payment_reminders = SQLitePaymentReminderRepository.from_connection(
             connection
         )
+        self.chat = SQLiteChatRepository.from_connection(connection)
         self.confirmation_documents = (
             SQLiteOrderConfirmationDocumentRepository.from_connection(connection)
         )
@@ -534,6 +672,7 @@ class OfficeApi:
         self.events = DeferredEventSink()
         self.executor = CoreCommandExecutor(connection, self.events)
         self._active_command_id: str | None = None
+        self._active_employee: AuthenticatedEmployee | None = None
         self.inquiry_service = InquiryService(self.inquiries, event_sink=self.events)
         self.order_service = OrderService(self.orders, event_sink=self.events)
         self.offer_service = OfferService(
@@ -553,6 +692,13 @@ class OfficeApi:
             self.payment_reminders,
             self.orders,
             today=views.berlin_today,
+        )
+        self.chat_service = ChatService(
+            self.chat,
+            self.employee_auth_repository,
+            orders=self.orders,
+            inquiries=self.inquiries,
+            contacts=self.contact_profiles,
         )
         self.confirmation_document_service = OrderConfirmationDocumentService(
             self.orders,
@@ -1205,7 +1351,426 @@ class OfficeApi:
                 return order
         return None
 
+    def _require_active_employee(self) -> AuthenticatedEmployee:
+        if self._active_employee is None:
+            raise ApiError(401, "unauthorized")
+        return self._active_employee
+
+    def _employee_display_name(self, employee_id: str) -> str:
+        account = self.employee_auth_repository.get_account_by_id(employee_id)
+        if account is None:
+            raise ApiError(500, "internal")
+        return account.display_name
+
+    def _chat_participants_shape(
+        self, participants: tuple[ChatParticipant, ...]
+    ) -> list[dict[str, object]]:
+        return [
+            _chat_participant_shape(
+                participant, self._employee_display_name(participant.employee_id)
+            )
+            for participant in participants
+        ]
+
+    def _chat_thread_summary_shape(
+        self, summary: ChatThreadSummary
+    ) -> dict[str, object]:
+        latest = summary.latest_message
+        return {
+            "thread": _chat_thread_shape(summary.thread),
+            "participants": self._chat_participants_shape(summary.participants),
+            "latest_message_preview": _chat_message_preview_shape(latest),
+            "unread_count": summary.unread_count,
+            "last_activity_at": (
+                latest.created_at if latest is not None else summary.thread.created_at
+            ).isoformat(),
+        }
+
+    def _chat_thread_detail_shape(
+        self,
+        actor: AuthenticatedEmployee,
+        thread: ChatThread,
+        messages: tuple[ChatMessageBundle, ...],
+    ) -> dict[str, object]:
+        participants = self.chat.list_participants(thread.thread_id)
+        current = next(
+            participant
+            for participant in participants
+            if participant.employee_id == actor.account.id
+        )
+        participant_names = {
+            participant.employee_id: self._employee_display_name(
+                participant.employee_id
+            )
+            for participant in participants
+        }
+        author_ids = {bundle.message.author_employee_id for bundle in messages}
+        author_names = {
+            employee_id: self._employee_display_name(employee_id)
+            for employee_id in author_ids
+        }
+        return {
+            "thread": _chat_thread_shape(thread),
+            "participants": self._chat_participants_shape(participants),
+            "current_participant": _chat_participant_shape(
+                current, participant_names[current.employee_id]
+            ),
+            "messages": [
+                _chat_message_shape(
+                    bundle,
+                    author_display_name=author_names[bundle.message.author_employee_id],
+                    mention_display_names=participant_names,
+                )
+                for bundle in messages
+            ],
+        }
+
+    def list_chat_threads(
+        self, actor: AuthenticatedEmployee
+    ) -> dict[str, object]:
+        return {
+            "threads": [
+                self._chat_thread_summary_shape(summary)
+                for summary in self.chat_service.list_threads(actor)
+            ]
+        }
+
+    def chat_thread_detail(
+        self, actor: AuthenticatedEmployee, thread_id: str
+    ) -> dict[str, object]:
+        try:
+            messages = self.chat_service.list_messages(actor, thread_id, limit=200)
+            thread = self.chat.get_thread(thread_id)
+            if thread is None:
+                raise ChatNotFoundError(thread_id)
+        except (ChatAccessDenied, ChatNotFoundError) as exc:
+            raise _chat_error(exc) from exc
+        return self._chat_thread_detail_shape(actor, thread, messages)
+
+    def chat_thread_participants(
+        self, actor: AuthenticatedEmployee, thread_id: str, q: str
+    ) -> dict[str, object]:
+        try:
+            self.chat_service.list_messages(actor, thread_id, limit=1)
+            participants = self.chat.list_participants(thread_id)
+        except (ChatAccessDenied, ChatNotFoundError) as exc:
+            raise _chat_error(exc) from exc
+        needle = q.casefold()
+        shaped = self._chat_participants_shape(participants)
+        if needle:
+            shaped = [
+                row
+                for row in shaped
+                if needle in str(row["display_name"]).casefold()
+                or needle in str(row["employee_id"]).casefold()
+            ]
+        return {"participants": shaped[:20]}
+
+    def search_chat(self, actor: AuthenticatedEmployee, q: str) -> dict[str, object]:
+        summaries = self.chat_service.list_threads(actor)
+        if not q:
+            return {"results": []}
+        needle = q.casefold()
+        matching_thread_ids: set[str] = set()
+        like = f"%{needle}%"
+        rows = self._conn.execute(
+            """
+            SELECT DISTINCT thread.thread_id
+            FROM chat_threads thread
+            JOIN chat_participants participant
+              ON participant.thread_id = thread.thread_id
+             AND participant.employee_id = ?
+            LEFT JOIN chat_messages message
+              ON message.thread_id = thread.thread_id
+            WHERE lower(COALESCE(thread.title, '')) LIKE ?
+               OR lower(COALESCE(message.body, '')) LIKE ?
+            LIMIT 50
+            """,
+            (actor.account.id, like, like),
+        ).fetchall()
+        matching_thread_ids.update(str(row[0]) for row in rows)
+        for summary in summaries:
+            if summary.thread.thread_id in matching_thread_ids:
+                continue
+            participant_names = [
+                self._employee_display_name(participant.employee_id).casefold()
+                for participant in summary.participants
+            ]
+            if any(needle in name for name in participant_names):
+                matching_thread_ids.add(summary.thread.thread_id)
+        return {
+            "results": [
+                self._chat_thread_summary_shape(summary)
+                for summary in summaries
+                if summary.thread.thread_id in matching_thread_ids
+            ][:50]
+        }
+
+    def search_chat_entities(
+        self, actor: AuthenticatedEmployee, q: str, reference_type: ChatReferenceType
+    ) -> dict[str, object]:
+        if not actor.application_access_allowed:
+            raise ApiError(403, "forbidden")
+        if "chat.send" not in actor.effective_permissions:
+            raise ApiError(403, "forbidden")
+        entity_permission = {
+            "ORDER": "orders.view",
+            "INQUIRY": "inquiries.view",
+            "CONTACT": "customers.view",
+        }[reference_type]
+        if entity_permission not in actor.effective_permissions:
+            raise ApiError(403, "forbidden")
+        if len(q) < 2:
+            return {"results": []}
+        needle = q.casefold()
+        results: list[dict[str, object]] = []
+        if reference_type == "CONTACT":
+            for profile_id in self.contact_profiles.search_profile_ids(q)[:20]:
+                profile = self.contact_profiles.get_profile(profile_id)
+                if profile is None:
+                    continue
+                results.append(
+                    {
+                        "reference_type": "CONTACT",
+                        "reference_id": profile.contact_profile_id,
+                        "primary_label": profile.display_name,
+                        "secondary_label": profile.email or profile.phone or "",
+                        "meta": {"contact_profile_id": profile.contact_profile_id},
+                    }
+                )
+            return {"results": results}
+        if reference_type == "INQUIRY":
+            for inquiry in self.inquiries.list_all():
+                snapshot = inquiry.customer_snapshot
+                company_name = snapshot.company_name if snapshot is not None else None
+                contact_name = snapshot.contact_name if snapshot is not None else None
+                contact_email = snapshot.email if snapshot is not None else None
+                contact_phone = snapshot.phone if snapshot is not None else None
+                haystack = " ".join(
+                    str(value or "")
+                    for value in (
+                        inquiry.inquiry_id,
+                        company_name,
+                        contact_name,
+                        contact_email,
+                        contact_phone,
+                        inquiry.location_text,
+                        inquiry.intake_subject,
+                    )
+                ).casefold()
+                if needle not in haystack:
+                    continue
+                results.append(
+                    {
+                        "reference_type": "INQUIRY",
+                        "reference_id": inquiry.inquiry_id,
+                        "primary_label": company_name
+                        or contact_name
+                        or f"Anfrage {inquiry.inquiry_id[:8]}",
+                        "secondary_label": " · ".join(
+                            part
+                            for part in (
+                                inquiry.event_date.isoformat(),
+                                inquiry.location_text,
+                            )
+                            if part
+                        ),
+                        "meta": {"inquiry_id": inquiry.inquiry_id},
+                    }
+                )
+                if len(results) >= 20:
+                    break
+            return {"results": results}
+        for order in self.orders.list_orders():
+            order_inquiry = self.inquiries.get_by_id(order.source_inquiry_id)
+            snapshot = (
+                order_inquiry.customer_snapshot
+                if order_inquiry is not None
+                else None
+            )
+            company_name = snapshot.company_name if snapshot is not None else None
+            contact_name = snapshot.contact_name if snapshot is not None else None
+            location_text = (
+                order_inquiry.location_text if order_inquiry is not None else ""
+            )
+            haystack = " ".join(
+                str(value or "")
+                for value in (
+                    order.order_id,
+                    order.source_inquiry_id,
+                    company_name,
+                    contact_name,
+                    location_text,
+                )
+            ).casefold()
+            if needle not in haystack:
+                continue
+            results.append(
+                {
+                    "reference_type": "ORDER",
+                    "reference_id": order.order_id,
+                    "primary_label": f"Auftrag {order.order_id[:8]}",
+                    "secondary_label": (
+                        company_name or contact_name or location_text
+                    ),
+                    "meta": {
+                        "order_id": order.order_id,
+                        "source_inquiry_id": order.source_inquiry_id,
+                    },
+                }
+            )
+            if len(results) >= 20:
+                break
+        return {"results": results}
+
+    def search_chat_employees(
+        self, actor: AuthenticatedEmployee, q: str
+    ) -> dict[str, object]:
+        if not actor.application_access_allowed:
+            raise ApiError(403, "forbidden")
+        if "chat.create" not in actor.effective_permissions:
+            raise ApiError(403, "forbidden")
+        needle = q.casefold()
+        rows: list[tuple[str, str]] = []
+        for account in self.employee_auth_repository.list_accounts():
+            if not account.is_active:
+                continue
+            if needle and needle not in account.display_name.casefold():
+                continue
+            rows.append((account.display_name.casefold(), account.id))
+        rows.sort()
+        return {
+            "employees": [
+                _chat_employee_shape(
+                    employee_id,
+                    self._employee_display_name(employee_id),
+                )
+                for _display_name, employee_id in rows[:20]
+            ]
+        }
+
     # -- commands (run inside the executor transaction) --------------------
+
+    def cmd_create_chat_thread(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        employee = self._require_active_employee()
+        thread_type = _v_enum(args["thread_type"], validate_chat_thread_type)
+        participant_ids = _chat_employee_ids(args["participant_employee_ids"])
+        title = _v_optional_str(args.get("title"), 200)
+        try:
+            if thread_type == "DIRECT":
+                unique_ids = tuple(
+                    dict.fromkeys((employee.account.id, *participant_ids))
+                )
+                if len(unique_ids) != 2:
+                    raise ValueError("DIRECT chat requires exactly two participants")
+                other_id = next(
+                    participant_id
+                    for participant_id in unique_ids
+                    if participant_id != employee.account.id
+                )
+                existing = self.chat.find_direct_thread(employee.account.id, other_id)
+                thread = self.chat_service.create_direct_thread(employee, other_id)
+                status = 200 if existing is not None else 201
+            else:
+                if title is None:
+                    raise ValueError("GROUP chat title is required")
+                thread = self.chat_service.create_group_thread(
+                    employee,
+                    title=title,
+                    participant_employee_ids=participant_ids,
+                )
+                status = 201
+        except (
+            ChatAccessDenied,
+            ChatNotFoundError,
+            ChatReferenceNotFoundError,
+            TypeError,
+            ValueError,
+            sqlite3.IntegrityError,
+        ) as exc:
+            raise _chat_error(exc) from exc
+        participants = self.chat.list_participants(thread.thread_id)
+        return status, {
+            "thread": {
+                **_chat_thread_shape(thread),
+                "participants": self._chat_participants_shape(participants),
+            }
+        }
+
+    def cmd_send_chat_message(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        employee = self._require_active_employee()
+        thread_id = _v_uuid(path_ids["thread_id"])
+        references = _chat_reference_args(args.get("references", []))
+        mention_ids = _chat_employee_ids(args.get("mention_employee_ids", []))
+        try:
+            message = self.chat_service.send_message(
+                employee,
+                thread_id,
+                body=_v_str(args["body"], 20000),
+                reply_to_message_id=_v_optional_uuid4(args.get("reply_to_message_id")),
+                mention_employee_ids=mention_ids,
+                references=references,
+            )
+            bundles = self.chat.list_messages(thread_id, limit=200)
+            bundle = next(
+                bundle
+                for bundle in bundles
+                if bundle.message.message_id == message.message_id
+            )
+            participants = self.chat.list_participants(thread_id)
+        except (
+            ChatAccessDenied,
+            ChatNotFoundError,
+            ChatReferenceNotFoundError,
+            StopIteration,
+            TypeError,
+            ValueError,
+            sqlite3.IntegrityError,
+        ) as exc:
+            raise _chat_error(exc) from exc
+        participant_names = {
+            participant.employee_id: self._employee_display_name(
+                participant.employee_id
+            )
+            for participant in participants
+        }
+        return 201, {
+            "message": _chat_message_shape(
+                bundle,
+                author_display_name=self._employee_display_name(
+                    message.author_employee_id
+                ),
+                mention_display_names=participant_names,
+            )
+        }
+
+    def cmd_mark_chat_thread_read(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        employee = self._require_active_employee()
+        thread_id = _v_uuid(path_ids["thread_id"])
+        last_read_message_id = _v_optional_uuid4(args["last_read_message_id"])
+        try:
+            self.chat_service.mark_read(
+                employee, thread_id, last_read_message_id=last_read_message_id
+            )
+        except (
+            ChatAccessDenied,
+            ChatNotFoundError,
+            TypeError,
+            ValueError,
+            sqlite3.IntegrityError,
+        ) as exc:
+            raise _chat_error(exc) from exc
+        return 200, {
+            "thread_id": thread_id,
+            "employee_id": employee.account.id,
+            "last_read_message_id": last_read_message_id,
+        }
 
     def cmd_create_inquiry(
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict
@@ -2427,6 +2992,15 @@ _CATALOG_DISH_CREATE_ARGS = _ArgKeys(
     ),
     optional=frozenset({"description", "composition", "notes", "allergens"}),
 )
+_CHAT_THREAD_CREATE_ARGS = _ArgKeys(
+    required=frozenset({"thread_type", "participant_employee_ids"}),
+    optional=frozenset({"title"}),
+)
+_CHAT_MESSAGE_CREATE_ARGS = _ArgKeys(
+    required=frozenset({"body"}),
+    optional=frozenset({"reply_to_message_id", "mention_employee_ids", "references"}),
+)
+_CHAT_READ_ARGS = _ArgKeys(required=frozenset({"last_read_message_id"}))
 
 _COMMANDS: dict[str, _CommandSpec] = {
     "create_inquiry": _CommandSpec("cmd_create_inquiry", _CREATE_ARGS, set()),
@@ -2521,6 +3095,17 @@ _COMMANDS: dict[str, _CommandSpec] = {
     "deactivate_catalog_dish": _CommandSpec(
         "cmd_deactivate_catalog_dish", _NO_ARGS, {"updated_at"}
     ),
+    "create_chat_thread": _CommandSpec(
+        "cmd_create_chat_thread", _CHAT_THREAD_CREATE_ARGS, set()
+    ),
+    "send_chat_message": _CommandSpec(
+        "cmd_send_chat_message", _CHAT_MESSAGE_CREATE_ARGS, set()
+    ),
+    "mark_chat_thread_read": _CommandSpec(
+        "cmd_mark_chat_thread_read",
+        _CHAT_READ_ARGS,
+        set(),
+    ),
 }
 
 # route table: (regex, template, {method: kind})
@@ -2535,6 +3120,46 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/work-center$"),
         "/office/v1/work-center",
         {"GET": "work_center"},
+    ),
+    (
+        re.compile(r"^/office/v1/chat/threads$"),
+        "/office/v1/chat/threads",
+        {"GET": "list_chat_threads", "POST": "create_chat_thread"},
+    ),
+    (
+        re.compile(r"^/office/v1/chat/search$"),
+        "/office/v1/chat/search",
+        {"GET": "search_chat"},
+    ),
+    (
+        re.compile(r"^/office/v1/chat/entity-search$"),
+        "/office/v1/chat/entity-search",
+        {"GET": "search_chat_entities"},
+    ),
+    (
+        re.compile(r"^/office/v1/chat/employees$"),
+        "/office/v1/chat/employees",
+        {"GET": "search_chat_employees"},
+    ),
+    (
+        re.compile(r"^/office/v1/chat/threads/(?P<thread_id>[^/]+)$"),
+        "/office/v1/chat/threads/{thread_id}",
+        {"GET": "chat_thread_detail"},
+    ),
+    (
+        re.compile(r"^/office/v1/chat/threads/(?P<thread_id>[^/]+)/messages$"),
+        "/office/v1/chat/threads/{thread_id}/messages",
+        {"POST": "send_chat_message"},
+    ),
+    (
+        re.compile(r"^/office/v1/chat/threads/(?P<thread_id>[^/]+)/read$"),
+        "/office/v1/chat/threads/{thread_id}/read",
+        {"POST": "mark_chat_thread_read"},
+    ),
+    (
+        re.compile(r"^/office/v1/chat/threads/(?P<thread_id>[^/]+)/participants$"),
+        "/office/v1/chat/threads/{thread_id}/participants",
+        {"GET": "chat_thread_participants"},
     ),
     (
         re.compile(r"^/office/v1/inquiries$"),
@@ -3005,6 +3630,47 @@ def make_office_api_handler(
                 seen[key] = value
             return seen
 
+        def _employee_with_permission(
+            self, permission_code: str
+        ) -> AuthenticatedEmployee:
+            session_token = parse_employee_session_header_values(
+                self.headers.get_all("X-Employee-Session")
+            )
+            if session_token == "malformed":
+                raise _invalid()
+            if session_token is None:
+                raise ApiError(401, "unauthorized")
+            try:
+                employee = api.employee_auth_service.authenticate_session(
+                    session_token
+                )
+            except AuthenticationError as exc:
+                raise ApiError(401, "unauthorized") from exc
+            if not employee.application_access_allowed:
+                raise ApiError(403, "forbidden")
+            if permission_code not in employee.effective_permissions:
+                raise ApiError(403, "forbidden")
+            return employee
+
+        def _chat_employee(self, kind: str) -> AuthenticatedEmployee:
+            if kind == "create_chat_thread":
+                return self._employee_with_permission("chat.create")
+            if kind == "send_chat_message":
+                return self._employee_with_permission("chat.send")
+            if kind in {
+                "list_chat_threads",
+                "chat_thread_detail",
+                "chat_thread_participants",
+                "search_chat",
+                "mark_chat_thread_read",
+            }:
+                return self._employee_with_permission("chat.view")
+            if kind == "search_chat_entities":
+                return self._employee_with_permission("chat.send")
+            if kind == "search_chat_employees":
+                return self._employee_with_permission("chat.create")
+            raise ApiError(500, "internal")
+
         def _pagination(self, params: dict[str, str]) -> tuple[int, int]:
             try:
                 limit = int(params.get("limit", str(views.LIST_LIMIT_DEFAULT)))
@@ -3255,6 +3921,51 @@ def make_office_api_handler(
             elif kind == "list_tasks":
                 self._query(set())
                 self._respond(200, api.list_tasks())
+            elif kind == "list_chat_threads":
+                self._query(set())
+                employee = self._chat_employee(kind)
+                self._respond(200, api.list_chat_threads(employee))
+            elif kind == "chat_thread_detail":
+                self._query(set())
+                employee = self._chat_employee(kind)
+                self._respond(
+                    200,
+                    api.chat_thread_detail(
+                        employee, _v_uuid(path_ids["thread_id"])
+                    ),
+                )
+            elif kind == "chat_thread_participants":
+                params = self._query({"q"})
+                employee = self._chat_employee(kind)
+                q = _v_str(params.get("q", ""), _MAX_Q_CHARS).strip()
+                self._respond(
+                    200,
+                    api.chat_thread_participants(
+                        employee, _v_uuid(path_ids["thread_id"]), q
+                    ),
+                )
+            elif kind == "search_chat":
+                params = self._query({"q"})
+                employee = self._chat_employee(kind)
+                q = _v_str(params.get("q", ""), _MAX_Q_CHARS).strip()
+                self._respond(200, api.search_chat(employee, q))
+            elif kind == "search_chat_entities":
+                params = self._query({"q", "type"})
+                employee = self._chat_employee(kind)
+                q = _v_str(params.get("q", ""), _MAX_Q_CHARS).strip()
+                if "type" not in params:
+                    raise _invalid()
+                reference_type = _v_enum(
+                    params["type"], validate_chat_reference_type
+                )
+                self._respond(
+                    200, api.search_chat_entities(employee, q, reference_type)
+                )
+            elif kind == "search_chat_employees":
+                params = self._query({"q"})
+                employee = self._chat_employee(kind)
+                q = _v_str(params.get("q", ""), _MAX_Q_CHARS).strip()
+                self._respond(200, api.search_chat_employees(employee, q))
             elif kind == "list_calendar":
                 params = self._query({"from", "to"})
                 if "from" not in params or "to" not in params:
@@ -3386,6 +4097,12 @@ def make_office_api_handler(
                 raise _invalid()
             if provided - arg_spec.required - arg_spec.optional:
                 raise _invalid()
+            employee = (
+                self._chat_employee(kind)
+                if kind
+                in {"create_chat_thread", "send_chat_message", "mark_chat_thread_read"}
+                else None
+            )
 
             fingerprint = command_fingerprint(
                 template, path_ids, args, expect, CLIENT_ID
@@ -3399,10 +4116,12 @@ def make_office_api_handler(
                         raise ApiError(409, "command_id_conflict")
                     return recorded.result_status, recorded.result_body
                 api._active_command_id = command_id
+                api._active_employee = employee
                 try:
                     status, result = handler(path_ids, args, expect)
                 finally:
                     api._active_command_id = None
+                    api._active_employee = None
                 body = json.dumps(
                     {"command_id": command_id, **result}, ensure_ascii=False
                 )

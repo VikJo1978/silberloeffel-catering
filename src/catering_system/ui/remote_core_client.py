@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import re
-import socket
 import urllib.error
 import urllib.request
 import uuid
@@ -25,6 +24,10 @@ from catering_system.domain.catalog import (
     PricingUnit,
     validate_allergen_codes,
     validate_pricing_unit,
+)
+from catering_system.domain.chat import (
+    CHAT_REFERENCE_TYPE_SET,
+    CHAT_THREAD_TYPE_SET,
 )
 from catering_system.domain.customer_document_eligibility import (
     DOCUMENT_BLOCKER_CODES,
@@ -253,6 +256,7 @@ _VERSION_KEYS = frozenset(
 _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
     400: frozenset({"invalid_request"}),
     401: frozenset({"unauthorized"}),
+    403: frozenset({"forbidden"}),
     404: frozenset({"not_found"}),
     405: frozenset({"method_not_allowed"}),
     409: frozenset(
@@ -303,6 +307,11 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
             "offer_document_blocked",
             "confirmation_document_blocked",
             "order_not_ready_to_send",
+            "invalid_chat_thread",
+            "invalid_chat_message",
+            "invalid_chat_mention",
+            "invalid_chat_reference",
+            "invalid_chat_reply",
         }
     ),
     500: frozenset({"internal"}),
@@ -349,7 +358,7 @@ class InquiryDetailMeta:
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001, ANN201
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
 
 
@@ -900,7 +909,7 @@ def _print_projection(data: Mapping[str, object]) -> OrderPrintProjection:
             is_preview=_bool(flags_data["is_preview"]),
             is_final_allowed=_bool(flags_data["is_final_allowed"]),
             is_stale=_bool(flags_data["is_stale"]),
-            watermark=watermark,  # type: ignore[arg-type]
+            watermark=watermark,
         ),
     )
 
@@ -1015,6 +1024,163 @@ def _payment_reminder(value: object, order_id: str) -> PaymentReminderView:
             None if data["updated_at"] is None else _datetime(data["updated_at"])
         ),
     )
+
+
+_CHAT_THREAD_KEYS = frozenset(
+    {"thread_id", "thread_type", "title", "created_by_employee_id", "created_at"}
+)
+_CHAT_THREAD_WITH_PARTICIPANTS_KEYS = _CHAT_THREAD_KEYS | {"participants"}
+_CHAT_PARTICIPANT_KEYS = frozenset(
+    {
+        "thread_id",
+        "employee_id",
+        "display_name",
+        "joined_at",
+        "last_read_message_id",
+    }
+)
+_CHAT_MESSAGE_PREVIEW_KEYS = frozenset(
+    {"message_id", "author_employee_id", "body", "created_at"}
+)
+_CHAT_REFERENCE_KEYS = frozenset({"reference_type", "reference_id"})
+_CHAT_MENTION_KEYS = frozenset({"employee_id", "display_name"})
+_CHAT_MESSAGE_KEYS = frozenset(
+    {
+        "message_id",
+        "thread_id",
+        "author_employee_id",
+        "author_display_name",
+        "body",
+        "reply_to_message_id",
+        "created_at",
+        "mentions",
+        "references",
+    }
+)
+_CHAT_SUMMARY_KEYS = frozenset(
+    {
+        "thread",
+        "participants",
+        "latest_message_preview",
+        "unread_count",
+        "last_activity_at",
+    }
+)
+_CHAT_DETAIL_KEYS = frozenset(
+    {"thread", "participants", "current_participant", "messages"}
+)
+_CHAT_ENTITY_RESULT_KEYS = frozenset(
+    {"reference_type", "reference_id", "primary_label", "secondary_label", "meta"}
+)
+_CHAT_EMPLOYEE_KEYS = frozenset({"employee_id", "display_name"})
+
+
+def _chat_reference_type(value: object) -> str:
+    raw = _str(value)
+    if raw not in CHAT_REFERENCE_TYPE_SET:
+        _bad_response()
+    return raw
+
+
+def _chat_thread(data: Mapping[str, object], *, participants: bool = False) -> None:
+    _exact(
+        data,
+        _CHAT_THREAD_WITH_PARTICIPANTS_KEYS if participants else _CHAT_THREAD_KEYS,
+    )
+    if _str(data["thread_type"]) not in CHAT_THREAD_TYPE_SET:
+        _bad_response()
+    _uuid4(data["thread_id"])
+    _optional_str(data["title"])
+    _uuid4(data["created_by_employee_id"])
+    _datetime(data["created_at"])
+    if participants:
+        for raw_participant in _list(data["participants"]):
+            _chat_participant(_dict(raw_participant))
+
+
+def _chat_participant(data: Mapping[str, object]) -> None:
+    _exact(data, _CHAT_PARTICIPANT_KEYS)
+    _uuid4(data["thread_id"])
+    _uuid4(data["employee_id"])
+    _str(data["display_name"])
+    _datetime(data["joined_at"])
+    _optional_uuid4(data["last_read_message_id"])
+
+
+def _chat_message_preview(value: object) -> None:
+    if value is None:
+        return
+    data = _dict(value)
+    _exact(data, _CHAT_MESSAGE_PREVIEW_KEYS)
+    _uuid4(data["message_id"])
+    _uuid4(data["author_employee_id"])
+    _str(data["body"])
+    _datetime(data["created_at"])
+
+
+def _chat_message(value: object) -> None:
+    data = _dict(value)
+    _exact(data, _CHAT_MESSAGE_KEYS)
+    _uuid4(data["message_id"])
+    _uuid4(data["thread_id"])
+    _uuid4(data["author_employee_id"])
+    _str(data["author_display_name"])
+    _str(data["body"])
+    _optional_uuid4(data["reply_to_message_id"])
+    _datetime(data["created_at"])
+    for raw_mention in _list(data["mentions"]):
+        mention = _dict(raw_mention)
+        _exact(mention, _CHAT_MENTION_KEYS)
+        _uuid4(mention["employee_id"])
+        _str(mention["display_name"])
+    for raw_reference in _list(data["references"]):
+        reference = _dict(raw_reference)
+        _exact(reference, _CHAT_REFERENCE_KEYS)
+        _chat_reference_type(reference["reference_type"])
+        _uuid4(reference["reference_id"])
+
+
+def _chat_summary(value: object) -> dict[str, object]:
+    data = _dict(value)
+    _exact(data, _CHAT_SUMMARY_KEYS)
+    _chat_thread(_dict(data["thread"]))
+    for raw_participant in _list(data["participants"]):
+        _chat_participant(_dict(raw_participant))
+    _chat_message_preview(data["latest_message_preview"])
+    _nonnegative_int(data["unread_count"])
+    _datetime(data["last_activity_at"])
+    return data
+
+
+def _chat_detail(value: object) -> dict[str, object]:
+    data = _dict(value)
+    _exact(data, _CHAT_DETAIL_KEYS)
+    _chat_thread(_dict(data["thread"]))
+    for raw_participant in _list(data["participants"]):
+        _chat_participant(_dict(raw_participant))
+    _chat_participant(_dict(data["current_participant"]))
+    for raw_message in _list(data["messages"]):
+        _chat_message(raw_message)
+    return data
+
+
+def _chat_entity_result(value: object) -> dict[str, object]:
+    data = _dict(value)
+    _exact(data, _CHAT_ENTITY_RESULT_KEYS)
+    _chat_reference_type(data["reference_type"])
+    _uuid4(data["reference_id"])
+    _str(data["primary_label"])
+    _str(data["secondary_label"])
+    _dict(data["meta"])
+    return data
+
+
+def _chat_employee(value: object) -> dict[str, object]:
+    data = _dict(value)
+    _exact(data, _CHAT_EMPLOYEE_KEYS)
+    _uuid4(data["employee_id"])
+    _str(data["display_name"])
+    return data
 
 
 def _validate_offer_prefill(value: object) -> None:
@@ -1140,9 +1306,12 @@ class RemoteCoreClient:
         query: Mapping[str, object] | None = None,
         body: Mapping[str, object] | None = None,
         expected: set[int],
+        employee_session_token: str | None = None,
     ) -> dict[str, object]:
         data = None
         headers = {"Authorization": f"Bearer {self._token}"}
+        if employee_session_token is not None:
+            headers["X-Employee-Session"] = employee_session_token
         if body is not None:
             data = json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode(
                 "utf-8"
@@ -1175,7 +1344,7 @@ class RemoteCoreClient:
             if code not in _ERROR_CODES_BY_STATUS.get(exc.code, frozenset()):
                 _bad_response()
             raise RemoteCoreError(exc.code, code) from exc
-        except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as exc:
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise RemoteCoreError(503, "unreachable", unavailable=True) from exc
         with response:
             if response.status not in expected:
@@ -1193,9 +1362,19 @@ class RemoteCoreClient:
             _bad_response()
 
     def get(
-        self, path: str, query: Mapping[str, object] | None = None
+        self,
+        path: str,
+        query: Mapping[str, object] | None = None,
+        *,
+        employee_session_token: str | None = None,
     ) -> dict[str, object]:
-        return self._request("GET", path, query=query, expected={200})
+        return self._request(
+            "GET",
+            path,
+            query=query,
+            expected={200},
+            employee_session_token=employee_session_token,
+        )
 
     def get_text(self, path: str, query: Mapping[str, object] | None = None) -> str:
         url = self._url(path, query)
@@ -1206,7 +1385,7 @@ class RemoteCoreClient:
         )
         try:
             response = self._opener.open(request, timeout=_READ_TIMEOUT_SECONDS)
-        except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as exc:
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise RemoteCoreError(503, "unreachable", unavailable=True) from exc
         with response:
             if response.status != 200:
@@ -1252,7 +1431,7 @@ class RemoteCoreClient:
                     # status survives, the code degrades to unexpected_status.
                     pass
             raise RemoteCoreError(exc.code, code) from exc
-        except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as exc:
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
             raise RemoteCoreError(503, "unreachable", unavailable=True) from exc
         with response:
             if response.status != 200:
@@ -1277,6 +1456,7 @@ class RemoteCoreClient:
         *,
         command_id: str | None = None,
         optional_result_keys: frozenset[str] | set[str] = frozenset(),
+        employee_session_token: str | None = None,
     ) -> dict[str, object]:
         """`result_keys` must all be present. `optional_result_keys` may be
         present — for commands whose response carries a field only in some
@@ -1294,6 +1474,7 @@ class RemoteCoreClient:
                 "args": dict(args),
             },
             expected=expected,
+            employee_session_token=employee_session_token,
         )
         required = result_keys | {"command_id"}
         if not required <= set(result) <= required | set(optional_result_keys):
@@ -1710,9 +1891,11 @@ class RemoteCoreClient:
                 }
                 if not keys <= set(item):
                     _bad_response()
-                if item.get("validity_hint") is not None:
-                    if _str(item["validity_hint"]) != "expires_today":
-                        _bad_response()
+                if (
+                    item.get("validity_hint") is not None
+                    and _str(item["validity_hint"]) != "expires_today"
+                ):
+                    _bad_response()
                 _uuid4(item["offer_id"])
                 _uuid4(item["inquiry_id"])
                 _uuid4(item["offer_version_id"])
@@ -2406,6 +2589,160 @@ class RemoteCoreClient:
                 _bad_response()
             _datetime(row["opened_at"])
         return body
+
+    def create_chat_thread(
+        self,
+        *,
+        employee_session_token: str,
+        thread_type: str,
+        participant_employee_ids: Sequence[str],
+        title: str | None = None,
+        command_id: str | None = None,
+    ) -> dict[str, object]:
+        args: dict[str, object] = {
+            "thread_type": thread_type,
+            "participant_employee_ids": list(participant_employee_ids),
+        }
+        if title is not None:
+            args["title"] = title
+        result = self.command(
+            "/office/v1/chat/threads",
+            args=args,
+            expect={},
+            expected={200, 201},
+            result_keys={"thread"},
+            command_id=command_id,
+            employee_session_token=employee_session_token,
+        )
+        thread = _dict(result["thread"])
+        _chat_thread(thread, participants=True)
+        return thread
+
+    def list_chat_threads(
+        self, *, employee_session_token: str
+    ) -> list[dict[str, object]]:
+        body = self.get(
+            "/office/v1/chat/threads",
+            employee_session_token=employee_session_token,
+        )
+        _exact(body, {"threads"})
+        return [_chat_summary(raw) for raw in _list(body["threads"])]
+
+    def get_chat_thread(
+        self, thread_id: str, *, employee_session_token: str
+    ) -> dict[str, object]:
+        body = self.get(
+            f"/office/v1/chat/threads/{quote(thread_id, safe='')}",
+            employee_session_token=employee_session_token,
+        )
+        return _chat_detail(body)
+
+    def send_chat_message(
+        self,
+        thread_id: str,
+        *,
+        employee_session_token: str,
+        body: str,
+        reply_to_message_id: str | None = None,
+        mention_employee_ids: Sequence[str] = (),
+        references: Sequence[Mapping[str, object]] = (),
+        command_id: str | None = None,
+    ) -> dict[str, object]:
+        result = self.command(
+            f"/office/v1/chat/threads/{quote(thread_id, safe='')}/messages",
+            args={
+                "body": body,
+                "reply_to_message_id": reply_to_message_id,
+                "mention_employee_ids": list(mention_employee_ids),
+                "references": [dict(reference) for reference in references],
+            },
+            expect={},
+            expected={201},
+            result_keys={"message"},
+            command_id=command_id,
+            employee_session_token=employee_session_token,
+        )
+        _chat_message(result["message"])
+        return _dict(result["message"])
+
+    def mark_chat_thread_read(
+        self,
+        thread_id: str,
+        *,
+        employee_session_token: str,
+        last_read_message_id: str | None,
+        command_id: str | None = None,
+    ) -> dict[str, object]:
+        result = self.command(
+            f"/office/v1/chat/threads/{quote(thread_id, safe='')}/read",
+            args={"last_read_message_id": last_read_message_id},
+            expect={},
+            expected={200},
+            result_keys={"thread_id", "employee_id", "last_read_message_id"},
+            command_id=command_id,
+            employee_session_token=employee_session_token,
+        )
+        _uuid4(result["thread_id"])
+        _uuid4(result["employee_id"])
+        _optional_uuid4(result["last_read_message_id"])
+        return result
+
+    def autocomplete_chat_participants(
+        self,
+        thread_id: str,
+        *,
+        employee_session_token: str,
+        q: str = "",
+    ) -> list[dict[str, object]]:
+        body = self.get(
+            f"/office/v1/chat/threads/{quote(thread_id, safe='')}/participants",
+            query={"q": q} if q else None,
+            employee_session_token=employee_session_token,
+        )
+        _exact(body, {"participants"})
+        participants = []
+        for raw_participant in _list(body["participants"]):
+            participant = _dict(raw_participant)
+            _chat_participant(participant)
+            participants.append(participant)
+        return participants
+
+    def search_chat_entities(
+        self,
+        *,
+        employee_session_token: str,
+        q: str,
+        reference_type: str,
+    ) -> list[dict[str, object]]:
+        body = self.get(
+            "/office/v1/chat/entity-search",
+            query={"q": q, "type": reference_type},
+            employee_session_token=employee_session_token,
+        )
+        _exact(body, {"results"})
+        return [_chat_entity_result(raw) for raw in _list(body["results"])]
+
+    def search_chat_employees(
+        self, *, employee_session_token: str, q: str = ""
+    ) -> list[dict[str, object]]:
+        body = self.get(
+            "/office/v1/chat/employees",
+            query={"q": q} if q else None,
+            employee_session_token=employee_session_token,
+        )
+        _exact(body, {"employees"})
+        return [_chat_employee(raw) for raw in _list(body["employees"])]
+
+    def search_chat(
+        self, *, employee_session_token: str, q: str
+    ) -> list[dict[str, object]]:
+        body = self.get(
+            "/office/v1/chat/search",
+            query={"q": q},
+            employee_session_token=employee_session_token,
+        )
+        _exact(body, {"results"})
+        return [_chat_summary(raw) for raw in _list(body["results"])]
 
     def list_calendar(self, from_date: date, to_date: date) -> dict[str, object]:
         params = {
@@ -3817,9 +4154,12 @@ class _RemoteConfirmationOutboundService:
     ) -> OutboundSendEligibility:
         confirmation = self._client.confirmation_document_service.eligibility(order_id)
         snapshot = confirmation.snapshot
-        if document_snapshot_id is not None and snapshot is not None:
-            if snapshot.document_snapshot_id != document_snapshot_id:
-                snapshot = None
+        if (
+            document_snapshot_id is not None
+            and snapshot is not None
+            and snapshot.document_snapshot_id != document_snapshot_id
+        ):
+            snapshot = None
         if snapshot is None:
             return OutboundSendEligibility(
                 state="dokument_fehlt",
