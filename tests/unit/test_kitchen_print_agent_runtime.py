@@ -13,12 +13,16 @@ from http.server import HTTPServer
 from pathlib import Path
 
 import pytest
+from kitchen_print_agent.agent import KitchenPrintAgent
+from kitchen_print_agent.client import KitchenPrintAgentClient
+from kitchen_print_agent.config import AgentConfig
+from kitchen_print_agent.printer import CupsPrinterAdapter, FakePrinterAdapter
 
 from catering_system.domain.inquiry import (
     CALL_VERIFICATION_STATUSES,
     CRM_PIPELINE,
-    Inquiry,
     PLANNING_MODES,
+    Inquiry,
 )
 from catering_system.domain.inquiry_customer_snapshot import (
     InquiryCustomerSnapshot as _CCSnapshot,
@@ -37,10 +41,6 @@ from catering_system.repositories.sqlite_order_commercial_snapshot_repository im
 from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepository
 from catering_system.services.kitchen_print_service import KitchenPrintService
 from catering_system.ui.kitchen_api import KitchenApi, make_kitchen_api_handler
-from kitchen_print_agent.agent import KitchenPrintAgent
-from kitchen_print_agent.client import KitchenPrintAgentClient
-from kitchen_print_agent.config import AgentConfig
-from kitchen_print_agent.printer import CupsPrinterAdapter, FakePrinterAdapter
 from tests.helpers.commercial_snapshot_seed import seed_commercial_snapshot
 from tests.helpers.order_seed import seed_order
 
@@ -159,8 +159,8 @@ def test_claim_receives_document_and_prints_via_fake_printer(
     assert claimed is True
     assert len(printer.printed) == 1
     content_type, body = printer.printed[0]
-    assert content_type == "text/html; charset=utf-8"
-    assert b"<!DOCTYPE html>" in body or len(body) > 0
+    assert content_type == "application/pdf"
+    assert body.startswith(b"%PDF-")
 
 
 def test_printer_failure_triggers_technical_reject(kitchen_api_server) -> None:

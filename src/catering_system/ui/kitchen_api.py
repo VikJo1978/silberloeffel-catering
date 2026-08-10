@@ -118,7 +118,6 @@ class KitchenApi:
         self._document_factory = KitchenPrintDocumentFactory(
             projection_service,
             self._document_store,
-            clock=self._clock,
         )
         self.application = KitchenPrintApplicationService(
             self._print_service,
@@ -211,7 +210,7 @@ def make_kitchen_api_handler(
     class KitchenApiHandler(BaseHTTPRequestHandler):
         server_version = "KitchenApi/1.0"
 
-        def log_message(self, format: str, *args: object) -> None:  # noqa: A003
+        def log_message(self, format: str, *args: object) -> None:
             _log.info(format, *args)
 
         def _authorized(self) -> bool:
@@ -259,7 +258,7 @@ def make_kitchen_api_handler(
                 raise _invalid()
             return strict_json_loads(raw)
 
-        def do_POST(self) -> None:  # noqa: N802
+        def do_POST(self) -> None:
             if not self._authorized():
                 self._error(401, "unauthorized")
                 return
@@ -301,7 +300,7 @@ def make_kitchen_api_handler(
             except ValueError:
                 self._error(422, "invalid_request")
 
-        def do_GET(self) -> None:  # noqa: N802
+        def do_GET(self) -> None:
             self._error(404, "not_found")
 
     return KitchenApiHandler

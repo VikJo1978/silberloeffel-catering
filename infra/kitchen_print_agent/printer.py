@@ -10,11 +10,7 @@ from typing import Protocol
 
 from kitchen_print_agent.errors import PrinterError
 
-_CONTENT_TYPE_SUFFIX = {
-    "text/html; charset=utf-8": ".html",
-    "text/html": ".html",
-    "application/pdf": ".pdf",
-}
+_PDF_CONTENT_TYPE = "application/pdf"
 
 
 class PrinterAdapter(Protocol):
@@ -38,10 +34,6 @@ class FakePrinterAdapter:
         if self.fail_on_print:
             raise PrinterError("simulated printer failure", self.rejection_code)
         self.printed.append((content_type, body))
-
-
-def _suffix_for_content_type(content_type: str) -> str:
-    return _CONTENT_TYPE_SUFFIX.get(content_type, ".bin")
 
 
 def _map_lp_failure(stderr: str) -> str:
@@ -71,10 +63,14 @@ class CupsPrinterAdapter:
         self._run_lp = run_lp or self._default_run_lp
 
     def print_document(self, content_type: str, body: bytes) -> None:
-        suffix = _suffix_for_content_type(content_type)
+        if content_type != _PDF_CONTENT_TYPE:
+            raise PrinterError(
+                f"unsupported print document content type: {content_type}",
+                "invalid_printer_configuration",
+            )
         temp_path: str | None = None
         try:
-            with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as handle:
+            with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as handle:
                 handle.write(body)
                 temp_path = handle.name
             result = self._run_lp(
