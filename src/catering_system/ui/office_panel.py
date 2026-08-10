@@ -687,9 +687,7 @@ class OfficePanel:
             version = self._orders.get_order_version(version_id)
             if version is None or version.order_id != order_id:
                 raise ValueError("order version does not belong to order")
-            attempts = kitchen_print_service.list_print_jobs_for_version(
-                version_id
-            )
+            attempts = kitchen_print_service.list_print_jobs_for_version(version_id)
             if not attempts:
                 kitchen_print_service.request_print(order_id, version_id)
                 return
