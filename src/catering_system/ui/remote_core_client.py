@@ -909,7 +909,7 @@ def _print_projection(data: Mapping[str, object]) -> OrderPrintProjection:
             is_preview=_bool(flags_data["is_preview"]),
             is_final_allowed=_bool(flags_data["is_final_allowed"]),
             is_stale=_bool(flags_data["is_stale"]),
-            watermark=watermark,
+            watermark=watermark,  # type: ignore[arg-type]
         ),
     )
 
