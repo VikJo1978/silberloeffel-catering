@@ -1425,9 +1425,7 @@ class OfficeApi:
             ],
         }
 
-    def list_chat_threads(
-        self, actor: AuthenticatedEmployee
-    ) -> dict[str, object]:
+    def list_chat_threads(self, actor: AuthenticatedEmployee) -> dict[str, object]:
         return {
             "threads": [
                 self._chat_thread_summary_shape(summary)
@@ -1584,9 +1582,7 @@ class OfficeApi:
         for order in self.orders.list_orders():
             order_inquiry = self.inquiries.get_by_id(order.source_inquiry_id)
             snapshot = (
-                order_inquiry.customer_snapshot
-                if order_inquiry is not None
-                else None
+                order_inquiry.customer_snapshot if order_inquiry is not None else None
             )
             company_name = snapshot.company_name if snapshot is not None else None
             contact_name = snapshot.contact_name if snapshot is not None else None
@@ -1610,9 +1606,7 @@ class OfficeApi:
                     "reference_type": "ORDER",
                     "reference_id": order.order_id,
                     "primary_label": f"Auftrag {order.order_id[:8]}",
-                    "secondary_label": (
-                        company_name or contact_name or location_text
-                    ),
+                    "secondary_label": (company_name or contact_name or location_text),
                     "meta": {
                         "order_id": order.order_id,
                         "source_inquiry_id": order.source_inquiry_id,
@@ -3641,9 +3635,7 @@ def make_office_api_handler(
             if session_token is None:
                 raise ApiError(401, "unauthorized")
             try:
-                employee = api.employee_auth_service.authenticate_session(
-                    session_token
-                )
+                employee = api.employee_auth_service.authenticate_session(session_token)
             except AuthenticationError as exc:
                 raise ApiError(401, "unauthorized") from exc
             if not employee.application_access_allowed:
@@ -3930,9 +3922,7 @@ def make_office_api_handler(
                 employee = self._chat_employee(kind)
                 self._respond(
                     200,
-                    api.chat_thread_detail(
-                        employee, _v_uuid(path_ids["thread_id"])
-                    ),
+                    api.chat_thread_detail(employee, _v_uuid(path_ids["thread_id"])),
                 )
             elif kind == "chat_thread_participants":
                 params = self._query({"q"})
@@ -3955,9 +3945,7 @@ def make_office_api_handler(
                 q = _v_str(params.get("q", ""), _MAX_Q_CHARS).strip()
                 if "type" not in params:
                     raise _invalid()
-                reference_type = _v_enum(
-                    params["type"], validate_chat_reference_type
-                )
+                reference_type = _v_enum(params["type"], validate_chat_reference_type)
                 self._respond(
                     200, api.search_chat_entities(employee, q, reference_type)
                 )
