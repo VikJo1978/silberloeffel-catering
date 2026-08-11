@@ -2,29 +2,38 @@
 
 from __future__ import annotations
 
-from tests.helpers.order_seed import seed_order
-
-from datetime import date
+from dataclasses import replace
+from datetime import UTC, date, datetime
 
 import pytest
 
+from catering_system.domain.customer_document_projection import CustomerAddress
+from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot
 from catering_system.domain.order_commercial_snapshot import (
     MissingCommercialSnapshotError,
 )
+from catering_system.domain.order_confirmation_document import (
+    SCHEMA_VERSION_V3,
+    OrderConfirmationDocumentSnapshot,
+)
+from catering_system.repositories.in_memory_order_commercial_snapshot_repository import (
+    InMemoryOrderCommercialSnapshotRepository,
+)
+from catering_system.repositories.in_memory_order_confirmation_document_repository import (
+    InMemoryOrderConfirmationDocumentRepository,
+)
+from catering_system.repositories.in_memory_order_repository import (
+    InMemoryOrderRepository,
+)
+from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjectionService,
     PrintFinalRequiresEffectiveError,
     PrintProjectionNotFoundError,
 )
-from catering_system.services.operational_core_service import OperationalCoreService
-from catering_system.repositories.in_memory_order_commercial_snapshot_repository import (
-    InMemoryOrderCommercialSnapshotRepository,
-)
-from catering_system.repositories.in_memory_order_repository import (
-    InMemoryOrderRepository,
-)
 from catering_system.services.order_service import OrderService
 from catering_system.ui.office_panel_views import render_print_sheet
+from tests.helpers.order_seed import seed_order
 from tests.unit.test_offer_service import (
     _INQUIRY_ID,
     _accepted_offer_state,
@@ -36,8 +45,64 @@ from tests.unit.test_offer_service import (
 def _projection_service(
     orders,
     snapshots: InMemoryOrderCommercialSnapshotRepository,
+    confirmations: InMemoryOrderConfirmationDocumentRepository | None = None,
 ) -> OrderPrintProjectionService:
-    return OrderPrintProjectionService(orders, snapshots)
+    return OrderPrintProjectionService(orders, snapshots, confirmations)
+
+
+def _insert_confirmation_snapshot(
+    confirmations: InMemoryOrderConfirmationDocumentRepository,
+    *,
+    order_id: str,
+    order_version_id: str,
+    event_date: date,
+    gross_total_cents: int = 32109,
+    payment_method: str = "RECHNUNG",
+    company_name: str = "Müller GmbH",
+    contact_name: str = "Anna Müller",
+    phone: str = "+49 40 123456",
+) -> None:
+    address = CustomerAddress(
+        street="Alter Wall 22",
+        postal_code="20457",
+        city="Hamburg",
+        country="Deutschland",
+    )
+    confirmations.insert(
+        OrderConfirmationDocumentSnapshot(
+            document_snapshot_id=f"doc-{order_version_id}",
+            order_id=order_id,
+            order_version_id=order_version_id,
+            offer_id="offer-1",
+            offer_version_id="offer-version-1",
+            document_reference="AB-TEST-V1",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            created_by="office",
+            recipient_name=contact_name,
+            recipient_email="anna.mueller@example.invalid",
+            recipient_company=company_name,
+            recipient_phone=phone,
+            recipient_status="ready",
+            event_date=event_date,
+            time_window_text="12:00–13:00",
+            location_text="Hamburg",
+            guest_count_estimate=35,
+            planning_mode="caterer_suggestion",
+            positions=(),
+            vat_buckets=(),
+            net_total_cents=30000,
+            vat_total_cents=gross_total_cents - 30000,
+            gross_total_cents=gross_total_cents,
+            payment_method=payment_method,
+            payment_customer_visible_text="Zahlung laut Vereinbarung.",
+            document_hash="sha256:" + ("0" * 64),
+            schema_version=SCHEMA_VERSION_V3,
+            invoice_address=address,
+            delivery_address=address,
+            delivery_address_differs=False,
+            fulfillment_mode="DELIVERY",
+        )
+    )
 
 
 def test_order_with_offer_conversion_has_menu_positions() -> None:
@@ -64,10 +129,154 @@ def test_order_with_offer_conversion_has_menu_positions() -> None:
     assert projection.commercial.positions[0].quantity_display == "80 Stück"
 
     sheet = render_print_sheet(projection)
-    assert "MENÜ" in sheet
+    assert "Bestellung / Menü" in sheet
     assert "Fingerfood Paket" in sheet
     assert "Frozen description" in sheet
-    assert "Menge: 80 Stück" in sheet
+    assert "80 Stück" in sheet
+    assert "Frozen customization" in sheet
+    assert "guest_count_estimate" not in sheet
+    assert "caterer_suggestion" not in sheet
+    assert order.order_id not in sheet
+    assert order_version.order_version_id not in sheet
+
+
+def test_kitchen_sheet_shows_existing_customer_contact_and_delivery_address() -> None:
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        _offers,
+        orders,
+        inquiries,
+        service,
+    ) = _accepted_offer_state()
+    inquiry = inquiries.get_by_id(_INQUIRY_ID)
+    assert inquiry is not None
+    inquiries.update(
+        replace(
+            inquiry,
+            customer_snapshot=InquiryCustomerSnapshot(
+                company_name="Müller GmbH",
+                contact_name="Anna Müller",
+                email="anna.mueller@example.invalid",
+                phone="+49 40 123456",
+                invoice_address=CustomerAddress(
+                    street="Alter Wall 22",
+                    postal_code="20457",
+                    city="Hamburg",
+                    country="Deutschland",
+                ),
+                delivery_address_mode="SAME_AS_INVOICE",
+            ),
+        )
+    )
+    _converted, order, order_version = service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
+    )
+    confirmations = InMemoryOrderConfirmationDocumentRepository()
+    _insert_confirmation_snapshot(
+        confirmations,
+        order_id=order.order_id,
+        order_version_id=order_version.order_version_id,
+        event_date=order_version.event_date,
+    )
+    inquiries.update(
+        replace(
+            inquiry,
+            customer_snapshot=InquiryCustomerSnapshot(
+                company_name="Live Mutation GmbH",
+                contact_name="Live Mutation",
+                email="live@example.invalid",
+                phone="+49 40 999999",
+                invoice_address=CustomerAddress(
+                    street="Mutable Weg 1",
+                    postal_code="99999",
+                    city="Geändert",
+                    country="Deutschland",
+                ),
+                delivery_address_mode="SAME_AS_INVOICE",
+            ),
+        )
+    )
+
+    projection = _projection_service(
+        orders,
+        service._commercial_snapshots,
+        confirmations,
+    ).resolve(order.order_id, order_version.order_version_id)
+    sheet = render_print_sheet(projection)
+
+    assert "Müller GmbH" in sheet
+    assert "Anna Müller" in sheet
+    assert "+49 40 123456" in sheet
+    assert "Alter Wall 22" in sheet
+    assert "20457 Hamburg" in sheet
+    assert "Deutschland" in sheet
+    assert "Live Mutation" not in sheet
+    assert "Mutable Weg" not in sheet
+    assert "Sonstiges" not in sheet
+
+
+def test_kitchen_sheet_cash_block_only_for_barzahlung() -> None:
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        _offers,
+        orders,
+        _inquiries,
+        service,
+    ) = _accepted_offer_state()
+    _converted, order, order_version = service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
+    )
+    snapshots = service._commercial_snapshots
+    invoice_projection = _projection_service(orders, snapshots).resolve(
+        order.order_id,
+        order_version.order_version_id,
+    )
+    assert "BARZAHLUNG" not in render_print_sheet(invoice_projection)
+
+    snapshot = snapshots.get_by_order_id(order.order_id)
+    assert snapshot is not None
+    cash_snapshot = replace(snapshot, payment_method="BAR_VOR_ORT")
+    snapshots._by_id[snapshot.snapshot_id] = cash_snapshot
+    cash_projection = _projection_service(orders, snapshots).resolve(
+        order.order_id,
+        order_version.order_version_id,
+    )
+    sheet = render_print_sheet(cash_projection)
+
+    assert "BARZAHLUNG – BEIM KUNDEN KASSIEREN" in sheet
+    assert "RECHNUNG MITNEHMEN UND DEM KUNDEN ÜBERGEBEN" in sheet
+
+    confirmations = InMemoryOrderConfirmationDocumentRepository()
+    _insert_confirmation_snapshot(
+        confirmations,
+        order_id=order.order_id,
+        order_version_id=order_version.order_version_id,
+        event_date=order_version.event_date,
+        gross_total_cents=43210,
+        payment_method="BAR_VOR_ORT",
+    )
+    cash_projection_with_amount = _projection_service(
+        orders,
+        snapshots,
+        confirmations,
+    ).resolve(order.order_id, order_version.order_version_id)
+    sheet = render_print_sheet(cash_projection_with_amount)
+
+    assert "BARZAHLUNG – 432,10 € KASSIEREN" in sheet
+    assert "BARZAHLUNG – BEIM KUNDEN KASSIEREN" not in sheet
+    assert "RECHNUNG MITNEHMEN UND DEM KUNDEN ÜBERGEBEN" in sheet
 
 
 def test_print_fails_when_commercial_snapshot_missing_for_seeded_order() -> None:
@@ -209,12 +418,12 @@ def test_candidate_change_preview_contains_reason_diff_and_frozen_offer_menu() -
     v2 = OrderService(orders).propose_order_version_change(
         order.order_id,
         event_date=v1.event_date,
-        time_window_text="18:00",
+        time_window_text=v1.time_window_text,
         location_text=v1.location_text,
-        guest_count_estimate=v1.guest_count_estimate,
+        guest_count_estimate=35,
         planning_mode=v1.planning_mode,
         actor_reference="office-panel",
-        change_reason="Beginn verschoben",
+        change_reason="Anzahl geändert",
     )
     service = _projection_service(orders, offer_service._commercial_snapshots)
     effective = service.resolve(order.order_id, v1.order_version_id)
@@ -222,13 +431,14 @@ def test_candidate_change_preview_contains_reason_diff_and_frozen_offer_menu() -
 
     assert candidate.flags.intent == "change_preview"
     assert candidate.flags.watermark == "ÄNDERUNG – NOCH NICHT WIRKSAM"
-    assert candidate.event.change_reason == "Beginn verschoben"
-    assert candidate.event.changed_fields == ("time_window_text",)
+    assert candidate.event.change_reason == "Anzahl geändert"
+    assert candidate.event.changed_fields == ("guest_count_estimate",)
     assert candidate.commercial.positions == effective.commercial.positions
     sheet = render_print_sheet(candidate)
     assert "ÄNDERUNG – NOCH NICHT WIRKSAM" in sheet
-    assert "Beginn verschoben" in sheet
-    assert "time_window_text" in sheet
+    assert "Anzahl geändert" in sheet
+    assert "Gästezahl geändert: 80 → 35" in sheet
+    assert "guest_count_estimate" not in sheet
 
 
 def test_stale_stand_shows_veraltet_watermark() -> None:
@@ -329,7 +539,7 @@ def test_cancelled_order_shows_storniert_banner_but_remains_readable() -> None:
     sheet = render_print_sheet(projection)
     assert "STORNIERT" in sheet
     assert "SILBERLÖFFEL" in sheet
-    assert "MENÜ" in sheet
+    assert "Bestellung / Menü" in sheet
     assert "Fingerfood Paket" in sheet
 
 
@@ -544,7 +754,7 @@ def test_print_uses_snapshot_when_offer_repository_unavailable() -> None:
     assert projection.commercial.positions[0].quantity_display == "80 Stück"
     sheet = render_print_sheet(projection)
     assert "Fingerfood Paket" in sheet
-    assert "Menge: 80 Stück" in sheet
+    assert "80 Stück" in sheet
 
 
 def test_print_snapshot_immune_to_later_offer_mutation() -> None:

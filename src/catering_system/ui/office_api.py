@@ -770,6 +770,7 @@ class OfficeApi:
         self.print_projection_service = OrderPrintProjectionService(
             self.orders,
             self.commercial_snapshots,
+            self.confirmation_documents,
         )
         self.buffet_cards_service = BuffetCardsService(
             self.orders,

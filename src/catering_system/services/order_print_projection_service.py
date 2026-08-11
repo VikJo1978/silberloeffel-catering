@@ -7,6 +7,8 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal, Protocol
 
+from catering_system.domain.customer_document_projection import CustomerAddress
+from catering_system.domain.inquiry import FulfillmentMode
 from catering_system.domain.offer import PositionQuantityMode
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_commercial_snapshot import (
@@ -14,8 +16,14 @@ from catering_system.domain.order_commercial_snapshot import (
     OrderCommercialPosition,
     OrderCommercialSnapshot,
 )
+from catering_system.domain.order_confirmation_document import (
+    OrderConfirmationDocumentSnapshot,
+)
 from catering_system.repositories.order_commercial_snapshot_repository import (
     OrderCommercialSnapshotRepository,
+)
+from catering_system.repositories.order_confirmation_document_repository import (
+    OrderConfirmationDocumentRepository,
 )
 from catering_system.repositories.order_repository import OrderRepository
 
@@ -29,6 +37,13 @@ class PrintProjectionNotFoundError(LookupError):
 
 class PrintFinalRequiresEffectiveError(ValueError):
     """Final print intent requires the effective OrderVersion."""
+
+
+@dataclass(frozen=True)
+class PrintChangeLine:
+    label: str
+    before: str
+    after: str
 
 
 @dataclass(frozen=True)
@@ -47,6 +62,7 @@ class PrintEventBlock:
     is_effective: bool
     change_reason: str | None = None
     changed_fields: tuple[str, ...] = ()
+    change_lines: tuple[PrintChangeLine, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -68,7 +84,18 @@ class PrintCommercialBlock:
     offer_version_id: str | None = None
     accepted_variant_id: str | None = None
     variant_label: str | None = None
+    payment_method: str | None = None
+    gross_total_cents: int | None = None
     positions: tuple[PrintPositionLine, ...] = ()
+
+
+@dataclass(frozen=True)
+class PrintCustomerBlock:
+    company_name: str | None = None
+    contact_name: str | None = None
+    phone: str | None = None
+    delivery_address_lines: tuple[str, ...] = ()
+    fulfillment_mode: FulfillmentMode = "UNKNOWN"
 
 
 @dataclass(frozen=True)
@@ -85,6 +112,7 @@ class OrderPrintProjection:
     event: PrintEventBlock
     commercial: PrintCommercialBlock
     flags: PrintFlagsBlock
+    customer: PrintCustomerBlock = PrintCustomerBlock()
 
 
 class _QuantityDisplaySource(Protocol):
@@ -132,9 +160,12 @@ class OrderPrintProjectionService:
         self,
         order_repository: OrderRepository,
         commercial_snapshot_repository: OrderCommercialSnapshotRepository,
+        confirmation_document_repository: OrderConfirmationDocumentRepository
+        | None = None,
     ) -> None:
         self._orders = order_repository
         self._commercial_snapshots = commercial_snapshot_repository
+        self._confirmation_documents = confirmation_document_repository
 
     def resolve(
         self,
@@ -149,25 +180,61 @@ class OrderPrintProjectionService:
         version = self._orders.get_order_version(order_version_id)
         if version is None or version.order_id != order_id:
             raise PrintProjectionNotFoundError(order_version_id)
-        commercial = self._resolve_commercial(order, version)
+        confirmation_snapshot = self._resolve_confirmation_snapshot(order, version)
+        commercial = self._resolve_commercial(
+            order, version, confirmation_snapshot=confirmation_snapshot
+        )
         flags = self._resolve_flags(order, version, intent=intent)
         if intent == "final" and not flags.is_final_allowed:
             raise PrintFinalRequiresEffectiveError(
                 "final print requires the effective order version"
             )
         return OrderPrintProjection(
-            event=_event_block(order, version),
+            event=_event_block(
+                order,
+                version,
+                self._resolve_parent_version(version),
+            ),
             commercial=commercial,
             flags=flags,
+            customer=_customer_block(confirmation_snapshot),
         )
 
-    def _resolve_commercial(
+    def _resolve_confirmation_snapshot(
         self, order: Order, version: OrderVersion
+    ) -> OrderConfirmationDocumentSnapshot | None:
+        if self._confirmation_documents is None:
+            return None
+        snapshot = self._confirmation_documents.get_by_order_version_id(
+            version.order_version_id
+        )
+        if snapshot is None or snapshot.order_id != order.order_id:
+            return None
+        return snapshot
+
+    def _resolve_parent_version(self, version: OrderVersion) -> OrderVersion | None:
+        if version.parent_order_version_id is None:
+            return None
+        parent = self._orders.get_order_version(version.parent_order_version_id)
+        if parent is None or parent.order_id != version.order_id:
+            return None
+        return parent
+
+    def _resolve_commercial(
+        self,
+        order: Order,
+        version: OrderVersion,
+        *,
+        confirmation_snapshot: OrderConfirmationDocumentSnapshot | None = None,
     ) -> PrintCommercialBlock:
         snapshot = self._commercial_snapshots.get_by_order_id(order.order_id)
         if snapshot is None:
             raise MissingCommercialSnapshotError(order.order_id)
-        return _commercial_from_snapshot(snapshot, version.guest_count_estimate)
+        return _commercial_from_snapshot(
+            snapshot,
+            version.guest_count_estimate,
+            confirmation_snapshot=confirmation_snapshot,
+        )
 
     def _resolve_flags(
         self,
@@ -236,7 +303,9 @@ class OrderPrintProjectionService:
         return "ENTWURF"
 
 
-def _event_block(order: Order, version: OrderVersion) -> PrintEventBlock:
+def _event_block(
+    order: Order, version: OrderVersion, previous: OrderVersion | None = None
+) -> PrintEventBlock:
     return PrintEventBlock(
         order_id=order.order_id,
         order_version_id=version.order_version_id,
@@ -252,11 +321,15 @@ def _event_block(order: Order, version: OrderVersion) -> PrintEventBlock:
         is_effective=version.order_version_id == order.effective_order_version_id,
         change_reason=version.change_reason,
         changed_fields=version.changed_fields,
+        change_lines=_change_lines(previous, version),
     )
 
 
 def _commercial_from_snapshot(
-    snapshot: OrderCommercialSnapshot, guest_count_estimate: int | None
+    snapshot: OrderCommercialSnapshot,
+    guest_count_estimate: int | None,
+    *,
+    confirmation_snapshot: OrderConfirmationDocumentSnapshot | None = None,
 ) -> PrintCommercialBlock:
     return PrintCommercialBlock(
         source="offer_conversion",
@@ -264,6 +337,16 @@ def _commercial_from_snapshot(
         offer_version_id=snapshot.source_offer_version_id,
         accepted_variant_id=snapshot.source_variant_id,
         variant_label=snapshot.variant_label,
+        payment_method=(
+            confirmation_snapshot.payment_method
+            if confirmation_snapshot is not None
+            else snapshot.payment_method
+        ),
+        gross_total_cents=(
+            confirmation_snapshot.gross_total_cents
+            if confirmation_snapshot is not None
+            else None
+        ),
         positions=tuple(
             _position_line_from_snapshot(position, guest_count_estimate)
             for position in snapshot.positions
@@ -284,3 +367,78 @@ def _position_line_from_snapshot(
         quantity_display=format_quantity_display(position, guest_count_estimate),
         unit_label=position.unit_label,
     )
+
+
+def _customer_block(
+    snapshot: OrderConfirmationDocumentSnapshot | None,
+) -> PrintCustomerBlock:
+    if snapshot is None:
+        return PrintCustomerBlock()
+    return PrintCustomerBlock(
+        company_name=(snapshot.recipient_company or "").strip() or None,
+        contact_name=(snapshot.recipient_name or "").strip() or None,
+        phone=(snapshot.recipient_phone or "").strip() or None,
+        delivery_address_lines=_address_lines(snapshot.delivery_address),
+        fulfillment_mode=snapshot.fulfillment_mode or "UNKNOWN",
+    )
+
+
+def _address_lines(address: CustomerAddress | None) -> tuple[str, ...]:
+    if address is None:
+        return ()
+    city_line = " ".join(
+        part
+        for part in (
+            (address.postal_code or "").strip(),
+            (address.city or "").strip(),
+        )
+        if part
+    )
+    return tuple(
+        line
+        for line in (
+            (address.street or "").strip(),
+            city_line,
+            (address.country or "").strip(),
+        )
+        if line
+    )
+
+
+def _change_lines(
+    previous: OrderVersion | None, current: OrderVersion
+) -> tuple[PrintChangeLine, ...]:
+    if previous is None:
+        return ()
+    lines: list[PrintChangeLine] = []
+    _append_change(
+        lines,
+        "Datum",
+        previous.event_date.strftime("%d.%m.%Y"),
+        current.event_date.strftime("%d.%m.%Y"),
+    )
+    _append_change(
+        lines,
+        "Zeitfenster / Anlieferung",
+        previous.time_window_text,
+        current.time_window_text,
+    )
+    _append_change(lines, "Ort", previous.location_text, current.location_text)
+    _append_change(
+        lines,
+        "Gästezahl geändert",
+        _optional_int_text(previous.guest_count_estimate),
+        _optional_int_text(current.guest_count_estimate),
+    )
+    return tuple(lines)
+
+
+def _append_change(
+    lines: list[PrintChangeLine], label: str, before: str, after: str
+) -> None:
+    if before != after:
+        lines.append(PrintChangeLine(label=label, before=before, after=after))
+
+
+def _optional_int_text(value: int | None) -> str:
+    return str(value) if value is not None else "–"

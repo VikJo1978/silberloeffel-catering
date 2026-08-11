@@ -32,6 +32,9 @@ from catering_system.repositories.contact_profile_repository import (
     ContactProfileRepository,
 )
 from catering_system.repositories.inquiry_repository import InquiryRepository
+from catering_system.repositories.in_memory_order_confirmation_document_repository import (
+    InMemoryOrderConfirmationDocumentRepository,
+)
 from catering_system.repositories.kitchen_print_job_repository import (
     KitchenPrintJobRepository,
 )
@@ -399,6 +402,9 @@ def make_office_panel_handler(
             configurator_handoff_service = ConfiguratorHandoffService(
                 SQLiteConfiguratorHandoffRepository.from_connection(repository)
             )
+    local_confirmation_document_repo = (
+        confirmation_document_repo or InMemoryOrderConfirmationDocumentRepository()
+    )
     panel = OfficePanel(
         inquiry_repo,
         order_repo,
@@ -408,7 +414,7 @@ def make_office_panel_handler(
         remote=remote,
         command_executor=command_executor,
         payment_reminder_repo=payment_reminder_repo,
-        confirmation_document_repo=confirmation_document_repo,
+        confirmation_document_repo=local_confirmation_document_repo,
         confirmation_outbound_repo=confirmation_outbound_repo,
         pause_repository=pause_repository,
         contact_note_repo=contact_note_repo,
@@ -1530,6 +1536,7 @@ def make_office_panel_handler(
             return OrderPrintProjectionService(
                 order_repo,
                 panel._commercial_snapshots,
+                local_confirmation_document_repo,
             ).resolve(order_id, version_id, intent="preview")
 
         def _resolve_buffet_cards_view(self, order_id: str, version_id: str):
@@ -1540,6 +1547,7 @@ def make_office_panel_handler(
                 OrderPrintProjectionService(
                     order_repo,
                     panel._commercial_snapshots,
+                    local_confirmation_document_repo,
                 ),
             ).resolve(order_id, version_id)
 

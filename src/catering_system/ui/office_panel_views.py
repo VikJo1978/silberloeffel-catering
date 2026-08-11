@@ -354,24 +354,86 @@ def _format_print_date(value: date) -> str:
     return value.strftime("%d.%m.%Y")
 
 
+def _format_eur_cents(cents: int) -> str:
+    return f"{cents / 100:.2f}".replace(".", ",")
+
+
 def _render_menu_section(projection: OrderPrintProjection) -> str:
     positions = projection.commercial.positions
     if not positions:
         return '<p class="menu-empty">Kein Menü hinterlegt</p>'
     blocks: list[str] = []
     for line in positions:
-        detail = line.description or line.composition
-        detail_html = f'<p class="menu-detail">{_e(detail)}</p>' if detail else ""
+        details = "".join(
+            f'<p class="menu-detail">{_e(value)}</p>'
+            for value in (line.description, line.composition)
+            if value
+        )
+        notes_html = f'<p class="menu-notes">{_e(line.notes)}</p>' if line.notes else ""
         quantity_html = (
-            f'<p class="menu-qty">Menge: {_e(line.quantity_display)}</p>'
+            f'<span class="menu-qty">{_e(line.quantity_display)}</span>'
             if line.quantity_display
             else ""
         )
         blocks.append(
-            f'<div class="menu-item"><p class="menu-name">• {_e(line.name)}</p>'
-            f"{detail_html}{quantity_html}</div>"
+            '<div class="menu-item">'
+            f'<div class="menu-item-head">{quantity_html}'
+            f'<p class="menu-name">{_e(line.name)}</p></div>'
+            f"{details}{notes_html}</div>"
         )
     return "".join(blocks)
+
+
+def _render_customer_section(projection: OrderPrintProjection) -> str:
+    customer = projection.customer
+    address_html = (
+        "<br>".join(_e(line) for line in customer.delivery_address_lines)
+        if customer.delivery_address_lines
+        else "–"
+    )
+    return (
+        '<section class="print-section">'
+        "<h2>Kunde / Lieferung</h2>"
+        '<dl class="facts">'
+        f"<div><dt>Kunde / Firma</dt><dd>{_e(customer.company_name or '–')}</dd></div>"
+        f"<div><dt>Ansprechpartner</dt><dd>{_e(customer.contact_name or '–')}</dd></div>"
+        f"<div><dt>Telefonnummer</dt><dd>{_e(customer.phone or '–')}</dd></div>"
+        f"<div><dt>Lieferadresse</dt><dd>{address_html}</dd></div>"
+        "</dl></section>"
+    )
+
+
+def _render_cash_block(projection: OrderPrintProjection) -> str:
+    commercial = projection.commercial
+    if commercial.payment_method != "BAR_VOR_ORT":
+        return ""
+    amount = (
+        f" – {_e(_format_eur_cents(commercial.gross_total_cents))} € KASSIEREN"
+        if commercial.gross_total_cents is not None
+        else " – BEIM KUNDEN KASSIEREN"
+    )
+    return (
+        '<section class="cash-block">'
+        f"<p>BARZAHLUNG{amount}</p>"
+        "<p>RECHNUNG MITNEHMEN UND DEM KUNDEN ÜBERGEBEN</p>"
+        "</section>"
+    )
+
+
+def _render_change_summary(projection: OrderPrintProjection) -> str:
+    event = projection.event
+    if event.change_reason is None and not event.change_lines:
+        return ""
+    rows = "".join(
+        f"<p>{_e(line.label)}: {_e(line.before)} → {_e(line.after)}</p>"
+        for line in event.change_lines
+    )
+    reason = (
+        f'<p class="change-reason">{_e(event.change_reason)}</p>'
+        if event.change_reason
+        else ""
+    )
+    return f'<section class="change-summary"><h2>ÄNDERUNG</h2>{rows}{reason}</section>'
 
 
 def render_print_sheet(projection: OrderPrintProjection) -> str:
@@ -391,51 +453,65 @@ def render_print_sheet(projection: OrderPrintProjection) -> str:
     watermark_html = (
         f'<p class="watermark">{_e(watermark)}</p>' if watermark is not None else ""
     )
-    change_html = ""
-    if event.change_reason is not None or event.changed_fields:
-        fields = ", ".join(event.changed_fields) or "–"
-        change_html = (
-            '<div class="change-summary">'
-            f'<p class="label">Änderungsgrund:</p><p class="value">'
-            f"{_e(event.change_reason or '–')}</p>"
-            f'<p class="label">Geänderte Felder:</p><p class="value">'
-            f"{_e(fields)}</p></div>"
-        )
+    change_html = _render_change_summary(projection)
+    customer_html = _render_customer_section(projection)
+    cash_html = _render_cash_block(projection)
     menu_html = _render_menu_section(projection)
     return f"""<!DOCTYPE html>
 <html lang="de"><head><meta charset="utf-8"><title>Küchenzettel</title>
 <style>
-body{{font-family:monospace;font-size:1.25rem;margin:2rem;max-width:40rem;line-height:1.5}}
-hr{{border:none;border-top:2px solid #000;margin:1.25rem 0}}
-.brand{{font-size:1.5rem;font-weight:bold;letter-spacing:0.08em}}
-.label{{margin:0.75rem 0 0.15rem;font-weight:bold}}
-.value{{margin:0 0 0.5rem}}
+@page{{size:A4;margin:14mm}}
+body{{font-family:Arial,sans-serif;font-size:13pt;margin:0;color:#111;line-height:1.35}}
+hr{{border:none;border-top:2px solid #000;margin:0.75rem 0}}
+h1{{font-size:2rem;margin:0}}
+h2{{font-size:1.1rem;margin:0 0 0.4rem;text-transform:uppercase;letter-spacing:0.04em}}
+.brand{{font-size:1rem;font-weight:bold;letter-spacing:0.08em;text-align:right}}
+.top{{display:grid;grid-template-columns:1fr auto;gap:1rem;align-items:start;margin-bottom:0.75rem}}
+.hero{{display:grid;grid-template-columns:repeat(4,1fr);gap:0.45rem;margin:0.75rem 0}}
+.hero-box{{border:2px solid #111;padding:0.45rem;min-height:3.8rem}}
+.hero-label{{font-size:0.75rem;text-transform:uppercase;font-weight:bold;margin:0 0 0.25rem;color:#555}}
+.hero-value{{font-size:1.25rem;font-weight:bold;margin:0}}
+.print-section{{border-top:2px solid #111;padding-top:0.65rem;margin-top:0.75rem}}
+.facts{{display:grid;grid-template-columns:repeat(2,1fr);gap:0.5rem 1rem;margin:0}}
+.facts div{{break-inside:avoid}}
+.facts dt{{font-weight:bold;font-size:0.8rem;text-transform:uppercase;color:#555}}
+.facts dd{{margin:0.1rem 0 0;white-space:normal}}
 .menu-title{{font-weight:bold;margin:0.5rem 0}}
-.menu-item{{margin:0.75rem 0 1rem}}
-.menu-name{{margin:0}}
-.menu-detail,.menu-qty{{margin:0.15rem 0 0 1.25rem}}
+.menu-item{{border-top:1px solid #aaa;padding-top:0.5rem;margin:0.6rem 0 0.8rem;break-inside:avoid}}
+.menu-item-head{{display:flex;gap:0.6rem;align-items:baseline}}
+.menu-name{{margin:0;font-weight:bold;font-size:1.1rem}}
+.menu-detail,.menu-notes{{margin:0.2rem 0 0 0}}
+.menu-notes{{font-weight:bold}}
+.menu-qty{{font-size:1.05rem;font-weight:bold;border:2px solid #111;padding:0.1rem 0.35rem;min-width:5rem;text-align:center}}
 .menu-empty{{margin:0.5rem 0;font-style:italic}}
-.stand{{margin-top:1rem}}
+.stand{{margin-top:1rem;color:#555;font-size:0.9rem}}
 .cancelled{{color:#a00;font-size:2rem;border:4px solid #a00;padding:0.5rem;text-align:center}}
 .watermark{{color:#666;font-size:2rem;border:3px dashed #666;padding:0.5rem;text-align:center;margin-bottom:1rem}}
+.change-summary{{border:3px solid #111;padding:0.6rem;margin:0.75rem 0}}
+.change-summary p{{margin:0.2rem 0;font-weight:bold}}
+.change-reason{{font-weight:normal!important}}
+.cash-block{{border:5px solid #111;padding:0.75rem;margin:0.75rem 0;text-align:center;break-inside:avoid}}
+.cash-block p{{font-size:1.35rem;font-weight:bold;margin:0.25rem 0}}
 button{{font-size:1rem;margin-top:1.5rem;padding:0.5rem 1rem}}
+@media print{{button{{display:none}}}}
 </style></head><body>
 {cancelled_banner}
 {watermark_html}
+<div class="top"><h1>Küchenzettel</h1><p class="brand">SILBERLÖFFEL</p></div>
+<section class="hero">
+<div class="hero-box"><p class="hero-label">Datum</p><p class="hero-value">{_e(_format_print_date(event.event_date))}</p></div>
+<div class="hero-box"><p class="hero-label">Zeitfenster / Anlieferung</p><p class="hero-value">{_e(event.time_window_text)}</p></div>
+<div class="hero-box"><p class="hero-label">Ort</p><p class="hero-value">{_e(event.location_text)}</p></div>
+<div class="hero-box"><p class="hero-label">Gäste</p><p class="hero-value">{_e(guests)}</p></div>
+</section>
 {change_html}
-<p class="brand">SILBERLÖFFEL</p>
-<hr>
-<p class="label">Datum:</p>
-<p class="value">{_e(_format_print_date(event.event_date))}</p>
-<p class="label">Ort:</p>
-<p class="value">{_e(event.location_text)}</p>
-<p class="label">Gäste:</p>
-<p class="value">{_e(guests)}</p>
-<hr>
-<p class="menu-title">MENÜ</p>
+{cash_html}
+{customer_html}
+<section class="print-section">
+<h2>Bestellung / Menü</h2>
 {menu_html}
-<hr>
-<p class="stand">Stand:<br>Version {event.version_number}</p>
+</section>
+<p class="stand">Stand Version {event.version_number}</p>
 <p><button onclick="window.print()">Drucken</button></p>
 </body></html>"""
 

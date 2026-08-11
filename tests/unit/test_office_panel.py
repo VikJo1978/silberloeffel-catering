@@ -1108,7 +1108,9 @@ def test_print_sheet_renders(panel: str) -> None:
     vid = body.split("print?version=")[1].split('"')[0]
     status, sheet = _get(f"{panel}/order/{oid}/print?version={vid}")
     assert status == 200
-    assert "Küchenzettel" in sheet and "Hamburg" in sheet and "MENÜ" in sheet
+    assert (
+        "Küchenzettel" in sheet and "Hamburg" in sheet and "Bestellung / Menü" in sheet
+    )
 
 
 def test_cancel_shows_storniert_and_hides_actions(panel: str) -> None:
