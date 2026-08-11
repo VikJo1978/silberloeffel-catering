@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
@@ -19,6 +20,8 @@ _REFERENCE_LABELS = {
     "INQUIRY": "Anfrage",
     "CONTACT": "Kontakt",
 }
+_HTTP_URL_RE = re.compile(r"https?://[^\s<>'\"]+")
+_TRAILING_URL_PUNCTUATION = ".,;:!?)"
 
 
 def _as_list(value: object) -> list[dict[str, object]]:
@@ -74,6 +77,28 @@ def _message_preview(summary: dict[str, object]) -> str:
         return "Noch keine Nachrichten."
     body = str(preview.get("body") or "").strip()
     return body or "Verknüpfte Karte"
+
+
+def _linkify_message_body(body: str) -> str:
+    parts: list[str] = []
+    position = 0
+    for match in _HTTP_URL_RE.finditer(body):
+        parts.append(_e(body[position : match.start()]))
+        url = match.group(0)
+        trailing = ""
+        while url and url[-1] in _TRAILING_URL_PUNCTUATION:
+            trailing = url[-1] + trailing
+            url = url[:-1]
+        if url:
+            escaped_url = _e(url)
+            parts.append(
+                f'<a href="{escaped_url}" target="_blank" rel="noopener noreferrer">'
+                f"{escaped_url}</a>"
+            )
+        parts.append(_e(trailing))
+        position = match.end()
+    parts.append(_e(body[position:]))
+    return "".join(parts)
 
 
 def _reference_href(reference_type: str, reference_id: str) -> str | None:
@@ -258,7 +283,11 @@ def _message_block(
         f'<span class="chat-meta">{_e(_format_time(message.get("created_at")))}</span>'
         "</div>"
         f"{reply}"
-        + (f'<p class="chat-message-body">{_e(body)}</p>' if body else "")
+        + (
+            f'<p class="chat-message-body">{_linkify_message_body(body)}</p>'
+            if body
+            else ""
+        )
         + mention_line
         + reference_list
         + f'<p class="chat-meta"><a href="/chat/{_e(quote(thread_id, safe=""))}?reply_to={_e(quote(message_id, safe=""))}">Antworten</a></p>'
