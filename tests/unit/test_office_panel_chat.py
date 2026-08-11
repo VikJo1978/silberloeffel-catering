@@ -211,6 +211,16 @@ def _hidden(html: str, name: str) -> str:
     return match.group(1)
 
 
+def _form(html: str, *, method: str, action: str) -> str:
+    match = re.search(
+        rf'<form[^>]*method="{re.escape(method)}"[^>]*action="{re.escape(action)}"[^>]*>.*?</form>',
+        html,
+        flags=re.DOTALL,
+    )
+    assert match, f"missing {method} form {action}"
+    return match.group(0)
+
+
 def test_chat_nav_list_badge_and_search_use_remote_client(
     chat_panel_world: PanelChatWorld,
 ) -> None:
@@ -288,6 +298,13 @@ def test_chat_create_uses_minimal_employee_picker_and_no_sensitive_fields(
     assert "role" not in html.lower()
     assert "permission" not in html.lower()
     assert "Inactive Chat User" not in html
+    assert html.count('name="participant_employee_id"') == 1
+
+    search_form = _form(html, method="get", action="/chat/new")
+    create_form = _form(html, method="post", action="/chat/threads")
+    assert 'name="q"' in search_form
+    assert 'name="participant_employee_id"' not in search_form
+    assert 'name="participant_employee_id"' in create_form
 
     status, url, _html = _request(
         chat_panel_world,
