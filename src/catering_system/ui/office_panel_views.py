@@ -127,6 +127,7 @@ class OfficePageContext:
     show_users_nav: bool = False
     employee_effective_permissions: frozenset[str] = frozenset()
     employee_account_id: str = ""
+    chat_unread_count: int | None = None
 
     def can(self, permission_code: str) -> bool:
         if permission_code not in PERMISSION_SET:
@@ -196,6 +197,17 @@ def _page(
         )
     if _nav_visible(context, "inquiries.view"):
         vertrieb.append(_nav_link("/emails", "E-Mail", "doc", "email", active_section))
+    if _nav_visible(context, "chat.view"):
+        vertrieb.append(
+            _nav_link(
+                "/chat",
+                "Nachrichten",
+                "chat",
+                "chat",
+                active_section,
+                badge=context.chat_unread_count,
+            )
+        )
     if _nav_visible(context, "queue.view"):
         vertrieb.append(
             _nav_link("/aufgaben", "Aufgaben", "doc", "tasks", active_section)

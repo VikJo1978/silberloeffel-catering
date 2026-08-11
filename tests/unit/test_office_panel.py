@@ -257,6 +257,7 @@ def test_v2_shell_is_local_no_js_and_has_complete_inline_icon_sprite() -> None:
         "office-i-users",
         "office-i-printer",
         "office-i-check",
+        "office-i-chat",
     }
     assert all(body.count(f'<symbol id="{symbol}"') == 1 for symbol in symbols)
 
