@@ -277,6 +277,30 @@ def test_chat_message_body_linkifies_http_and_https_urls() -> None:
     ) in html
 
 
+def test_chat_message_body_linkifies_www_urls_with_https_href() -> None:
+    html = _render_message_body("Siehe (www.example.com), dann www.example.org/path.")
+
+    assert (
+        '(<a href="https://www.example.com" target="_blank" rel="noopener noreferrer">'
+        "www.example.com</a>),"
+    ) in html
+    assert (
+        '<a href="https://www.example.org/path" '
+        'target="_blank" rel="noopener noreferrer">'
+        "www.example.org/path</a>."
+    ) in html
+
+
+def test_chat_message_body_does_not_double_linkify_www_inside_http_urls() -> None:
+    https_html = _render_message_body("Visit https://www.example.com now")
+    http_html = _render_message_body("Visit http://www.example.com now")
+
+    assert https_html.count('target="_blank" rel="noopener noreferrer"') == 1
+    assert http_html.count('target="_blank" rel="noopener noreferrer"') == 1
+    assert 'href="https://www.example.com"' in https_html
+    assert 'href="http://www.example.com"' in http_html
+
+
 def test_chat_message_body_escapes_text_and_ignores_unsafe_schemes() -> None:
     html = _render_message_body(
         '5 < 7 & <script>alert("x")</script> javascript:alert(1) data:text/html,payload'
