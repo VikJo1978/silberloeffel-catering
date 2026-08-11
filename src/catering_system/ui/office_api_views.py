@@ -13,14 +13,16 @@ from __future__ import annotations
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
+from catering_system.domain.calendar_entry_projection import (
+    CALENDAR_ENTRY_KIND_LABELS,
+    CalendarEntryProjection,
+)
+from catering_system.domain.catalog import (
+    CatalogDish,
+    CatalogPriceHistoryEntry,
+    allergen_labels,
+)
 from catering_system.domain.contact_projection import ContactProjection
-from catering_system.domain.inquiry_contact_completeness import (
-    derive_inquiry_contact_completeness,
-    missing_contact_fields,
-)
-from catering_system.domain.inquiry_customer_snapshot import (
-    customer_snapshot_to_mapping,
-)
 from catering_system.domain.email_intake_projection import EmailIntakeProjection
 from catering_system.domain.inquiry import (
     Inquiry,
@@ -29,16 +31,13 @@ from catering_system.domain.inquiry import (
     derive_inquiry_offer_projection,
     derive_inquiry_office_state,
 )
-from catering_system.domain.calendar_entry_projection import (
-    CALENDAR_ENTRY_KIND_LABELS,
-    CalendarEntryProjection,
+from catering_system.domain.inquiry_contact_completeness import (
+    derive_inquiry_contact_completeness,
+    missing_contact_fields,
 )
-from catering_system.domain.offer_queue import (
-    OfferQueueItem,
-    OfferQueueSection,
-    OfferQueueSnapshot,
+from catering_system.domain.inquiry_customer_snapshot import (
+    customer_snapshot_to_mapping,
 )
-from catering_system.domain.task_projection import TaskProjection
 from catering_system.domain.offer import (
     Offer,
     OfferPosition,
@@ -46,20 +45,11 @@ from catering_system.domain.offer import (
     OfferVersion,
     derive_offer_state,
 )
-from catering_system.services.offer_budget_presentation import (
-    compute_offer_budget_presentation,
+from catering_system.domain.offer_queue import (
+    OfferQueueItem,
+    OfferQueueSection,
+    OfferQueueSnapshot,
 )
-from catering_system.services.order_print_projection_service import (
-    OrderPrintProjection,
-    PrintPositionLine,
-)
-from catering_system.services.buffet_cards_service import BuffetCard, BuffetCardsView
-from catering_system.domain.catalog import allergen_labels
-from catering_system.services.catalog_dish_service import (
-    AllergenCodeDefinition,
-    CatalogDishListResult,
-)
-from catering_system.domain.catalog import CatalogDish, CatalogPriceHistoryEntry
 from catering_system.domain.order import (
     Order,
     OrderVersion,
@@ -71,8 +61,17 @@ from catering_system.domain.order_operational_pause import (
 )
 from catering_system.domain.order_payment_reminder import PaymentReminderView
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
+from catering_system.domain.task_projection import TaskProjection
 from catering_system.domain.wochenuebersicht import Wochenuebersicht
 from catering_system.domain.work_center import WorkCenterSnapshot
+from catering_system.services.buffet_cards_service import BuffetCard, BuffetCardsView
+from catering_system.services.catalog_dish_service import (
+    AllergenCodeDefinition,
+    CatalogDishListResult,
+)
+from catering_system.services.offer_budget_presentation import (
+    compute_offer_budget_presentation,
+)
 from catering_system.services.order_confirmation_document_preview import (
     OrderConfirmationDocumentPreview,
     preview_to_json,
@@ -81,8 +80,11 @@ from catering_system.services.order_confirmation_document_service import (
     OrderConfirmationDocumentEligibility,
     OrderConfirmationDocumentSummary,
 )
+from catering_system.services.order_print_projection_service import (
+    OrderPrintProjection,
+    PrintPositionLine,
+)
 from catering_system.ui.office_panel_offer_prefill import offer_prefill_payload
-
 
 BERLIN = ZoneInfo("Europe/Berlin")
 
@@ -1107,10 +1109,19 @@ def _print_position_line_shape(line: PrintPositionLine) -> dict[str, object]:
     }
 
 
+def _print_change_line_shape(line) -> dict[str, object]:
+    return {
+        "label": line.label,
+        "before": line.before,
+        "after": line.after,
+    }
+
+
 def order_print_projection_shape(projection: OrderPrintProjection) -> dict[str, object]:
     event = projection.event
     commercial = projection.commercial
     flags = projection.flags
+    customer = projection.customer
     return {
         "event": {
             "order_id": event.order_id,
@@ -1135,6 +1146,9 @@ def order_print_projection_shape(projection: OrderPrintProjection) -> dict[str, 
             "is_effective": event.is_effective,
             "change_reason": event.change_reason,
             "changed_fields": list(event.changed_fields),
+            "change_lines": [
+                _print_change_line_shape(line) for line in event.change_lines
+            ],
         },
         "commercial": {
             "source": commercial.source,
@@ -1142,9 +1156,18 @@ def order_print_projection_shape(projection: OrderPrintProjection) -> dict[str, 
             "offer_version_id": commercial.offer_version_id,
             "accepted_variant_id": commercial.accepted_variant_id,
             "variant_label": commercial.variant_label,
+            "payment_method": commercial.payment_method,
+            "gross_total_cents": commercial.gross_total_cents,
             "positions": [
                 _print_position_line_shape(line) for line in commercial.positions
             ],
+        },
+        "customer": {
+            "company_name": customer.company_name,
+            "contact_name": customer.contact_name,
+            "phone": customer.phone,
+            "delivery_address_lines": list(customer.delivery_address_lines),
+            "fulfillment_mode": customer.fulfillment_mode,
         },
         "flags": {
             "intent": flags.intent,

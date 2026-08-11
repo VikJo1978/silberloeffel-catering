@@ -94,7 +94,9 @@ from catering_system.services.order_confirmation_outbound_service import (
 )
 from catering_system.services.order_print_projection_service import (
     OrderPrintProjection,
+    PrintChangeLine,
     PrintCommercialBlock,
+    PrintCustomerBlock,
     PrintEventBlock,
     PrintFlagsBlock,
     PrintPositionLine,
@@ -807,8 +809,10 @@ _PRINT_EVENT_KEYS = frozenset(
         "is_effective",
         "change_reason",
         "changed_fields",
+        "change_lines",
     }
 )
+_PRINT_CHANGE_LINE_KEYS = frozenset({"label", "before", "after"})
 _PRINT_COMMERCIAL_KEYS = frozenset(
     {
         "source",
@@ -816,7 +820,18 @@ _PRINT_COMMERCIAL_KEYS = frozenset(
         "offer_version_id",
         "accepted_variant_id",
         "variant_label",
+        "payment_method",
+        "gross_total_cents",
         "positions",
+    }
+)
+_PRINT_CUSTOMER_KEYS = frozenset(
+    {
+        "company_name",
+        "contact_name",
+        "phone",
+        "delivery_address_lines",
+        "fulfillment_mode",
     }
 )
 _PRINT_FLAGS_KEYS = frozenset(
@@ -828,7 +843,7 @@ _PRINT_FLAGS_KEYS = frozenset(
         "watermark",
     }
 )
-_PRINT_PROJECTION_KEYS = frozenset({"event", "commercial", "flags"})
+_PRINT_PROJECTION_KEYS = frozenset({"event", "commercial", "customer", "flags"})
 
 
 def _print_position_line(data: Mapping[str, object]) -> PrintPositionLine:
@@ -845,12 +860,23 @@ def _print_position_line(data: Mapping[str, object]) -> PrintPositionLine:
     )
 
 
+def _print_change_line(data: Mapping[str, object]) -> PrintChangeLine:
+    _exact(data, _PRINT_CHANGE_LINE_KEYS)
+    return PrintChangeLine(
+        label=_str(data["label"]),
+        before=_str(data["before"]),
+        after=_str(data["after"]),
+    )
+
+
 def _print_projection(data: Mapping[str, object]) -> OrderPrintProjection:
     _exact(data, _PRINT_PROJECTION_KEYS)
     event_data = _dict(data["event"])
     _exact(event_data, _PRINT_EVENT_KEYS)
     commercial_data = _dict(data["commercial"])
     _exact(commercial_data, _PRINT_COMMERCIAL_KEYS)
+    customer_data = _dict(data["customer"])
+    _exact(customer_data, _PRINT_CUSTOMER_KEYS)
     flags_data = _dict(data["flags"])
     _exact(flags_data, _PRINT_FLAGS_KEYS)
     source = _str(commercial_data["source"])
@@ -868,6 +894,18 @@ def _print_projection(data: Mapping[str, object]) -> OrderPrintProjection:
         _bad_response()
     try:
         planning_mode = validate_planning_mode(_str(event_data["planning_mode"]))
+        fulfillment_mode = validate_fulfillment_mode(
+            _str(customer_data["fulfillment_mode"])
+        )
+    except ValueError:
+        _bad_response()
+    payment_method_raw = commercial_data.get("payment_method")
+    try:
+        payment_method = (
+            None
+            if payment_method_raw is None
+            else validate_payment_method(_str(payment_method_raw))
+        )
     except ValueError:
         _bad_response()
     return OrderPrintProjection(
@@ -890,6 +928,10 @@ def _print_projection(data: Mapping[str, object]) -> OrderPrintProjection:
             changed_fields=tuple(
                 _str(value) for value in _list(event_data.get("changed_fields"))
             ),
+            change_lines=tuple(
+                _print_change_line(_dict(value))
+                for value in _list(event_data["change_lines"])
+            ),
         ),
         commercial=PrintCommercialBlock(
             source=source,  # type: ignore[arg-type]
@@ -899,10 +941,21 @@ def _print_projection(data: Mapping[str, object]) -> OrderPrintProjection:
                 commercial_data.get("accepted_variant_id")
             ),
             variant_label=_optional_str(commercial_data.get("variant_label")),
+            payment_method=payment_method,
+            gross_total_cents=_optional_int(commercial_data.get("gross_total_cents")),
             positions=tuple(
                 _print_position_line(_dict(item))
                 for item in _list(commercial_data["positions"])
             ),
+        ),
+        customer=PrintCustomerBlock(
+            company_name=_optional_str(customer_data.get("company_name")),
+            contact_name=_optional_str(customer_data.get("contact_name")),
+            phone=_optional_str(customer_data.get("phone")),
+            delivery_address_lines=tuple(
+                _str(line) for line in _list(customer_data["delivery_address_lines"])
+            ),
+            fulfillment_mode=fulfillment_mode,
         ),
         flags=PrintFlagsBlock(
             intent=intent,  # type: ignore[arg-type]
