@@ -27,6 +27,8 @@ from catering_system.services.employee_auth_service import EmployeeAuthService
 from catering_system.ui.employee_auth_http import CSRF_COOKIE_NAME, SESSION_COOKIE_NAME
 from catering_system.ui.office_api import create_office_api_server
 from catering_system.ui.office_panel import create_office_panel_server
+from catering_system.ui.office_panel_chat import render_chat_detail
+from catering_system.ui.office_panel_views import OfficePageContext
 from catering_system.ui.remote_core_client import RemoteCoreClient
 from tests.helpers.offer_pdf_static_content import fake_offer_pdf_static_content
 
@@ -219,6 +221,73 @@ def _form(html: str, *, method: str, action: str) -> str:
     )
     assert match, f"missing {method} form {action}"
     return match.group(0)
+
+
+def _render_message_body(body: str) -> str:
+    return render_chat_detail(
+        {
+            "thread": {
+                "thread_id": "thread-1",
+                "thread_type": "DIRECT",
+                "title": None,
+            },
+            "participants": [
+                {"employee_id": "viktor", "display_name": "Viktor"},
+                {"employee_id": "anna", "display_name": "Anna"},
+            ],
+            "messages": [
+                {
+                    "message_id": "message-1",
+                    "thread_id": "thread-1",
+                    "author_display_name": "Anna",
+                    "body": body,
+                    "created_at": "2026-08-10T08:00:00+00:00",
+                    "reply_to_message_id": None,
+                    "mentions": [],
+                    "references": [],
+                }
+            ],
+        },
+        context=OfficePageContext(employee_account_id="viktor"),
+        read_command_fields="",
+        send_command_fields="",
+        participant_results=[],
+        mention_q="",
+        entity_results=[],
+        reference_q="",
+        reference_type="ORDER",
+        reply_to_message_id="",
+    )
+
+
+def test_chat_message_body_linkifies_http_and_https_urls() -> None:
+    html = _render_message_body(
+        "Docs https://example.test/a?x=1&y=2 and http://intranet.test/path."
+    )
+
+    assert (
+        '<a href="https://example.test/a?x=1&amp;y=2" '
+        'target="_blank" rel="noopener noreferrer">'
+        "https://example.test/a?x=1&amp;y=2</a>"
+    ) in html
+    assert (
+        '<a href="http://intranet.test/path" '
+        'target="_blank" rel="noopener noreferrer">'
+        "http://intranet.test/path</a>."
+    ) in html
+
+
+def test_chat_message_body_escapes_text_and_ignores_unsafe_schemes() -> None:
+    html = _render_message_body(
+        '5 < 7 & <script>alert("x")</script> javascript:alert(1) data:text/html,payload'
+    )
+
+    assert "5 &lt; 7 &amp; &lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;" in html
+    assert "javascript:alert(1)" in html
+    assert "data:text/html,payload" in html
+    assert "<script>" not in html
+    assert 'href="javascript:' not in html
+    assert 'href="data:' not in html
 
 
 def test_chat_nav_list_badge_and_search_use_remote_client(
