@@ -20,7 +20,7 @@ _REFERENCE_LABELS = {
     "INQUIRY": "Anfrage",
     "CONTACT": "Kontakt",
 }
-_HTTP_URL_RE = re.compile(r"https?://[^\s<>'\"]+")
+_CHAT_URL_RE = re.compile(r"(?<![A-Za-z0-9@:/])(?:https?://|www\.)[^\s<>'\"]+")
 _TRAILING_URL_PUNCTUATION = ".,;:!?)"
 
 
@@ -82,7 +82,7 @@ def _message_preview(summary: dict[str, object]) -> str:
 def _linkify_message_body(body: str) -> str:
     parts: list[str] = []
     position = 0
-    for match in _HTTP_URL_RE.finditer(body):
+    for match in _CHAT_URL_RE.finditer(body):
         parts.append(_e(body[position : match.start()]))
         url = match.group(0)
         trailing = ""
@@ -90,9 +90,11 @@ def _linkify_message_body(body: str) -> str:
             trailing = url[-1] + trailing
             url = url[:-1]
         if url:
+            href = url if url.startswith(("http://", "https://")) else f"https://{url}"
+            escaped_href = _e(href)
             escaped_url = _e(url)
             parts.append(
-                f'<a href="{escaped_url}" target="_blank" rel="noopener noreferrer">'
+                f'<a href="{escaped_href}" target="_blank" rel="noopener noreferrer">'
                 f"{escaped_url}</a>"
             )
         parts.append(_e(trailing))
