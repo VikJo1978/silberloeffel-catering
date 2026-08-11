@@ -197,7 +197,6 @@ def render_chat_new(
         f'<input id="chat-employee-q" name="q" value="{_e(q)}">'
         '<button type="submit">Suchen</button>'
         "</form>"
-        f'<div class="chat-picker-list">{picker}</div>'
         "</section>"
         '<section class="chat-panel">'
         '<form method="post" action="/chat/threads">'
