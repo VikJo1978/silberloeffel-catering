@@ -74,6 +74,9 @@ from catering_system.domain.inquiry_offer_preparation import (
 )
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_confirmation_outbound import FakeOutboxMessage
+from catering_system.domain.order_operational_context import (
+    OrderVersionOperationalContextSnapshot,
+)
 from catering_system.domain.order_payment_reminder import (
     PAYMENT_METHODS,
     OrderPaymentReminder,
@@ -3137,18 +3140,33 @@ class RemoteCoreClient:
         self._write_forbidden()
 
     def save_order_with_initial_version(
-        self, order: Order, version: OrderVersion
+        self,
+        order: Order,
+        version: OrderVersion,
+        operational_context: OrderVersionOperationalContextSnapshot | None = None,
     ) -> None:
         self._write_forbidden()
 
     def update_order(self, order: Order) -> None:
         self._write_forbidden()
 
-    def append_order_version(self, order: Order, version: OrderVersion) -> None:
+    def append_order_version(
+        self,
+        order: Order,
+        version: OrderVersion,
+        operational_context: OrderVersionOperationalContextSnapshot | None = None,
+    ) -> None:
         self._write_forbidden()
 
     def update_order_version(self, version: OrderVersion) -> None:
         self._write_forbidden()
+
+    def get_operational_context(
+        self, order_version_id: str
+    ) -> OrderVersionOperationalContextSnapshot | None:
+        raise RuntimeError(
+            "remote panel reads operational context through print-data projections"
+        )
 
     def _write_forbidden(self) -> NoReturn:
         raise RuntimeError("remote panel writes only through Core Office API commands")

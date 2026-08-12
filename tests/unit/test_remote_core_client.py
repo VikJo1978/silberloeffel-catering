@@ -20,12 +20,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
+from catering_system.repositories.order_repository import OrderRepository
 from catering_system.repositories.sqlite_inquiry_repository import (
     SQLiteInquiryRepository,
 )
-from catering_system.repositories.sqlite_order_repository import (
-    SQLiteOrderRepository,
-)
+from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepository
 from catering_system.services.inquiry_service import InquiryService
 from catering_system.ui import remote_core_client as rcc
 from catering_system.ui.remote_core_client import RemoteCoreClient, RemoteCoreError
@@ -670,6 +669,32 @@ def test_write_methods_raise_runtime_error_not_type_error(
     client = RemoteCoreClient("http://127.0.0.1:8084", _TOKEN)
     with pytest.raises(RuntimeError, match="Core Office API commands"):
         getattr(client, method_name)(*args)
+
+
+def test_remote_core_client_satisfies_order_repository_protocol_shape() -> None:
+    client = RemoteCoreClient("http://127.0.0.1:8084", _TOKEN)
+    repo: OrderRepository = client
+
+    assert repo is client
+    with pytest.raises(RuntimeError, match="print-data projections"):
+        client.get_operational_context("version-1")
+
+
+def test_remote_order_write_stubs_accept_optional_operational_context() -> None:
+    client = RemoteCoreClient("http://127.0.0.1:8084", _TOKEN)
+
+    with pytest.raises(RuntimeError, match="Core Office API commands"):
+        client.save_order_with_initial_version(
+            object(),  # type: ignore[arg-type]
+            object(),  # type: ignore[arg-type]
+            operational_context=None,
+        )
+    with pytest.raises(RuntimeError, match="Core Office API commands"):
+        client.append_order_version(
+            object(),  # type: ignore[arg-type]
+            object(),  # type: ignore[arg-type]
+            operational_context=None,
+        )
 
 
 def test_find_by_source_and_external_ref_no_match_returns_none() -> None:
