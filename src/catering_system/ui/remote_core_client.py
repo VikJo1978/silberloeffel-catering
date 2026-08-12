@@ -72,6 +72,11 @@ from catering_system.domain.inquiry_customer_snapshot import (
 from catering_system.domain.inquiry_offer_preparation import (
     InquiryOfferPreparationBlocker,
 )
+from catering_system.domain.manual_task import (
+    ManualTask,
+    validate_manual_task,
+    validate_manual_task_subject_type,
+)
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_confirmation_outbound import FakeOutboxMessage
 from catering_system.domain.order_operational_context import (
@@ -1080,6 +1085,50 @@ def _payment_reminder(value: object, order_id: str) -> PaymentReminderView:
             None if data["updated_at"] is None else _datetime(data["updated_at"])
         ),
     )
+
+
+def _manual_task(value: object) -> ManualTask:
+    data = _dict(value)
+    _exact(
+        data,
+        {
+            "task_id",
+            "title",
+            "description",
+            "due_at",
+            "status",
+            "created_at",
+            "completed_at",
+            "created_by_employee_id",
+            "assigned_to_employee_id",
+            "subject_type",
+            "subject_id",
+        },
+    )
+    try:
+        task = validate_manual_task(
+            ManualTask(
+                task_id=_uuid4(data["task_id"]),
+                title=_str(data["title"]),
+                description=_str(data["description"]),
+                due_at=_optional_datetime(data["due_at"]),
+                created_at=_datetime(data["created_at"]),
+                completed_at=_optional_datetime(data["completed_at"]),
+                created_by_employee_id=_uuid4(data["created_by_employee_id"]),
+                assigned_to_employee_id=_optional_uuid4(
+                    data["assigned_to_employee_id"]
+                ),
+                subject_type=validate_manual_task_subject_type(
+                    _str(data["subject_type"])
+                ),
+                subject_id=_optional_uuid4(data["subject_id"]),
+            )
+        )
+    except (TypeError, ValueError):
+        _bad_response()
+    if _str(data["status"]) != task.status:
+        _bad_response()
+    return task
 
 
 _CHAT_THREAD_KEYS = frozenset(
@@ -2645,6 +2694,74 @@ class RemoteCoreClient:
                 _bad_response()
             _datetime(row["opened_at"])
         return body
+
+    def list_manual_tasks(
+        self,
+        *,
+        employee_session_token: str,
+        subject_type: str | None = None,
+        subject_id: str | None = None,
+    ) -> list[ManualTask]:
+        query: dict[str, object] | None = None
+        if subject_type is not None or subject_id is not None:
+            if subject_type is None or subject_id is None:
+                raise ValueError("subject_type and subject_id must be paired")
+            query = {"subject_type": subject_type, "subject_id": subject_id}
+        body = self.get(
+            "/office/v1/manual-tasks",
+            query=query,
+            employee_session_token=employee_session_token,
+        )
+        _exact(body, {"manual_tasks"})
+        return [_manual_task(raw) for raw in _list(body["manual_tasks"])]
+
+    def create_manual_task(
+        self,
+        *,
+        employee_session_token: str,
+        title: str,
+        description: str | None = None,
+        due_at: datetime | None = None,
+        assigned_to_employee_id: str | None = None,
+        subject_type: str = "NONE",
+        subject_id: str | None = None,
+        command_id: str | None = None,
+    ) -> ManualTask:
+        result = self.command(
+            "/office/v1/manual-tasks",
+            args={
+                "title": title,
+                "description": description,
+                "due_at": due_at.isoformat() if due_at is not None else None,
+                "assigned_to_employee_id": assigned_to_employee_id,
+                "subject_type": subject_type,
+                "subject_id": subject_id,
+            },
+            expect={},
+            expected={201},
+            result_keys={"manual_task"},
+            command_id=command_id,
+            employee_session_token=employee_session_token,
+        )
+        return _manual_task(result["manual_task"])
+
+    def complete_manual_task(
+        self,
+        task_id: str,
+        *,
+        employee_session_token: str,
+        command_id: str | None = None,
+    ) -> ManualTask:
+        result = self.command(
+            f"/office/v1/manual-tasks/{quote(task_id, safe='')}/complete",
+            args={},
+            expect={},
+            expected={200},
+            result_keys={"manual_task"},
+            command_id=command_id,
+            employee_session_token=employee_session_token,
+        )
+        return _manual_task(result["manual_task"])
 
     def create_chat_thread(
         self,
