@@ -19,6 +19,9 @@ from catering_system.domain.order_commercial_snapshot import (
 from catering_system.domain.order_confirmation_document import (
     OrderConfirmationDocumentSnapshot,
 )
+from catering_system.domain.order_operational_context import (
+    OrderVersionOperationalContextSnapshot,
+)
 from catering_system.repositories.order_commercial_snapshot_repository import (
     OrderCommercialSnapshotRepository,
 )
@@ -197,7 +200,9 @@ class OrderPrintProjectionService:
             ),
             commercial=commercial,
             flags=flags,
-            customer=_customer_block(confirmation_snapshot),
+            customer=_customer_block(
+                self._orders.get_operational_context(order_version_id)
+            ),
         )
 
     def _resolve_confirmation_snapshot(
@@ -370,7 +375,7 @@ def _position_line_from_snapshot(
 
 
 def _customer_block(
-    snapshot: OrderConfirmationDocumentSnapshot | None,
+    snapshot: OrderVersionOperationalContextSnapshot | None,
 ) -> PrintCustomerBlock:
     if snapshot is None:
         return PrintCustomerBlock()
@@ -379,7 +384,6 @@ def _customer_block(
         contact_name=(snapshot.recipient_name or "").strip() or None,
         phone=(snapshot.recipient_phone or "").strip() or None,
         delivery_address_lines=_address_lines(snapshot.delivery_address),
-        fulfillment_mode=snapshot.fulfillment_mode or "UNKNOWN",
     )
 
 

@@ -422,18 +422,13 @@ def _render_cash_block(projection: OrderPrintProjection) -> str:
 
 def _render_change_summary(projection: OrderPrintProjection) -> str:
     event = projection.event
-    if event.change_reason is None and not event.change_lines:
+    if not event.change_lines:
         return ""
     rows = "".join(
         f"<p>{_e(line.label)}: {_e(line.before)} → {_e(line.after)}</p>"
         for line in event.change_lines
     )
-    reason = (
-        f'<p class="change-reason">{_e(event.change_reason)}</p>'
-        if event.change_reason
-        else ""
-    )
-    return f'<section class="change-summary"><h2>ÄNDERUNG</h2>{rows}{reason}</section>'
+    return f'<section class="change-summary"><h2>ÄNDERUNG</h2>{rows}</section>'
 
 
 def render_print_sheet(projection: OrderPrintProjection) -> str:
@@ -460,44 +455,44 @@ def render_print_sheet(projection: OrderPrintProjection) -> str:
     return f"""<!DOCTYPE html>
 <html lang="de"><head><meta charset="utf-8"><title>Küchenzettel</title>
 <style>
-@page{{size:A4;margin:14mm}}
-body{{font-family:Arial,sans-serif;font-size:13pt;margin:0;color:#111;line-height:1.35}}
-hr{{border:none;border-top:2px solid #000;margin:0.75rem 0}}
-h1{{font-size:2rem;margin:0}}
-h2{{font-size:1.1rem;margin:0 0 0.4rem;text-transform:uppercase;letter-spacing:0.04em}}
-.brand{{font-size:1rem;font-weight:bold;letter-spacing:0.08em;text-align:right}}
-.top{{display:grid;grid-template-columns:1fr auto;gap:1rem;align-items:start;margin-bottom:0.75rem}}
-.hero{{display:grid;grid-template-columns:repeat(4,1fr);gap:0.45rem;margin:0.75rem 0}}
-.hero-box{{border:2px solid #111;padding:0.45rem;min-height:3.8rem}}
-.hero-label{{font-size:0.75rem;text-transform:uppercase;font-weight:bold;margin:0 0 0.25rem;color:#555}}
-.hero-value{{font-size:1.25rem;font-weight:bold;margin:0}}
-.print-section{{border-top:2px solid #111;padding-top:0.65rem;margin-top:0.75rem}}
-.facts{{display:grid;grid-template-columns:repeat(2,1fr);gap:0.5rem 1rem;margin:0}}
+@page{{size:A4 portrait;margin:12mm}}
+body{{font-family:Arial,sans-serif;font-size:12.5pt;margin:0;color:#111;line-height:1.3}}
+hr{{border:none;border-top:2px solid #000;margin:0.6rem 0}}
+h1{{font-size:1.65rem;margin:0}}
+h2{{font-size:1rem;margin:0 0 0.35rem;text-transform:uppercase;letter-spacing:0.04em}}
+.brand{{font-size:1rem;font-weight:bold;letter-spacing:0.08em;text-align:right;margin:0}}
+.version-label{{font-size:0.95rem;font-weight:bold;margin:0.15rem 0 0;text-align:right}}
+.top{{display:grid;grid-template-columns:1fr auto;gap:0.75rem;align-items:start;margin-bottom:0.45rem}}
+.hero{{display:grid;grid-template-columns:repeat(4,1fr);gap:0.35rem;margin:0.45rem 0 0.55rem}}
+.hero-box{{border:2px solid #111;padding:0.35rem;min-height:3.1rem}}
+.hero-label{{font-size:0.68rem;text-transform:uppercase;font-weight:bold;margin:0 0 0.18rem;color:#555}}
+.hero-value{{font-size:1.08rem;font-weight:bold;margin:0}}
+.print-section{{border-top:2px solid #111;padding-top:0.5rem;margin-top:0.55rem}}
+.facts{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0.35rem 0.8rem;margin:0}}
 .facts div{{break-inside:avoid}}
-.facts dt{{font-weight:bold;font-size:0.8rem;text-transform:uppercase;color:#555}}
-.facts dd{{margin:0.1rem 0 0;white-space:normal}}
+.facts dt{{font-weight:bold;font-size:0.72rem;text-transform:uppercase;color:#555}}
+.facts dd{{margin:0.08rem 0 0;white-space:normal;overflow-wrap:anywhere}}
 .menu-title{{font-weight:bold;margin:0.5rem 0}}
-.menu-item{{border-top:1px solid #aaa;padding-top:0.5rem;margin:0.6rem 0 0.8rem;break-inside:avoid}}
+.menu-item{{border-top:1px solid #aaa;padding-top:0.4rem;margin:0.45rem 0 0.6rem;break-inside:avoid}}
 .menu-item-head{{display:flex;gap:0.6rem;align-items:baseline}}
-.menu-name{{margin:0;font-weight:bold;font-size:1.1rem}}
-.menu-detail,.menu-notes{{margin:0.2rem 0 0 0}}
+.menu-name{{margin:0;font-weight:bold;font-size:1.05rem;overflow-wrap:anywhere}}
+.menu-detail,.menu-notes{{margin:0.15rem 0 0 0;overflow-wrap:anywhere}}
 .menu-notes{{font-weight:bold}}
-.menu-qty{{font-size:1.05rem;font-weight:bold;border:2px solid #111;padding:0.1rem 0.35rem;min-width:5rem;text-align:center}}
+.menu-qty{{font-size:1rem;font-weight:bold;border:2px solid #111;padding:0.08rem 0.3rem;min-width:4.5rem;text-align:center;flex:0 0 auto}}
 .menu-empty{{margin:0.5rem 0;font-style:italic}}
 .stand{{margin-top:1rem;color:#555;font-size:0.9rem}}
 .cancelled{{color:#a00;font-size:2rem;border:4px solid #a00;padding:0.5rem;text-align:center}}
 .watermark{{color:#666;font-size:2rem;border:3px dashed #666;padding:0.5rem;text-align:center;margin-bottom:1rem}}
-.change-summary{{border:3px solid #111;padding:0.6rem;margin:0.75rem 0}}
+.change-summary{{border:3px solid #111;padding:0.5rem;margin:0.55rem 0}}
 .change-summary p{{margin:0.2rem 0;font-weight:bold}}
-.change-reason{{font-weight:normal!important}}
-.cash-block{{border:5px solid #111;padding:0.75rem;margin:0.75rem 0;text-align:center;break-inside:avoid}}
+.cash-block{{border:5px solid #111;padding:0.65rem;margin:0.55rem 0;text-align:center;break-inside:avoid}}
 .cash-block p{{font-size:1.35rem;font-weight:bold;margin:0.25rem 0}}
 button{{font-size:1rem;margin-top:1.5rem;padding:0.5rem 1rem}}
 @media print{{button{{display:none}}}}
 </style></head><body>
 {cancelled_banner}
 {watermark_html}
-<div class="top"><h1>Küchenzettel</h1><p class="brand">SILBERLÖFFEL</p></div>
+<div class="top"><h1>Küchenzettel</h1><div><p class="brand">SILBERLÖFFEL</p><p class="version-label">Version {_e(str(event.version_number))}</p></div></div>
 <section class="hero">
 <div class="hero-box"><p class="hero-label">Datum</p><p class="hero-value">{_e(_format_print_date(event.event_date))}</p></div>
 <div class="hero-box"><p class="hero-label">Zeitfenster / Anlieferung</p><p class="hero-value">{_e(event.time_window_text)}</p></div>
@@ -511,7 +506,6 @@ button{{font-size:1rem;margin-top:1.5rem;padding:0.5rem 1rem}}
 <h2>Bestellung / Menü</h2>
 {menu_html}
 </section>
-<p class="stand">Stand Version {event.version_number}</p>
 <p><button onclick="window.print()">Drucken</button></p>
 </body></html>"""
 

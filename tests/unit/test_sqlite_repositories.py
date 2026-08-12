@@ -2,20 +2,29 @@
 
 from __future__ import annotations
 
-from tests.helpers.order_seed import seed_order
-
 import sqlite3
 from dataclasses import replace
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 import pytest
 
+from catering_system.domain.customer_document_projection import CustomerAddress
 from catering_system.domain.inquiry import (
     CALL_VERIFICATION_STATUSES,
     CRM_PIPELINE,
-    Inquiry,
     PLANNING_MODES,
+    Inquiry,
+)
+from catering_system.domain.inquiry_customer_snapshot import (
+    InquiryCustomerSnapshot as _CCSnapshot,
+)
+from catering_system.domain.order_confirmation_document import (
+    SCHEMA_VERSION_V3,
+    OrderConfirmationDocumentSnapshot,
+)
+from catering_system.domain.order_operational_context import (
+    OrderVersionOperationalContextSnapshot,
 )
 from catering_system.repositories.inquiry_repository import (
     DuplicateExternalReferenceError,
@@ -24,22 +33,32 @@ from catering_system.repositories.sqlite_inquiry_repository import (
     SQLiteInquiryRepository,
 )
 from catering_system.repositories.sqlite_migrations import apply_migrations
+from catering_system.repositories.sqlite_order_confirmation_document_repository import (
+    SQLiteOrderConfirmationDocumentRepository,
+)
 from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepository
 from catering_system.services.operational_core_service import OperationalCoreService
 from catering_system.services.order_service import OrderService
 from catering_system.services.progression_service import ProgressionService
-
-from catering_system.domain.inquiry_customer_snapshot import (
-    InquiryCustomerSnapshot as _CCSnapshot,
-)
+from tests.helpers.order_seed import seed_order
 
 _CONTACT_COMPLETE_SNAPSHOT = _CCSnapshot(
-    email="kunde@example.com", phone="+49301234567"
+    company_name="Müller GmbH",
+    contact_name="Anna Müller",
+    email="kunde@example.com",
+    phone="+49301234567",
+    invoice_address=CustomerAddress(
+        street="Alter Wall 22",
+        postal_code="20457",
+        city="Hamburg",
+        country="Deutschland",
+    ),
+    delivery_address_mode="SAME_AS_INVOICE",
 )
 
 
 def _sample_inquiry() -> Inquiry:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return Inquiry(
         inquiry_id="11111111-1111-1111-1111-111111111111",
         event_date=date(2026, 10, 1),
@@ -59,6 +78,53 @@ def _sample_inquiry() -> Inquiry:
         intake_summary="Zusammenfassung",
         intake_external_ref="ref-1",
         customer_snapshot=_CONTACT_COMPLETE_SNAPSHOT,
+    )
+
+
+def _confirmation_snapshot(
+    order_id: str,
+    order_version_id: str,
+    *,
+    created_at: datetime,
+) -> OrderConfirmationDocumentSnapshot:
+    address = CustomerAddress(
+        street="Backfill Straße 1",
+        postal_code="20457",
+        city="Hamburg",
+        country="Deutschland",
+    )
+    return OrderConfirmationDocumentSnapshot(
+        document_snapshot_id=f"doc-{order_version_id}",
+        order_id=order_id,
+        order_version_id=order_version_id,
+        offer_id="offer-1",
+        offer_version_id="offer-version-1",
+        document_reference="AB-TEST-V1",
+        created_at=created_at,
+        created_by="office",
+        recipient_name="Backfill Anna",
+        recipient_email="backfill@example.invalid",
+        recipient_company="Backfill GmbH",
+        recipient_phone="+4940999",
+        recipient_status="ready",
+        event_date=date(2026, 10, 1),
+        time_window_text="mittags",
+        location_text="Hamburg",
+        guest_count_estimate=25,
+        planning_mode=PLANNING_MODES[0],
+        positions=(),
+        vat_buckets=(),
+        net_total_cents=1000,
+        vat_total_cents=190,
+        gross_total_cents=1190,
+        payment_method="RECHNUNG",
+        payment_customer_visible_text="Zahlung per Rechnung",
+        document_hash="sha256:" + ("0" * 64),
+        schema_version=SCHEMA_VERSION_V3,
+        invoice_address=address,
+        delivery_address=address,
+        delivery_address_differs=False,
+        fulfillment_mode="DELIVERY",
     )
 
 
@@ -96,7 +162,7 @@ def test_sqlite_inquiry_migration_from_pre_intake_context_schema(
         );
         """
     )
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     conn.execute(
         "INSERT INTO inquiries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
@@ -259,6 +325,98 @@ def test_order_roundtrip_and_version_ordering(tmp_path: Path) -> None:
     assert rows[1] == v2
 
 
+def test_order_operational_context_backfill_from_exact_confirmation_snapshot(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "test.db"
+    orders = SQLiteOrderRepository(db)
+    order, version = seed_order(orders, _sample_inquiry())
+    confirmations = SQLiteOrderConfirmationDocumentRepository(db)
+    confirmations.insert(
+        _confirmation_snapshot(
+            order.order_id,
+            version.order_version_id,
+            created_at=datetime.now(UTC),
+        )
+    )
+
+    reopened = SQLiteOrderRepository(db)
+    context = reopened.get_operational_context(version.order_version_id)
+    assert context is not None
+    assert context.recipient_company == "Backfill GmbH"
+    assert context.recipient_name == "Backfill Anna"
+    assert context.recipient_phone == "+4940999"
+    assert context.delivery_address is not None
+    assert context.delivery_address.street == "Backfill Straße 1"
+    assert context.source == "confirmation_snapshot_backfill"
+
+    reopened_again = SQLiteOrderRepository(db)
+    assert reopened_again.get_operational_context(version.order_version_id) == context
+
+
+def test_order_operational_context_backfill_requires_exact_version(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "test.db"
+    orders = SQLiteOrderRepository(db)
+    order, v1 = seed_order(orders, _sample_inquiry())
+    v2 = OrderService(orders).create_relevant_order_change_version(
+        order,
+        event_date=date(2026, 10, 2),
+        time_window_text="abends",
+        location_text="Hamburg",
+        guest_count_estimate=30,
+        planning_mode=PLANNING_MODES[0],
+    )
+    confirmations = SQLiteOrderConfirmationDocumentRepository(db)
+    confirmations.insert(
+        _confirmation_snapshot(
+            order.order_id,
+            v1.order_version_id,
+            created_at=datetime.now(UTC),
+        )
+    )
+
+    reopened = SQLiteOrderRepository(db)
+    assert reopened.get_operational_context(v1.order_version_id) is not None
+    assert reopened.get_operational_context(v2.order_version_id) is None
+
+
+def test_order_operational_context_snapshot_is_immutable(tmp_path: Path) -> None:
+    db = tmp_path / "test.db"
+    orders = SQLiteOrderRepository(db)
+    order, version = seed_order(orders, _sample_inquiry())
+    confirmations = SQLiteOrderConfirmationDocumentRepository(db)
+    confirmations.insert(
+        _confirmation_snapshot(
+            order.order_id,
+            version.order_version_id,
+            created_at=datetime.now(UTC),
+        )
+    )
+    orders.close()
+
+    reopened = SQLiteOrderRepository(db)
+    assert reopened.get_operational_context(version.order_version_id) is not None
+    with pytest.raises(sqlite3.DatabaseError, match="operational context is immutable"):
+        reopened._conn.execute(
+            """
+            UPDATE order_version_operational_context_snapshots
+            SET recipient_name = ?
+            WHERE order_version_id = ?
+            """,
+            ("Mutation", version.order_version_id),
+        )
+    with pytest.raises(sqlite3.DatabaseError, match="operational context is immutable"):
+        reopened._conn.execute(
+            """
+            DELETE FROM order_version_operational_context_snapshots
+            WHERE order_version_id = ?
+            """,
+            (version.order_version_id,),
+        )
+
+
 def test_initial_order_and_version_creation_rolls_back_together(tmp_path: Path) -> None:
     """A failed v1 insert must not leave an order without its initial version."""
     repo = SQLiteOrderRepository(tmp_path / "test.db")
@@ -266,6 +424,7 @@ def test_initial_order_and_version_creation_rolls_back_together(tmp_path: Path) 
     new_order = replace(
         existing_order,
         order_id="new-order",
+        source_inquiry_id="22222222-2222-2222-2222-222222222222",
         candidate_order_version_id=None,
         effective_order_version_id=None,
     )
@@ -276,6 +435,77 @@ def test_initial_order_and_version_creation_rolls_back_together(tmp_path: Path) 
 
     assert repo.get_order(new_order.order_id) is None
     assert repo.get_order_version(existing_v1.order_version_id) == existing_v1
+
+
+def test_initial_operational_context_failure_rolls_back_order_version(
+    tmp_path: Path,
+) -> None:
+    repo = SQLiteOrderRepository(tmp_path / "test.db")
+    existing_order, existing_v1 = seed_order(repo, _sample_inquiry())
+    new_order = replace(
+        existing_order,
+        order_id="new-order",
+        source_inquiry_id="33333333-3333-3333-3333-333333333333",
+        candidate_order_version_id=None,
+        effective_order_version_id=None,
+    )
+    new_v1 = replace(
+        existing_v1,
+        order_id=new_order.order_id,
+        order_version_id="new-version",
+    )
+    bad_context = OrderVersionOperationalContextSnapshot(
+        order_version_id=existing_v1.order_version_id,
+        order_id=existing_order.order_id,
+        recipient_company="Bad GmbH",
+        recipient_name="Bad",
+        recipient_phone="+490",
+        delivery_address=None,
+        created_at=datetime.now(UTC),
+        source="explicit_change",
+    )
+
+    with pytest.raises(ValueError, match="operational context owner is invalid"):
+        repo.save_order_with_initial_version(new_order, new_v1, bad_context)
+
+    assert repo.get_order(new_order.order_id) is None
+    assert repo.get_order_version(new_v1.order_version_id) is None
+    assert repo.get_operational_context(new_v1.order_version_id) is None
+
+
+def test_append_operational_context_failure_rolls_back_version_order_and_context(
+    tmp_path: Path,
+) -> None:
+    repo = SQLiteOrderRepository(tmp_path / "test.db")
+    order, v1 = seed_order(repo, _sample_inquiry())
+    updated_order = replace(
+        order,
+        updated_at=order.updated_at + timedelta(minutes=1),
+        candidate_order_version_id="new-version",
+    )
+    new_v2 = replace(
+        v1,
+        order_version_id="new-version",
+        version_number=2,
+        parent_order_version_id=v1.order_version_id,
+    )
+    bad_context = OrderVersionOperationalContextSnapshot(
+        order_version_id=v1.order_version_id,
+        order_id=order.order_id,
+        recipient_company="Bad GmbH",
+        recipient_name="Bad",
+        recipient_phone="+490",
+        delivery_address=None,
+        created_at=datetime.now(UTC),
+        source="explicit_change",
+    )
+
+    with pytest.raises(ValueError, match="operational context owner is invalid"):
+        repo.append_order_version(updated_order, new_v2, bad_context)
+
+    assert repo.get_order(order.order_id) == order
+    assert repo.get_order_version(new_v2.order_version_id) is None
+    assert repo.get_operational_context(new_v2.order_version_id) is None
 
 
 def test_initial_version_must_belong_to_order_and_be_v1(tmp_path: Path) -> None:
@@ -406,6 +636,7 @@ def test_component_migrations_are_recorded_once(tmp_path: Path) -> None:
         ("orders", 5),
         ("orders", 6),  # PROXMOX pack §6.2: unique active source inquiry
         ("orders", 7),  # immutable change provenance + snapshot guard
+        ("orders", 8),  # frozen operational context per order version
     ]
 
 

@@ -12,8 +12,9 @@ import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 
+from catering_system.domain.customer_document_projection import CustomerAddress
 from catering_system.domain.inquiry import (
     Inquiry,
     validate_planning_mode,
@@ -24,13 +25,18 @@ from catering_system.domain.operational_core_events import (
     OrderVersionChangeProposed,
 )
 from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.order_operational_context import (
+    OrderOperationalContextData,
+    OrderVersionOperationalContextSnapshot,
+    copy_operational_context_for_version,
+)
 from catering_system.repositories.order_repository import OrderRepository
 
 _log = logging.getLogger(__name__)
 
 
 def _utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class OrderService:
@@ -89,6 +95,7 @@ class OrderService:
         self,
         source_inquiry_id: str,
         offer_version: CommercialOfferVersion,
+        inquiry: Inquiry | None = None,
     ) -> tuple[Order, OrderVersion]:
         """Create Order + v1 from commercial OfferVersion facts (not Inquiry)."""
         now = _utc_now()
@@ -110,7 +117,12 @@ class OrderService:
             guest_count_estimate=offer_version.guest_count,
             planning_mode=offer_version.planning_mode,
         )
-        self._order_repository.save_order_with_initial_version(order, version)
+        context = (
+            _initial_operational_context(order, version, inquiry, created_at=now)
+            if inquiry is not None
+            else None
+        )
+        self._order_repository.save_order_with_initial_version(order, version, context)
         _log.info(
             "create_order_from_offer_version inquiry_id=%s order_id=%s version=%s",
             source_inquiry_id,
@@ -128,6 +140,7 @@ class OrderService:
         location_text: str,
         guest_count_estimate: int | None,
         planning_mode: str,
+        operational_context: OrderOperationalContextData | None = None,
     ) -> OrderVersion:
         """Append a new OrderVersion; increments version_number; does not select any version as active."""
         current = self._order_repository.get_order(order.order_id)
@@ -152,8 +165,15 @@ class OrderService:
             guest_count_estimate=guest_count_estimate,
             planning_mode=pm,
         )
+        context = _operational_context_for_new_version(
+            order_repository=self._order_repository,
+            order=current,
+            version=version,
+            data=operational_context,
+            created_at=now,
+        )
         self._order_repository.append_order_version(
-            replace(current, updated_at=now), version
+            replace(current, updated_at=now), version, context
         )
         _log.info(
             "create_relevant_order_change_version order_id=%s version=%s",
@@ -173,6 +193,7 @@ class OrderService:
         planning_mode: str,
         actor_reference: str,
         change_reason: str,
+        operational_context: OrderOperationalContextData | None = None,
     ) -> OrderVersion:
         """Append an immutable snapshot and atomically make it current candidate.
 
@@ -233,7 +254,14 @@ class OrderService:
             candidate_order_version_id=version.order_version_id,
             updated_at=now,
         )
-        self._order_repository.append_order_version(updated, version)
+        context = _operational_context_for_new_version(
+            order_repository=self._order_repository,
+            order=current,
+            version=version,
+            data=operational_context,
+            created_at=now,
+        )
+        self._order_repository.append_order_version(updated, version, context)
         if (
             previous_candidate_id is not None
             and previous_candidate_id != current.effective_order_version_id
@@ -316,3 +344,103 @@ class OrderService:
         if not cid:
             return None
         return self._order_repository.get_order_version(cid)
+
+
+def _initial_operational_context(
+    order: Order,
+    version: OrderVersion,
+    inquiry: Inquiry,
+    *,
+    created_at: datetime,
+) -> OrderVersionOperationalContextSnapshot:
+    snapshot = inquiry.customer_snapshot
+    delivery_address: CustomerAddress | None = None
+    if snapshot is not None and inquiry.fulfillment_mode != "PICKUP":
+        if snapshot.delivery_address_mode == "SAME_AS_INVOICE":
+            delivery_address = snapshot.invoice_address
+        elif snapshot.delivery_address_mode == "SEPARATE":
+            delivery_address = snapshot.delivery_address
+    return OrderVersionOperationalContextSnapshot(
+        order_version_id=version.order_version_id,
+        order_id=order.order_id,
+        recipient_company=(
+            (snapshot.company_name or "").strip() or None
+            if snapshot is not None
+            else None
+        ),
+        recipient_name=(
+            (snapshot.contact_name or "").strip() or None
+            if snapshot is not None
+            else None
+        ),
+        recipient_phone=(
+            (snapshot.phone or "").strip() or None if snapshot is not None else None
+        ),
+        delivery_address=delivery_address,
+        created_at=created_at,
+        source="initial_inquiry_snapshot",
+    )
+
+
+def _inherited_operational_context(
+    order_repository: OrderRepository,
+    parent_id: str,
+    version: OrderVersion,
+    *,
+    created_at: datetime,
+) -> OrderVersionOperationalContextSnapshot | None:
+    parent = order_repository.get_operational_context(parent_id)
+    if parent is None:
+        return None
+    return copy_operational_context_for_version(
+        parent,
+        order_version_id=version.order_version_id,
+        order_id=version.order_id,
+        created_at=created_at,
+        source="inherited_parent",
+    )
+
+
+def _operational_context_for_new_version(
+    *,
+    order_repository: OrderRepository,
+    order: Order,
+    version: OrderVersion,
+    data: OrderOperationalContextData | None,
+    created_at: datetime,
+) -> OrderVersionOperationalContextSnapshot | None:
+    if data is not None:
+        return _explicit_operational_context(
+            order=order,
+            version=version,
+            data=data,
+            created_at=created_at,
+        )
+    parent_id = version.parent_order_version_id
+    if parent_id is None:
+        return None
+    return _inherited_operational_context(
+        order_repository,
+        parent_id,
+        version,
+        created_at=created_at,
+    )
+
+
+def _explicit_operational_context(
+    *,
+    order: Order,
+    version: OrderVersion,
+    data: OrderOperationalContextData,
+    created_at: datetime,
+) -> OrderVersionOperationalContextSnapshot:
+    return OrderVersionOperationalContextSnapshot(
+        order_version_id=version.order_version_id,
+        order_id=order.order_id,
+        recipient_company=data.recipient_company,
+        recipient_name=data.recipient_name,
+        recipient_phone=data.recipient_phone,
+        delivery_address=data.delivery_address,
+        created_at=created_at,
+        source="explicit_change",
+    )

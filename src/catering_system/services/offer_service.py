@@ -14,9 +14,9 @@ from catering_system.domain.inquiry_contact_completeness import (
     inquiry_contact_complete,
 )
 from catering_system.domain.inquiry_offer_preparation import (
-    InquiryOfferPreparationBlocker,
     REASON_ACTIVE_ORDER_EXISTS,
     REASON_OFFER_ALREADY_EXISTS,
+    InquiryOfferPreparationBlocker,
     evaluate_inquiry_offer_preparation,
 )
 from catering_system.domain.offer import (
@@ -40,27 +40,27 @@ from catering_system.domain.offer import (
     offer_allows_withdrawal,
     offer_has_newer_open_version,
 )
-from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.offer_snapshot import (
     OfferSnapshotPosition,
     OfferSnapshotV1,
     OfferSnapshotV2,
     OfferSnapshotVariant,
 )
-from catering_system.repositories.inquiry_repository import InquiryRepository
+from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.order_commercial_snapshot import (
+    build_order_commercial_snapshot,
+)
 from catering_system.repositories.in_memory_order_commercial_snapshot_repository import (
     InMemoryOrderCommercialSnapshotRepository,
 )
+from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.repositories.offer_repository import OfferRepository
 from catering_system.repositories.order_commercial_snapshot_repository import (
     OrderCommercialSnapshotRepository,
 )
 from catering_system.repositories.order_repository import OrderRepository
-from catering_system.services.order_service import OrderService
 from catering_system.services.offer_snapshot_validation import validate_offer_snapshot
-from catering_system.domain.order_commercial_snapshot import (
-    build_order_commercial_snapshot,
-)
+from catering_system.services.order_service import OrderService
 
 _log = logging.getLogger(__name__)
 
@@ -580,6 +580,7 @@ class OfferService:
         order, order_version = self._order_service.create_order_from_offer_version(
             offer.source_inquiry_id,
             version,
+            inquiry,
         )
         acceptance = offer.acceptance_evidence
         if acceptance is None or acceptance.acceptance_id != acceptance_id:
