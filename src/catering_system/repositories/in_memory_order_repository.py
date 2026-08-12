@@ -5,15 +5,24 @@ from __future__ import annotations
 from dataclasses import replace
 
 from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.order_operational_context import (
+    OrderVersionOperationalContextSnapshot,
+)
 
 
 class InMemoryOrderRepository:
     def __init__(self) -> None:
         self._orders: dict[str, Order] = {}
         self._versions: dict[str, OrderVersion] = {}
+        self._operational_contexts: dict[
+            str, OrderVersionOperationalContextSnapshot
+        ] = {}
 
     def save_order_with_initial_version(
-        self, order: Order, version: OrderVersion
+        self,
+        order: Order,
+        version: OrderVersion,
+        operational_context: OrderVersionOperationalContextSnapshot | None = None,
     ) -> None:
         """Persist both initial records as one in-memory state change."""
         if version.order_id != order.order_id or version.version_number != 1:
@@ -32,11 +41,18 @@ class InMemoryOrderRepository:
             )
         next_orders = dict(self._orders)
         next_versions = dict(self._versions)
+        next_contexts = dict(self._operational_contexts)
         next_versions[version.order_version_id] = version
         self._validate_order_references(order, next_versions)
+        if operational_context is not None:
+            self._validate_operational_context(version, operational_context)
+            if operational_context.order_version_id in next_contexts:
+                raise KeyError(operational_context.order_version_id)
+            next_contexts[operational_context.order_version_id] = operational_context
         next_orders[order.order_id] = order
         self._orders = next_orders
         self._versions = next_versions
+        self._operational_contexts = next_contexts
 
     def get_order(self, order_id: str) -> Order | None:
         return self._orders.get(order_id)
@@ -50,7 +66,12 @@ class InMemoryOrderRepository:
         self._validate_order_references(order, self._versions)
         self._orders[order.order_id] = order
 
-    def append_order_version(self, order: Order, version: OrderVersion) -> None:
+    def append_order_version(
+        self,
+        order: Order,
+        version: OrderVersion,
+        operational_context: OrderVersionOperationalContextSnapshot | None = None,
+    ) -> None:
         """Append a version and update its aggregate root as one state change."""
         if version.order_id != order.order_id or version.version_number < 1:
             raise ValueError("version must belong to the supplied order")
@@ -69,11 +90,18 @@ class InMemoryOrderRepository:
             )
         next_orders = dict(self._orders)
         next_versions = dict(self._versions)
+        next_contexts = dict(self._operational_contexts)
         next_versions[version.order_version_id] = version
         self._validate_order_references(order, next_versions)
+        if operational_context is not None:
+            self._validate_operational_context(version, operational_context)
+            if operational_context.order_version_id in next_contexts:
+                raise KeyError(operational_context.order_version_id)
+            next_contexts[operational_context.order_version_id] = operational_context
         next_orders[order.order_id] = order
         self._orders = next_orders
         self._versions = next_versions
+        self._operational_contexts = next_contexts
 
     def update_order_version(self, version: OrderVersion) -> None:
         existing = self._versions.get(version.order_version_id)
@@ -115,3 +143,19 @@ class InMemoryOrderRepository:
     def list_order_versions(self, order_id: str) -> list[OrderVersion]:
         rows = [v for v in self._versions.values() if v.order_id == order_id]
         return sorted(rows, key=lambda v: v.version_number)
+
+    def get_operational_context(
+        self, order_version_id: str
+    ) -> OrderVersionOperationalContextSnapshot | None:
+        return self._operational_contexts.get(order_version_id)
+
+    @staticmethod
+    def _validate_operational_context(
+        version: OrderVersion,
+        context: OrderVersionOperationalContextSnapshot,
+    ) -> None:
+        if (
+            context.order_version_id != version.order_version_id
+            or context.order_id != version.order_id
+        ):
+            raise ValueError("operational context owner is invalid")

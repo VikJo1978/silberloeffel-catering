@@ -130,10 +130,13 @@ def test_order_with_offer_conversion_has_menu_positions() -> None:
 
     sheet = render_print_sheet(projection)
     assert "Bestellung / Menü" in sheet
+    assert "@page{size:A4 portrait" in sheet
+    assert "Version 1" in sheet
     assert "Fingerfood Paket" in sheet
     assert "Frozen description" in sheet
     assert "80 Stück" in sheet
     assert "Frozen customization" in sheet
+    assert "Stand Version" not in sheet
     assert "guest_count_estimate" not in sheet
     assert "caterer_suggestion" not in sheet
     assert order.order_id not in sheet
@@ -177,13 +180,6 @@ def test_kitchen_sheet_shows_existing_customer_contact_and_delivery_address() ->
         variant_id,
         acceptance_id,
     )
-    confirmations = InMemoryOrderConfirmationDocumentRepository()
-    _insert_confirmation_snapshot(
-        confirmations,
-        order_id=order.order_id,
-        order_version_id=order_version.order_version_id,
-        event_date=order_version.event_date,
-    )
     inquiries.update(
         replace(
             inquiry,
@@ -206,7 +202,6 @@ def test_kitchen_sheet_shows_existing_customer_contact_and_delivery_address() ->
     projection = _projection_service(
         orders,
         service._commercial_snapshots,
-        confirmations,
     ).resolve(order.order_id, order_version.order_version_id)
     sheet = render_print_sheet(projection)
 
@@ -219,6 +214,30 @@ def test_kitchen_sheet_shows_existing_customer_contact_and_delivery_address() ->
     assert "Live Mutation" not in sheet
     assert "Mutable Weg" not in sheet
     assert "Sonstiges" not in sheet
+
+
+def test_kitchen_sheet_missing_operational_context_shows_blank_facts() -> None:
+    offer, version_id, variant_id, acceptance_id, _offers, orders, _inq, service = (
+        _accepted_offer_state()
+    )
+    _converted, order, version = service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
+    )
+    orders._operational_contexts.pop(version.order_version_id, None)
+    projection = _projection_service(orders, service._commercial_snapshots).resolve(
+        order.order_id,
+        version.order_version_id,
+    )
+
+    sheet = render_print_sheet(projection)
+
+    assert "<dt>Kunde / Firma</dt><dd>–</dd>" in sheet
+    assert "<dt>Ansprechpartner</dt><dd>–</dd>" in sheet
+    assert "<dt>Telefonnummer</dt><dd>–</dd>" in sheet
+    assert "<dt>Lieferadresse</dt><dd>–</dd>" in sheet
 
 
 def test_kitchen_sheet_cash_block_only_for_barzahlung() -> None:
@@ -337,6 +356,7 @@ def test_new_order_version_uses_version_facts_and_accepted_offer_menu() -> None:
     sheet = render_print_sheet(projection)
     assert "Lübeck" in sheet
     assert "Version 2" in sheet
+    assert "Stand Version" not in sheet
     assert "Fingerfood Paket" in sheet
 
 
@@ -415,7 +435,7 @@ def test_candidate_change_preview_contains_reason_diff_and_frozen_offer_menu() -
     core = OperationalCoreService(orders)
     core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     core.make_order_version_effective(order.order_id, v1.order_version_id)
-    v2 = OrderService(orders).propose_order_version_change(
+    intermediate = OrderService(orders).propose_order_version_change(
         order.order_id,
         event_date=v1.event_date,
         time_window_text=v1.time_window_text,
@@ -425,19 +445,33 @@ def test_candidate_change_preview_contains_reason_diff_and_frozen_offer_menu() -
         actor_reference="office-panel",
         change_reason="Anzahl geändert",
     )
+    core.confirm_kitchen_print(order.order_id, intermediate.order_version_id)
+    core.make_order_version_effective(order.order_id, intermediate.order_version_id)
+    v2 = OrderService(orders).propose_order_version_change(
+        order.order_id,
+        event_date=intermediate.event_date,
+        time_window_text=intermediate.time_window_text,
+        location_text=intermediate.location_text,
+        guest_count_estimate=40,
+        planning_mode=intermediate.planning_mode,
+        actor_reference="office-panel",
+        change_reason="anzahl",
+    )
     service = _projection_service(orders, offer_service._commercial_snapshots)
-    effective = service.resolve(order.order_id, v1.order_version_id)
+    effective = service.resolve(order.order_id, intermediate.order_version_id)
     candidate = service.resolve(order.order_id, v2.order_version_id)
 
     assert candidate.flags.intent == "change_preview"
     assert candidate.flags.watermark == "ÄNDERUNG – NOCH NICHT WIRKSAM"
-    assert candidate.event.change_reason == "Anzahl geändert"
+    assert candidate.event.change_reason == "anzahl"
     assert candidate.event.changed_fields == ("guest_count_estimate",)
     assert candidate.commercial.positions == effective.commercial.positions
     sheet = render_print_sheet(candidate)
     assert "ÄNDERUNG – NOCH NICHT WIRKSAM" in sheet
-    assert "Anzahl geändert" in sheet
-    assert "Gästezahl geändert: 80 → 35" in sheet
+    assert "Version 3" in sheet
+    assert "Gästezahl geändert: 35 → 40" in sheet
+    assert "Anzahl geändert" not in sheet
+    assert "anzahl" not in sheet
     assert "guest_count_estimate" not in sheet
 
 

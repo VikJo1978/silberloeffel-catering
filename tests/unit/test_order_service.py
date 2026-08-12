@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import sys
 from dataclasses import fields, replace
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -13,26 +13,42 @@ _SRC = Path(__file__).resolve().parents[2] / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))
 
-from tests.helpers.order_seed import seed_order
-
+from catering_system.domain.customer_document_projection import CustomerAddress
 from catering_system.domain.inquiry import (
     CALL_VERIFICATION_STATUSES,
     CRM_PIPELINE,
-    Inquiry,
     PLANNING_MODES,
+    Inquiry,
 )
-from catering_system.domain.order import Order, OrderVersion
-from catering_system.repositories.in_memory_order_repository import (
-    InMemoryOrderRepository,
-)
-from catering_system.services.order_service import OrderService
-
 from catering_system.domain.inquiry_customer_snapshot import (
     InquiryCustomerSnapshot as _CCSnapshot,
 )
+from catering_system.domain.offer import OfferPosition, OfferVariant, OfferVersion
+from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.order_operational_context import (
+    OrderOperationalContextData,
+)
+from catering_system.repositories.in_memory_order_repository import (
+    InMemoryOrderRepository,
+)
+from catering_system.services.order_service import (
+    OrderService,
+    _operational_context_for_new_version,
+)
+from tests.helpers.order_seed import seed_order
 
 _CONTACT_COMPLETE_SNAPSHOT = _CCSnapshot(
-    email="kunde@example.com", phone="+49301234567"
+    company_name="Müller GmbH",
+    contact_name="Anna Müller",
+    email="kunde@example.com",
+    phone="+49301234567",
+    invoice_address=CustomerAddress(
+        street="Alter Wall 22",
+        postal_code="20457",
+        city="Hamburg",
+        country="Deutschland",
+    ),
+    delivery_address_mode="SAME_AS_INVOICE",
 )
 
 _B3_FORBIDDEN_FIELD_NAMES = frozenset(
@@ -53,7 +69,7 @@ def _module_source_lower(module: object) -> str:
 
 
 def _sample_inquiry() -> Inquiry:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return Inquiry(
         inquiry_id="11111111-1111-1111-1111-111111111111",
         event_date=date(2026, 10, 1),
@@ -69,6 +85,44 @@ def _sample_inquiry() -> Inquiry:
         call_verification_required=False,
         call_verification_status=CALL_VERIFICATION_STATUSES[0],
         customer_snapshot=_CONTACT_COMPLETE_SNAPSHOT,
+    )
+
+
+def _offer_version_from_inquiry(inquiry: Inquiry) -> OfferVersion:
+    return OfferVersion(
+        offer_version_id="offer-version-1",
+        offer_id="offer-1",
+        version_number=1,
+        created_at=inquiry.created_at,
+        valid_until=inquiry.event_date,
+        snapshot_id="snapshot-1",
+        snapshot_hash="sha256:" + ("0" * 64),
+        event_date=inquiry.event_date,
+        time_window_text=inquiry.time_window_text,
+        location_text=inquiry.location_text,
+        guest_count=inquiry.guest_count_estimate,
+        planning_mode=inquiry.planning_mode,
+        payment_method="RECHNUNG",
+        payment_customer_visible_text="Zahlung per Rechnung",
+        variants=(
+            OfferVariant(
+                variant_id="variant-1",
+                offer_version_id="offer-version-1",
+                label="Standard",
+                positions=(
+                    OfferPosition(
+                        position_id="position-1",
+                        kind="catalog",
+                        name="Menü",
+                        unit_net_cents=100,
+                        net_total_cents=100,
+                        vat_rate_percent=7,
+                        vat_amount_cents=7,
+                        gross_total_cents=107,
+                    ),
+                ),
+            ),
+        ),
     )
 
 
@@ -113,6 +167,203 @@ def test_create_relevant_order_change_version_second_preserves_first() -> None:
     updated_order = repo.get_order(order.order_id)
     assert updated_order is not None
     assert updated_order.updated_at >= order.updated_at
+
+
+def test_initial_version_stores_frozen_operational_context() -> None:
+    repo = InMemoryOrderRepository()
+    svc = OrderService(repo)
+    order, version = svc.create_order_from_offer_version(
+        _sample_inquiry().inquiry_id,
+        _offer_version_from_inquiry(_sample_inquiry()),
+        _sample_inquiry(),
+    )
+
+    context = repo.get_operational_context(version.order_version_id)
+    assert context is not None
+    assert context.order_id == order.order_id
+    assert context.recipient_company == "Müller GmbH"
+    assert context.recipient_name == "Anna Müller"
+    assert context.recipient_phone == "+49301234567"
+    assert context.delivery_address is not None
+    assert context.delivery_address.street == "Alter Wall 22"
+    assert context.source == "initial_inquiry_snapshot"
+
+
+def test_child_version_inherits_parent_operational_context_not_live_inquiry() -> None:
+    inquiry = _sample_inquiry()
+    repo = InMemoryOrderRepository()
+    svc = OrderService(repo)
+    order, v1 = svc.create_order_from_offer_version(
+        inquiry.inquiry_id,
+        _offer_version_from_inquiry(inquiry),
+        inquiry,
+    )
+    mutated = replace(
+        inquiry,
+        customer_snapshot=replace(
+            inquiry.customer_snapshot,
+            company_name="Live Mutation GmbH",
+            contact_name="Live Mutation",
+        ),
+    )
+    v2 = svc.propose_order_version_change(
+        order.order_id,
+        event_date=v1.event_date,
+        time_window_text=v1.time_window_text,
+        location_text=v1.location_text,
+        guest_count_estimate=40,
+        planning_mode=v1.planning_mode,
+        actor_reference="office",
+        change_reason="anzahl",
+    )
+
+    v1_context = repo.get_operational_context(v1.order_version_id)
+    v2_context = repo.get_operational_context(v2.order_version_id)
+    assert mutated.customer_snapshot is not None
+    assert mutated.customer_snapshot.company_name == "Live Mutation GmbH"
+    assert v1_context is not None
+    assert v2_context is not None
+    assert v2_context.order_version_id == v2.order_version_id
+    assert v2_context.recipient_company == v1_context.recipient_company
+    assert v2_context.recipient_company == "Müller GmbH"
+    assert v2_context.source == "inherited_parent"
+    assert v1_context is not v2_context
+
+
+def test_explicit_operational_context_change_and_grandchild_inheritance() -> None:
+    inquiry = _sample_inquiry()
+    repo = InMemoryOrderRepository()
+    svc = OrderService(repo)
+    order, v1 = svc.create_order_from_offer_version(
+        inquiry.inquiry_id,
+        _offer_version_from_inquiry(inquiry),
+        inquiry,
+    )
+    new_address = CustomerAddress(
+        street="Neuer Weg 5",
+        postal_code="20095",
+        city="Hamburg",
+        country="Deutschland",
+    )
+    explicit = OrderOperationalContextData(
+        recipient_company="Neue Firma GmbH",
+        recipient_name="Nina Neu",
+        recipient_phone="+494012345",
+        delivery_address=new_address,
+    )
+    v2 = svc.propose_order_version_change(
+        order.order_id,
+        event_date=v1.event_date,
+        time_window_text=v1.time_window_text,
+        location_text=v1.location_text,
+        guest_count_estimate=40,
+        planning_mode=v1.planning_mode,
+        actor_reference="office",
+        change_reason="adresse",
+        operational_context=explicit,
+    )
+    v1_context = repo.get_operational_context(v1.order_version_id)
+    v2_context = repo.get_operational_context(v2.order_version_id)
+    assert v1_context is not None
+    assert v2_context is not None
+    assert v1_context.recipient_company == "Müller GmbH"
+    assert v2_context.recipient_company == "Neue Firma GmbH"
+    assert v2_context.delivery_address == new_address
+    assert v2_context.source == "explicit_change"
+
+    v3 = svc.propose_order_version_change(
+        order.order_id,
+        event_date=v2.event_date,
+        time_window_text=v2.time_window_text,
+        location_text=v2.location_text,
+        guest_count_estimate=45,
+        planning_mode=v2.planning_mode,
+        actor_reference="office",
+        change_reason="anzahl",
+    )
+    v3_context = repo.get_operational_context(v3.order_version_id)
+    assert v3_context is not None
+    assert v3_context.recipient_company == "Neue Firma GmbH"
+    assert v3_context.delivery_address == new_address
+    assert v3_context.source == "inherited_parent"
+
+
+def test_operational_context_inherits_from_exact_parent_not_latest_branch() -> None:
+    inquiry = _sample_inquiry()
+    repo = InMemoryOrderRepository()
+    svc = OrderService(repo)
+    order, v1 = svc.create_order_from_offer_version(
+        inquiry.inquiry_id,
+        _offer_version_from_inquiry(inquiry),
+        inquiry,
+    )
+    explicit_b = OrderOperationalContextData(
+        recipient_company="Branch B GmbH",
+        recipient_name="Berta Branch",
+        recipient_phone="+4940555",
+        delivery_address=CustomerAddress(
+            street="Branch Weg 2",
+            postal_code="20095",
+            city="Hamburg",
+            country="Deutschland",
+        ),
+    )
+    v2 = svc.propose_order_version_change(
+        order.order_id,
+        event_date=v1.event_date,
+        time_window_text=v1.time_window_text,
+        location_text=v1.location_text,
+        guest_count_estimate=40,
+        planning_mode=v1.planning_mode,
+        actor_reference="office",
+        change_reason="adresse",
+        operational_context=explicit_b,
+    )
+    v3 = replace(
+        v2,
+        order_version_id="branch-v3",
+        version_number=3,
+        parent_order_version_id=v1.order_version_id,
+    )
+
+    inherited = _operational_context_for_new_version(
+        order_repository=repo,
+        order=order,
+        version=v3,
+        data=None,
+        created_at=v3.created_at,
+    )
+
+    assert inherited is not None
+    assert inherited.order_version_id == v3.order_version_id
+    assert inherited.source == "inherited_parent"
+    assert inherited.recipient_company == "Müller GmbH"
+    assert inherited.recipient_company != "Branch B GmbH"
+    assert repo.get_operational_context(v2.order_version_id).recipient_company == (
+        "Branch B GmbH"
+    )
+
+
+def test_legacy_parent_without_operational_context_does_not_invent_child_context() -> (
+    None
+):
+    repo = InMemoryOrderRepository()
+    svc = OrderService(repo)
+    order, v1 = seed_order(repo, _sample_inquiry())
+
+    v2 = svc.propose_order_version_change(
+        order.order_id,
+        event_date=v1.event_date,
+        time_window_text=v1.time_window_text,
+        location_text=v1.location_text,
+        guest_count_estimate=40,
+        planning_mode=v1.planning_mode,
+        actor_reference="office",
+        change_reason="anzahl",
+    )
+
+    assert repo.get_operational_context(v1.order_version_id) is None
+    assert repo.get_operational_context(v2.order_version_id) is None
 
 
 def test_in_memory_repository_rejects_operational_version_update() -> None:

@@ -13,8 +13,17 @@ from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 
+from catering_system.domain.customer_document_projection import CustomerAddress
 from catering_system.domain.inquiry import validate_planning_mode
+from catering_system.domain.inquiry_customer_snapshot import (
+    customer_address_from_mapping,
+    customer_address_to_mapping,
+)
 from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.order_operational_context import (
+    ORDER_OPERATIONAL_CONTEXT_SOURCES,
+    OrderVersionOperationalContextSnapshot,
+)
 from catering_system.repositories.sqlite_migrations import apply_migrations
 
 _CREATE_ORDERS = """
@@ -113,6 +122,105 @@ _INVARIANT_MUTATION_TRIGGERS = (
             OR NEW.order_id <> orders.order_id))
     BEGIN SELECT RAISE(ABORT, 'order version is referenced'); END""",
 )
+
+
+def _create_operational_context_table(connection: sqlite3.Connection) -> None:
+    connection.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS order_version_operational_context_snapshots (
+            order_version_id TEXT PRIMARY KEY,
+            order_id TEXT NOT NULL,
+            recipient_company TEXT,
+            recipient_name TEXT,
+            recipient_phone TEXT,
+            delivery_address_json TEXT,
+            created_at TEXT NOT NULL,
+            source TEXT NOT NULL,
+            CHECK (
+                source IN (
+                    'initial_inquiry_snapshot',
+                    'inherited_parent',
+                    'explicit_change',
+                    'confirmation_snapshot_backfill'
+                )
+            ),
+            FOREIGN KEY (order_version_id) REFERENCES order_versions(order_version_id),
+            FOREIGN KEY (order_id) REFERENCES orders(order_id)
+        );
+        CREATE TRIGGER IF NOT EXISTS trg_order_version_operational_context_owner_insert
+        BEFORE INSERT ON order_version_operational_context_snapshots
+        WHEN NOT EXISTS (
+            SELECT 1 FROM order_versions v
+            WHERE v.order_version_id = NEW.order_version_id
+              AND v.order_id = NEW.order_id
+        )
+        BEGIN
+            SELECT RAISE(ABORT, 'order version operational context owner is invalid');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_order_version_operational_context_immutable_update
+        BEFORE UPDATE ON order_version_operational_context_snapshots
+        BEGIN
+            SELECT RAISE(ABORT, 'order version operational context is immutable');
+        END;
+        CREATE TRIGGER IF NOT EXISTS trg_order_version_operational_context_immutable_delete
+        BEFORE DELETE ON order_version_operational_context_snapshots
+        BEGIN
+            SELECT RAISE(ABORT, 'order version operational context is immutable');
+        END;
+        """
+    )
+
+
+def _backfill_operational_context_from_confirmations(
+    connection: sqlite3.Connection,
+) -> None:
+    exists = connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' "
+        "AND name = 'order_confirmation_document_snapshots'"
+    ).fetchone()
+    if exists is None:
+        return
+    rows = connection.execute(
+        """
+        SELECT d.canonical_snapshot_json
+        FROM order_confirmation_document_snapshots d
+        JOIN order_versions v ON v.order_version_id = d.order_version_id
+        LEFT JOIN order_version_operational_context_snapshots c
+          ON c.order_version_id = d.order_version_id
+        WHERE c.order_version_id IS NULL
+        """
+    ).fetchall()
+    for (raw,) in rows:
+        payload = json.loads(raw)
+        delivery_address = payload.get("delivery_address")
+        connection.execute(
+            """
+            INSERT OR IGNORE INTO order_version_operational_context_snapshots (
+                order_version_id,
+                order_id,
+                recipient_company,
+                recipient_name,
+                recipient_phone,
+                delivery_address_json,
+                created_at,
+                source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                str(payload["order_version_id"]),
+                str(payload["order_id"]),
+                _optional_text(payload.get("recipient_company")),
+                _optional_text(payload.get("recipient_name")),
+                _optional_text(payload.get("recipient_phone")),
+                (
+                    json.dumps(delivery_address, ensure_ascii=False, sort_keys=True)
+                    if delivery_address is not None
+                    else None
+                ),
+                str(payload["created_at"]),
+                "confirmation_snapshot_backfill",
+            ),
+        )
 
 
 def _migration_1_create_tables(connection: sqlite3.Connection) -> None:
@@ -251,6 +359,11 @@ def _migration_7_immutable_version_change_metadata(
     )
 
 
+def _migration_8_operational_context_snapshots(connection: sqlite3.Connection) -> None:
+    _create_operational_context_table(connection)
+    _backfill_operational_context_from_confirmations(connection)
+
+
 _MIGRATIONS = (
     (1, "create_order_tables", _migration_1_create_tables),
     (2, "add_cancelled_at", _migration_2_add_cancelled_at),
@@ -263,11 +376,39 @@ _MIGRATIONS = (
         "immutable_version_change_metadata",
         _migration_7_immutable_version_change_metadata,
     ),
+    (
+        8,
+        "operational_context_snapshots",
+        _migration_8_operational_context_snapshots,
+    ),
 )
 
 
 def _dt(value: str) -> datetime:
     return datetime.fromisoformat(value)
+
+
+def _optional_text(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _address_json(address: CustomerAddress | None) -> str | None:
+    if address is None:
+        return None
+    return json.dumps(
+        customer_address_to_mapping(address),
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+
+
+def _address_from_json(raw: str | None) -> CustomerAddress | None:
+    if raw is None:
+        return None
+    return customer_address_from_mapping(json.loads(raw))
 
 
 class SQLiteOrderRepository:
@@ -276,7 +417,12 @@ class SQLiteOrderRepository:
         self._manage_transactions = True
         try:
             apply_migrations(self._conn, "orders", _MIGRATIONS)
+            _backfill_operational_context_from_confirmations(self._conn)
+            if self._conn.in_transaction:
+                self._conn.commit()
         except Exception:
+            if self._conn.in_transaction:
+                self._conn.rollback()
             self._conn.close()
             raise
 
@@ -289,9 +435,10 @@ class SQLiteOrderRepository:
         repo._conn = connection
         repo._manage_transactions = False
         apply_migrations(connection, "orders", _MIGRATIONS)
+        _backfill_operational_context_from_confirmations(connection)
         return repo
 
-    def _write_scope(self):  # noqa: ANN202
+    def _write_scope(self):
         # `with self._write_scope():` commits on exit — correct standalone, fatal
         # inside an externally-owned transaction (it would commit half a
         # command). nullcontext leaves control with the coordinator.
@@ -301,7 +448,10 @@ class SQLiteOrderRepository:
         self._conn.close()
 
     def save_order_with_initial_version(
-        self, order: Order, version: OrderVersion
+        self,
+        order: Order,
+        version: OrderVersion,
+        operational_context: OrderVersionOperationalContextSnapshot | None = None,
     ) -> None:
         """Create the aggregate root and v1 in one SQLite transaction."""
         if version.order_id != order.order_id or version.version_number != 1:
@@ -316,6 +466,8 @@ class SQLiteOrderRepository:
                 "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 self._version_values(version),
             )
+            if operational_context is not None:
+                self._insert_operational_context(version, operational_context)
 
     def get_order(self, order_id: str) -> Order | None:
         row = self._conn.execute(
@@ -354,7 +506,12 @@ class SQLiteOrderRepository:
             for r in rows
         ]
 
-    def append_order_version(self, order: Order, version: OrderVersion) -> None:
+    def append_order_version(
+        self,
+        order: Order,
+        version: OrderVersion,
+        operational_context: OrderVersionOperationalContextSnapshot | None = None,
+    ) -> None:
         """Append a version and update its aggregate root in one transaction."""
         if version.order_id != order.order_id or version.version_number < 1:
             raise ValueError("version must belong to the supplied order")
@@ -364,6 +521,8 @@ class SQLiteOrderRepository:
                 "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 self._version_values(version),
             )
+            if operational_context is not None:
+                self._insert_operational_context(version, operational_context)
             updated = self._update_order_row(order)
             if updated != 1:
                 raise KeyError(order.order_id)
@@ -411,6 +570,43 @@ class SQLiteOrderRepository:
             """,
             self._order_values(order)[1:] + (order.order_id,),
         ).rowcount
+
+    def _insert_operational_context(
+        self,
+        version: OrderVersion,
+        context: OrderVersionOperationalContextSnapshot,
+    ) -> None:
+        if (
+            context.order_version_id != version.order_version_id
+            or context.order_id != version.order_id
+        ):
+            raise ValueError("operational context owner is invalid")
+        if context.source not in ORDER_OPERATIONAL_CONTEXT_SOURCES:
+            raise ValueError("invalid operational context source")
+        self._conn.execute(
+            """
+            INSERT INTO order_version_operational_context_snapshots (
+                order_version_id,
+                order_id,
+                recipient_company,
+                recipient_name,
+                recipient_phone,
+                delivery_address_json,
+                created_at,
+                source
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                context.order_version_id,
+                context.order_id,
+                context.recipient_company,
+                context.recipient_name,
+                context.recipient_phone,
+                _address_json(context.delivery_address),
+                context.created_at.isoformat(),
+                context.source,
+            ),
+        )
 
     @staticmethod
     def _order_values(order: Order) -> tuple:
@@ -460,6 +656,34 @@ class SQLiteOrderRepository:
             (order_id,),
         ).fetchall()
         return [self._row_to_version(r) for r in rows]
+
+    def get_operational_context(
+        self, order_version_id: str
+    ) -> OrderVersionOperationalContextSnapshot | None:
+        row = self._conn.execute(
+            """
+            SELECT order_version_id, order_id, recipient_company, recipient_name,
+                   recipient_phone, delivery_address_json, created_at, source
+            FROM order_version_operational_context_snapshots
+            WHERE order_version_id = ?
+            """,
+            (order_version_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        source = row[7]
+        if source not in ORDER_OPERATIONAL_CONTEXT_SOURCES:
+            raise ValueError("invalid operational context source")
+        return OrderVersionOperationalContextSnapshot(
+            order_version_id=row[0],
+            order_id=row[1],
+            recipient_company=row[2],
+            recipient_name=row[3],
+            recipient_phone=row[4],
+            delivery_address=_address_from_json(row[5]),
+            created_at=_dt(row[6]),
+            source=source,
+        )
 
     @staticmethod
     def _row_to_version(row: tuple) -> OrderVersion:
