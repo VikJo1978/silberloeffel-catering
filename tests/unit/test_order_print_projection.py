@@ -143,6 +143,48 @@ def test_order_with_offer_conversion_has_menu_positions() -> None:
     assert order_version.order_version_id not in sheet
 
 
+def test_kitchen_sheet_screen_preview_uses_a4_portrait_page_container() -> None:
+    offer, version_id, variant_id, acceptance_id, _offers, orders, _inq, service = (
+        _accepted_offer_state()
+    )
+    _converted, order, order_version = service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
+    )
+    projection = _projection_service(orders, service._commercial_snapshots).resolve(
+        order.order_id,
+        order_version.order_version_id,
+    )
+
+    sheet = render_print_sheet(projection)
+
+    assert "@page{size:A4 portrait" in sheet
+    assert ".preview-shell{padding:1.5rem}" in sheet
+    assert ".a4-page{aspect-ratio:210/297;" in sheet
+    assert "width:min(100%,850px)" in sheet
+    assert "max-width:calc(100vw - 3rem)" in sheet
+    assert "margin:0 auto" in sheet
+    assert "background:#fff" in sheet
+    assert "border:1px solid #b8b8b8" in sheet
+    assert "box-shadow:" in sheet
+    assert '<main class="a4-page">' in sheet
+    assert (
+        '<p class="print-actions"><button onclick="window.print()">Drucken</button></p>'
+        in sheet
+    )
+    page = sheet.split('<main class="a4-page">', 1)[1].split("</main>", 1)[0]
+    assert "Drucken" not in page
+    assert "@media print{body{background:#fff;padding:0}" in sheet
+    assert ".preview-shell{padding:0}" in sheet
+    assert (
+        ".a4-page{width:auto;max-width:none;min-height:0;aspect-ratio:auto;margin:0;padding:0;border:0;box-shadow:none}"
+        in sheet
+    )
+    assert ".print-actions{display:none}" in sheet
+
+
 def test_kitchen_sheet_shows_existing_customer_contact_and_delivery_address() -> None:
     (
         offer,

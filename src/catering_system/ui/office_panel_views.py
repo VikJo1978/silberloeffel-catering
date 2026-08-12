@@ -456,7 +456,9 @@ def render_print_sheet(projection: OrderPrintProjection) -> str:
 <html lang="de"><head><meta charset="utf-8"><title>Küchenzettel</title>
 <style>
 @page{{size:A4 portrait;margin:12mm}}
-body{{font-family:Arial,sans-serif;font-size:12.5pt;margin:0;color:#111;line-height:1.3}}
+body{{font-family:Arial,sans-serif;font-size:12.5pt;margin:0;color:#111;line-height:1.3;background:#e8e8e8}}
+.preview-shell{{padding:1.5rem}}
+.a4-page{{aspect-ratio:210/297;box-sizing:border-box;width:min(100%,850px);max-width:calc(100vw - 3rem);margin:0 auto;padding:12mm;background:#fff;border:1px solid #b8b8b8;box-shadow:0 0.5rem 2rem rgba(0,0,0,0.18);overflow:visible}}
 hr{{border:none;border-top:2px solid #000;margin:0.6rem 0}}
 h1{{font-size:1.65rem;margin:0}}
 h2{{font-size:1rem;margin:0 0 0.35rem;text-transform:uppercase;letter-spacing:0.04em}}
@@ -487,9 +489,12 @@ h2{{font-size:1rem;margin:0 0 0.35rem;text-transform:uppercase;letter-spacing:0.
 .change-summary p{{margin:0.2rem 0;font-weight:bold}}
 .cash-block{{border:5px solid #111;padding:0.65rem;margin:0.55rem 0;text-align:center;break-inside:avoid}}
 .cash-block p{{font-size:1.35rem;font-weight:bold;margin:0.25rem 0}}
-button{{font-size:1rem;margin-top:1.5rem;padding:0.5rem 1rem}}
-@media print{{button{{display:none}}}}
+.print-actions{{margin:1rem auto 0;max-width:850px;text-align:right}}
+button{{font-size:1rem;padding:0.5rem 1rem}}
+@media print{{body{{background:#fff;padding:0}}.preview-shell{{padding:0}}.a4-page{{width:auto;max-width:none;min-height:0;aspect-ratio:auto;margin:0;padding:0;border:0;box-shadow:none}}.print-actions{{display:none}}}}
 </style></head><body>
+<div class="preview-shell">
+<main class="a4-page">
 {cancelled_banner}
 {watermark_html}
 <div class="top"><h1>Küchenzettel</h1><div><p class="brand">SILBERLÖFFEL</p><p class="version-label">Version {_e(str(event.version_number))}</p></div></div>
@@ -506,7 +511,9 @@ button{{font-size:1rem;margin-top:1.5rem;padding:0.5rem 1rem}}
 <h2>Bestellung / Menü</h2>
 {menu_html}
 </section>
-<p><button onclick="window.print()">Drucken</button></p>
+</main>
+<p class="print-actions"><button onclick="window.print()">Drucken</button></p>
+</div>
 </body></html>"""
 
 
