@@ -15,6 +15,7 @@ from pathlib import Path
 
 from catering_system.domain.customer_document_projection import CustomerAddress
 from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot
+from catering_system.domain.order import OrderVersion
 from catering_system.repositories.core_transaction import (
     CoreCommandExecutor,
     open_core_connection,
@@ -81,6 +82,7 @@ def _empty_forms(**overrides: object) -> OrderDetailFormFields:
         version_command_fields="",
         payment_command_fields="",
         customer_addresses_command_fields="",
+        delivery_address_command_fields="",
     )
     base.update(overrides)
     return OrderDetailFormFields(**base)  # type: ignore[arg-type]
@@ -106,8 +108,23 @@ def test_address_card_separate_shows_stored_and_effective() -> None:
         created_at=datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
         updated_at=datetime(2026, 7, 18, 10, 0, tzinfo=UTC),
     )
+    version = OrderVersion(
+        order_version_id="33333333-3333-4333-8333-333333333333",
+        order_id=order.order_id,
+        version_number=1,
+        created_at=order.created_at,
+        event_date=inquiry.event_date,
+        time_window_text=inquiry.time_window_text,
+        location_text=inquiry.location_text,
+        guest_count_estimate=inquiry.guest_count_estimate,
+        planning_mode=inquiry.planning_mode,
+    )
     card = render_customer_addresses_card(
-        inquiry, order, _empty_forms(), context=legacy_office_context()
+        inquiry,
+        order,
+        _empty_forms(delivery_address_command_fields='<input name="_expect_x">'),
+        target_version=version,
+        context=legacy_office_context(),
     )
     assert "Rechnungsadresse" in card
     assert "Bürostraße 1" in card
@@ -115,10 +132,12 @@ def test_address_card_separate_shows_stored_and_effective() -> None:
     assert "Gespeicherte Lieferadresse" in card
     assert "Eventplatz 9" in card
     assert "Effektive Lieferadresse" in card
-    assert "Adressen bearbeiten" in card
-    assert 'action="/inquiry/' in card
-    assert "customer-addresses" in card
-    assert 'name="return_order_id"' in card
+    assert "Lieferadresse ändern" in card
+    assert f'action="/order/{order.order_id}/delivery-address"' in card
+    assert 'action="/inquiry/' not in card
+    assert "customer-addresses" not in card
+    assert 'name="return_order_id"' not in card
+    assert f'value="{version.order_version_id}"' in card
 
 
 def test_address_card_same_as_invoice_distinguishes_stored_vs_effective() -> None:
@@ -265,8 +284,9 @@ def test_order_detail_shows_separate_addresses_after_service_write(
     assert "Bürostraße 1" in page
     assert "Eventplatz 9" in page
     assert "Abweichende Lieferadresse" in page
-    assert 'action="/inquiry/' in page
-    assert "customer-addresses" in page
+    assert f'action="/order/{order_id}/delivery-address"' in page
+    assert f'action="/inquiry/{inquiry_id}/customer-addresses"' not in page
+    assert 'name="parent_order_version_id"' in page
 
 
 def test_mode_changes_update_stored_and_effective_labels(tmp_path: Path) -> None:
@@ -401,36 +421,19 @@ def _post(url: str, fields: dict[str, str]) -> tuple[int, str]:
         return exc.code, exc.read().decode("utf-8")
 
 
-def test_panel_http_customer_addresses_form_round_trip(tmp_path: Path) -> None:
+def test_panel_http_order_delivery_address_form_uses_order_action(
+    tmp_path: Path,
+) -> None:
     db, order_id, inquiry_id = _seed_order_world(tmp_path)
     base, server = _start_panel_server(db)
     try:
         status, page = _get(f"{base}/order/{order_id}")
         assert status == 200
         assert "Kundenadressen" in page
-        assert "Adressen bearbeiten" in page
-        status, _body = _post(
-            f"{base}/inquiry/{inquiry_id}/customer-addresses",
-            {
-                "_csrf_token": _CSRF,
-                "return_order_id": order_id,
-                "delivery_address_mode": "SEPARATE",
-                "invoice_street": _INVOICE.street or "",
-                "invoice_postal_code": _INVOICE.postal_code or "",
-                "invoice_city": _INVOICE.city or "",
-                "invoice_country": _INVOICE.country or "",
-                "delivery_street": _DELIVERY.street or "",
-                "delivery_postal_code": _DELIVERY.postal_code or "",
-                "delivery_city": _DELIVERY.city or "",
-                "delivery_country": _DELIVERY.country or "",
-            },
-        )
-        assert status in {200, 302}
-        status, page = _get(f"{base}/order/{order_id}")
-        assert status == 200
-        assert "Eventplatz 9" in page
-        assert "Abweichende Lieferadresse" in page
-        assert "Bürostraße 1" in page
+        assert "Lieferadresse ändern" in page
+        assert f'action="/order/{order_id}/delivery-address"' in page
+        assert f'action="/inquiry/{inquiry_id}/customer-addresses"' not in page
+        assert 'name="parent_order_version_id"' in page
     finally:
         server.shutdown()
         server.server_close()

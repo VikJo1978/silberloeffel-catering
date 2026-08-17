@@ -32,6 +32,7 @@ from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
 )
 from catering_system.services.order_service import (
+    OperationalContextMissingError,
     OrderService,
     _operational_context_for_new_version,
 )
@@ -342,6 +343,159 @@ def test_operational_context_inherits_from_exact_parent_not_latest_branch() -> N
     assert repo.get_operational_context(v2.order_version_id).recipient_company == (
         "Branch B GmbH"
     )
+
+
+def test_delivery_address_change_creates_explicit_context_without_inquiry_mutation() -> (
+    None
+):
+    inquiry = _sample_inquiry()
+    repo = InMemoryOrderRepository()
+    svc = OrderService(repo)
+    order, v1 = svc.create_order_from_offer_version(
+        inquiry.inquiry_id,
+        _offer_version_from_inquiry(inquiry),
+        inquiry,
+    )
+    before_context = repo.get_operational_context(v1.order_version_id)
+    assert before_context is not None
+    new_address = CustomerAddress(
+        street="Neuer Weg 5",
+        postal_code="20095",
+        city="Hamburg",
+        country="Deutschland",
+    )
+
+    v2 = svc.propose_delivery_address_change(
+        order.order_id,
+        parent_order_version_id=v1.order_version_id,
+        delivery_address=new_address,
+        actor_reference="office-panel",
+        change_reason="Lieferadresse geändert",
+    )
+
+    after_context = repo.get_operational_context(v1.order_version_id)
+    v2_context = repo.get_operational_context(v2.order_version_id)
+    assert v2.version_number == 2
+    assert v2.parent_order_version_id == v1.order_version_id
+    assert v2.changed_fields == ("delivery_address",)
+    assert after_context == before_context
+    assert inquiry.customer_snapshot == _CONTACT_COMPLETE_SNAPSHOT
+    assert v2_context is not None
+    assert v2_context.source == "explicit_change"
+    assert v2_context.recipient_company == before_context.recipient_company
+    assert v2_context.recipient_name == before_context.recipient_name
+    assert v2_context.recipient_phone == before_context.recipient_phone
+    assert v2_context.delivery_address == new_address
+
+
+def test_delivery_address_change_uses_explicit_parent_not_latest_branch() -> None:
+    inquiry = _sample_inquiry()
+    repo = InMemoryOrderRepository()
+    svc = OrderService(repo)
+    order, v1 = svc.create_order_from_offer_version(
+        inquiry.inquiry_id,
+        _offer_version_from_inquiry(inquiry),
+        inquiry,
+    )
+    branch_b = OrderOperationalContextData(
+        recipient_company="Branch B GmbH",
+        recipient_name="Berta Branch",
+        recipient_phone="+4940555",
+        delivery_address=CustomerAddress(
+            street="Branch Weg 2",
+            postal_code="20095",
+            city="Hamburg",
+            country="Deutschland",
+        ),
+    )
+    v2 = svc.propose_order_version_change(
+        order.order_id,
+        event_date=v1.event_date,
+        time_window_text=v1.time_window_text,
+        location_text=v1.location_text,
+        guest_count_estimate=40,
+        planning_mode=v1.planning_mode,
+        actor_reference="office",
+        change_reason="branch",
+        operational_context=branch_b,
+    )
+    new_address = CustomerAddress(
+        street="Zurück zu V1 9",
+        postal_code="20457",
+        city="Hamburg",
+        country="Deutschland",
+    )
+
+    v3 = svc.propose_delivery_address_change(
+        order.order_id,
+        parent_order_version_id=v1.order_version_id,
+        delivery_address=new_address,
+        actor_reference="office-panel",
+        change_reason="Lieferadresse geändert",
+    )
+
+    v3_context = repo.get_operational_context(v3.order_version_id)
+    assert v2.version_number == 2
+    assert v3.version_number == 3
+    assert v3.parent_order_version_id == v1.order_version_id
+    assert v3_context is not None
+    assert v3_context.recipient_company == "Müller GmbH"
+    assert v3_context.recipient_company != "Branch B GmbH"
+    assert v3_context.delivery_address == new_address
+
+
+def test_delivery_address_change_rejects_missing_parent_context_without_partial_version() -> (
+    None
+):
+    repo = InMemoryOrderRepository()
+    svc = OrderService(repo)
+    order, v1 = seed_order(repo, _sample_inquiry())
+    before_versions = repo.list_order_versions(order.order_id)
+
+    with pytest.raises(OperationalContextMissingError):
+        svc.propose_delivery_address_change(
+            order.order_id,
+            parent_order_version_id=v1.order_version_id,
+            delivery_address=CustomerAddress(street="Neuer Weg 5"),
+            actor_reference="office-panel",
+            change_reason="Lieferadresse geändert",
+        )
+
+    assert repo.list_order_versions(order.order_id) == before_versions
+    assert repo.get_order(order.order_id).candidate_order_version_id is None
+
+
+def test_delivery_address_change_rejects_parent_not_owned_without_partial_version() -> (
+    None
+):
+    inquiry = _sample_inquiry()
+    repo = InMemoryOrderRepository()
+    svc = OrderService(repo)
+    order_a, v1a = svc.create_order_from_offer_version(
+        inquiry.inquiry_id,
+        _offer_version_from_inquiry(inquiry),
+        inquiry,
+    )
+    other_inquiry = replace(inquiry, inquiry_id="22222222-2222-2222-2222-222222222222")
+    order_b, v1b = svc.create_order_from_offer_version(
+        other_inquiry.inquiry_id,
+        _offer_version_from_inquiry(other_inquiry),
+        other_inquiry,
+    )
+    before_versions = repo.list_order_versions(order_a.order_id)
+
+    with pytest.raises(ValueError, match="not a version of order"):
+        svc.propose_delivery_address_change(
+            order_a.order_id,
+            parent_order_version_id=v1b.order_version_id,
+            delivery_address=CustomerAddress(street="Neuer Weg 5"),
+            actor_reference="office-panel",
+            change_reason="Lieferadresse geändert",
+        )
+
+    assert v1a.order_id == order_a.order_id
+    assert v1b.order_id == order_b.order_id
+    assert repo.list_order_versions(order_a.order_id) == before_versions
 
 
 def test_legacy_parent_without_operational_context_does_not_invent_child_context() -> (

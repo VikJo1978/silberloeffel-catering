@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import queue
+import sqlite3
 import socket
 import threading
 import time
@@ -20,6 +21,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
+from catering_system.domain.customer_document_projection import CustomerAddress
 from catering_system.repositories.order_repository import OrderRepository
 from catering_system.repositories.sqlite_inquiry_repository import (
     SQLiteInquiryRepository,
@@ -374,6 +376,12 @@ def test_same_contracts_without_reasons_are_unaffected(status: int, code: str) -
     behaving exactly as before the fix."""
     error = _expect_error(status, _error_body(error=code))
     assert (error.status, error.code) == (status, code)
+
+
+def test_operational_context_missing_is_business_422_not_unavailable() -> None:
+    error = _expect_error(422, _error_body(error="operational_context_missing"))
+    assert (error.status, error.code) == (422, "operational_context_missing")
+    assert error.unavailable is False
 
 
 def test_unknown_422_code_is_still_rejected() -> None:
@@ -837,6 +845,97 @@ def test_create_relevant_order_change_version_returns_the_version_not_bad_respon
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_remote_delivery_address_change_sends_narrow_payload_and_returns_version(
+    tmp_path,
+) -> None:
+    db = tmp_path / "core.db"
+    inquiries = SQLiteInquiryRepository(db)
+    orders = SQLiteOrderRepository(db)
+    inquiry = InquiryService(inquiries).create_inquiry(
+        event_date=date(2026, 10, 1),
+        inquiry_source="manual",
+        crm_stage="Neue Anfrage",
+        customer_linkage={},
+        time_window_text="mittags",
+        location_text="Hamburg",
+        guest_count_estimate=10,
+        planning_mode="caterer_suggestion",
+        call_verification_required=False,
+        call_verification_status="not_required",
+        contact_email="kunde@example.com",
+        contact_phone="+4940235649",
+    )
+    order, v1 = seed_order(orders, inquiry)
+    inquiries.close()
+    orders.close()
+    conn = sqlite3.connect(db)
+    conn.execute(
+        """
+        INSERT INTO order_version_operational_context_snapshots (
+            order_version_id, order_id, recipient_company, recipient_name,
+            recipient_phone, delivery_address_json, created_at, source
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            v1.order_version_id,
+            order.order_id,
+            "A GmbH",
+            "B Person",
+            "+4940235649",
+            json.dumps(
+                {
+                    "street": "Alter Wall 22",
+                    "postal_code": "20457",
+                    "city": "Hamburg",
+                    "country": "Deutschland",
+                },
+                separators=(",", ":"),
+            ),
+            v1.created_at.isoformat(),
+            "initial_inquiry_snapshot",
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    url, server = _run_office_api_in_thread(db)
+    try:
+        client = RemoteCoreClient(url, _TOKEN)
+        client.begin_request({})
+        result = client.order_service.propose_delivery_address_change(
+            order.order_id,
+            parent_order_version_id=v1.order_version_id,
+            delivery_address=CustomerAddress(
+                street="Neuer Weg 5",
+                postal_code="20095",
+                city="Hamburg",
+                country="Deutschland",
+            ),
+            actor_reference="office-panel",
+            change_reason="Lieferadresse geändert",
+        )
+        assert result.version_number == 2
+        assert result.parent_order_version_id == v1.order_version_id
+        assert result.changed_fields == ("delivery_address",)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    conn = sqlite3.connect(db)
+    context = conn.execute(
+        """
+        SELECT source, recipient_company, recipient_name, recipient_phone,
+               delivery_address_json
+        FROM order_version_operational_context_snapshots
+        WHERE order_version_id = ?
+        """,
+        (result.order_version_id,),
+    ).fetchone()
+    conn.close()
+    assert context[:4] == ("explicit_change", "A GmbH", "B Person", "+4940235649")
+    assert json.loads(context[4])["street"] == "Neuer Weg 5"
 
 
 def test_prepare_next_offer_version_parses_success_payload() -> None:
