@@ -247,7 +247,7 @@ def _mark_sent_form(
         f"{forms.csrf_input}{forms.command_fields}"
         "<fieldset>"
         f'<label>Versandzeitpunkt <input type="datetime-local" name="sent_at" '
-        f'value="{_e(default_at)}" required></label>'
+        f'step="1" value="{_e(default_at)}" required></label>'
         f'<label>Kanal <select name="channel" required>'
         f"{_select_options(SENT_CHANNELS, _SENT_CHANNEL_LABELS)}"
         "</select></label>"
@@ -288,7 +288,7 @@ def _record_acceptance_form(
         f"{variant_options}"
         "</select></label>"
         f'<label>Annahmezeitpunkt <input type="datetime-local" name="accepted_at" '
-        f'value="{_e(default_at)}" required></label>'
+        f'step="1" value="{_e(default_at)}" required></label>'
         f'<label>Kanal <select name="channel" required>'
         f"{_select_options(ACCEPTANCE_CHANNELS, _ACCEPTANCE_CHANNEL_LABELS)}"
         "</select></label>"
@@ -315,7 +315,7 @@ def _record_rejection_form(
         f"{forms.csrf_input}{forms.command_fields}"
         "<fieldset>"
         f'<label>Ablehnungszeitpunkt <input type="datetime-local" name="rejected_at" '
-        f'value="{_e(default_at)}" required></label>'
+        f'step="1" value="{_e(default_at)}" required></label>'
         '<label>Kommentar / Nachweis (optional) <input name="evidence_reference" '
         'maxlength="1000" placeholder="Telefonische Absage"></label>'
         "</fieldset>"

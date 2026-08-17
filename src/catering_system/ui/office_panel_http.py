@@ -209,6 +209,10 @@ _OFFER_COMMAND_ERROR_LABELS: dict[str, str] = {
     "sent_recording_blocked": (
         "Der Versand kann in diesem Angebotsstatus nicht vermerkt werden."
     ),
+    "invalid_sent_evidence": (
+        "Der Versandnachweis ist ungültig. Bitte prüfen Sie Zeitpunkt, Kanal, "
+        "Empfänger und Referenz; der Versandzeitpunkt darf nicht in der Zukunft liegen."
+    ),
     "conversion_already_exists": "Dieses Angebot wurde bereits in einen Auftrag umgewandelt.",
     "conversion_blocked": (
         "Das angenommene Angebot kann derzeit nicht in einen Auftrag umgewandelt werden."
@@ -277,6 +281,11 @@ def office_command_error_message(code_or_text: str) -> str:
         return _OFFER_COMMAND_ERROR_LABELS["acceptance_blocked"]
     if "sent recording blocked" in lowered:
         return _OFFER_COMMAND_ERROR_LABELS["sent_recording_blocked"]
+    if (
+        "recorded_at cannot precede sent_at" in lowered
+        or "sentevidence cannot predate its offerversion" in lowered
+    ):
+        return _OFFER_COMMAND_ERROR_LABELS["invalid_sent_evidence"]
     if "rejection blocked" in lowered or "rejection evidence already exists" in lowered:
         if "already exists" in lowered:
             return _OFFER_COMMAND_ERROR_LABELS["rejection_evidence_exists"]
