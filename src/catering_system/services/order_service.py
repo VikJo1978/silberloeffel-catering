@@ -35,6 +35,10 @@ from catering_system.repositories.order_repository import OrderRepository
 _log = logging.getLogger(__name__)
 
 
+class OperationalContextMissingError(ValueError):
+    """Exact parent OrderVersion has no frozen operational context to inherit."""
+
+
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -289,6 +293,112 @@ class OrderService:
             "propose_order_version_change order_id=%s version=%s candidate=%s",
             order_id,
             version.version_number,
+            version.order_version_id,
+        )
+        return version
+
+    def propose_delivery_address_change(
+        self,
+        order_id: str,
+        *,
+        parent_order_version_id: str,
+        delivery_address: CustomerAddress | None,
+        actor_reference: str,
+        change_reason: str,
+    ) -> OrderVersion:
+        """Append a candidate version with delivery address changed from exact parent.
+
+        This narrow workflow deliberately does not consult Inquiry/customer live
+        state. Recipient facts are inherited only from the supplied parent
+        version's frozen operational context.
+        """
+        current = self._order_repository.get_order(order_id)
+        if current is None:
+            raise ValueError(f"no order with id {order_id!r}")
+        if current.cancelled_at is not None:
+            raise ValueError(
+                f"order {order_id!r} is cancelled (Storno); no further versions"
+            )
+        parent = self._order_repository.get_order_version(parent_order_version_id)
+        if parent is None or parent.order_id != order_id:
+            raise ValueError(
+                f"order_version_id {parent_order_version_id!r} is not a version "
+                f"of order {order_id!r}"
+            )
+        parent_context = self._order_repository.get_operational_context(
+            parent_order_version_id
+        )
+        if parent_context is None:
+            raise OperationalContextMissingError(
+                f"operational context missing for order_version_id "
+                f"{parent_order_version_id!r}"
+            )
+        versions = self._order_repository.list_order_versions(order_id)
+        if not versions:
+            raise ValueError(f"order {order_id!r} has no source version")
+
+        now = _utc_now()
+        version = OrderVersion(
+            order_version_id=str(uuid.uuid4()),
+            order_id=order_id,
+            version_number=max(item.version_number for item in versions) + 1,
+            created_at=now,
+            event_date=parent.event_date,
+            time_window_text=parent.time_window_text,
+            location_text=parent.location_text,
+            guest_count_estimate=parent.guest_count_estimate,
+            planning_mode=parent.planning_mode,
+            parent_order_version_id=parent.order_version_id,
+            created_by=actor_reference,
+            change_reason=change_reason,
+            changed_fields=("delivery_address",),
+        )
+        operational_context = OrderOperationalContextData(
+            recipient_company=parent_context.recipient_company,
+            recipient_name=parent_context.recipient_name,
+            recipient_phone=parent_context.recipient_phone,
+            delivery_address=delivery_address,
+        )
+        context = _explicit_operational_context(
+            order=current,
+            version=version,
+            data=operational_context,
+            created_at=now,
+        )
+        previous_candidate_id = current.candidate_order_version_id
+        updated = replace(
+            current,
+            candidate_order_version_id=version.order_version_id,
+            updated_at=now,
+        )
+        self._order_repository.append_order_version(updated, version, context)
+        if (
+            previous_candidate_id is not None
+            and previous_candidate_id != current.effective_order_version_id
+        ):
+            self._emit(
+                OrderVersionCandidateSuperseded(
+                    order_id=order_id,
+                    superseded_order_version_id=previous_candidate_id,
+                    new_candidate_order_version_id=version.order_version_id,
+                    occurred_at=now,
+                )
+            )
+        self._emit(
+            OrderVersionChangeProposed(
+                order_id=order_id,
+                old_effective_order_version_id=current.effective_order_version_id,
+                new_candidate_order_version_id=version.order_version_id,
+                actor_reference=actor_reference,
+                change_reason=change_reason,
+                changed_fields=version.changed_fields,
+                occurred_at=now,
+            )
+        )
+        _log.info(
+            "propose_delivery_address_change order_id=%s parent=%s version=%s",
+            order_id,
+            parent_order_version_id,
             version.order_version_id,
         )
         return version

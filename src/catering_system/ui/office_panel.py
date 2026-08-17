@@ -3354,6 +3354,21 @@ class OfficePanel:
                         if not cancelled and context.can("orders.version.create")
                         else ""
                     ),
+                    delivery_address_command_fields=(
+                        self._command_fields(
+                            {
+                                "latest_version_number": str(latest_version_number),
+                                "current_effective_order_version_id": (
+                                    order.effective_order_version_id or ""
+                                ),
+                                "current_candidate_order_version_id": (
+                                    order.candidate_order_version_id or ""
+                                ),
+                            }
+                        )
+                        if not cancelled and context.can("orders.version.create")
+                        else ""
+                    ),
                     payment_command_fields=(
                         self._command_fields(
                             {
@@ -3675,6 +3690,21 @@ class OfficePanel:
                 if not cancelled and source_inquiry is not None
                 else ""
             ),
+            delivery_address_command_fields=(
+                self._command_fields(
+                    {
+                        "latest_version_number": str(latest_version_number),
+                        "current_effective_order_version_id": (
+                            order.effective_order_version_id or ""
+                        ),
+                        "current_candidate_order_version_id": (
+                            order.candidate_order_version_id or ""
+                        ),
+                    }
+                )
+                if not cancelled and context.can("orders.version.create")
+                else ""
+            ),
             fulfillment_mode_command_fields=(
                 self._command_fields(
                     {
@@ -3695,6 +3725,7 @@ class OfficePanel:
             source_inquiry,
             order,
             detail_forms,
+            target_version=action_target,
             context=context,
         )
         confirmation_card = render_confirmation_card(
@@ -3904,6 +3935,60 @@ class OfficePanel:
                 actor_reference="office-panel",
                 change_reason=form.get("change_reason", "").strip()
                 or "Operational order change",
+            )
+
+        if self._remote is not None:
+            work()
+        elif self._command_executor is not None:
+            self._command_executor.run(work)
+        else:
+            work()
+
+    def change_delivery_address(self, order_id: str, form: dict[str, str]) -> None:
+        order = self._orders.get_order(order_id)
+        if order is None:
+            raise ValueError(f"no order with id {order_id!r}")
+        parent_order_version_id = form.get("parent_order_version_id", "").strip()
+        if not parent_order_version_id:
+            raise ValueError("parent_order_version_id is required")
+        if self._remote is None:
+            versions = self._orders.list_order_versions(order_id)
+            latest = max((version.version_number for version in versions), default=0)
+            expected_raw = form.get("_expect_latest_version_number", "").strip()
+            if expected_raw and int(expected_raw) != latest:
+                raise ValueError(
+                    "Der Auftrag wurde zwischenzeitlich geändert. "
+                    "Bitte laden Sie die Seite neu."
+                )
+            expected_effective = form.get("_expect_current_effective_order_version_id")
+            expected_candidate = form.get("_expect_current_candidate_order_version_id")
+            if (
+                expected_effective is not None
+                and (expected_effective or None) != order.effective_order_version_id
+            ) or (
+                expected_candidate is not None
+                and (expected_candidate or None) != order.candidate_order_version_id
+            ):
+                raise ValueError(
+                    "Der Auftrag wurde zwischenzeitlich geändert. "
+                    "Bitte laden Sie die Seite neu."
+                )
+        delivery = canonicalize_customer_address(
+            CustomerAddress(
+                street=_opt_contact(form, "delivery_street"),
+                postal_code=_opt_contact(form, "delivery_postal_code"),
+                city=_opt_contact(form, "delivery_city"),
+                country=_opt_contact(form, "delivery_country"),
+            )
+        )
+
+        def work() -> None:
+            self.order_service.propose_delivery_address_change(
+                order_id,
+                parent_order_version_id=parent_order_version_id,
+                delivery_address=delivery,
+                actor_reference="office-panel",
+                change_reason="Lieferadresse geändert",
             )
 
         if self._remote is not None:

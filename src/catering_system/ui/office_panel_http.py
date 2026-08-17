@@ -189,6 +189,10 @@ _INQUIRY_COMMAND_ERROR_LABELS: dict[str, str] = {
         "Die eingegebenen Kontaktdaten sind ungültig — bitte E-Mail-Adresse "
         "oder Telefonnummer prüfen."
     ),
+    "operational_context_missing": (
+        "Der gewählte Auftragsstand hat keinen eingefrorenen Empfängerkontext. "
+        "Bitte Support kontaktieren; es wurde nichts gespeichert."
+    ),
 }
 
 
@@ -788,6 +792,7 @@ def make_office_panel_handler(
                 action = parts[2]
                 order_post_permissions: dict[str, tuple[str, ...]] = {
                     "version": ("orders.version.create",),
+                    "delivery-address": ("orders.version.create",),
                     "print-confirm": ("orders.print.confirm",),
                     "effective": ("orders.effective.set",),
                     "ready": ("orders.ready.release",),
@@ -2422,6 +2427,8 @@ def make_office_panel_handler(
         def _order_action(self, order_id: str, action: str) -> None:
             if action == "version":
                 panel.create_version(order_id, self._form())
+            elif action == "delivery-address":
+                panel.change_delivery_address(order_id, self._form())
             elif action == "print-confirm":
                 form = self._form()
                 _ = form["order_version_id"]

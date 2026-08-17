@@ -22,6 +22,7 @@ from catering_system.domain.catalog import CatalogDish
 from catering_system.domain.customer_document_projection import CustomerAddress
 from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot
 from catering_system.domain.kitchen_print_job import KitchenPrintJob
+from catering_system.domain.offer import OfferPosition, OfferVariant, OfferVersion
 from catering_system.domain.offer_snapshot import compute_snapshot_hash
 from catering_system.repositories.sqlite_catalog_repository import (
     SQLiteCatalogRepository,
@@ -72,6 +73,45 @@ _SERVICE_TOKENS = {
 }
 _CONFIGURATOR_AUTH = {"Authorization": "Bearer svc-configurator-token"}
 _WRONG_SERVICE_AUTH = {"Authorization": "Bearer svc-office-token"}
+
+
+def _offer_version_for_order_creation() -> OfferVersion:
+    offer_version_id = str(uuid.uuid4())
+    return OfferVersion(
+        offer_version_id=offer_version_id,
+        offer_id=str(uuid.uuid4()),
+        version_number=1,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        valid_until=date(2026, 9, 1),
+        snapshot_id=str(uuid.uuid4()),
+        snapshot_hash="sha256:" + ("0" * 64),
+        event_date=date(2026, 10, 1),
+        time_window_text="mittags",
+        location_text="Hamburg",
+        guest_count=25,
+        planning_mode="caterer_suggestion",
+        payment_method="RECHNUNG",
+        payment_customer_visible_text="Zahlung per Rechnung",
+        variants=(
+            OfferVariant(
+                variant_id=str(uuid.uuid4()),
+                offer_version_id=offer_version_id,
+                label="Standard",
+                positions=(
+                    OfferPosition(
+                        position_id=str(uuid.uuid4()),
+                        kind="catalog",
+                        name="Menü",
+                        unit_net_cents=100,
+                        net_total_cents=100,
+                        vat_rate_percent=7,
+                        vat_amount_cents=7,
+                        gross_total_cents=107,
+                    ),
+                ),
+            ),
+        ),
+    )
 
 
 def _seed(db_path: Path) -> dict[str, str]:
@@ -201,6 +241,35 @@ def _employee_auth(db_path: Path) -> dict[str, str]:
     login = service.authenticate(username="auth.handoff", password="ChangedPassw0rd!")
     repo.close()
     return {"account_id": account.id, "session_token": login.session_token}
+
+
+def _create_order_with_operational_context(db_path: Path) -> tuple[str, str]:
+    inquiries = SQLiteInquiryRepository(db_path)
+    orders = SQLiteOrderRepository(db_path)
+    inquiry = InquiryService(inquiries).create_inquiry(
+        event_date=date(2026, 10, 1),
+        inquiry_source="manual",
+        crm_stage="Neue Anfrage",
+        customer_linkage={},
+        time_window_text="mittags",
+        location_text="Hamburg",
+        guest_count_estimate=25,
+        planning_mode="caterer_suggestion",
+        call_verification_required=False,
+        call_verification_status="not_required",
+        contact_email="kunde@example.com",
+        contact_phone="+4940235649",
+        company_name="A GmbH",
+        contact_name="B Person",
+    )
+    order, version = OrderService(orders).create_order_from_offer_version(
+        inquiry.inquiry_id,
+        _offer_version_for_order_creation(),
+        inquiry,
+    )
+    inquiries.close()
+    orders.close()
+    return order.order_id, version.order_version_id
 
 
 def _mint_first_offer_handoff(
@@ -1615,6 +1684,172 @@ def test_versions_expect_and_cancelled_gate(api) -> None:
         },
     )
     assert (status, body["error"]) == (422, "order_cancelled")
+
+
+def test_delivery_address_version_command_creates_explicit_context(api) -> None:
+    base, _ids, db = api
+    order_id, parent_id = _create_order_with_operational_context(db)
+    url = f"{base}/office/v1/orders/{order_id}/versions"
+    new_address = {
+        "street": "Neuer Weg 5",
+        "postal_code": "20095",
+        "city": "Hamburg",
+        "country": "Deutschland",
+    }
+
+    status, body, _h = _post(
+        url,
+        args={
+            "parent_order_version_id": parent_id,
+            "delivery_address": new_address,
+            "actor_reference": "office-panel",
+            "change_reason": "Lieferadresse geändert",
+        },
+        expect={
+            "latest_version_number": 1,
+            "current_effective_order_version_id": None,
+            "current_candidate_order_version_id": None,
+        },
+    )
+
+    assert status == 201
+    assert body["version_number"] == 2
+    assert body["parent_order_version_id"] == parent_id
+    assert body["changed_fields"] == ["delivery_address"]
+    conn = sqlite3.connect(db)
+    rows = conn.execute(
+        """
+        SELECT order_version_id, source, recipient_company, recipient_name,
+               recipient_phone, delivery_address_json
+        FROM order_version_operational_context_snapshots
+        WHERE order_id = ?
+        ORDER BY created_at
+        """,
+        (order_id,),
+    ).fetchall()
+    inquiry_rows = conn.execute(
+        """
+        SELECT snapshot_company_name, snapshot_contact_name, snapshot_phone,
+               snapshot_delivery_address_json
+        FROM inquiries
+        WHERE inquiry_id = (SELECT source_inquiry_id FROM orders WHERE order_id = ?)
+        """,
+        (order_id,),
+    ).fetchall()
+    conn.close()
+    assert len(rows) == 2
+    v1_row, v2_row = rows
+    assert v1_row[1] == "initial_inquiry_snapshot"
+    assert v2_row[0] == body["order_version_id"]
+    assert v2_row[1] == "explicit_change"
+    assert v2_row[2:5] == ("A GmbH", "B Person", "+4940235649")
+    assert json.loads(v2_row[5]) == new_address
+    assert v1_row[5] != v2_row[5]
+    assert inquiry_rows == [("A GmbH", "B Person", "+4940235649", None)]
+
+
+def test_delivery_address_version_command_rejects_missing_parent_context(api) -> None:
+    base, ids, db = api
+    order_id = ids["order_unprinted"]
+    parent_id = ids["version_unprinted"]
+    conn = sqlite3.connect(db)
+    before_count = conn.execute(
+        "SELECT COUNT(*) FROM order_versions WHERE order_id = ?",
+        (order_id,),
+    ).fetchone()[0]
+    conn.close()
+
+    status, body, _h = _post(
+        f"{base}/office/v1/orders/{order_id}/versions",
+        args={
+            "parent_order_version_id": parent_id,
+            "delivery_address": {
+                "street": "Neuer Weg 5",
+                "postal_code": "20095",
+                "city": "Hamburg",
+                "country": "Deutschland",
+            },
+        },
+        expect={
+            "latest_version_number": 1,
+            "current_effective_order_version_id": None,
+            "current_candidate_order_version_id": None,
+        },
+    )
+
+    conn = sqlite3.connect(db)
+    after_count = conn.execute(
+        "SELECT COUNT(*) FROM order_versions WHERE order_id = ?",
+        (order_id,),
+    ).fetchone()[0]
+    candidate = conn.execute(
+        "SELECT candidate_order_version_id FROM orders WHERE order_id = ?",
+        (order_id,),
+    ).fetchone()[0]
+    conn.close()
+    assert (status, body["error"]) == (422, "operational_context_missing")
+    assert after_count == before_count
+    assert candidate is None
+
+
+def test_delivery_address_version_command_rejects_parent_not_owned(api) -> None:
+    base, ids, db = api
+    order_id, _parent_id = _create_order_with_operational_context(db)
+    conn = sqlite3.connect(db)
+    before_count = conn.execute(
+        "SELECT COUNT(*) FROM order_versions WHERE order_id = ?",
+        (order_id,),
+    ).fetchone()[0]
+    conn.close()
+
+    status, body, _h = _post(
+        f"{base}/office/v1/orders/{order_id}/versions",
+        args={
+            "parent_order_version_id": ids["version_ready"],
+            "delivery_address": {
+                "street": "Neuer Weg 5",
+                "postal_code": None,
+                "city": None,
+                "country": None,
+            },
+        },
+        expect={
+            "latest_version_number": 1,
+            "current_effective_order_version_id": None,
+            "current_candidate_order_version_id": None,
+        },
+    )
+    conn = sqlite3.connect(db)
+    after_count = conn.execute(
+        "SELECT COUNT(*) FROM order_versions WHERE order_id = ?",
+        (order_id,),
+    ).fetchone()[0]
+    conn.close()
+    assert (status, body["error"]) == (422, "version_not_owned")
+    assert after_count == before_count
+
+
+def test_delivery_address_version_command_preserves_stale_state_gate(api) -> None:
+    base, _ids, db = api
+    order_id, parent_id = _create_order_with_operational_context(db)
+    status, body, _h = _post(
+        f"{base}/office/v1/orders/{order_id}/versions",
+        args={
+            "parent_order_version_id": parent_id,
+            "delivery_address": {
+                "street": "Neuer Weg 5",
+                "postal_code": None,
+                "city": None,
+                "country": None,
+            },
+        },
+        expect={
+            "latest_version_number": 9,
+            "current_effective_order_version_id": None,
+            "current_candidate_order_version_id": None,
+        },
+    )
+    assert (status, body["error"]) == (409, "stale_state")
 
 
 def test_print_confirm_effective_and_gates(api) -> None:

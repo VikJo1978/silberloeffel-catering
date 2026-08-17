@@ -235,7 +235,10 @@ from catering_system.services.order_print_projection_service import (
     PrintFinalRequiresEffectiveError,
     PrintProjectionNotFoundError,
 )
-from catering_system.services.order_service import OrderService
+from catering_system.services.order_service import (
+    OperationalContextMissingError,
+    OrderService,
+)
 from catering_system.services.payment_reminder_service import PaymentReminderService
 from catering_system.services.task_projection_service import TaskProjectionService
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
@@ -2512,27 +2515,68 @@ class OfficeApi:
             != order.candidate_order_version_id
         ):
             raise ApiError(409, "stale_state")
+        has_delivery_change = (
+            "parent_order_version_id" in args or "delivery_address" in args
+        )
         try:
-            version = self.order_service.propose_order_version_change(
-                order.order_id,
-                event_date=_v_date(args["event_date"]),
-                time_window_text=_v_str(args["time_window_text"], 500),
-                location_text=_v_str(args["location_text"], 500),
-                guest_count_estimate=_v_guest_count(args["guest_count_estimate"]),
-                planning_mode=_v_enum(args["planning_mode"], validate_planning_mode),
-                actor_reference=(
-                    _v_str(args["actor_reference"], 200)
-                    if "actor_reference" in args
-                    else CLIENT_ID
-                ),
-                change_reason=(
-                    _v_str(args["change_reason"], 1000)
-                    if "change_reason" in args
-                    else "Operational order change"
-                ),
+            actor_reference = (
+                _v_str(args["actor_reference"], 200)
+                if "actor_reference" in args
+                else CLIENT_ID
             )
+            change_reason = (
+                _v_str(args["change_reason"], 1000)
+                if "change_reason" in args
+                else "Operational order change"
+            )
+            if has_delivery_change:
+                if (
+                    "parent_order_version_id" not in args
+                    or "delivery_address" not in args
+                ):
+                    raise _invalid()
+                version = self.order_service.propose_delivery_address_change(
+                    order.order_id,
+                    parent_order_version_id=_v_uuid(args["parent_order_version_id"]),
+                    delivery_address=customer_address_from_mapping(
+                        args["delivery_address"]
+                    ),
+                    actor_reference=actor_reference,
+                    change_reason=change_reason,
+                )
+            else:
+                required = {
+                    "event_date",
+                    "time_window_text",
+                    "location_text",
+                    "guest_count_estimate",
+                    "planning_mode",
+                }
+                if not required <= set(args):
+                    raise _invalid()
+                version = self.order_service.propose_order_version_change(
+                    order.order_id,
+                    event_date=_v_date(args["event_date"]),
+                    time_window_text=_v_str(args["time_window_text"], 500),
+                    location_text=_v_str(args["location_text"], 500),
+                    guest_count_estimate=_v_guest_count(args["guest_count_estimate"]),
+                    planning_mode=_v_enum(
+                        args["planning_mode"], validate_planning_mode
+                    ),
+                    actor_reference=actor_reference,
+                    change_reason=change_reason,
+                )
+        except OperationalContextMissingError as exc:
+            raise ApiError(422, "operational_context_missing") from exc
+        except TypeError as exc:
+            raise ApiError(422, "validation_error") from exc
         except ValueError as exc:
-            raise ApiError(422, "order_cancelled") from exc
+            message = str(exc)
+            if "cancelled" in message:
+                raise ApiError(422, "order_cancelled") from exc
+            if "not a version of order" in message:
+                raise ApiError(422, "version_not_owned") from exc
+            raise ApiError(422, "validation_error") from exc
         return 201, {
             "order_version_id": version.order_version_id,
             "version_number": version.version_number,
@@ -2996,16 +3040,20 @@ _UPDATE_ARGS = _ArgKeys(
     optional=_INTAKE_OPTIONAL,
 )
 _VERSION_ARGS = _ArgKeys(
-    required=frozenset(
+    required=frozenset(),
+    optional=frozenset(
         {
             "event_date",
             "time_window_text",
             "location_text",
             "guest_count_estimate",
             "planning_mode",
+            "actor_reference",
+            "change_reason",
+            "parent_order_version_id",
+            "delivery_address",
         }
     ),
-    optional=frozenset({"actor_reference", "change_reason"}),
 )
 _NO_ARGS = _ArgKeys(required=frozenset())
 _SNAPSHOT_ARGS = _ArgKeys(required=frozenset({"snapshot"}))

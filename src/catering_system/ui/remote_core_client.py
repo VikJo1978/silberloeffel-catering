@@ -309,6 +309,7 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
             "invalid_rejection_evidence",
             "invalid_withdrawal_evidence",
             "order_version_not_current_candidate",
+            "operational_context_missing",
             "validation_error",
             # Issue #39: the three document blockers. All are real Office API
             # business errors that were missing here, so the status whitelist
@@ -3656,6 +3657,90 @@ class _RemoteOrderService:
         if order is None:
             raise RemoteCoreError(404, "not_found")
         return self.create_relevant_order_change_version(order, **values)
+
+    def propose_delivery_address_change(
+        self,
+        order_id: str,
+        *,
+        parent_order_version_id: str,
+        delivery_address: CustomerAddress | None,
+        actor_reference: str,
+        change_reason: str,
+    ) -> OrderVersion:
+        order = self._client.get_order(order_id)
+        if order is None:
+            raise RemoteCoreError(404, "not_found")
+        versions = self._client.list_order_versions(order.order_id)
+        parent = next(
+            (
+                version
+                for version in versions
+                if version.order_version_id == parent_order_version_id
+            ),
+            None,
+        )
+        if parent is None:
+            raise RemoteCoreError(422, "version_not_owned")
+        total_count, _truncated = self._client.order_versions_meta(order.order_id)
+        latest = total_count or max(
+            (version.version_number for version in versions), default=0
+        )
+        expected_latest = self._client.form_value("_expect_latest_version_number")
+        expected_effective = self._client.form_value(
+            "_expect_current_effective_order_version_id"
+        )
+        expected_candidate = self._client.form_value(
+            "_expect_current_candidate_order_version_id"
+        )
+        result = self._client.command(
+            f"/office/v1/orders/{quote(order.order_id, safe='')}/versions",
+            {
+                "parent_order_version_id": parent_order_version_id,
+                "delivery_address": customer_address_to_mapping(delivery_address),
+                "actor_reference": actor_reference,
+                "change_reason": change_reason,
+            },
+            {
+                "latest_version_number": (
+                    int(expected_latest) if expected_latest is not None else latest
+                ),
+                "current_effective_order_version_id": (
+                    order.effective_order_version_id
+                    if expected_effective is None
+                    else (expected_effective or None)
+                ),
+                "current_candidate_order_version_id": (
+                    order.candidate_order_version_id
+                    if expected_candidate is None
+                    else (expected_candidate or None)
+                ),
+            },
+            expected={201},
+            result_keys={
+                "order_version_id",
+                "version_number",
+                "candidate_order_version_id",
+                "parent_order_version_id",
+                "changed_fields",
+            },
+        )
+        return OrderVersion(
+            order_version_id=_uuid4(result["order_version_id"]),
+            order_id=order.order_id,
+            version_number=_int(result["version_number"]),
+            created_at=order.updated_at,
+            event_date=parent.event_date,
+            time_window_text=parent.time_window_text,
+            location_text=parent.location_text,
+            guest_count_estimate=parent.guest_count_estimate,
+            planning_mode=parent.planning_mode,
+            parent_order_version_id=_optional_uuid4(result["parent_order_version_id"]),
+            created_by=actor_reference,
+            change_reason=change_reason,
+            changed_fields=tuple(
+                _str(value) for value in _list(result["changed_fields"])
+            ),
+        )
 
 
 class _RemoteCatalogDishWriteService:

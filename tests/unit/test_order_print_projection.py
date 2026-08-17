@@ -258,6 +258,78 @@ def test_kitchen_sheet_shows_existing_customer_contact_and_delivery_address() ->
     assert "Sonstiges" not in sheet
 
 
+def test_kitchen_sheet_for_delivery_address_change_uses_new_version_context() -> None:
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        _offers,
+        orders,
+        inquiries,
+        service,
+    ) = _accepted_offer_state()
+    inquiry = inquiries.get_by_id(_INQUIRY_ID)
+    assert inquiry is not None
+    inquiries.update(
+        replace(
+            inquiry,
+            customer_snapshot=InquiryCustomerSnapshot(
+                company_name="Grant Hotel",
+                contact_name="Fr.Garent",
+                email="grant@example.invalid",
+                phone="+4940235649",
+                invoice_address=CustomerAddress(
+                    street="Alter Wall 22",
+                    postal_code="20457",
+                    city="Hamburg",
+                    country="Deutschland",
+                ),
+                delivery_address_mode="SAME_AS_INVOICE",
+            ),
+        )
+    )
+    _converted, order, v1 = service.convert_accepted_offer(
+        offer.offer_id,
+        version_id,
+        variant_id,
+        acceptance_id,
+    )
+    new_address = CustomerAddress(
+        street="Neuer Lieferweg 9",
+        postal_code="20095",
+        city="Hamburg",
+        country="Deutschland",
+    )
+    v2 = OrderService(orders).propose_delivery_address_change(
+        order.order_id,
+        parent_order_version_id=v1.order_version_id,
+        delivery_address=new_address,
+        actor_reference="office-panel",
+        change_reason="Lieferadresse geändert",
+    )
+
+    projection = _projection_service(
+        orders,
+        service._commercial_snapshots,
+    ).resolve(order.order_id, v2.order_version_id)
+    sheet = render_print_sheet(projection)
+
+    assert projection.customer.company_name == "Grant Hotel"
+    assert projection.customer.contact_name == "Fr.Garent"
+    assert projection.customer.phone == "+4940235649"
+    assert projection.customer.delivery_address_lines == (
+        "Neuer Lieferweg 9",
+        "20095 Hamburg",
+        "Deutschland",
+    )
+    assert "Grant Hotel" in sheet
+    assert "Fr.Garent" in sheet
+    assert "+4940235649" in sheet
+    assert "Neuer Lieferweg 9" in sheet
+    assert "Alter Wall 22" not in sheet
+
+
 def test_kitchen_sheet_missing_operational_context_shows_blank_facts() -> None:
     offer, version_id, variant_id, acceptance_id, _offers, orders, _inq, service = (
         _accepted_offer_state()

@@ -10,7 +10,6 @@ from typing import Literal
 from catering_system.domain.customer_document_preview import CustomerDocumentPreview
 from catering_system.domain.customer_document_projection import CustomerAddress
 from catering_system.domain.inquiry import FULFILLMENT_MODES, PLANNING_MODES, Inquiry
-from catering_system.domain.inquiry_customer_snapshot import DELIVERY_ADDRESS_MODES
 from catering_system.domain.order import (
     Order,
     OrderVersion,
@@ -175,6 +174,7 @@ class OrderDetailFormFields:
     pause_command_fields: str = ""
     resume_command_fields: str = ""
     customer_addresses_command_fields: str = ""
+    delivery_address_command_fields: str = ""
     fulfillment_mode_command_fields: str = ""
     version_change_prefill: OrderVersionChangePrefill | None = None
 
@@ -839,46 +839,24 @@ def _address_input_block(prefix: str, address: CustomerAddress | None) -> str:
 
 
 def _customer_addresses_form(
-    inquiry: Inquiry,
     order: Order,
+    target_version: OrderVersion,
     forms: OrderDetailFormFields,
 ) -> str:
-    snapshot = inquiry.customer_snapshot
-    mode = snapshot.delivery_address_mode if snapshot is not None else "UNKNOWN"
-    invoice = snapshot.invoice_address if snapshot is not None else None
-    delivery = snapshot.delivery_address if snapshot is not None else None
-    options = "".join(
-        f'<option value="{_e(value)}"{" selected" if value == mode else ""}>'
-        f"{_e(_DELIVERY_MODE_LABELS[value])}</option>"
-        for value in DELIVERY_ADDRESS_MODES
-    )
-    delivery_display = "block" if mode == "SEPARATE" else "none"
-    delivery_fields_id = f"delivery-address-fields-{order.order_id}"
+    delivery: CustomerAddress | None = None
     return (
-        '<details class="order-edit"><summary>Adressen bearbeiten</summary>'
+        '<details class="order-edit"><summary>Lieferadresse ändern</summary>'
         '<div class="order-edit-body">'
-        f'<form method="post" action="/inquiry/{_e(inquiry.inquiry_id)}/customer-addresses" '
+        f'<form method="post" action="/order/{_e(order.order_id)}/delivery-address" '
         'onsubmit="return confirm('
-        "'Kundenadressen für die Auftragsbestätigung werden gespeichert.'"
+        "'Die geänderte Lieferadresse legt einen neuen Auftragsstand an.'"
         ');">'
-        f"{forms.csrf_input}{forms.customer_addresses_command_fields}"
-        f'<input type="hidden" name="return_order_id" value="{_e(order.order_id)}">'
+        f"{forms.csrf_input}{forms.delivery_address_command_fields}"
+        '<input type="hidden" name="parent_order_version_id" '
+        f'value="{_e(target_version.order_version_id)}">'
         "<fieldset>"
-        "<p><strong>Rechnungsadresse</strong></p>"
-        + _address_input_block("invoice", invoice)
-        + "<p><label>Liefermodus</label>"
-        + (
-            f'<select name="delivery_address_mode" '
-            f"onchange=\"var box=document.getElementById('{_e(delivery_fields_id)}');"
-            "if(box){box.style.display=this.value==='SEPARATE'?'block':'none';}\">"
-        )
-        + f"{options}</select></p>"
-        f'<div id="{_e(delivery_fields_id)}" '
-        f'style="display:{delivery_display}">'
-        "<p><strong>Abweichende Lieferadresse</strong></p>"
         + _address_input_block("delivery", delivery)
-        + "</div>"
-        '<p><button type="submit">Adressen speichern</button></p>'
+        + '<p><button type="submit">Neuen Stand mit Lieferadresse anlegen</button></p>'
         "</fieldset></form></div></details>"
     )
 
@@ -888,6 +866,7 @@ def render_customer_addresses_card(
     order: Order,
     forms: OrderDetailFormFields,
     *,
+    target_version: OrderVersion | None = None,
     editable: bool = True,
     context: OfficePageContext | None = None,
 ) -> str:
@@ -924,12 +903,13 @@ def render_customer_addresses_card(
         f'<dd style="white-space:pre-line">{_e(effective_label)}</dd></div>'
     )
     form = (
-        _customer_addresses_form(inquiry, order, forms)
+        _customer_addresses_form(order, target_version, forms)
         if (
             editable
             and order.cancelled_at is None
+            and target_version is not None
             and page_context.can("inquiries.view")
-            and page_context.can("customers.edit")
+            and page_context.can("orders.version.create")
         )
         else ""
     )
@@ -1369,7 +1349,11 @@ def render_order_detail(
             source_inquiry, order, forms, context=page_context
         )
         + render_customer_addresses_card(
-            source_inquiry, order, forms, context=page_context
+            source_inquiry,
+            order,
+            forms,
+            target_version=target,
+            context=page_context,
         )
         + _confirmation_card(
             order, confirmation, forms, live_preview, context=page_context
