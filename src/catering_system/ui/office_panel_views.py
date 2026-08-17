@@ -30,16 +30,21 @@ def parse_datetime_local_berlin(value: str) -> datetime:
     raw = value.strip()
     if not raw:
         raise ValueError("datetime is required")
-    if len(raw) < 16 or raw[10] != "T":
+    if raw[10:11] != "T":
         raise ValueError("invalid datetime-local value")
-    parsed = datetime.strptime(raw[:16], "%Y-%m-%dT%H:%M")
+    if len(raw) == 16:
+        parsed = datetime.strptime(raw, "%Y-%m-%dT%H:%M")
+    elif len(raw) == 19:
+        parsed = datetime.strptime(raw, "%Y-%m-%dT%H:%M:%S")
+    else:
+        raise ValueError("invalid datetime-local value")
     return parsed.replace(tzinfo=BERLIN)
 
 
 def default_datetime_local_berlin() -> str:
     from catering_system.ui.office_api_views import BERLIN
 
-    return datetime.now(BERLIN).strftime("%Y-%m-%dT%H:%M")
+    return datetime.now(BERLIN).strftime("%Y-%m-%dT%H:%M:%S")
 
 
 def format_datetime_utc_iso(value: datetime) -> str:

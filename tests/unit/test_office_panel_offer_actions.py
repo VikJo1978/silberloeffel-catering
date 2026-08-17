@@ -473,6 +473,25 @@ def _offer_form_fields(html: str, action_suffix: str) -> dict[str, str]:
     return fields
 
 
+def _form_block(html: str, action_suffix: str) -> str:
+    match = re.search(
+        rf"(<form[^>]*{re.escape(action_suffix)}[^>]*>.*?</form>)",
+        html,
+        re.DOTALL,
+    )
+    assert match, f"missing form for {action_suffix!r}"
+    return match.group(1)
+
+
+def _input_value(html: str, name: str) -> str:
+    match = re.search(
+        rf'<input[^>]*name="{re.escape(name)}"[^>]*value="([^"]*)"',
+        html,
+    )
+    assert match, f"missing input value {name!r}"
+    return match.group(1)
+
+
 @pytest.fixture()
 def direct_world(tmp_path: Path):
     db = tmp_path / "offer-actions.db"
@@ -503,6 +522,35 @@ def test_prepared_shows_mark_sent_form_only(direct_world) -> None:
     assert 'action="/offer/' in html and "/mark-sent" in html
     assert "Annahme erfassen" not in html
     assert "In Auftrag umwandeln" not in html
+
+
+def test_mark_sent_unchanged_default_with_seconds_is_accepted(direct_world) -> None:
+    panel_url, api_url, ids, db = direct_world
+    offer_id, _version_id = _prepare_offer(api_url, ids["inquiry_convertible"])
+    _status, html = _get(f"{panel_url}/offer/{offer_id}")
+    form = _form_block(html, "/mark-sent")
+    sent_at = _input_value(form, "sent_at")
+    assert re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", sent_at)
+    assert 'name="sent_at"' in form and 'step="1"' in form
+    fields = _offer_form_fields(html, "/mark-sent")
+    fields.update(
+        {
+            "sent_at": sent_at,
+            "channel": "email",
+            "recipient_reference": "kunde@example.invalid",
+            "evidence_reference": "E-Mail Versand",
+        }
+    )
+
+    status, final_url, _body = _post(f"{panel_url}/offer/{offer_id}/mark-sent", fields)
+
+    assert status == 200
+    assert final_url.endswith(f"/offer/{offer_id}")
+    offers = SQLiteOfferRepository(db)
+    offer = offers.get(offer_id)
+    offers.close()
+    assert offer is not None
+    assert offer.sent_evidence[0].sent_at == parse_datetime_local_berlin(sent_at)
 
 
 def test_offer_detail_shows_position_description_and_composition(
@@ -671,6 +719,50 @@ def test_mark_sent_requires_evidence_reference(direct_world) -> None:
     status, _url, body = _post(f"{panel_url}/offer/{offer_id}/mark-sent", fields)
     assert status == 400
     assert "evidence_reference is required" in body or "Fehler" in body
+
+
+def test_mark_sent_future_timestamp_shows_german_error(direct_world) -> None:
+    panel_url, api_url, ids, _db = direct_world
+    offer_id, _version_id = _prepare_offer(api_url, ids["inquiry_convertible"])
+    _status, html = _get(f"{panel_url}/offer/{offer_id}")
+    fields = _offer_form_fields(html, "/mark-sent")
+    fields.update(
+        {
+            "sent_at": "2999-01-01T10:00",
+            "channel": "email",
+            "recipient_reference": "kunde@example.invalid",
+            "evidence_reference": "E-Mail vom 01.01.2999",
+        }
+    )
+
+    status, _url, body = _post(f"{panel_url}/offer/{offer_id}/mark-sent", fields)
+
+    assert status == 400
+    assert "Der Versandnachweis ist ungültig" in body
+    assert "invalid_sent_evidence" not in body
+
+
+def test_mark_sent_before_offer_version_created_at_shows_german_error(
+    direct_world,
+) -> None:
+    panel_url, api_url, ids, _db = direct_world
+    offer_id, _version_id = _prepare_offer(api_url, ids["inquiry_convertible"])
+    _status, html = _get(f"{panel_url}/offer/{offer_id}")
+    fields = _offer_form_fields(html, "/mark-sent")
+    fields.update(
+        {
+            "sent_at": "2000-01-01T10:00:00",
+            "channel": "email",
+            "recipient_reference": "kunde@example.invalid",
+            "evidence_reference": "E-Mail vom 01.01.2000",
+        }
+    )
+
+    status, _url, body = _post(f"{panel_url}/offer/{offer_id}/mark-sent", fields)
+
+    assert status == 400
+    assert "Der Versandnachweis ist ungültig" in body
+    assert "invalid_sent_evidence" not in body
 
 
 def test_datetime_local_converts_to_berlin_iso(direct_world) -> None:
