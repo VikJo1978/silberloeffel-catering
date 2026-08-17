@@ -13,6 +13,8 @@ from datetime import UTC, date, datetime
 from http.server import HTTPServer
 from pathlib import Path
 
+import pytest
+
 from catering_system.domain.customer_document_projection import CustomerAddress
 from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot
 from catering_system.domain.order import OrderVersion
@@ -265,6 +267,95 @@ def _panel(db: Path, *, ui_version: str = "v2") -> OfficePanel:
         command_executor=CoreCommandExecutor(connection),
         ui_version=ui_version,
     )
+
+
+def test_panel_change_delivery_address_creates_order_version_with_parent_context(
+    tmp_path: Path,
+) -> None:
+    db, order_id, inquiry_id = _seed_order_world(tmp_path)
+    panel = _panel(db)
+    order = panel._orders.get_order(order_id)
+    assert order is not None
+    v1 = panel._orders.list_order_versions(order_id)[0]
+    v1_context = panel._orders.get_operational_context(v1.order_version_id)
+    assert v1_context is not None
+    before_inquiry = panel._inquiries.get_by_id(inquiry_id)
+    assert before_inquiry is not None
+
+    panel.change_delivery_address(
+        order_id,
+        {
+            "parent_order_version_id": v1.order_version_id,
+            "delivery_street": "Neue Lieferstraße 7",
+            "delivery_postal_code": "20097",
+            "delivery_city": "Hamburg",
+            "delivery_country": "DE",
+            "_expect_latest_version_number": "1",
+            "_expect_current_effective_order_version_id": (
+                order.effective_order_version_id or ""
+            ),
+            "_expect_current_candidate_order_version_id": (
+                order.candidate_order_version_id or ""
+            ),
+        },
+    )
+
+    versions = panel._orders.list_order_versions(order_id)
+    assert [version.version_number for version in versions] == [1, 2]
+    v2 = versions[1]
+    assert v2.parent_order_version_id == v1.order_version_id
+    assert v2.changed_fields == ("delivery_address",)
+    v2_context = panel._orders.get_operational_context(v2.order_version_id)
+    assert v2_context is not None
+    assert v2_context.source == "explicit_change"
+    assert v2_context.recipient_company == v1_context.recipient_company
+    assert v2_context.recipient_name == v1_context.recipient_name
+    assert v2_context.recipient_phone == v1_context.recipient_phone
+    assert v2_context.delivery_address is not None
+    assert v2_context.delivery_address.street == "Neue Lieferstraße 7"
+    assert panel._orders.get_operational_context(v1.order_version_id) == v1_context
+    after_inquiry = panel._inquiries.get_by_id(inquiry_id)
+    assert after_inquiry is not None
+    assert after_inquiry.customer_snapshot == before_inquiry.customer_snapshot
+
+
+def test_panel_change_delivery_address_rejects_missing_parent_id(
+    tmp_path: Path,
+) -> None:
+    db, order_id, _inquiry_id = _seed_order_world(tmp_path)
+    panel = _panel(db)
+
+    with pytest.raises(ValueError, match="parent_order_version_id is required"):
+        panel.change_delivery_address(
+            order_id,
+            {
+                "delivery_street": "Neue Lieferstraße 7",
+                "delivery_postal_code": "20097",
+                "delivery_city": "Hamburg",
+                "delivery_country": "DE",
+            },
+        )
+
+
+def test_panel_change_delivery_address_preserves_stale_state_gate(
+    tmp_path: Path,
+) -> None:
+    db, order_id, _inquiry_id = _seed_order_world(tmp_path)
+    panel = _panel(db)
+    v1 = panel._orders.list_order_versions(order_id)[0]
+
+    with pytest.raises(ValueError, match="zwischenzeitlich geändert"):
+        panel.change_delivery_address(
+            order_id,
+            {
+                "parent_order_version_id": v1.order_version_id,
+                "delivery_street": "Neue Lieferstraße 7",
+                "delivery_postal_code": "20097",
+                "delivery_city": "Hamburg",
+                "delivery_country": "DE",
+                "_expect_latest_version_number": "99",
+            },
+        )
 
 
 def test_order_detail_shows_separate_addresses_after_service_write(
