@@ -293,7 +293,7 @@ def test_print_confirm_task_emitted() -> None:
     assert print_row.title == "Druck bestätigen"
 
 
-def test_effective_task_emitted() -> None:
+def test_effective_task_not_emitted_after_manual_print_confirmation() -> None:
     inquiries = InMemoryInquiryRepository()
     orders = InMemoryOrderRepository()
     inquiry = _save_inquiry(inquiries)
@@ -302,11 +302,7 @@ def test_effective_task_emitted() -> None:
         order.order_id, version.order_version_id
     )
     rows = _service(inquiries=inquiries, orders=orders).list_tasks()
-    assert any(row.category == "order_effective" for row in rows)
-    effective_row = next(row for row in rows if row.category == "order_effective")
-    assert effective_row.task_id == (
-        f"order:{order.order_id}:effective:{version.order_version_id}"
-    )
+    assert not any(row.category == "order_effective" for row in rows)
 
 
 def test_payment_task_emitted_with_overdue_urgency() -> None:

@@ -17,7 +17,10 @@ from catering_system.domain.kitchen_print_job import (
     KitchenPrintJob,
     KitchenPrintPolicy,
 )
-from catering_system.domain.operational_core_events import KitchenPrintConfirmed
+from catering_system.domain.operational_core_events import (
+    KitchenPrintConfirmed,
+    OrderVersionMadeEffective,
+)
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.repositories.kitchen_print_job_repository import (
     KitchenPrintJobRepository,
@@ -185,7 +188,7 @@ class KitchenPrintService:
         a duplicate KitchenPrintConfirmed event.
         """
 
-        job, _order, version = self._active_job_context(print_job_id)
+        job, order, version = self._active_job_context(print_job_id)
         if job.acknowledged_at is not None:
             stored_version = self._orders.get_order_version(job.order_version_id)
             assert stored_version is not None
@@ -208,7 +211,13 @@ class KitchenPrintService:
             if confirmation_was_new
             else version
         )
-        self._jobs.acknowledge_and_confirm(acknowledged, confirmed_version)
+        activated_order = self._activation_after_successful_print(order, version, now)
+        activation_applied = self._jobs.acknowledge_and_confirm(
+            acknowledged,
+            confirmed_version,
+            expected_order=order,
+            activated_order=activated_order,
+        )
         if confirmation_was_new and self._event_sink is not None:
             self._event_sink(
                 KitchenPrintConfirmed(
@@ -216,7 +225,40 @@ class KitchenPrintService:
                     order_version_id=job.order_version_id,
                 )
             )
+        if activation_applied and self._event_sink is not None:
+            self._event_sink(
+                OrderVersionMadeEffective(
+                    order_id=job.order_id,
+                    order_version_id=job.order_version_id,
+                )
+            )
         return acknowledged, confirmed_version
+
+    @staticmethod
+    def _activation_after_successful_print(
+        order: Order, version: OrderVersion, now: datetime
+    ) -> Order | None:
+        if order.cancelled_at is not None:
+            return None
+        if order.candidate_order_version_id == version.order_version_id:
+            return replace(
+                order,
+                effective_order_version_id=version.order_version_id,
+                candidate_order_version_id=None,
+                updated_at=now,
+            )
+        if (
+            order.effective_order_version_id is None
+            and order.candidate_order_version_id is None
+            and version.version_number == 1
+            and version.parent_order_version_id is None
+        ):
+            return replace(
+                order,
+                effective_order_version_id=version.order_version_id,
+                updated_at=now,
+            )
+        return None
 
     def reprint(
         self,

@@ -67,6 +67,8 @@ def _panel_action(order: Order, repo: InMemoryOrderRepository) -> dict | None:
         return None
     action = re.search(r"/order/[^/]+/([a-z-]+)\"", html)
     version = re.search(r'name="order_version_id" value="([^"]+)"', html)
+    if action is None and version is None:
+        return None
     assert action and version
     return {"action": action.group(1), "order_version_id": version.group(1)}
 

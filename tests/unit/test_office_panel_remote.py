@@ -1325,8 +1325,8 @@ def test_full_write_flow_through_remote_panel(remote_world) -> None:
         order_html,
         re.DOTALL,
     )
-    assert f'action="/order/{order_id}/effective"' in order_html
-    assert "Wirksam machen" in order_html
+    assert f'action="/order/{order_id}/effective"' not in order_html
+    assert "Wirksam machen" not in order_html
 
     ready_command_id = _extract_hidden(
         re.search(
@@ -1337,24 +1337,6 @@ def test_full_write_flow_through_remote_panel(remote_world) -> None:
     status, _body = _post_form(
         f"{base}/order/{order_id}/ready",
         {"_csrf_token": _CSRF_TOKEN, "_command_id": ready_command_id},
-    )
-    assert status == 200  # not yet effective, but the command itself succeeds
-
-    effective_command_id = _extract_hidden(
-        re.search(
-            r'(<form[^>]*action="/order/[^"]*/effective"[^>]*>.*?</form>)', order_html
-        ).group(0),
-        "_command_id",
-    )
-    effective_expect = _extract_hidden(order_html, "_expect_effective_version_id")
-    status, _body = _post_form(
-        f"{base}/order/{order_id}/effective",
-        {
-            "_csrf_token": _CSRF_TOKEN,
-            "_command_id": effective_command_id,
-            "_expect_effective_version_id": effective_expect,
-            "order_version_id": version_id,
-        },
     )
     assert status == 200
 

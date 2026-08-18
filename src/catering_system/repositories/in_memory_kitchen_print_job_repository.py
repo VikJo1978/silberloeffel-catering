@@ -11,7 +11,7 @@ from catering_system.domain.kitchen_print_job import (
     KitchenPrintPolicy,
     validate_kitchen_print_job_transition,
 )
-from catering_system.domain.order import OrderVersion
+from catering_system.domain.order import Order, OrderVersion
 from catering_system.repositories.order_repository import OrderRepository
 
 
@@ -79,8 +79,13 @@ class InMemoryKitchenPrintJobRepository:
         self._jobs = next_jobs
 
     def acknowledge_and_confirm(
-        self, job: KitchenPrintJob, confirmed_version: OrderVersion
-    ) -> None:
+        self,
+        job: KitchenPrintJob,
+        confirmed_version: OrderVersion,
+        *,
+        expected_order: Order,
+        activated_order: Order | None = None,
+    ) -> bool:
         previous_job = self._jobs.get(job.print_job_id)
         if previous_job is None:
             raise KeyError(job.print_job_id)
@@ -104,14 +109,32 @@ class InMemoryKitchenPrintJobRepository:
                 raise ValueError("confirmation facts must share one timestamp")
         elif confirmed_version != previous_version:
             raise ValueError("existing kitchen confirmation is not revocable")
+        current_order = self._orders.get_order(job.order_id)
+        if current_order is None:
+            raise KeyError(job.order_id)
+        if activated_order is not None:
+            if activated_order.order_id != job.order_id:
+                raise ValueError("activated order does not belong to print job")
+            if activated_order.effective_order_version_id != job.order_version_id:
+                raise ValueError("activated order must select the printed version")
 
-        # Both writes have been fully validated. The OrderRepository update is
-        # the only operation that can fail; the dict swap after it cannot leave
-        # a partial in-memory state.
+        # All writes have been fully validated. Repository updates happen before
+        # the local job dict swap, so a failure cannot leave a partial job state.
+        activation_applied = (
+            activated_order is not None
+            and current_order.candidate_order_version_id
+            == expected_order.candidate_order_version_id
+            and current_order.effective_order_version_id
+            == expected_order.effective_order_version_id
+        )
+        if activation_applied:
+            assert activated_order is not None
+            self._orders.update_order(activated_order)
         self._orders.update_order_version(confirmed_version)
         next_jobs = dict(self._jobs)
         next_jobs[job.print_job_id] = job
         self._jobs = next_jobs
+        return activation_applied
 
     def claim_next_eligible(
         self, now: datetime, policy: KitchenPrintPolicy

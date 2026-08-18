@@ -6,7 +6,7 @@ from datetime import datetime
 from typing import Protocol
 
 from catering_system.domain.kitchen_print_job import KitchenPrintJob, KitchenPrintPolicy
-from catering_system.domain.order import OrderVersion
+from catering_system.domain.order import Order, OrderVersion
 
 
 class KitchenPrintJobRepository(Protocol):
@@ -28,8 +28,13 @@ class KitchenPrintJobRepository(Protocol):
     ) -> None: ...
 
     def acknowledge_and_confirm(
-        self, job: KitchenPrintJob, confirmed_version: OrderVersion
-    ) -> None: ...
+        self,
+        job: KitchenPrintJob,
+        confirmed_version: OrderVersion,
+        *,
+        expected_order: Order,
+        activated_order: Order | None = None,
+    ) -> bool: ...
 
     def claim_next_eligible(
         self, now: datetime, policy: KitchenPrintPolicy

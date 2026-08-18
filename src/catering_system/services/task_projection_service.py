@@ -163,25 +163,6 @@ class TaskProjectionService:
                             event_date,
                         )
                     )
-                elif next_action["action"] == "effective":
-                    tasks.append(
-                        (
-                            TaskProjection(
-                                task_id=f"order:{order.order_id}:effective:{version_id}",
-                                category="order_effective",
-                                title="Version wirksam setzen",
-                                subtitle=subtitle,
-                                entity_type="order",
-                                entity_id=order.order_id,
-                                action_label="Auftrag öffnen",
-                                action_href=f"/order/{order.order_id}",
-                                due_at=None,
-                                urgency="normal",
-                                opened_at=order.created_at,
-                            ),
-                            event_date,
-                        )
-                    )
             try:
                 payment = self._payment_reminders.view(order.order_id)
             except (KeyError, ValueError):

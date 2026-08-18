@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import fields
+from dataclasses import fields, replace
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -21,7 +21,10 @@ from catering_system.domain.kitchen_print_job import (
     KitchenPrintPolicy,
     derive_kitchen_print_job_state,
 )
-from catering_system.domain.operational_core_events import KitchenPrintConfirmed
+from catering_system.domain.operational_core_events import (
+    KitchenPrintConfirmed,
+    OrderVersionMadeEffective,
+)
 from catering_system.repositories.in_memory_kitchen_print_job_repository import (
     InMemoryKitchenPrintJobRepository,
 )
@@ -30,6 +33,8 @@ from catering_system.repositories.in_memory_order_repository import (
 )
 from catering_system.services.kitchen_print_service import KitchenPrintService
 from catering_system.services.operational_core_service import OperationalCoreService
+from catering_system.services.order_service import OrderService
+from catering_system.ui.office_panel import OfficePanel
 from tests.helpers.order_seed import seed_order
 
 _CONTACT_COMPLETE_SNAPSHOT = _CCSnapshot(
@@ -169,9 +174,11 @@ def test_ack_before_deadline_atomically_confirms_version() -> None:
     assert orders.get_order_version(version_id) == version
     assert derive_kitchen_print_job_state(acknowledged, now=clock.now) == "confirmed"
     assert events == [
-        KitchenPrintConfirmed(order_id=order_id, order_version_id=version_id)
+        KitchenPrintConfirmed(order_id=order_id, order_version_id=version_id),
+        OrderVersionMadeEffective(order_id=order_id, order_version_id=version_id),
     ]
-    assert core.evaluate_ready_to_send(order_id).ready is False  # still not effective
+    assert core.evaluate_ready_to_send(order_id).ready is True
+    assert orders.get_order(order_id).effective_order_version_id == version_id
 
 
 def test_ack_after_deadline_is_rejected_and_explicit_reprint_is_possible() -> None:
@@ -211,7 +218,7 @@ def test_repeated_ack_keeps_original_facts_and_emits_once() -> None:
     assert second_job == first_job
     assert second_version == first_version
     assert second_job.acknowledged_at != clock.now
-    assert len(events) == 1
+    assert len(events) == 2
 
 
 def test_reprint_creates_new_job_and_supersedes_live_attempt() -> None:
@@ -260,7 +267,7 @@ def test_multiple_jobs_for_same_version_preserve_attempt_history() -> None:
     assert rows[1].rejection_code == "printer_unavailable"
 
 
-def test_effective_switch_stays_blocked_until_job_ack_then_succeeds() -> None:
+def test_effective_switch_is_automatic_after_job_ack() -> None:
     _orders, service, core, _clock, order_id, version_id, _events = _setup()
     service.request_print(order_id, version_id, print_job_id=JOB_1)
     service.accept_print_job(JOB_1)
@@ -269,8 +276,169 @@ def test_effective_switch_stays_blocked_until_job_ack_then_succeeds() -> None:
         core.make_order_version_effective(order_id, version_id)
 
     service.acknowledge_print_job(JOB_1)
-    updated = core.make_order_version_effective(order_id, version_id)
-    assert updated.effective_order_version_id == version_id
+    assert core.evaluate_ready_to_send(order_id).ready is True
+
+
+def test_ack_activates_current_candidate_version() -> None:
+    orders, service, _core, _clock, order_id, version_id, _events = _setup()
+    order_service = OrderService(orders)
+    order = orders.get_order(order_id)
+    assert order is not None
+    v2 = order_service.create_relevant_order_change_version(
+        order,
+        event_date=date(2026, 10, 2),
+        time_window_text="abends",
+        location_text="Kiel",
+        guest_count_estimate=12,
+        planning_mode="caterer_suggestion",
+    )
+    order_service.set_candidate_order_version(order_id, v2.order_version_id)
+    service.request_print(order_id, v2.order_version_id, print_job_id=JOB_1)
+    service.accept_print_job(JOB_1)
+
+    _acknowledged, confirmed = service.acknowledge_print_job(JOB_1)
+
+    order = orders.get_order(order_id)
+    assert confirmed.order_version_id == v2.order_version_id
+    assert confirmed.kitchen_print_confirmed_at is not None
+    assert order is not None
+    assert order.effective_order_version_id == v2.order_version_id
+    assert order.candidate_order_version_id is None
+    assert orders.get_order_version(version_id).kitchen_print_confirmed_at is None
+
+
+def test_ack_for_stale_print_confirms_but_does_not_activate_old_candidate() -> None:
+    orders, service, _core, _clock, order_id, _version_id, _events = _setup()
+    order_service = OrderService(orders)
+    order = orders.get_order(order_id)
+    assert order is not None
+    v2 = order_service.create_relevant_order_change_version(
+        order,
+        event_date=date(2026, 10, 2),
+        time_window_text="abends",
+        location_text="Kiel",
+        guest_count_estimate=12,
+        planning_mode="caterer_suggestion",
+    )
+    order_service.set_candidate_order_version(order_id, v2.order_version_id)
+    service.request_print(order_id, v2.order_version_id, print_job_id=JOB_1)
+    service.accept_print_job(JOB_1)
+    order = orders.get_order(order_id)
+    assert order is not None
+    v3 = order_service.create_relevant_order_change_version(
+        order,
+        event_date=date(2026, 10, 3),
+        time_window_text="mittags",
+        location_text="Lübeck",
+        guest_count_estimate=18,
+        planning_mode="caterer_suggestion",
+    )
+    order_service.set_candidate_order_version(order_id, v3.order_version_id)
+
+    _acknowledged, confirmed = service.acknowledge_print_job(JOB_1)
+
+    order = orders.get_order(order_id)
+    assert confirmed.order_version_id == v2.order_version_id
+    assert confirmed.kitchen_print_confirmed_at is not None
+    assert order is not None
+    assert order.effective_order_version_id is None
+    assert order.candidate_order_version_id == v3.order_version_id
+
+
+def test_successful_retry_activates_exact_current_candidate() -> None:
+    orders, service, _core, _clock, order_id, _version_id, _events = _setup()
+    order = orders.get_order(order_id)
+    assert order is not None
+    v2 = OrderService(orders).create_relevant_order_change_version(
+        order,
+        event_date=date(2026, 10, 2),
+        time_window_text="abends",
+        location_text="Kiel",
+        guest_count_estimate=12,
+        planning_mode="caterer_suggestion",
+    )
+    OrderService(orders).set_candidate_order_version(order_id, v2.order_version_id)
+    service.request_print(order_id, v2.order_version_id, print_job_id=JOB_1)
+    service.reject_print_job(JOB_1, "spool_rejected")
+    retry = service.reprint(JOB_1, new_print_job_id=JOB_2)
+    service.accept_print_job(JOB_2)
+
+    service.acknowledge_print_job(JOB_2)
+
+    attempts = service.list_print_jobs_for_version(v2.order_version_id)
+    order = orders.get_order(order_id)
+    assert attempts[0].rejection_code == "spool_rejected"
+    assert attempts[1].print_job_id == retry.print_job_id
+    assert order is not None
+    assert order.effective_order_version_id == v2.order_version_id
+    assert order.candidate_order_version_id is None
+
+
+def test_rejected_print_does_not_confirm_or_activate_candidate() -> None:
+    orders, service, _core, clock, order_id, _version_id, _events = _setup()
+    order = orders.get_order(order_id)
+    assert order is not None
+    v2 = OrderService(orders).create_relevant_order_change_version(
+        order,
+        event_date=date(2026, 10, 2),
+        time_window_text="abends",
+        location_text="Kiel",
+        guest_count_estimate=12,
+        planning_mode="caterer_suggestion",
+    )
+    OrderService(orders).set_candidate_order_version(order_id, v2.order_version_id)
+
+    service.request_print(order_id, v2.order_version_id, print_job_id=JOB_1)
+    service.reject_print_job(JOB_1, "printer_unavailable")
+
+    order = orders.get_order(order_id)
+    version = orders.get_order_version(v2.order_version_id)
+    assert version is not None
+    assert version.kitchen_print_confirmed_at is None
+    assert order is not None
+    assert order.effective_order_version_id is None
+    assert order.candidate_order_version_id == v2.order_version_id
+    assert (
+        service._activation_after_successful_print(
+            replace(order, cancelled_at=clock.now),
+            version,
+            clock.now,
+        )
+        is None
+    )
+
+
+def test_office_print_status_message_tracks_attempt_lifecycle() -> None:
+    _orders, service, _core, clock, order_id, version_id, _events = _setup()
+    panel = OfficePanel.__new__(OfficePanel)
+    panel.kitchen_print_service = service
+    service.request_print(order_id, version_id, print_job_id=JOB_1)
+    service.accept_print_job(JOB_1)
+
+    assert (
+        panel._kitchen_print_status_message(version_id)
+        == "Druckauftrag wird verarbeitet …"
+    )
+    clock.advance(timedelta(minutes=3))
+    assert (
+        panel._kitchen_print_status_message(version_id)
+        == "Druckauftrag fehlgeschlagen."
+    )
+    service.reject_print_job(JOB_1, "printer_unavailable")
+    assert (
+        panel._kitchen_print_status_message(version_id) == "Drucker nicht erreichbar."
+    )
+
+    _orders, service, _core, _clock, order_id, version_id, _events = _setup()
+    panel.kitchen_print_service = service
+    service.request_print(order_id, version_id, print_job_id=JOB_1)
+    service.accept_print_job(JOB_1)
+    service.acknowledge_print_job(JOB_1)
+
+    assert (
+        panel._kitchen_print_status_message(version_id)
+        == "Küchenzettel erfolgreich gedruckt"
+    )
 
 
 def test_existing_manual_confirmation_flow_is_unchanged() -> None:

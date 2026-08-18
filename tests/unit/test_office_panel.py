@@ -1035,8 +1035,9 @@ def test_order_page_offers_effective_only_after_print_confirmation(panel: str) -
     _simulate_kitchen_agent_ack(panel, vid)
     _status, body = _get(f"{panel}/order/{oid}")
     assert f'action="/order/{oid}/print-confirm"' not in body
-    assert f'action="/order/{oid}/effective"' in body
-    assert "Wirksam machen" in body
+    assert f'action="/order/{oid}/effective"' not in body
+    assert "Wirksam machen" not in body
+    assert "READY_TO_SEND: bereit" in body
 
 
 def test_stale_print_attempt_offers_explicit_reprint(panel: str) -> None:
@@ -1077,10 +1078,6 @@ def test_full_release_flow(panel: str) -> None:
     vid = body.split('name="order_version_id" value="')[1].split('"')[0]
     _post(f"{panel}/order/{oid}/print-confirm", {"order_version_id": vid})
     _simulate_kitchen_agent_ack(panel, vid)
-    _status, _url, body = _post(
-        f"{panel}/order/{oid}/effective", {"order_version_id": vid}
-    )
-    assert "wirksam" in body
     _status, _url, body = _post(f"{panel}/order/{oid}/ready", {})
     assert "READY_TO_SEND: bereit" in body
 
@@ -1147,22 +1144,14 @@ def test_v2_order_detail_guides_print_effective_and_release(
     _simulate_kitchen_agent_ack(premium_panel, version_id)
     _status, printed = _get(f"{premium_panel}/order/{order_id}")
 
-    assert "Stand 1 als Küchenstand festlegen" in printed
+    assert "Vorbereitung vollständig" in printed
+    assert "Die Versandfreigabe ist erfüllt." in printed
     assert f'action="/order/{order_id}/print-confirm"' not in printed
-    assert f'action="/order/{order_id}/effective"' in printed
+    assert f'action="/order/{order_id}/effective"' not in printed
 
-    _post(
-        f"{premium_panel}/order/{order_id}/effective",
-        {"order_version_id": version_id},
-    )
-    _status, effective = _get(f"{premium_panel}/order/{order_id}")
+    assert f'action="/order/{order_id}/ready"' in printed
 
-    assert "Vorbereitung vollständig" in effective
-    assert "Die Versandfreigabe ist erfüllt." in effective
-    assert f'action="/order/{order_id}/effective"' not in effective
-    assert f'action="/order/{order_id}/ready"' in effective
-
-    visible = html.unescape(re.sub(r"<[^>]+>", " ", effective))
+    visible = html.unescape(re.sub(r"<[^>]+>", " ", printed))
     assert order_id[:8] not in visible
     assert inquiry_id[:8] not in visible
     assert "caterer_suggestion" not in visible
@@ -1215,6 +1204,65 @@ def test_v2_order_detail_prefers_new_candidate_over_ready_old_stand(
     assert "Eine Änderung wartet noch auf Küchendruck" in body
     assert "Aktueller Küchenstand" in body
     assert "Aktueller Bearbeitungsstand" in body
+
+
+def test_v2_stale_print_ack_shows_human_warning_without_manual_effective_action(
+    premium_panel: str,
+) -> None:
+    inquiry_id = _create_inquiry(premium_panel)
+    order_id = _convert(premium_panel, inquiry_id)
+    _status, initial = _get(f"{premium_panel}/order/{order_id}")
+    v1_id = re.search(r'name="order_version_id" value="([^"]+)"', initial).group(1)
+    _post(
+        f"{premium_panel}/order/{order_id}/print-confirm", {"order_version_id": v1_id}
+    )
+    _simulate_kitchen_agent_ack(premium_panel, v1_id)
+
+    _status, before_v2 = _get(f"{premium_panel}/order/{order_id}")
+    latest_version_number = re.search(
+        r'name="latest_version_number" value="([^"]+)"',
+        before_v2,
+    ).group(1)
+    _post(
+        f"{premium_panel}/order/{order_id}/version",
+        {
+            "latest_version_number": latest_version_number,
+            "event_date": "2026-10-02",
+            "time_window_text": "abends",
+            "location_text": "Kiel",
+            "guest_count_estimate": "30",
+            "planning_mode": "caterer_suggestion",
+        },
+    )
+    _status, v2_page = _get(f"{premium_panel}/order/{order_id}")
+    v2_id = re.search(r'name="order_version_id" value="([^"]+)"', v2_page).group(1)
+    _post(
+        f"{premium_panel}/order/{order_id}/print-confirm", {"order_version_id": v2_id}
+    )
+
+    latest_version_number = re.search(
+        r'name="latest_version_number" value="([^"]+)"',
+        v2_page,
+    ).group(1)
+    _post(
+        f"{premium_panel}/order/{order_id}/version",
+        {
+            "latest_version_number": latest_version_number,
+            "event_date": "2026-10-03",
+            "time_window_text": "mittags",
+            "location_text": "Lübeck",
+            "guest_count_estimate": "40",
+            "planning_mode": "self_select",
+        },
+    )
+
+    _simulate_kitchen_agent_ack(premium_panel, v2_id)
+    _status, body = _get(f"{premium_panel}/order/{order_id}")
+
+    assert "Küchendruck nicht übernommen" in body
+    assert "inzwischen gibt es einen neueren Stand" in body
+    assert f'action="/order/{order_id}/effective"' not in body
+    assert "Wirksam machen" not in body
 
 
 def test_v2_create_version_rejects_stale_latest_version_number(
@@ -2086,8 +2134,8 @@ def test_next_step_never_offers_effective_before_print_confirmed() -> None:
     panel.core.confirm_kitchen_print(order.order_id, v1.order_version_id)
     order = panel._orders.get_order(order.order_id)
     action_html = panel._next_step_action(order, context=legacy_office_context())
-    assert "Wirksam machen" in action_html
-    assert f'action="/order/{order.order_id}/effective"' in action_html
+    assert "Küchenzettel wurde gedruckt" in action_html
+    assert f'action="/order/{order.order_id}/effective"' not in action_html
 
 
 def test_next_step_falls_back_to_latest_when_candidate_is_foreign() -> None:

@@ -309,9 +309,12 @@ def test_ack_confirms_order_version_and_replays(kitchen_api) -> None:
 
     orders = SQLiteOrderRepository(db)
     version = orders.get_order_version(version_id)
+    order = orders.get_order(_order_id)
     orders.close()
     assert version is not None
     assert version.kitchen_print_confirmed_at == _NOW
+    assert order is not None
+    assert order.effective_order_version_id == version_id
 
 
 def test_ack_requires_agent_auth(kitchen_api) -> None:

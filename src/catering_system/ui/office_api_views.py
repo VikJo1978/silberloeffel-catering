@@ -559,8 +559,9 @@ def resolve_next_action(
 ) -> dict[str, str] | None:
     """Exactly the panel's `_next_step_action` rule (§1.2): target version =
     candidate if it names a real owned version, else the highest
-    version_number; print-confirm before effective; null when cancelled,
-    versionless, or nothing to do."""
+    version_number; print-confirm is the only manual next action because
+    kitchen-agent ACK activates a safe/current printed version automatically;
+    null when cancelled, versionless, or nothing to do."""
     if order.cancelled_at is not None or not versions:
         return None
     target = next(
@@ -571,8 +572,6 @@ def resolve_next_action(
         target = max(versions, key=lambda v: v.version_number)
     if target.kitchen_print_confirmed_at is None:
         return {"action": "print-confirm", "order_version_id": target.order_version_id}
-    if target.order_version_id != order.effective_order_version_id:
-        return {"action": "effective", "order_version_id": target.order_version_id}
     return None
 
 
