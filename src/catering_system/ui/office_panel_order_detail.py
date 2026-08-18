@@ -30,6 +30,7 @@ from catering_system.services.order_confirmation_document_service import (
 from catering_system.services.order_confirmation_outbound_service import (
     OutboundSendEligibility,
 )
+from catering_system.services.order_print_projection_service import PrintPositionLine
 from catering_system.ui.office_panel_views import OfficePageContext
 from catering_system.ui.operational_pause_labels import (
     PAUSE_REASON_LABELS,
@@ -101,9 +102,7 @@ _READY_BLOCKER_LABELS = {
     "kitchen_print_not_confirmed": (
         "Für den aktuellen Küchenstand fehlt die Druckbestätigung."
     ),
-    "pending_order_version_change": (
-        "Eine Änderung wartet noch auf Küchendruck und Wirksamstellung."
-    ),
+    "pending_order_version_change": ("Eine Änderung wartet noch auf Küchendruck."),
     "operational_pause": "Der Auftrag ist betrieblich pausiert.",
 }
 
@@ -171,6 +170,7 @@ class OrderDetailFormFields:
     confirmation_command_fields: str = ""
     print_confirm_button_labels: Mapping[str, str] = field(default_factory=dict)
     print_status_messages: Mapping[str, str] = field(default_factory=dict)
+    print_action_available: Mapping[str, bool] = field(default_factory=dict)
     send_command_fields: str = ""
     pause_command_fields: str = ""
     resume_command_fields: str = ""
@@ -186,6 +186,20 @@ class OrderDetailPage:
 
     title: str
     body: str
+
+
+@dataclass(frozen=True)
+class OrderDetailOperationalData:
+    """Exact target-version data prepared by the Office Panel read boundary."""
+
+    company_name: str | None = None
+    contact_name: str | None = None
+    phone: str | None = None
+    delivery_address_lines: tuple[str, ...] = ()
+    operational_context_available: bool = False
+    variant_label: str | None = None
+    positions: tuple[PrintPositionLine, ...] = ()
+    positions_available: bool = False
 
 
 def _e(value: object) -> str:
@@ -269,12 +283,8 @@ def _state_copy(
             "Historie und Küchenzettel bleiben zur Einsicht verfügbar.",
         )
     if operational_pause.get("active"):
-        reason = _e(
-            str(
-                operational_pause.get("reason_code")
-                or operational_pause.get("reason")
-                or "–"
-            )
+        reason = _pause_reason_label(
+            operational_pause.get("reason_code") or operational_pause.get("reason")
         )
         return (
             "Betrieblich pausiert",
@@ -307,6 +317,8 @@ def _primary_action(
     next_action: Mapping[str, str] | None,
     forms: OrderDetailFormFields,
     *,
+    ready: ReadyToSendEvaluation,
+    operational_pause: Mapping[str, object],
     context: OfficePageContext,
 ) -> str:
     if order.cancelled_at is not None:
@@ -317,12 +329,53 @@ def _primary_action(
             "<p>Der Auftrag ist storniert und bleibt schreibgeschützt.</p>"
             "</section>"
         )
-    if target is None or next_action is None:
+    if operational_pause.get("active"):
+        pause_action = (
+            '<a class="order-button" href="#order-pause-controls">Pause aufheben</a>'
+            if context.can("orders.pause")
+            else ""
+        )
+        return (
+            '<section class="order-next-step muted">'
+            '<div class="order-eyebrow">Nächster Schritt</div>'
+            "<h2>Auftragspause klären</h2>"
+            "<p>Prüfen Sie den Pausengrund und setzen Sie den Auftrag anschließend fort.</p>"
+            f'<div class="order-next-actions">{pause_action}</div></section>'
+        )
+    if target is None:
+        return (
+            '<section class="order-next-step muted">'
+            '<div class="order-eyebrow">Nächster Schritt</div>'
+            "<h2>Auftragsdaten prüfen</h2>"
+            "<p>Für diesen Auftrag ist kein gültiger Stand verfügbar.</p>"
+            "</section>"
+        )
+    if next_action is None:
+        if not ready.ready:
+            blockers = " ".join(
+                _ready_blocker_label(reason) for reason in ready.reasons
+            )
+            return (
+                '<section class="order-next-step muted">'
+                '<div class="order-eyebrow">Nächster Schritt</div>'
+                "<h2>Auftragsdaten prüfen</h2>"
+                f"<p>{_e(blockers)}</p>"
+                "</section>"
+            )
+        ready_action = ""
+        if context.can("orders.ready.release"):
+            ready_action = (
+                f'<form method="post" action="/order/{_e(order.order_id)}/ready">'
+                f"{forms.csrf_input}{forms.ready_command_fields}"
+                '<button class="order-button" type="submit">'
+                "Versandfreigabe prüfen</button></form>"
+            )
         return (
             '<section class="order-next-step complete">'
             '<div class="order-eyebrow">Nächster Schritt</div>'
-            "<h2>Kein offener Vorbereitungsschritt</h2>"
-            "<p>Prüfen Sie die Versandfreigabe und den separaten Zahlungsbereich.</p>"
+            "<h2>Vorbereitung vollständig</h2>"
+            "<p>Der Küchenstand ist bestätigt. Prüfen Sie jetzt die Versandfreigabe.</p>"
+            f'<div class="order-next-actions">{ready_action}</div>'
             "</section>"
         )
     action = next_action.get("action")
@@ -331,7 +384,13 @@ def _primary_action(
             not context.can("orders.print.confirm")
             or target.order_version_id not in forms.print_confirm_command_fields
         ):
-            return ""
+            return (
+                '<section class="order-next-step muted">'
+                '<div class="order-eyebrow">Nächster Schritt</div>'
+                "<h2>Küchendruck erforderlich</h2>"
+                "<p>Der aktuelle Stand muss vor der weiteren Bearbeitung gedruckt werden.</p>"
+                "</section>"
+            )
         command_fields = forms.print_confirm_command_fields.get(
             target.order_version_id, ""
         )
@@ -340,31 +399,35 @@ def _primary_action(
         )
         status_message = forms.print_status_messages.get(
             target.order_version_id,
-            "Druckauftrag wird verarbeitet …",
+            "",
         )
-        heading = (
-            "Druck fehlgeschlagen"
-            if button_label == "Erneut drucken"
-            else f"Küchendruck für Stand {target.version_number} starten"
+        status_html = f"<p>{_e(status_message)}</p>" if status_message else ""
+        heading = "Küchenzettel für den aktuellen Stand drucken"
+        action_available = forms.print_action_available.get(
+            target.order_version_id, True
         )
-        return (
-            '<section class="order-next-step">'
-            '<div class="order-eyebrow">Nächster Schritt</div>'
-            f"<h2>{heading}</h2>"
-            f"<p>{_e(status_message)}</p>"
-            '<div class="order-next-actions">'
-            f'<a class="order-button secondary" target="_blank" rel="noopener" '
-            f'href="/order/{_e(order.order_id)}/print?version='
-            f'{_e(target.order_version_id)}">Küchenzettel öffnen</a>'
-            f'<a class="order-button secondary" target="_blank" rel="noopener" '
-            f'href="/order/{_e(order.order_id)}/buffet-cards?version='
-            f'{_e(target.order_version_id)}">Buffetschilder öffnen</a>'
+        primary = (
             f'<form method="post" action="/order/{_e(order.order_id)}/print-confirm">'
             f"{forms.csrf_input}{command_fields}"
             f'<input type="hidden" name="order_version_id" '
             f'value="{_e(target.order_version_id)}">'
             f'<button class="order-button" type="submit">{_e(button_label)}</button>'
-            "</form></div></section>"
+            "</form>"
+            if button_label and action_available
+            else ""
+        )
+        secondary = (
+            f'<a class="order-button secondary" target="_blank" rel="noopener" '
+            f'href="/order/{_e(order.order_id)}/print?version='
+            f'{_e(target.order_version_id)}">Küchenzettel öffnen</a>'
+        )
+        return (
+            '<section class="order-next-step">'
+            '<div class="order-eyebrow">Nächster Schritt</div>'
+            f"<h2>{heading}</h2>"
+            f"{status_html}"
+            '<div class="order-next-actions">'
+            f"{primary}{secondary}</div></section>"
         )
     if action == "effective":
         return (
@@ -503,10 +566,16 @@ def _version_actions(
         f'{_e(version.order_version_id)}">Buffetschilder öffnen</a>',
     ]
     print_fields = forms.print_confirm_command_fields.get(version.order_version_id)
-    if print_fields is not None and context.can("orders.print.confirm"):
-        button_label = forms.print_confirm_button_labels.get(
-            version.order_version_id, "Küchendruck starten"
-        )
+    button_label = forms.print_confirm_button_labels.get(
+        version.order_version_id, "Küchendruck starten"
+    )
+    action_available = forms.print_action_available.get(version.order_version_id, True)
+    if (
+        print_fields is not None
+        and button_label
+        and action_available
+        and context.can("orders.print.confirm")
+    ):
         actions.append(
             f'<form method="post" action="/order/{_e(order.order_id)}/print-confirm">'
             f"{forms.csrf_input}{print_fields}"
@@ -514,16 +583,6 @@ def _version_actions(
             f'value="{_e(version.order_version_id)}">'
             '<button class="order-button ghost" type="submit">'
             f"{_e(button_label)}</button></form>"
-        )
-    effective_fields = forms.effective_command_fields.get(version.order_version_id)
-    if effective_fields is not None and context.can("orders.effective.set"):
-        actions.append(
-            f'<form method="post" action="/order/{_e(order.order_id)}/effective">'
-            f"{forms.csrf_input}{effective_fields}"
-            f'<input type="hidden" name="order_version_id" '
-            f'value="{_e(version.order_version_id)}">'
-            '<button class="order-button ghost" type="submit">'
-            "Als Küchenstand festlegen</button></form>"
         )
     return '<div class="order-version-actions">' + "".join(actions) + "</div>"
 
@@ -701,6 +760,7 @@ def _confirmation_card(
     forms: OrderDetailFormFields,
     live_preview: ConfirmationLivePreviewView,
     *,
+    compact: bool = False,
     context: OfficePageContext,
 ) -> str:
     state_label = _confirmation_state_label(confirmation.state)
@@ -711,11 +771,7 @@ def _confirmation_card(
             [
                 ("Referenz", snapshot.document_reference),
                 ("Empfänger", snapshot.recipient_email_masked or "–"),
-                ("Hash", snapshot.document_hash_short),
-                (
-                    "Wirksamer Stand",
-                    f"Version {snapshot.effective_version_number}",
-                ),
+                ("Stand", f"Version {snapshot.effective_version_number}"),
                 (
                     "Summe brutto",
                     f"{snapshot.gross_total_cents / 100:.2f} €".replace(".", ","),
@@ -723,6 +779,8 @@ def _confirmation_card(
                 ("Erstellt", snapshot.created_at.strftime("%d.%m.%Y · %H:%M")),
             ]
         )
+        if not compact:
+            facts.insert(3, ("Hash", snapshot.document_hash_short))
     live_html = _live_preview_diagnostics(live_preview)
     actions: list[str] = []
     can_create = (
@@ -859,7 +917,7 @@ def _customer_addresses_form(
 ) -> str:
     delivery: CustomerAddress | None = None
     return (
-        '<details class="order-edit"><summary>Lieferadresse ändern</summary>'
+        '<details class="order-edit"><summary>Ändern</summary>'
         '<div class="order-edit-body">'
         f'<form method="post" action="/order/{_e(order.order_id)}/delivery-address" '
         'onsubmit="return confirm('
@@ -870,7 +928,7 @@ def _customer_addresses_form(
         f'value="{_e(target_version.order_version_id)}">'
         "<fieldset>"
         + _address_input_block("delivery", delivery)
-        + '<p><button type="submit">Neuen Stand mit Lieferadresse anlegen</button></p>'
+        + '<p><button type="submit">Lieferadresse speichern</button></p>'
         "</fieldset></form></div></details>"
     )
 
@@ -1024,6 +1082,8 @@ def render_confirmation_outbound_card(
 ) -> str:
     """Fake-outbox test send card — never implies real customer delivery."""
     page_context = context or OfficePageContext()
+    if not page_context.can("documents.send"):
+        return ""
     pause_view = operational_pause or {"active": False}
     state_label = _OUTBOUND_STATE_LABELS.get(outbound.state, outbound.state)
     facts: list[tuple[str, str]] = [("Status", state_label)]
@@ -1068,8 +1128,8 @@ def render_confirmation_outbound_card(
             f'href="/order/{_e(order.order_id)}/confirmation-document/fake-outbox" '
             f'target="_blank" rel="noopener">Testnachricht ansehen</a></p>'
         )
-    return (
-        '<section class="order-card order-content-card order-confirmation-outbound-card">'
+    card = (
+        '<section class="order-technical-card order-confirmation-outbound-card">'
         '<div class="order-section-kicker">Testversand</div>'
         "<h2>Fake Outbox</h2>"
         '<dl class="order-payment-facts">'
@@ -1080,6 +1140,10 @@ def render_confirmation_outbound_card(
         + "</dl>"
         + "".join(actions)
         + "</section>"
+    )
+    return (
+        '<details class="order-technical"><summary>Technik / Test</summary>'
+        f'<div class="order-technical-body">{card}</div></details>'
     )
 
 
@@ -1222,9 +1286,10 @@ def _operational_pause_controls(
     *,
     context: OfficePageContext,
 ) -> str:
-    return render_operational_pause_card(
+    controls = render_operational_pause_card(
         order, operational_pause, forms, context=context
     )
+    return f'<div id="order-pause-controls">{controls}</div>' if controls else ""
 
 
 def _secondary_actions(
@@ -1240,9 +1305,9 @@ def _secondary_actions(
     )
     if order.cancelled_at is not None:
         return (
-            '<section class="order-card order-content-card">'
-            "<h2>Weitere Informationen</h2>"
-            f"<p>{inquiry_link}</p></section>"
+            '<details class="order-lower-section order-more-actions">'
+            "<summary>Weitere Aktionen</summary>"
+            f'<div class="order-lower-body"><p>{inquiry_link}</p></div></details>'
         )
     cancel_block = ""
     if context.can("orders.cancel"):
@@ -1256,13 +1321,160 @@ def _secondary_actions(
             "</form></details>"
         )
     return (
-        '<section class="order-card order-content-card">'
-        "<h2>Weitere Aktionen</h2>"
-        f"<p>{inquiry_link}</p>"
+        '<details class="order-lower-section order-more-actions">'
+        "<summary>Weitere Aktionen</summary>"
+        f'<div class="order-lower-body"><p>{inquiry_link}</p>'
         + _version_change_form(order, forms, context=context)
         + _operational_pause_controls(order, operational_pause, forms, context=context)
         + cancel_block
-        + "</section>"
+        + "</div></details>"
+    )
+
+
+def _event_card(target: OrderVersion | None) -> str:
+    if target is None:
+        content = '<p class="order-section-note">Nicht verfügbar.</p>'
+    else:
+        content = (
+            '<dl class="order-facts-list">'
+            f"<div><dt>Uhrzeit</dt><dd>{_e(target.time_window_text or 'Noch offen')}</dd></div>"
+            f"<div><dt>Ort</dt><dd>{_e(target.location_text or 'Noch offen')}</dd></div>"
+            f"<div><dt>Planung</dt><dd>{_e(_planning_label(target.planning_mode))}</dd></div>"
+            f"<div><dt>Stand erstellt</dt><dd>{_e(_created_text(target))}</dd></div>"
+            "</dl>"
+        )
+    return (
+        '<section class="order-card order-content-card order-event-card">'
+        "<h2>Veranstaltung</h2>"
+        f"{content}</section>"
+    )
+
+
+def _customer_delivery_card(
+    order: Order,
+    target: OrderVersion | None,
+    operational_data: OrderDetailOperationalData | None,
+    source_inquiry: Inquiry | None,
+    forms: OrderDetailFormFields,
+    *,
+    context: OfficePageContext,
+) -> str:
+    company = operational_data.company_name if operational_data is not None else None
+    contact = operational_data.contact_name if operational_data is not None else None
+    phone = operational_data.phone if operational_data is not None else None
+    customer_lines = [value for value in (company, contact, phone) if value]
+    customer_html = (
+        "<br>".join(_e(value) for value in customer_lines)
+        if customer_lines
+        else '<span class="order-unavailable">Nicht verfügbar</span>'
+    )
+    address_lines = (
+        operational_data.delivery_address_lines
+        if operational_data is not None
+        and operational_data.operational_context_available
+        else ()
+    )
+    address_html = (
+        "<br>".join(_e(line) for line in address_lines)
+        if address_lines
+        else '<span class="order-unavailable">Nicht verfügbar</span>'
+    )
+    fulfillment = (
+        _FULFILLMENT_MODE_LABELS.get(
+            source_inquiry.fulfillment_mode, source_inquiry.fulfillment_mode
+        )
+        if source_inquiry is not None
+        else "Nicht verfügbar"
+    )
+    edit = (
+        _customer_addresses_form(order, target, forms)
+        if (
+            target is not None
+            and order.cancelled_at is None
+            and context.can("inquiries.view")
+            and context.can("orders.version.create")
+        )
+        else ""
+    )
+    return (
+        '<section class="order-card order-content-card order-customer-card">'
+        "<h2>Kunde &amp; Lieferung</h2>"
+        '<div class="order-customer-grid">'
+        f'<div><span class="order-field-label">Kunde</span><p>{customer_html}</p></div>'
+        f'<div><span class="order-field-label">Auftragsart</span><p>{_e(fulfillment)}</p></div>'
+        '<div class="order-delivery-address">'
+        '<span class="order-field-label">Lieferadresse</span>'
+        f"<address>{address_html}</address>{edit}</div></div></section>"
+    )
+
+
+def _positions_card(operational_data: OrderDetailOperationalData | None) -> str:
+    if operational_data is None or not operational_data.positions_available:
+        content = '<p class="order-section-note">Bestellung nicht verfügbar.</p>'
+    elif not operational_data.positions:
+        content = '<p class="order-section-note">Keine Positionen vorhanden.</p>'
+    else:
+        rows = []
+        for position in operational_data.positions:
+            details = [
+                value
+                for value in (
+                    position.description,
+                    position.composition,
+                    position.notes,
+                )
+                if value
+            ]
+            quantity = (
+                f'<span class="order-position-quantity">{_e(position.quantity_display)}</span>'
+                if position.quantity_display
+                else ""
+            )
+            detail_html = f"<p>{_e(' · '.join(details))}</p>" if details else ""
+            rows.append(
+                '<li class="order-position-row">'
+                f"<div><strong>{_e(position.name)}</strong>{detail_html}</div>"
+                f"{quantity}</li>"
+            )
+        variant = (
+            f'<p class="order-section-note">{_e(operational_data.variant_label)}</p>'
+            if operational_data.variant_label
+            else ""
+        )
+        content = f'{variant}<ul class="order-position-list">{"".join(rows)}</ul>'
+    return (
+        '<section class="order-card order-content-card order-positions-card">'
+        f"<h2>Bestellung</h2>{content}</section>"
+    )
+
+
+def _changes_card(target: OrderVersion | None, ready: ReadyToSendEvaluation) -> str:
+    items: list[str] = []
+    if target is not None and target.change_reason:
+        items.append(f"Änderung: {target.change_reason}")
+    if target is not None and target.changed_fields:
+        labels = ", ".join(
+            _CHANGED_FIELD_LABELS.get(field, field) for field in target.changed_fields
+        )
+        items.append(f"Geändert: {labels}")
+    if not ready.ready:
+        items.extend(_ready_blocker_label(reason) for reason in ready.reasons)
+    content = (
+        "<ul>" + "".join(f"<li>{_e(item)}</li>" for item in items) + "</ul>"
+        if items
+        else '<p class="order-section-note">Keine offenen Hinweise.</p>'
+    )
+    return (
+        '<section class="order-card order-content-card order-changes-card">'
+        f"<h2>Hinweise / Änderungen</h2>{content}</section>"
+    )
+
+
+def _status_card(state_title: str, state_description: str) -> str:
+    return (
+        '<section class="order-card order-content-card order-status-card">'
+        "<h2>Status</h2>"
+        f"<strong>{_e(state_title)}</strong><p>{_e(state_description)}</p></section>"
     )
 
 
@@ -1278,6 +1490,7 @@ def render_order_detail(
     live_preview: ConfirmationLivePreviewView,
     *,
     source_inquiry: Inquiry | None = None,
+    operational_data: OrderDetailOperationalData | None = None,
     operational_pause: Mapping[str, object] | None = None,
     versions_total_count: int,
     versions_truncated: bool,
@@ -1288,7 +1501,14 @@ def render_order_detail(
 
     pause_view = operational_pause or {"active": False}
     target = _target_version(order, versions)
-    title = f"Auftrag für den {_date_text(target)}" if target is not None else "Auftrag"
+    customer_label = "Kunde nicht verfügbar"
+    if operational_data is not None:
+        customer_label = (
+            operational_data.company_name
+            or operational_data.contact_name
+            or customer_label
+        )
+    title = f"Auftrag · {customer_label}"
     state_title, state_description = _state_copy(
         order, target, next_action, ready, pause_view
     )
@@ -1300,91 +1520,81 @@ def render_order_detail(
         else ""
     )
     if target is None:
-        hero_facts = "<span>Keine Veranstaltungsdaten vorhanden</span>"
-        event_facts = (
-            '<p class="order-section-note">Keine Auftragsstände vorhanden.</p>'
-        )
-        stand_label = "Auftrag"
+        meta = "Veranstaltungsdaten nicht verfügbar"
+        stand_badge = ""
     else:
         guests = (
-            f"ca. {target.guest_count_estimate} Gäste"
+            f"{target.guest_count_estimate} Gäste"
             if target.guest_count_estimate is not None
-            else "Gästezahl noch offen"
+            else "Gästezahl offen"
         )
-        hero_facts = (
-            f"<span>Datum: {_e(_date_text(target))}</span>"
-            f"<span>Zeit: {_e(target.time_window_text or 'Noch offen')}</span>"
-            f"<span>Ort: {_e(target.location_text or 'Noch offen')}</span>"
-            f"<span>{_e(guests)}</span>"
+        meta = f"{_date_text(target)} · {guests}"
+        stand_badge = (
+            f'<span class="order-header-badge">Stand {_e(target.version_number)}</span>'
         )
-        event_facts = (
-            '<dl class="order-facts-list">'
-            f"<div><dt>Datum</dt><dd>{_e(_date_text(target))}</dd></div>"
-            f"<div><dt>Zeit</dt><dd>{_e(target.time_window_text or 'Noch offen')}</dd></div>"
-            f"<div><dt>Ort</dt><dd>{_e(target.location_text or 'Noch offen')}</dd></div>"
-            f"<div><dt>Gäste</dt><dd>{_e(guests)}</dd></div>"
-            f"<div><dt>Planung</dt><dd>{_e(_planning_label(target.planning_mode))}</dd></div>"
-            f"<div><dt>Stand erstellt</dt><dd>{_e(_created_text(target))}</dd></div>"
-            "</dl>"
-        )
-        stand_label = f"Auftrag · Stand {target.version_number}"
-    cancelled_banner = (
-        '<div class="order-cancelled-banner">STORNIERT</div>'
+    status_badge = (
+        "Storniert"
         if order.cancelled_at is not None
-        else ""
-    )
-    paused_banner = (
-        '<div class="order-paused-banner">PAUSIERT</div>'
+        else "Pausiert"
         if pause_view.get("active")
-        else ""
+        else state_title
+    )
+    technical = render_confirmation_outbound_card(
+        order,
+        confirmation,
+        outbound,
+        forms,
+        operational_pause=pause_view,
+        context=page_context,
     )
     body = (
         '<a class="order-back" href="/auftraege">← Zurück zu den Aufträgen</a>'
-        + cancelled_banner
-        + paused_banner
-        + truncation_warning
-        + _stale_print_notice(order, versions)
-        + '<section class="order-hero"><div>'
-        f'<div class="order-eyebrow">{_e(stand_label)}</div>'
-        f"<h1>{_e(title)}</h1>"
-        f'<div class="order-hero-facts">{hero_facts}</div></div>'
-        '<div class="order-state-panel"><span>Arbeitsstand</span>'
-        f"<strong>{_e(state_title)}</strong><p>{_e(state_description)}</p></div>"
-        "</section>"
-        '<div class="order-detail-layout"><div class="order-detail-main">'
-        '<section class="order-card order-content-card">'
-        "<h2>Aktueller Veranstaltungsstand</h2>"
-        f"{event_facts}</section>"
-        + _operational_progress(order, target, ready, forms, context=page_context)
-        + _version_history(order, versions, forms, context=page_context)
-        + "</div>"
-        '<aside class="order-detail-side">'
-        + _primary_action(order, target, next_action, forms, context=page_context)
-        + render_fulfillment_mode_card(
-            source_inquiry, order, forms, context=page_context
-        )
-        + render_customer_addresses_card(
-            source_inquiry,
+        + '<header class="order-header"><div class="order-header-main">'
+        f"<h1>{_e(title)}</h1><p>{_e(meta)}</p></div>"
+        '<div class="order-header-badges">'
+        f'<span class="order-header-badge status">{_e(status_badge)}</span>'
+        f"{stand_badge}</div></header>"
+        + _primary_action(
             order,
+            target,
+            next_action,
             forms,
-            target_version=target,
-            context=page_context,
-        )
-        + _confirmation_card(
-            order, confirmation, forms, live_preview, context=page_context
-        )
-        + render_confirmation_outbound_card(
-            order,
-            confirmation,
-            outbound,
-            forms,
+            ready=ready,
             operational_pause=pause_view,
             context=page_context,
         )
+        + truncation_warning
+        + _stale_print_notice(order, versions)
+        + '<div class="order-work-layout"><div class="order-main-stack">'
+        + _event_card(target)
+        + _customer_delivery_card(
+            order,
+            target,
+            operational_data,
+            source_inquiry,
+            forms,
+            context=page_context,
+        )
+        + _positions_card(operational_data)
+        + _changes_card(target, ready)
+        + '</div><aside class="order-sidebar">'
+        + _status_card(state_title, state_description)
+        + _confirmation_card(
+            order,
+            confirmation,
+            forms,
+            live_preview,
+            compact=True,
+            context=page_context,
+        )
         + _payment_card(order, payment, forms, context=page_context)
+        + "</aside></div>"
+        + '<div class="order-lower-sections">'
+        + _version_history(order, versions, forms, context=page_context)
         + _secondary_actions(
             order, forms, operational_pause=pause_view, context=page_context
         )
-        + "</aside></div>"
+        + technical
+        + "</div>"
     )
     return OrderDetailPage(title=title, body=body)

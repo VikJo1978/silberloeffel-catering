@@ -108,7 +108,7 @@ def test_legacy_and_v2_pause_card_parity(tmp_path: Path) -> None:
         assert "&lt;script&gt;" in page
 
 
-def test_outbound_card_blocks_send_button_when_paused(tmp_path: Path) -> None:
+def test_outbound_card_hidden_without_send_permission(tmp_path: Path) -> None:
     db, doc_service, _core, orders, order_id, order_version_id = _sqlite_world(tmp_path)
     snapshot = doc_service.prepare_snapshot(order_id, order_version_id, "office-panel")
     panel = _panel(db)
@@ -141,8 +141,7 @@ def test_outbound_card_blocks_send_button_when_paused(tmp_path: Path) -> None:
         ),
         operational_pause=pause_view,
     )
-    assert "Testversand blockiert: Auftrag pausiert" in card
-    assert "Testversand erzeugen" not in card
+    assert card == ""
 
 
 def test_existing_send_evidence_remains_visible_after_pause(tmp_path: Path) -> None:
@@ -171,10 +170,16 @@ def test_existing_send_evidence_remains_visible_after_pause(tmp_path: Path) -> N
         actor_reference="office-panel",
         command_id=str(uuid4()),
     )
-    page = panel.render_order(order_id)
-    assert page is not None
-    assert "Testversand protokolliert" in page
-    assert "Testversand blockiert: Auftrag pausiert" in page
+    hidden_page = panel.render_order(order_id)
+    assert hidden_page is not None
+    assert "Fake Outbox" not in hidden_page
+    assert "Testversand protokolliert" not in hidden_page
+    assert "Testversand blockiert: Auftrag pausiert" not in hidden_page
+
+    permitted_page = panel.render_order(order_id, context=legacy_office_context())
+    assert permitted_page is not None
+    assert "Testversand protokolliert" in permitted_page
+    assert "Testversand blockiert: Auftrag pausiert" in permitted_page
 
 
 def test_b1_preview_link_still_available_during_pause(tmp_path: Path) -> None:

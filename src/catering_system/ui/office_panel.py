@@ -63,6 +63,9 @@ from catering_system.domain.offer_pdf import (
     OfferPdfUnsupportedCharacterError,
 )
 from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.order_commercial_snapshot import (
+    MissingCommercialSnapshotError,
+)
 from catering_system.domain.order_payment_reminder import (
     PAYMENT_METHOD_LABELS,
     PAYMENT_METHODS,
@@ -173,6 +176,10 @@ from catering_system.services.order_confirmation_outbound_service import (
     OrderConfirmationOutboundService,
 )
 from catering_system.services.order_service import OrderService
+from catering_system.services.order_print_projection_service import (
+    OrderPrintProjectionService,
+    PrintProjectionNotFoundError,
+)
 from catering_system.services.payment_reminder_service import PaymentReminderService
 from catering_system.services.progression_service import ProgressionService
 from catering_system.services.task_projection_service import TaskProjectionService
@@ -214,6 +221,7 @@ from catering_system.ui.office_panel_order_detail import (
     _DOCUMENT_BLOCKER_LABELS,
     ConfirmationLivePreviewView,
     OrderDetailFormFields,
+    OrderDetailOperationalData,
     render_confirmation_card,
     render_confirmation_outbound_card,
     render_customer_addresses_card,
@@ -741,14 +749,30 @@ class OfficePanel:
             return "Erneut drucken"
         return "Küchendruck starten"
 
-    def _kitchen_print_status_message(self, order_version_id: str) -> str:
+    def _kitchen_print_is_processing(self, order_version_id: str) -> bool:
         if self.kitchen_print_service is None:
-            return "Druckauftrag wird verarbeitet …"
+            return False
         attempts = self.kitchen_print_service.list_print_jobs_for_version(
             order_version_id
         )
         if not attempts:
-            return "Druckauftrag wird verarbeitet …"
+            return False
+        latest = attempts[-1]
+        return (
+            latest.acknowledged_at is None
+            and latest.rejected_at is None
+            and latest.superseded_at is None
+            and not self.kitchen_print_service.is_ack_overdue(latest)
+        )
+
+    def _kitchen_print_status_message(self, order_version_id: str) -> str:
+        if self.kitchen_print_service is None:
+            return ""
+        attempts = self.kitchen_print_service.list_print_jobs_for_version(
+            order_version_id
+        )
+        if not attempts:
+            return ""
         latest = attempts[-1]
         if latest.acknowledged_at is not None:
             return "Küchenzettel erfolgreich gedruckt"
@@ -762,6 +786,76 @@ class OfficePanel:
         if latest.accepted_at is not None:
             return "Druckauftrag wird verarbeitet …"
         return "Druckauftrag wird verarbeitet …"
+
+    @staticmethod
+    def _order_address_lines(address: CustomerAddress | None) -> tuple[str, ...]:
+        if address is None:
+            return ()
+        city_line = " ".join(
+            part
+            for part in (
+                (address.postal_code or "").strip(),
+                (address.city or "").strip(),
+            )
+            if part
+        )
+        return tuple(
+            value
+            for value in (
+                (address.street or "").strip(),
+                city_line,
+                (address.country or "").strip(),
+            )
+            if value
+        )
+
+    def _order_detail_operational_data(
+        self, order_id: str, order_version_id: str
+    ) -> OrderDetailOperationalData | None:
+        if self._remote is not None:
+            projection = self._remote.print_data(order_id, order_version_id)
+            if projection is None:
+                return None
+            return OrderDetailOperationalData(
+                company_name=projection.customer.company_name,
+                contact_name=projection.customer.contact_name,
+                phone=projection.customer.phone,
+                delivery_address_lines=projection.customer.delivery_address_lines,
+                operational_context_available=True,
+                variant_label=projection.commercial.variant_label,
+                positions=projection.commercial.positions,
+                positions_available=True,
+            )
+
+        operational_context = self._orders.get_operational_context(order_version_id)
+        try:
+            projection = OrderPrintProjectionService(
+                self._orders, self._commercial_snapshots
+            ).resolve(order_id, order_version_id)
+        except PrintProjectionNotFoundError:
+            return None
+        except MissingCommercialSnapshotError:
+            if operational_context is None:
+                return None
+            return OrderDetailOperationalData(
+                company_name=operational_context.recipient_company,
+                contact_name=operational_context.recipient_name,
+                phone=operational_context.recipient_phone,
+                delivery_address_lines=self._order_address_lines(
+                    operational_context.delivery_address
+                ),
+                operational_context_available=True,
+            )
+        return OrderDetailOperationalData(
+            company_name=projection.customer.company_name,
+            contact_name=projection.customer.contact_name,
+            phone=projection.customer.phone,
+            delivery_address_lines=projection.customer.delivery_address_lines,
+            operational_context_available=operational_context is not None,
+            variant_label=projection.commercial.variant_label,
+            positions=projection.commercial.positions,
+            positions_available=True,
+        )
 
     @staticmethod
     def _missed_calls_open(
@@ -3297,6 +3391,7 @@ class OfficePanel:
             print_confirm_fields: dict[str, str] = {}
             print_confirm_labels: dict[str, str] = {}
             print_status_messages: dict[str, str] = {}
+            print_action_available: dict[str, bool] = {}
             effective_fields: dict[str, str] = {}
             target = next(
                 (
@@ -3327,6 +3422,11 @@ class OfficePanel:
                         print_status_messages[version.order_version_id] = (
                             self._kitchen_print_status_message(version.order_version_id)
                         )
+                        print_action_available[
+                            version.order_version_id
+                        ] = not self._kitchen_print_is_processing(
+                            version.order_version_id
+                        )
                     # Successful kitchen-agent ACK now activates the safe/current
                     # printed stand automatically; the old manual effective action
                     # is kept out of the normal Office workflow.
@@ -3337,6 +3437,13 @@ class OfficePanel:
                 order,
                 versions,
                 latest_version_number=latest_version_number,
+            )
+            operational_data = (
+                self._order_detail_operational_data(
+                    order.order_id, target.order_version_id
+                )
+                if target is not None
+                else None
             )
             detail = render_order_detail(
                 order,
@@ -3464,11 +3571,13 @@ class OfficePanel:
                     version_change_prefill=change_prefill if not cancelled else None,
                     print_confirm_button_labels=print_confirm_labels,
                     print_status_messages=print_status_messages,
+                    print_action_available=print_action_available,
                 ),
                 confirmation=confirmation,
                 live_preview=live_preview,
                 outbound=outbound,
                 source_inquiry=source_inquiry,
+                operational_data=operational_data,
                 operational_pause=pause_view,
                 versions_total_count=versions_total_count,
                 versions_truncated=versions_truncated,

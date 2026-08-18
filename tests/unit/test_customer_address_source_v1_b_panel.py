@@ -134,7 +134,7 @@ def test_address_card_separate_shows_stored_and_effective() -> None:
     assert "Gespeicherte Lieferadresse" in card
     assert "Eventplatz 9" in card
     assert "Effektive Lieferadresse" in card
-    assert "Lieferadresse ändern" in card
+    assert "<summary>Ändern</summary>" in card
     assert f'action="/order/{order.order_id}/delivery-address"' in card
     assert 'action="/inquiry/' not in card
     assert "customer-addresses" not in card
@@ -358,7 +358,7 @@ def test_panel_change_delivery_address_preserves_stale_state_gate(
         )
 
 
-def test_order_detail_shows_separate_addresses_after_service_write(
+def test_order_detail_ignores_live_inquiry_addresses_after_service_write(
     tmp_path: Path,
 ) -> None:
     db, order_id, inquiry_id = _seed_order_world(tmp_path)
@@ -371,16 +371,21 @@ def test_order_detail_shows_separate_addresses_after_service_write(
     )
     page = panel.render_order(order_id, context=legacy_office_context())
     assert page is not None
-    assert "Kundenadressen" in page
-    assert "Bürostraße 1" in page
-    assert "Eventplatz 9" in page
-    assert "Abweichende Lieferadresse" in page
+    customer_section = page.split("<h2>Kunde &amp; Lieferung</h2>", 1)[1].split(
+        "</section>", 1
+    )[0]
+    assert "Bürostraße 1" not in page
+    assert "Eventplatz 9" not in page
+    assert "Abweichende Lieferadresse" not in customer_section
+    assert "Nicht verfügbar" in customer_section
     assert f'action="/order/{order_id}/delivery-address"' in page
     assert f'action="/inquiry/{inquiry_id}/customer-addresses"' not in page
     assert 'name="parent_order_version_id"' in page
 
 
-def test_mode_changes_update_stored_and_effective_labels(tmp_path: Path) -> None:
+def test_inquiry_address_mode_changes_do_not_change_v2_order_address(
+    tmp_path: Path,
+) -> None:
     db, order_id, inquiry_id = _seed_order_world(tmp_path)
     panel = _panel(db)
     panel.inquiry_service.set_inquiry_customer_addresses(
@@ -397,9 +402,13 @@ def test_mode_changes_update_stored_and_effective_labels(tmp_path: Path) -> None
     )
     page = panel.render_order(order_id, context=legacy_office_context())
     assert page is not None
-    assert "Wie Rechnungsadresse" in page
-    assert "keine separate Adresse" in page
+    customer_section = page.split("<h2>Kunde &amp; Lieferung</h2>", 1)[1].split(
+        "</section>", 1
+    )[0]
+    assert "Wie Rechnungsadresse" not in customer_section
+    assert "keine separate Adresse" not in customer_section
     assert "Eventplatz 9" not in page
+    assert "Nicht verfügbar" in customer_section
 
     panel.inquiry_service.set_inquiry_customer_addresses(
         inquiry_id,
@@ -409,8 +418,12 @@ def test_mode_changes_update_stored_and_effective_labels(tmp_path: Path) -> None
     )
     page = panel.render_order(order_id, context=legacy_office_context())
     assert page is not None
-    assert "Unbekannt" in page
-    assert "nicht festgelegt" in page
+    customer_section = page.split("<h2>Kunde &amp; Lieferung</h2>", 1)[1].split(
+        "</section>", 1
+    )[0]
+    assert "Unbekannt" not in customer_section
+    assert "nicht festgelegt" not in customer_section
+    assert "Nicht verfügbar" in customer_section
 
 
 def test_contact_completion_after_address_form_preserves_addresses(
@@ -447,8 +460,12 @@ def test_contact_completion_after_address_form_preserves_addresses(
     )
     page = panel.render_order(order_id, context=legacy_office_context())
     assert page is not None
-    assert "Eventplatz 9" in page
-    assert "Abweichende Lieferadresse" in page
+    customer_section = page.split("<h2>Kunde &amp; Lieferung</h2>", 1)[1].split(
+        "</section>", 1
+    )[0]
+    assert "Eventplatz 9" not in page
+    assert "Abweichende Lieferadresse" not in customer_section
+    assert "Nicht verfügbar" in customer_section
     loaded = panel._inquiries.get_by_id(inquiry_id)
     assert loaded is not None
     assert loaded.customer_snapshot is not None
@@ -520,8 +537,8 @@ def test_panel_http_order_delivery_address_form_uses_order_action(
     try:
         status, page = _get(f"{base}/order/{order_id}")
         assert status == 200
-        assert "Kundenadressen" in page
-        assert "Lieferadresse ändern" in page
+        assert "Kunde &amp; Lieferung" in page
+        assert "<summary>Ändern</summary>" in page
         assert f'action="/order/{order_id}/delivery-address"' in page
         assert f'action="/inquiry/{inquiry_id}/customer-addresses"' not in page
         assert 'name="parent_order_version_id"' in page
@@ -530,7 +547,7 @@ def test_panel_http_order_delivery_address_form_uses_order_action(
         server.server_close()
 
 
-def test_legacy_and_v2_show_same_address_facts(tmp_path: Path) -> None:
+def test_legacy_and_v2_use_their_respective_address_sources(tmp_path: Path) -> None:
     db, order_id, inquiry_id = _seed_order_world(tmp_path)
     connection = open_core_connection(db)
     inquiries = SQLiteInquiryRepository.from_connection(connection)
@@ -545,8 +562,15 @@ def test_legacy_and_v2_show_same_address_facts(tmp_path: Path) -> None:
     v2 = _panel(db, ui_version="v2").render_order(order_id)
     legacy = _panel(db, ui_version="legacy").render_order(order_id)
     assert v2 is not None and legacy is not None
-    for page in (v2, legacy):
-        assert "Kundenadressen" in page
-        assert "Bürostraße 1" in page
-        assert "Eventplatz 9" in page
-        assert "Abweichende Lieferadresse" in page
+    assert "Kundenadressen" in legacy
+    assert "Bürostraße 1" in legacy
+    assert "Eventplatz 9" in legacy
+    assert "Abweichende Lieferadresse" in legacy
+
+    customer_section = v2.split("<h2>Kunde &amp; Lieferung</h2>", 1)[1].split(
+        "</section>", 1
+    )[0]
+    assert "Bürostraße 1" not in v2
+    assert "Eventplatz 9" not in v2
+    assert "Abweichende Lieferadresse" not in customer_section
+    assert "Nicht verfügbar" in customer_section

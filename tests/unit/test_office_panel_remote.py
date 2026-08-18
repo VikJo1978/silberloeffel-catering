@@ -867,8 +867,15 @@ def test_v2_order_detail_parity_direct_vs_remote(tmp_path: Path) -> None:
             r_status, r_html = _get(f"{remote_url}/order/{order_id}")
             assert d_status == r_status == 200
             _assert_same_modulo_remote_fields(d_html, r_html)
-            assert "order-hero" in d_html
+            assert '<header class="order-header">' in d_html
+            assert '<section class="order-next-step' in d_html
+            assert "<h2>Bestellung</h2>" in d_html
+            assert "Seeded Menü" in d_html
             assert 'name="_command_id"' not in d_html
+            if key == "order_unprinted":
+                assert "Druckauftrag wird verarbeitet" not in r_html
+                assert f'action="/order/{order_id}/print-confirm"' in r_html
+                assert "Küchendruck starten" in r_html
             if key != "order_cancelled":
                 assert 'name="_command_id"' in r_html
                 assert 'name="_expect_updated_at"' in r_html
