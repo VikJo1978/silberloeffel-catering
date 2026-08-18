@@ -797,6 +797,8 @@ def test_confirmation_send_hidden_without_documents_send() -> None:
         forms,
         context=_employee_context("documents.view", "documents.prepare"),
     )
+    assert hidden == ""
+    assert "Fake Outbox" not in hidden
     assert "/confirmation-document/send" not in hidden
     assert "Testversand erzeugen" not in hidden
 
@@ -807,6 +809,9 @@ def test_confirmation_send_hidden_without_documents_send() -> None:
         forms,
         context=_employee_context("documents.send"),
     )
+    assert '<details class="order-technical">' in allowed
+    assert "<summary>Technik / Test</summary>" in allowed
+    assert "Fake Outbox" in allowed
     assert "/confirmation-document/send" in allowed
     assert "Testversand erzeugen" in allowed
 

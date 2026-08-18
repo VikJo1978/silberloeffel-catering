@@ -1472,6 +1472,135 @@ button.office-account-link:hover {
   color: #fff;
   background: var(--danger);
 }
+.order-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-top: 12px;
+  padding: 16px 0 17px;
+  border-bottom: 1px solid var(--line);
+}
+.office-content .order-header h1 {
+  margin: 0;
+  font-size: 25px;
+  line-height: 1.2;
+  letter-spacing: 0;
+}
+.order-header-main p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 650;
+}
+.order-header-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+.order-header-badge {
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--ink);
+  background: var(--surface);
+  font-size: 11px;
+  font-weight: 800;
+}
+.order-header-badge.status {
+  border-color: var(--accent-soft);
+  color: var(--accent-deep);
+  background: var(--accent-soft);
+}
+.order-header + .order-next-step { margin-top: 15px; }
+.order-work-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(270px, 340px);
+  gap: 18px;
+  margin-top: 18px;
+  align-items: start;
+}
+.order-main-stack,
+.order-sidebar,
+.order-lower-sections {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+.order-sidebar .order-content-card { padding: 16px; }
+.order-sidebar .order-section-kicker { margin-bottom: 5px; }
+.order-sidebar .order-payment-facts { gap: 6px; }
+.order-sidebar .order-payment-facts > div { padding-bottom: 6px; }
+.order-status-card strong { display: block; font-size: 13px; }
+.order-status-card p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+.order-customer-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 22px;
+}
+.order-customer-grid p,
+.order-delivery-address address { margin: 5px 0 0; font-style: normal; }
+.order-field-label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+  text-transform: uppercase;
+}
+.order-delivery-address { grid-column: 1 / -1; }
+.order-unavailable { color: var(--muted); }
+.order-edit { margin-top: 9px; }
+.order-edit summary {
+  color: var(--accent-deep);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.order-edit-body { margin-top: 12px; }
+.order-position-list {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.order-position-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.order-position-row:last-child { padding-bottom: 0; border-bottom: 0; }
+.order-position-row p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
+.order-position-quantity { color: var(--accent-deep); font-size: 12px; font-weight: 800; }
+.order-changes-card ul { margin: 0; padding-left: 18px; }
+.order-lower-sections { margin-top: 16px; }
+.order-lower-section,
+.order-technical {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-small);
+  background: var(--surface);
+}
+.order-lower-section > summary,
+.order-technical > summary {
+  padding: 15px 18px;
+  color: var(--accent-deep);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+.order-lower-section[open] > summary,
+.order-technical[open] > summary { border-bottom: 1px solid var(--line); }
+.order-lower-body,
+.order-technical-body { padding: 16px 18px; }
+.order-lower-body > p:first-child,
+.order-technical-card > :first-child { margin-top: 0; }
+.order-lower-body .order-pause-card {
+  margin-top: 15px;
+  box-shadow: none;
+}
+.order-technical-card .order-payment-facts { margin-top: 10px; }
 .chat-layout {
   display: grid;
   grid-template-columns: minmax(280px, .8fr) minmax(0, 1.6fr);
@@ -1631,6 +1760,8 @@ button.office-account-link:hover {
   .order-detail-layout { grid-template-columns: 1fr; }
   .order-detail-side { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .order-next-step { grid-column: 1 / -1; }
+  .order-work-layout { grid-template-columns: 1fr; }
+  .order-sidebar { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .chat-layout { grid-template-columns: 1fr; }
 }
 @media (max-width: 620px) {
@@ -1667,6 +1798,12 @@ button.office-account-link:hover {
   .order-version-head { display: grid; }
   .order-version-statuses { justify-content: flex-start; }
   .order-version-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .order-header { align-items: flex-start; flex-direction: column; }
+  .order-header-badges { justify-content: flex-start; }
+  .order-sidebar,
+  .order-customer-grid { grid-template-columns: 1fr; }
+  .order-delivery-address { grid-column: auto; }
+  .order-position-row { grid-template-columns: 1fr; gap: 5px; }
 }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }

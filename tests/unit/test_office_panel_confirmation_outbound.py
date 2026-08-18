@@ -230,7 +230,7 @@ def test_panel_test_send_persists_evidence_and_shows_protokolliert(
         server.server_close()
 
 
-def test_missing_recipient_blocks_testversand_button(tmp_path: Path) -> None:
+def test_fake_outbox_hidden_without_send_permission(tmp_path: Path) -> None:
     db, doc_service, _core, _orders, order_id, order_version_id = _sqlite_world(
         tmp_path,
         clear_recipient_email_after_convert=True,
@@ -239,7 +239,8 @@ def test_missing_recipient_blocks_testversand_button(tmp_path: Path) -> None:
     panel = _panel_with_outbound(db)
     page = panel.render_order(order_id)
     assert page is not None
-    assert "Empfänger-E-Mail fehlt" in page
+    assert "Fake Outbox" not in page
+    assert "Empfänger-E-Mail fehlt" not in page
     assert "Testversand erzeugen" not in page
 
 
