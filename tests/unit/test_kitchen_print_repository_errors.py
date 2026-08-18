@@ -129,10 +129,12 @@ def test_in_memory_acknowledge_rejects_version_mismatch() -> None:
     jobs.update(accepted)
     acknowledged = replace(accepted, acknowledged_at=_NOW + timedelta(seconds=2))
     wrong_version = orders.get_order_version(version_id)
+    order = orders.get_order(order_id)
     assert wrong_version is not None
+    assert order is not None
     mismatched = replace(wrong_version, order_id="00000000-0000-4000-8000-000000000000")
     with pytest.raises(ValueError, match="does not belong to print job"):
-        jobs.acknowledge_and_confirm(acknowledged, mismatched)
+        jobs.acknowledge_and_confirm(acknowledged, mismatched, expected_order=order)
 
 
 def test_in_memory_validate_new_job_rejects_duplicate_attempt_number() -> None:
@@ -170,11 +172,13 @@ def test_sqlite_acknowledge_rejects_missing_acknowledged_at(tmp_path: Path) -> N
     )
     jobs.update(accepted)
     version = orders.get_order_version(version_id)
+    order = orders.get_order(order_id)
     assert version is not None
+    assert order is not None
     with pytest.raises(
         ValueError, match="atomic confirmation requires acknowledged_at"
     ):
-        jobs.acknowledge_and_confirm(accepted, version)
+        jobs.acknowledge_and_confirm(accepted, version, expected_order=order)
     jobs.close()
     orders.close()
 
@@ -210,11 +214,13 @@ def test_in_memory_acknowledge_rejects_missing_acknowledged_at() -> None:
     )
     jobs.update(accepted)
     version = orders.get_order_version(version_id)
+    order = orders.get_order(order_id)
     assert version is not None
+    assert order is not None
     with pytest.raises(
         ValueError, match="atomic confirmation requires acknowledged_at"
     ):
-        jobs.acknowledge_and_confirm(accepted, version)
+        jobs.acknowledge_and_confirm(accepted, version, expected_order=order)
 
 
 def test_sqlite_acknowledge_rejects_mismatched_confirmation_timestamp(
@@ -231,11 +237,113 @@ def test_sqlite_acknowledge_rejects_mismatched_confirmation_timestamp(
     jobs.update(accepted)
     acknowledged = replace(accepted, acknowledged_at=_NOW + timedelta(seconds=2))
     version = orders.get_order_version(version_id)
+    order = orders.get_order(order_id)
     assert version is not None
+    assert order is not None
     wrong_confirmation = replace(
         version, kitchen_print_confirmed_at=_NOW + timedelta(hours=1)
     )
     with pytest.raises(ValueError, match="confirmation facts must share one timestamp"):
-        jobs.acknowledge_and_confirm(acknowledged, wrong_confirmation)
+        jobs.acknowledge_and_confirm(
+            acknowledged, wrong_confirmation, expected_order=order
+        )
     jobs.close()
     orders.close()
+
+
+def test_ack_activation_rejects_invalid_order_targets_without_partial_writes(
+    tmp_path: Path,
+) -> None:
+    foreign_order_id = "00000000-0000-4000-8000-000000000000"
+
+    memory_orders, memory_jobs, order_id, version_id = _memory_world()
+    pending = _job(order_id, version_id)
+    memory_jobs.save(pending)
+    accepted = replace(
+        pending,
+        accepted_at=_NOW + timedelta(seconds=1),
+        ack_deadline_at=_NOW + timedelta(minutes=1),
+    )
+    memory_jobs.update(accepted)
+    acknowledged = replace(accepted, acknowledged_at=_NOW + timedelta(seconds=2))
+    version = memory_orders.get_order_version(version_id)
+    order = memory_orders.get_order(order_id)
+    assert version is not None
+    assert order is not None
+    confirmed = replace(
+        version, kitchen_print_confirmed_at=acknowledged.acknowledged_at
+    )
+    activated = replace(order, effective_order_version_id=version_id)
+
+    with pytest.raises(ValueError, match="activated order does not belong"):
+        memory_jobs.acknowledge_and_confirm(
+            acknowledged,
+            confirmed,
+            expected_order=order,
+            activated_order=replace(activated, order_id=foreign_order_id),
+        )
+    with pytest.raises(ValueError, match="must select the printed version"):
+        memory_jobs.acknowledge_and_confirm(
+            acknowledged,
+            confirmed,
+            expected_order=order,
+            activated_order=order,
+        )
+    assert memory_jobs.get(JOB_1) == accepted
+    assert memory_orders.get_order_version(version_id) == version
+
+    memory_orders._orders.pop(order_id)
+    with pytest.raises(KeyError, match=order_id):
+        memory_jobs.acknowledge_and_confirm(
+            acknowledged,
+            confirmed,
+            expected_order=order,
+            activated_order=activated,
+        )
+    assert memory_jobs.get(JOB_1) == accepted
+    assert memory_orders.get_order_version(version_id) == version
+
+    sqlite_orders, sqlite_jobs, order_id, version_id = _sqlite_world(tmp_path)
+    pending = _job(order_id, version_id)
+    sqlite_jobs.save(pending)
+    accepted = replace(
+        pending,
+        accepted_at=_NOW + timedelta(seconds=1),
+        ack_deadline_at=_NOW + timedelta(minutes=1),
+    )
+    sqlite_jobs.update(accepted)
+    acknowledged = replace(accepted, acknowledged_at=_NOW + timedelta(seconds=2))
+    version = sqlite_orders.get_order_version(version_id)
+    order = sqlite_orders.get_order(order_id)
+    assert version is not None
+    assert order is not None
+    confirmed = replace(
+        version, kitchen_print_confirmed_at=acknowledged.acknowledged_at
+    )
+    activated = replace(order, effective_order_version_id=version_id)
+
+    with pytest.raises(ValueError, match="expected order does not belong"):
+        sqlite_jobs.acknowledge_and_confirm(
+            acknowledged,
+            confirmed,
+            expected_order=replace(order, order_id=foreign_order_id),
+            activated_order=activated,
+        )
+    with pytest.raises(ValueError, match="activated order does not belong"):
+        sqlite_jobs.acknowledge_and_confirm(
+            acknowledged,
+            confirmed,
+            expected_order=order,
+            activated_order=replace(activated, order_id=foreign_order_id),
+        )
+    with pytest.raises(ValueError, match="must select the printed version"):
+        sqlite_jobs.acknowledge_and_confirm(
+            acknowledged,
+            confirmed,
+            expected_order=order,
+            activated_order=order,
+        )
+    assert sqlite_jobs.get(JOB_1) == accepted
+    assert sqlite_orders.get_order_version(version_id) == version
+    sqlite_jobs.close()
+    sqlite_orders.close()

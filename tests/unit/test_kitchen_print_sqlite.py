@@ -23,6 +23,7 @@ from catering_system.repositories.sqlite_kitchen_print_job_repository import (
 from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepository
 from catering_system.services.kitchen_print_service import KitchenPrintService
 from catering_system.services.operational_core_service import OperationalCoreService
+from catering_system.services.order_service import OrderService
 
 from catering_system.domain.inquiry_customer_snapshot import (
     InquiryCustomerSnapshot as _CCSnapshot,
@@ -141,6 +142,10 @@ def test_sqlite_jobs_roundtrip_and_ack_confirmation_survive_reconnect(
     reopened_jobs.close()
     reopened_orders = SQLiteOrderRepository(db)
     assert reopened_orders.get_order_version(version_id) == confirmed
+    order = reopened_orders.get_order(order_id)
+    assert order is not None
+    assert order.effective_order_version_id == version_id
+    assert order.candidate_order_version_id is None
     reopened_orders.close()
 
 
@@ -168,9 +173,77 @@ def test_atomic_ack_rolls_back_version_if_job_fact_write_fails(
         service.acknowledge_print_job(JOB_1)
 
     stored_version = orders.get_order_version(version_id)
+    stored_order = orders.get_order(order_id)
     assert stored_version is not None
     assert stored_version.kitchen_print_confirmed_at is None
+    assert stored_order is not None
+    assert stored_order.effective_order_version_id is None
     assert jobs.get(JOB_1) == accepted
+    jobs.close()
+    orders.close()
+
+
+def test_activation_guard_miss_preserves_print_confirmation(
+    tmp_path: Path,
+) -> None:
+    db = tmp_path / "core.db"
+    orders, jobs, service, order_id, _version_id = _sqlite_world(db)
+    order_service = OrderService(orders)
+    order = orders.get_order(order_id)
+    assert order is not None
+    v2 = order_service.create_relevant_order_change_version(
+        order,
+        event_date=date(2026, 10, 2),
+        time_window_text="abends",
+        location_text="Kiel",
+        guest_count_estimate=30,
+        planning_mode="caterer_suggestion",
+    )
+    order_service.set_candidate_order_version(order_id, v2.order_version_id)
+    order = orders.get_order(order_id)
+    assert order is not None
+    v3 = order_service.create_relevant_order_change_version(
+        order,
+        event_date=date(2026, 10, 3),
+        time_window_text="mittags",
+        location_text="Lübeck",
+        guest_count_estimate=40,
+        planning_mode="self_select",
+    )
+    service.request_print(order_id, v2.order_version_id, print_job_id=JOB_1)
+    accepted = service.accept_print_job(JOB_1)
+
+    connection = sqlite3.connect(db)
+    connection.execute(
+        """
+        CREATE TRIGGER simulate_candidate_race
+        BEFORE UPDATE OF kitchen_print_confirmed_at ON order_versions
+        WHEN NEW.order_version_id = '33333333-3333-4333-8333-333333333333'
+        BEGIN
+            UPDATE orders
+            SET candidate_order_version_id = '44444444-4444-4444-8444-444444444444'
+            WHERE order_id = '11111111-1111-4111-8111-111111111111';
+        END
+        """.replace("33333333-3333-4333-8333-333333333333", v2.order_version_id)
+        .replace("44444444-4444-4444-8444-444444444444", v3.order_version_id)
+        .replace("11111111-1111-4111-8111-111111111111", order_id)
+    )
+    connection.commit()
+    connection.close()
+
+    acknowledged, confirmed = service.acknowledge_print_job(JOB_1)
+
+    stored_order = orders.get_order(order_id)
+    stored_v2 = orders.get_order_version(v2.order_version_id)
+    assert acknowledged.acknowledged_at is not None
+    assert confirmed.kitchen_print_confirmed_at is not None
+    assert jobs.get(JOB_1).acknowledged_at == acknowledged.acknowledged_at
+    assert stored_v2 is not None
+    assert stored_v2.kitchen_print_confirmed_at == confirmed.kitchen_print_confirmed_at
+    assert stored_order is not None
+    assert stored_order.effective_order_version_id is None
+    assert stored_order.candidate_order_version_id == v3.order_version_id
+    assert jobs.get(JOB_1) != accepted
     jobs.close()
     orders.close()
 

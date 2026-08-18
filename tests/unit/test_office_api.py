@@ -1665,14 +1665,10 @@ def test_versions_expect_and_cancelled_gate(api) -> None:
     )
     assert status == 200
     _ack_next_kitchen_job(db, body["order_version_id"])
-    status, switched, _h = _post(
-        effective_url,
-        args={"order_version_id": body["order_version_id"]},
-        expect=effective_expect,
-    )
+    status, detail, _h = _get(f"{base}/office/v1/orders/{ids['order_ready']}")
     assert status == 200
-    assert switched["effective_order_version_id"] == body["order_version_id"]
-    assert switched["candidate_order_version_id"] is None
+    assert detail["effective_order_version_id"] == body["order_version_id"]
+    assert detail["candidate_order_version_id"] is None
 
     status, body, _h = _post(
         f"{base}/office/v1/orders/{ids['order_cancelled']}/versions",
@@ -1897,6 +1893,9 @@ def test_print_confirm_effective_and_gates(api) -> None:
     )
     assert (status, body["error"]) == (422, "kitchen_print_not_confirmed")
     _ack_next_kitchen_job(db, version_id)
+    status, detail, _h = _get(f"{base}/office/v1/orders/{order_id}")
+    assert status == 200
+    assert detail["effective_order_version_id"] == version_id
     # effective with stale pointer expectation
     status, body, _h = _post(
         f"{base}/office/v1/orders/{order_id}/effective",
@@ -1906,7 +1905,7 @@ def test_print_confirm_effective_and_gates(api) -> None:
             "current_candidate_order_version_id": None,
         },
     )
-    assert (status, body["error"]) == (409, "stale_state")
+    assert status == 200
     status, body, _h = _post(
         f"{base}/office/v1/orders/{order_id}/effective",
         args={"order_version_id": version_id},
@@ -1915,8 +1914,7 @@ def test_print_confirm_effective_and_gates(api) -> None:
             "current_candidate_order_version_id": None,
         },
     )
-    assert status == 200
-    assert body["effective_order_version_id"] == version_id
+    assert (status, body["error"]) == (409, "stale_state")
     # print-confirm on a cancelled order: API-level gate
     status, body, _h = _post(
         f"{base}/office/v1/orders/{ids['order_cancelled']}/print-confirm",
@@ -1965,14 +1963,7 @@ def test_confirmed_old_version_does_not_authorize_new_candidate(api) -> None:
     assert body["kitchen_print_confirmed_at"] is None
     _ack_next_kitchen_job(db, str(v2_id))
 
-    status, body, _h = _post(
-        f"{base}/office/v1/orders/{order_id}/effective",
-        args={"order_version_id": v2_id},
-        expect={
-            "current_effective_order_version_id": v1_id,
-            "current_candidate_order_version_id": v2_id,
-        },
-    )
+    status, body, _h = _get(f"{base}/office/v1/orders/{order_id}")
     assert status == 200
     assert body["effective_order_version_id"] == v2_id
 
@@ -4792,17 +4783,6 @@ def _make_effective_offer_order(
         == 200
     )
     _ack_next_kitchen_job(db, order_version_id)
-    assert (
-        _post(
-            f"{base}/office/v1/orders/{order_id}/effective",
-            args={"order_version_id": order_version_id},
-            expect={
-                "current_effective_order_version_id": None,
-                "current_candidate_order_version_id": None,
-            },
-        )[0]
-        == 200
-    )
     return order_id, order_version_id
 
 

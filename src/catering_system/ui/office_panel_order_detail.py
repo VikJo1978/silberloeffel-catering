@@ -170,6 +170,7 @@ class OrderDetailFormFields:
     payment_command_fields: str
     confirmation_command_fields: str = ""
     print_confirm_button_labels: Mapping[str, str] = field(default_factory=dict)
+    print_status_messages: Mapping[str, str] = field(default_factory=dict)
     send_command_fields: str = ""
     pause_command_fields: str = ""
     resume_command_fields: str = ""
@@ -285,10 +286,9 @@ def _state_copy(
             "Den Küchenzettel prüfen und den Küchendruck starten.",
         )
     if next_action is not None and next_action.get("action") == "effective":
-        stand = target.version_number if target is not None else ""
         return (
-            f"Stand {stand} als Küchenstand festlegen",
-            "Der Ausdruck ist bestätigt. Jetzt den geprüften Stand übernehmen.",
+            "Küchenstand wird übernommen",
+            "Der Ausdruck ist bestätigt. Der geprüfte Stand wird automatisch übernommen.",
         )
     if ready.ready:
         return (
@@ -338,8 +338,12 @@ def _primary_action(
         button_label = forms.print_confirm_button_labels.get(
             target.order_version_id, "Küchendruck starten"
         )
+        status_message = forms.print_status_messages.get(
+            target.order_version_id,
+            "Druckauftrag wird verarbeitet …",
+        )
         heading = (
-            f"Küchendruck für Stand {target.version_number} erneut starten"
+            "Druck fehlgeschlagen"
             if button_label == "Erneut drucken"
             else f"Küchendruck für Stand {target.version_number} starten"
         )
@@ -347,7 +351,7 @@ def _primary_action(
             '<section class="order-next-step">'
             '<div class="order-eyebrow">Nächster Schritt</div>'
             f"<h2>{heading}</h2>"
-            "<p>Der Auftrag wird erst nach erfolgreicher Druckmeldung der Küche bestätigt.</p>"
+            f"<p>{_e(status_message)}</p>"
             '<div class="order-next-actions">'
             f'<a class="order-button secondary" target="_blank" rel="noopener" '
             f'href="/order/{_e(order.order_id)}/print?version='
@@ -363,24 +367,12 @@ def _primary_action(
             "</form></div></section>"
         )
     if action == "effective":
-        if (
-            not context.can("orders.effective.set")
-            or target.order_version_id not in forms.effective_command_fields
-        ):
-            return ""
-        command_fields = forms.effective_command_fields.get(target.order_version_id, "")
         return (
             '<section class="order-next-step">'
             '<div class="order-eyebrow">Nächster Schritt</div>'
-            f"<h2>Stand {target.version_number} als Küchenstand festlegen</h2>"
-            "<p>Der Ausdruck ist bestätigt. Dieser Stand wird zur aktuellen "
-            "Arbeitsgrundlage für die Küche.</p>"
-            f'<form method="post" action="/order/{_e(order.order_id)}/effective">'
-            f"{forms.csrf_input}{command_fields}"
-            f'<input type="hidden" name="order_version_id" '
-            f'value="{_e(target.order_version_id)}">'
-            '<button class="order-button" type="submit">Stand übernehmen</button>'
-            "</form></section>"
+            "<h2>Küchenstand wird automatisch übernommen</h2>"
+            "<p>Der Ausdruck ist bestätigt. Dieser Stand wird ohne weiteren "
+            "manuellen Schritt zur Arbeitsgrundlage für die Küche.</p></section>"
         )
     return ""
 
@@ -425,11 +417,11 @@ def _operational_progress(
         steps += _progress_item(
             "done" if effective else ("current" if printed else "waiting"),
             "✓" if effective else "2",
-            f"Stand {target.version_number} als Küchenstand festlegen",
+            "Küchenstand automatisch übernehmen",
             (
                 "Die Küche arbeitet mit diesem Stand."
                 if effective
-                else "Dieser Schritt ist erst nach der Druckbestätigung möglich."
+                else "Nach erfolgreichem Druck wird dieser Stand automatisch übernommen."
             ),
         )
         steps += _progress_item(
@@ -470,6 +462,28 @@ def _operational_progress(
         '<section class="order-card order-content-card">'
         "<h2>Operative Vorbereitung</h2>"
         f"{steps}{blocker_html}{ready_form}</section>"
+    )
+
+
+def _stale_print_notice(order: Order, versions: Sequence[OrderVersion]) -> str:
+    if order.candidate_order_version_id is None:
+        return ""
+    stale_prints = [
+        version
+        for version in versions
+        if version.kitchen_print_confirmed_at is not None
+        and version.order_version_id != order.effective_order_version_id
+        and version.order_version_id != order.candidate_order_version_id
+    ]
+    if not stale_prints:
+        return ""
+    latest = max(stale_prints, key=lambda version: version.version_number)
+    return (
+        '<div class="order-notice blocked">'
+        "<strong>Küchendruck nicht übernommen:</strong> "
+        f"Stand {_e(latest.version_number)} wurde gedruckt, aber inzwischen gibt es "
+        "einen neueren Stand. Der ältere Stand wurde nicht als aktueller "
+        "Küchenstand übernommen.</div>"
     )
 
 
@@ -1329,6 +1343,7 @@ def render_order_detail(
         + cancelled_banner
         + paused_banner
         + truncation_warning
+        + _stale_print_notice(order, versions)
         + '<section class="order-hero"><div>'
         f'<div class="order-eyebrow">{_e(stand_label)}</div>'
         f"<h1>{_e(title)}</h1>"

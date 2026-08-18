@@ -248,6 +248,19 @@ if TYPE_CHECKING:
     from catering_system.repositories.core_transaction import CoreCommandExecutor
     from catering_system.ui.remote_core_client import RemoteCoreClient
 
+_KITCHEN_PRINT_REJECTION_MESSAGES = {
+    "render_failed": "Druckauftrag fehlgeschlagen.",
+    "spool_rejected": "Druckauftrag fehlgeschlagen.",
+    "printer_unavailable": "Drucker nicht erreichbar.",
+    "printer_stopped": "Drucker ist angehalten.",
+    "job_aborted": "Druckauftrag fehlgeschlagen.",
+    "job_canceled": "Druckauftrag fehlgeschlagen.",
+    "paper_missing": "Papier fehlt.",
+    "media_empty": "Papier fehlt.",
+    "invalid_printer_configuration": "Drucker ist nicht korrekt eingerichtet.",
+    "order_cancelled": "Der Auftrag wurde storniert.",
+}
+
 __all__ = [
     "CALL_VERIFICATION_STATUS_LABELS",
     "PROGRESSION_BLOCKER_LABELS",
@@ -727,6 +740,28 @@ class OfficePanel:
         ):
             return "Erneut drucken"
         return "Küchendruck starten"
+
+    def _kitchen_print_status_message(self, order_version_id: str) -> str:
+        if self.kitchen_print_service is None:
+            return "Druckauftrag wird verarbeitet …"
+        attempts = self.kitchen_print_service.list_print_jobs_for_version(
+            order_version_id
+        )
+        if not attempts:
+            return "Druckauftrag wird verarbeitet …"
+        latest = attempts[-1]
+        if latest.acknowledged_at is not None:
+            return "Küchenzettel erfolgreich gedruckt"
+        if latest.rejected_at is not None:
+            return _KITCHEN_PRINT_REJECTION_MESSAGES.get(
+                latest.rejection_code or "",
+                "Druckauftrag fehlgeschlagen.",
+            )
+        if self.kitchen_print_service.is_ack_overdue(latest):
+            return "Druckauftrag fehlgeschlagen."
+        if latest.accepted_at is not None:
+            return "Druckauftrag wird verarbeitet …"
+        return "Druckauftrag wird verarbeitet …"
 
     @staticmethod
     def _missed_calls_open(
@@ -1870,13 +1905,11 @@ class OfficePanel:
                 "print-confirm",
             )
         elif version.order_version_id != order.effective_order_version_id:
-            if not context.can("orders.effective.set"):
-                return ""
-            label, action = "Wirksam machen", "effective"
-            expect = {
-                "effective_version_id": order.effective_order_version_id or "",
-                "candidate_version_id": order.candidate_order_version_id or "",
-            }
+            return (
+                '<p class="muted">Der Küchenzettel wurde gedruckt. '
+                "Der aktuelle Küchenstand wird automatisch übernommen, "
+                "sobald die Druckmeldung verarbeitet ist.</p>"
+            )
         else:
             return ""
         return (
@@ -3263,6 +3296,7 @@ class OfficePanel:
         if self._ui_version == "v2":
             print_confirm_fields: dict[str, str] = {}
             print_confirm_labels: dict[str, str] = {}
+            print_status_messages: dict[str, str] = {}
             effective_fields: dict[str, str] = {}
             target = next(
                 (
@@ -3290,25 +3324,12 @@ class OfficePanel:
                         print_confirm_labels[version.order_version_id] = (
                             self._kitchen_print_action_label(version.order_version_id)
                         )
-                    if (
-                        target is not None
-                        and version.order_version_id == target.order_version_id
-                        and version.kitchen_print_confirmed_at is not None
-                        and version.order_version_id != order.effective_order_version_id
-                        and context.can("orders.effective.set")
-                    ):
-                        effective_fields[version.order_version_id] = (
-                            self._command_fields(
-                                {
-                                    "effective_version_id": (
-                                        order.effective_order_version_id or ""
-                                    ),
-                                    "candidate_version_id": (
-                                        order.candidate_order_version_id or ""
-                                    ),
-                                }
-                            )
+                        print_status_messages[version.order_version_id] = (
+                            self._kitchen_print_status_message(version.order_version_id)
                         )
+                    # Successful kitchen-agent ACK now activates the safe/current
+                    # printed stand automatically; the old manual effective action
+                    # is kept out of the normal Office workflow.
             latest_version_number = versions_total_count or max(
                 (version.version_number for version in versions), default=0
             )
@@ -3442,6 +3463,7 @@ class OfficePanel:
                     ),
                     version_change_prefill=change_prefill if not cancelled else None,
                     print_confirm_button_labels=print_confirm_labels,
+                    print_status_messages=print_status_messages,
                 ),
                 confirmation=confirmation,
                 live_preview=live_preview,

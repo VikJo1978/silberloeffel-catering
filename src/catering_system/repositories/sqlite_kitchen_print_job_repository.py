@@ -20,7 +20,7 @@ from catering_system.domain.kitchen_print_job import (
     KitchenPrintPolicy,
     validate_kitchen_print_job_transition,
 )
-from catering_system.domain.order import OrderVersion
+from catering_system.domain.order import Order, OrderVersion
 from catering_system.repositories.sqlite_migrations import apply_migrations
 
 _REJECTION_CODES_SQL = ", ".join(
@@ -317,8 +317,13 @@ class SQLiteKitchenPrintJobRepository:
             self._insert(new_job)
 
     def acknowledge_and_confirm(
-        self, job: KitchenPrintJob, confirmed_version: OrderVersion
-    ) -> None:
+        self,
+        job: KitchenPrintJob,
+        confirmed_version: OrderVersion,
+        *,
+        expected_order: Order,
+        activated_order: Order | None = None,
+    ) -> bool:
         previous_job = self.get(job.print_job_id)
         if previous_job is None:
             raise KeyError(job.print_job_id)
@@ -330,6 +335,13 @@ class SQLiteKitchenPrintJobRepository:
             or confirmed_version.order_version_id != job.order_version_id
         ):
             raise ValueError("confirmed version does not belong to print job")
+        if expected_order.order_id != job.order_id:
+            raise ValueError("expected order does not belong to print job")
+        if activated_order is not None:
+            if activated_order.order_id != job.order_id:
+                raise ValueError("activated order does not belong to print job")
+            if activated_order.effective_order_version_id != job.order_version_id:
+                raise ValueError("activated order must select the printed version")
 
         current = self._conn.execute(
             "SELECT kitchen_print_confirmed_at FROM order_versions "
@@ -345,6 +357,7 @@ class SQLiteKitchenPrintJobRepository:
         elif confirmed_version.kitchen_print_confirmed_at != current_confirmation:
             raise ValueError("existing kitchen confirmation is not revocable")
 
+        activation_applied = False
         with self._write_scope():
             if current_confirmation is None:
                 updated = self._conn.execute(
@@ -359,7 +372,42 @@ class SQLiteKitchenPrintJobRepository:
                 ).rowcount
                 if updated != 1:
                     raise ValueError("stale kitchen print confirmation")
+            if activated_order is not None:
+                updated_order = self._conn.execute(
+                    """
+                    UPDATE orders SET
+                        source_inquiry_id = ?, created_at = ?, updated_at = ?,
+                        candidate_order_version_id = ?, effective_order_version_id = ?,
+                        cancelled_at = ?
+                    WHERE order_id = ?
+                      AND (
+                        candidate_order_version_id = ?
+                        OR (candidate_order_version_id IS NULL AND ? IS NULL)
+                      )
+                      AND (
+                        effective_order_version_id = ?
+                        OR (effective_order_version_id IS NULL AND ? IS NULL)
+                      )
+                    """,
+                    (
+                        activated_order.source_inquiry_id,
+                        activated_order.created_at.isoformat(),
+                        activated_order.updated_at.isoformat(),
+                        activated_order.candidate_order_version_id,
+                        activated_order.effective_order_version_id,
+                        activated_order.cancelled_at.isoformat()
+                        if activated_order.cancelled_at is not None
+                        else None,
+                        activated_order.order_id,
+                        expected_order.candidate_order_version_id,
+                        expected_order.candidate_order_version_id,
+                        expected_order.effective_order_version_id,
+                        expected_order.effective_order_version_id,
+                    ),
+                ).rowcount
+                activation_applied = updated_order == 1
             self._update_facts(job)
+        return activation_applied
 
     def claim_next_eligible(
         self, now: datetime, policy: KitchenPrintPolicy
