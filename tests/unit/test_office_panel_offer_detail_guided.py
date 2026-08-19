@@ -96,7 +96,7 @@ def test_sent_keeps_acceptance_primary_and_subordinates_other_actions() -> None:
 
     assert "Kundenentscheidung erfassen" in html
     assert "/record-acceptance" in html
-    assert '<summary>Weitere Aktionen</summary>' in html
+    assert "<summary>Weitere Aktionen</summary>" in html
     assert "/record-rejection" in html
     assert "/record-withdrawal" in html
     assert "Neue Version vorbereiten" in html
