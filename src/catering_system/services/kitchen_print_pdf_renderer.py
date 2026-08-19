@@ -209,10 +209,10 @@ def _build_story(projection: OrderPrintProjection, styles: _Styles) -> list[Flow
         changed_labels = _changed_field_labels(event.changed_fields)
         if changed_labels:
             story.append(_p(f"Geändert: {', '.join(changed_labels)}", styles.body))
-        for line in event.change_lines:
+        for change_line in event.change_lines:
             story.append(
                 _p(
-                    f"{line.label}: von {line.before or '-'} auf {line.after or '-'}",
+                    f"{change_line.label}: von {change_line.before or '-'} auf {change_line.after or '-'}",
                     styles.body,
                 )
             )
@@ -337,18 +337,21 @@ def _check_all_text(projection: OrderPrintProjection) -> None:
     _ensure_renderable(event.change_reason, "change_reason")
     for index, field in enumerate(event.changed_fields):
         _ensure_renderable(field, f"changed_fields[{index}]")
-    for index, line in enumerate(event.change_lines):
+    for index, change_line in enumerate(event.change_lines):
         prefix = f"change_lines[{index}]"
-        _ensure_renderable(line.label, f"{prefix}.label")
-        _ensure_renderable(line.before, f"{prefix}.before")
-        _ensure_renderable(line.after, f"{prefix}.after")
+        _ensure_renderable(change_line.label, f"{prefix}.label")
+        _ensure_renderable(change_line.before, f"{prefix}.before")
+        _ensure_renderable(change_line.after, f"{prefix}.after")
 
     customer = projection.customer
     _ensure_renderable(customer.company_name, "customer.company_name")
     _ensure_renderable(customer.contact_name, "customer.contact_name")
     _ensure_renderable(customer.phone, "customer.phone")
-    for index, line in enumerate(customer.delivery_address_lines):
-        _ensure_renderable(line, f"customer.delivery_address_lines[{index}]")
+    for index, address_line in enumerate(customer.delivery_address_lines):
+        _ensure_renderable(
+            address_line,
+            f"customer.delivery_address_lines[{index}]",
+        )
 
     for index, position in enumerate(projection.commercial.positions):
         prefix = f"positions[{index}]"
