@@ -5,8 +5,12 @@ from __future__ import annotations
 from dataclasses import replace
 
 from catering_system.domain.customer_document_projection import CustomerAddress
-from catering_system.domain.inquiry_customer_snapshot import set_inquiry_customer_addresses
-from catering_system.services.customer_document_preview import CustomerDocumentPreviewService
+from catering_system.domain.inquiry_customer_snapshot import (
+    set_inquiry_customer_addresses,
+)
+from catering_system.services.customer_document_preview import (
+    CustomerDocumentPreviewService,
+)
 from catering_system.services.order_service import OrderService
 from tests.unit.test_order_confirmation_document import _effective_order, _services
 
@@ -36,7 +40,9 @@ def _set_delivery_inquiry(
     *,
     delivery_address: CustomerAddress | None,
 ) -> None:
-    inquiry = inquiries.get_by_id(order.source_inquiry_id)  # type: ignore[attr-defined]
+    inquiry = inquiries.get_by_id(  # type: ignore[attr-defined]
+        order.source_inquiry_id  # type: ignore[attr-defined]
+    )
     assert inquiry is not None
     mode = "SEPARATE" if delivery_address is not None else "UNKNOWN"
     updated = set_inquiry_customer_addresses(
@@ -50,7 +56,7 @@ def _set_delivery_inquiry(
     )
 
 
-def test_effective_delivery_change_drives_eligibility_preview_and_snapshot() -> None:
+def test_effective_delivery_change_drives_confirmation_context() -> None:
     services = _services()
     orders, _offers, inquiries, _documents, service, core, offer_service = services
     order, v1 = _effective_order(services)
@@ -123,7 +129,9 @@ def test_effective_delivery_removal_does_not_fall_back_to_stale_inquiry() -> Non
     core.confirm_kitchen_print(order.order_id, v2.order_version_id)
     core.make_order_version_effective(order.order_id, v2.order_version_id)
 
-    decision = service._evaluate_create(orders.get_order(order.order_id))
+    current_order = orders.get_order(order.order_id)
+    assert current_order is not None
+    decision = service._evaluate_create(current_order)
     assert decision.allowed is False
     assert "DELIVERY_ADDRESS_REQUIRED_FOR_DELIVERY" in {
         blocker.code for blocker in decision.blockers
