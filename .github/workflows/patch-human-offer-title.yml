@@ -1,0 +1,105 @@
+name: Temporary human Angebot title patch
+
+on:
+  push:
+    branches:
+      - automation/patch-human-offer-title
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/human-offer-title
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: 0.11.32
+          python-version: "3.12"
+      - name: Apply bounded patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/catering_system/ui/office_panel.py")
+          text = path.read_text()
+
+          old_import = '''from catering_system.ui.office_panel_offer_detail import (
+              OfferDetailFormFields,
+              render_offer_detail,
+              surface_version_id,
+          )'''
+          new_import = '''from catering_system.ui.office_panel_offer_detail import (
+              OfferDetailFormFields,
+              customer_display_from_offer_queue,
+              render_offer_detail,
+              surface_version_id,
+          )'''
+          assert text.count(old_import) == 1, "offer detail import boundary changed"
+          text = text.replace(old_import, new_import, 1)
+
+          old_render = '''        else:
+              offer = self._offers.get(offer_id)
+              if offer is None:
+                  return None
+              detail = api_views.offer_detail(offer, today=api_views.berlin_today())
+          forms = OfferDetailFormFields('''
+          new_render = '''        else:
+              offer = self._offers.get(offer_id)
+              if offer is None:
+                  return None
+              detail = api_views.offer_detail(offer, today=api_views.berlin_today())
+          detail = dict(detail)
+          detail["customer_display"] = (
+              customer_display_from_offer_queue(self._offer_queue_snapshot(), offer_id)
+              or ""
+          )
+          forms = OfferDetailFormFields('''
+          assert text.count(old_render) == 1, "render_offer boundary changed"
+          text = text.replace(old_render, new_render, 1)
+          path.write_text(text)
+          PY
+      - name: Install development tools
+        run: uv sync --dev
+      - name: Format bounded files
+        run: |
+          uv run ruff format \
+            src/catering_system/ui/office_panel.py \
+            src/catering_system/ui/office_panel_offer_detail.py \
+            tests/unit/test_office_panel_offer_detail_guided.py
+      - name: Lint bounded files
+        run: |
+          uv run ruff check \
+            src/catering_system/ui/office_panel.py \
+            src/catering_system/ui/office_panel_offer_detail.py \
+            tests/unit/test_office_panel_offer_detail_guided.py
+      - name: Type-check production code
+        run: uv run mypy src/catering_system
+      - name: Focused tests
+        run: |
+          uv run pytest -q \
+            tests/unit/test_office_panel_offer_detail_guided.py \
+            tests/unit/test_office_panel_remote.py::test_offer_detail_parity_direct_vs_remote \
+            tests/unit/test_office_panel_auth_2d3.py::test_offer_convert_hidden_without_composite_permissions
+      - name: Verify hard boundary
+        run: |
+          changed="$(git diff --name-only)"
+          printf '%s\n' "$changed"
+          test "$changed" = "$(printf '%s\n' \
+            src/catering_system/ui/office_panel.py \
+            src/catering_system/ui/office_panel_offer_detail.py \
+            tests/unit/test_office_panel_offer_detail_guided.py)"
+      - name: Commit bounded patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            src/catering_system/ui/office_panel.py \
+            src/catering_system/ui/office_panel_offer_detail.py \
+            tests/unit/test_office_panel_offer_detail_guided.py
+          git commit -m "Show customer name in Angebot title"
+          git push origin HEAD:codex/human-offer-title
