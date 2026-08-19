@@ -6,6 +6,7 @@ import re
 
 from catering_system.ui.office_panel_offer_detail import (
     OfferDetailFormFields,
+    customer_display_from_offer_queue,
     render_offer_detail,
 )
 from tests.helpers.office_panel_context import legacy_office_context
@@ -67,9 +68,17 @@ def _detail(state: str) -> dict[str, object]:
     return detail
 
 
-def _render(state: str, *, revision_url: str | None = "/configurator/revision") -> str:
+def _render(
+    state: str,
+    *,
+    revision_url: str | None = "/configurator/revision",
+    customer_display: str | None = None,
+) -> str:
+    detail = _detail(state)
+    if customer_display is not None:
+        detail["customer_display"] = customer_display
     return render_offer_detail(
-        _detail(state),
+        detail,
         context=legacy_office_context(),
         forms=OfferDetailFormFields(
             csrf_input='<input type="hidden" name="csrf" value="x">',
@@ -124,3 +133,32 @@ def test_accepted_and_converted_keep_existing_lifecycle_targets() -> None:
     assert "Auftrag erstellt" in converted
     assert "/order/66666666-6666-4666-8666-666666666666" in converted
     assert "/convert" not in converted
+
+
+def test_title_uses_human_customer_display_without_offer_id() -> None:
+    html = _render("Sent", customer_display="Art.draw GmbH")
+
+    assert "<h1>Angebot · Art.draw GmbH</h1>" in html
+    assert f"<h1>Angebot {_OFFER_ID[:8]}</h1>" not in html
+    assert "<h1>Angebot</h1>" in _render("Sent", customer_display="–")
+    assert "<h1>Angebot</h1>" in _render("Sent")
+
+
+def test_customer_display_comes_from_matching_offer_queue_item() -> None:
+    snapshot: dict[str, object] = {
+        "sections": [
+            {
+                "items": [
+                    {"offer_id": "other", "customer_display": "Andere GmbH"},
+                    {"offer_id": _OFFER_ID, "customer_display": " Art.draw GmbH "},
+                ]
+            }
+        ]
+    }
+
+    assert customer_display_from_offer_queue(snapshot, _OFFER_ID) == "Art.draw GmbH"
+    assert customer_display_from_offer_queue(snapshot, "missing") is None
+    snapshot["sections"] = [
+        {"items": [{"offer_id": _OFFER_ID, "customer_display": "–"}]}
+    ]
+    assert customer_display_from_offer_queue(snapshot, _OFFER_ID) is None
