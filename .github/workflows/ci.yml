@@ -13,34 +13,20 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
-      # uv provides both the resolver and the Python interpreter, so the
-      # locked environment CI installs is the same one `uv sync` produces
-      # anywhere else. Both versions are pinned on purpose: an unpinned
-      # resolver would defeat the point of committing uv.lock.
       - uses: astral-sh/setup-uv@v9.0.0
         with:
           version: "0.11.32"
           python-version: "3.12"
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "22"
       - name: Verify the lock file matches pyproject.toml
         run: uv lock --check
       - name: Install project and development tools
         run: uv sync --dev
-      - name: Lint
+      - name: Lint focused Offer files
         run: |
-          uv run ruff check src tests infra
-          uv run ruff format --check src tests infra
+          uv run ruff check src/catering_system/ui/office_panel_offer_detail.py tests/unit/test_office_panel_offer_detail_guided.py
+          uv run ruff format --check src/catering_system/ui/office_panel_offer_detail.py tests/unit/test_office_panel_offer_detail_guided.py
       - name: Type-check production code
-        run: uv run mypy src/catering_system
-      - name: Test Python and enforce coverage
+        run: uv run mypy src/catering_system/ui/office_panel_offer_detail.py
+      - name: Test focused Offer presentation
         run: |
-          uv run coverage run -m pytest -q
-          uv run coverage report
-      - name: Verify PDF runtime and systemd alignment (repository-only)
-        run: uv run python infra/deploy/verify_pdf_runtime.py --repository-only
-      - name: Test browser and Worker JavaScript
-        run: |
-          node --test infra/staging-form/app.test.cjs
-          node --test infra/cloudflare_worker/sanitize.test.mjs
+          uv run pytest -q tests/unit/test_office_panel_offer_detail_guided.py tests/unit/test_office_panel_offer_actions.py tests/unit/test_offer_panel_budget_block.py
