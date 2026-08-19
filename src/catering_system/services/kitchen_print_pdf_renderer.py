@@ -11,6 +11,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import (
     Flowable,
+    KeepTogether,
     Paragraph,
     SimpleDocTemplate,
     Spacer,
@@ -26,6 +27,20 @@ _LEFT_MARGIN = 18 * mm
 _RIGHT_MARGIN = 18 * mm
 _TOP_MARGIN = 16 * mm
 _BOTTOM_MARGIN = 14 * mm
+
+_PLANNING_MODE_LABELS = {
+    "caterer_suggestion": "Vorschlag durch Silberlöffel",
+    "self_select": "Auswahl durch den Kunden",
+}
+
+_CHANGED_FIELD_LABELS = {
+    "event_date": "Datum",
+    "time_window_text": "Zeit",
+    "location_text": "Ort",
+    "guest_count_estimate": "Gästezahl",
+    "planning_mode": "Planung",
+    "delivery_address": "Lieferadresse",
+}
 
 
 class KitchenPrintPdfUnsupportedCharacterError(Exception):
@@ -164,19 +179,11 @@ def _build_story(projection: OrderPrintProjection, styles: _Styles) -> list[Flow
                 [_p("Gäste", styles.table_header), _p(guests, styles.body)],
                 [
                     _p("Planung", styles.table_header),
-                    _p(event.planning_mode, styles.body),
+                    _p(_planning_mode_label(event.planning_mode), styles.body),
                 ],
                 [
                     _p("Stand", styles.table_header),
-                    _p(f"Version {event.version_number}", styles.body),
-                ],
-                [
-                    _p("Auftrag", styles.table_header),
-                    _p(event.order_id, styles.small),
-                ],
-                [
-                    _p("Version-ID", styles.table_header),
-                    _p(event.order_version_id, styles.small),
+                    _p(str(event.version_number), styles.body),
                 ],
             ],
             colWidths=(32 * mm, 120 * mm),
@@ -188,22 +195,34 @@ def _build_story(projection: OrderPrintProjection, styles: _Styles) -> list[Flow
             ),
         )
     )
+
+    story.extend(_customer_story(projection, styles))
+
     if projection.flags.watermark is not None:
         story.append(Spacer(1, 4 * mm))
         story.append(_p(projection.flags.watermark, styles.title))
-    if event.change_reason is not None or event.changed_fields:
+    if event.change_reason is not None or event.changed_fields or event.change_lines:
         story.append(Spacer(1, 4 * mm))
-        story.append(_p("Änderung", styles.h2))
-        story.append(_p(f"Grund: {event.change_reason or '-'}", styles.body))
-        fields = ", ".join(event.changed_fields) or "-"
-        story.append(_p(f"Felder: {fields}", styles.body))
+        story.append(_p("ÄNDERUNG", styles.h2))
+        if event.change_reason is not None:
+            story.append(_p(f"Grund: {event.change_reason}", styles.body))
+        changed_labels = _changed_field_labels(event.changed_fields)
+        if changed_labels:
+            story.append(_p(f"Geändert: {', '.join(changed_labels)}", styles.body))
+        for change_line in event.change_lines:
+            story.append(
+                _p(
+                    f"{change_line.label}: von {change_line.before or '-'} auf {change_line.after or '-'}",
+                    styles.body,
+                )
+            )
 
     story.append(Spacer(1, 6 * mm))
     story.append(_p("MENÜ", styles.h2))
     if not projection.commercial.positions:
         story.append(_p("Keine Positionen.", styles.body))
     for position in projection.commercial.positions:
-        story.append(_p(position.name, styles.body_bold))
+        position_story: list[Flowable] = [_p(position.name, styles.body_bold)]
         details = [
             value
             for value in (
@@ -213,9 +232,64 @@ def _build_story(projection: OrderPrintProjection, styles: _Styles) -> list[Flow
             if value
         ]
         for detail in details:
-            story.append(_p(detail, styles.body))
-        story.append(Spacer(1, 3 * mm))
+            position_story.append(_p(detail, styles.body))
+        if position.notes:
+            position_story.append(_p(f"Hinweis: {position.notes}", styles.body))
+        position_story.append(Spacer(1, 3 * mm))
+        story.append(KeepTogether(position_story))
     return story
+
+
+def _customer_story(
+    projection: OrderPrintProjection,
+    styles: _Styles,
+) -> list[Flowable]:
+    customer = projection.customer
+    address = "\n".join(customer.delivery_address_lines) or "-"
+    return [
+        Spacer(1, 5 * mm),
+        _p("KUNDE / LIEFERUNG", styles.h2),
+        Table(
+            [
+                [
+                    _p("Kunde / Firma", styles.table_header),
+                    _p(customer.company_name or "-", styles.body),
+                ],
+                [
+                    _p("Ansprechpartner", styles.table_header),
+                    _p(customer.contact_name or "-", styles.body),
+                ],
+                [
+                    _p("Telefon", styles.table_header),
+                    _p(customer.phone or "-", styles.body),
+                ],
+                [
+                    _p("Lieferadresse", styles.table_header),
+                    _p(address, styles.body),
+                ],
+            ],
+            colWidths=(38 * mm, 114 * mm),
+            style=TableStyle(
+                [
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ]
+            ),
+        ),
+    ]
+
+
+def _planning_mode_label(value: str) -> str:
+    return _PLANNING_MODE_LABELS.get(value, "Planung noch prüfen")
+
+
+def _changed_field_labels(fields: tuple[str, ...]) -> tuple[str, ...]:
+    labels: list[str] = []
+    for field in fields:
+        label = _CHANGED_FIELD_LABELS.get(field, "Weitere Auftragsdaten")
+        if label not in labels:
+            labels.append(label)
+    return tuple(labels)
 
 
 def _page_decorator(created_at: datetime):
@@ -263,6 +337,22 @@ def _check_all_text(projection: OrderPrintProjection) -> None:
     _ensure_renderable(event.change_reason, "change_reason")
     for index, field in enumerate(event.changed_fields):
         _ensure_renderable(field, f"changed_fields[{index}]")
+    for index, change_line in enumerate(event.change_lines):
+        prefix = f"change_lines[{index}]"
+        _ensure_renderable(change_line.label, f"{prefix}.label")
+        _ensure_renderable(change_line.before, f"{prefix}.before")
+        _ensure_renderable(change_line.after, f"{prefix}.after")
+
+    customer = projection.customer
+    _ensure_renderable(customer.company_name, "customer.company_name")
+    _ensure_renderable(customer.contact_name, "customer.contact_name")
+    _ensure_renderable(customer.phone, "customer.phone")
+    for index, address_line in enumerate(customer.delivery_address_lines):
+        _ensure_renderable(
+            address_line,
+            f"customer.delivery_address_lines[{index}]",
+        )
+
     for index, position in enumerate(projection.commercial.positions):
         prefix = f"positions[{index}]"
         _ensure_renderable(position.name, f"{prefix}.name")
