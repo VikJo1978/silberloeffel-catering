@@ -354,7 +354,7 @@ def _primary_action(
             "<p>Für diesen Auftrag ist kein gültiger Stand verfügbar.</p>"
             "</section>"
         )
-    if _requires_fulfillment_choice(source_inquiry):
+    if source_inquiry is not None and _requires_fulfillment_choice(source_inquiry):
         action = (
             f'<form method="post" action="/inquiry/{_e(source_inquiry.inquiry_id)}/fulfillment-mode">'
             f"{forms.csrf_input}{forms.fulfillment_mode_command_fields}"
@@ -443,8 +443,8 @@ def _primary_action(
             f'<div class="order-next-actions">{ready_action}</div>'
             "</section>"
         )
-    action = next_action.get("action")
-    if action == "print-confirm":
+    next_action_name = next_action.get("action")
+    if next_action_name == "print-confirm":
         if (
             not context.can("orders.print.confirm")
             or target.order_version_id not in forms.print_confirm_command_fields
@@ -494,7 +494,7 @@ def _primary_action(
             '<div class="order-next-actions">'
             f"{primary}{secondary}</div></section>"
         )
-    if action == "effective":
+    if next_action_name == "effective":
         return (
             '<section class="order-next-step">'
             '<div class="order-eyebrow">Nächster Schritt</div>'
