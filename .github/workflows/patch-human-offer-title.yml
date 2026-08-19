@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - automation/patch-human-offer-title
+  pull_request:
+    branches:
+      - codex/human-offer-title
 
 permissions:
   contents: write
