@@ -318,6 +318,10 @@ def _primary_action(
     forms: OrderDetailFormFields,
     *,
     ready: ReadyToSendEvaluation,
+    confirmation: OrderConfirmationDocumentEligibility,
+    live_preview: ConfirmationLivePreviewView,
+    source_inquiry: Inquiry | None,
+    operational_data: OrderDetailOperationalData | None,
     operational_pause: Mapping[str, object],
     context: OfficePageContext,
 ) -> str:
@@ -350,6 +354,42 @@ def _primary_action(
             "<p>Für diesen Auftrag ist kein gültiger Stand verfügbar.</p>"
             "</section>"
         )
+    if _requires_fulfillment_choice(source_inquiry):
+        action = (
+            f'<form method="post" action="/inquiry/{_e(source_inquiry.inquiry_id)}/fulfillment-mode">'
+            f"{forms.csrf_input}{forms.fulfillment_mode_command_fields}"
+            f'<input type="hidden" name="return_order_id" value="{_e(order.order_id)}">'
+            "<fieldset>"
+            "<p><label>Auftragsart</label>"
+            '<select name="fulfillment_mode">'
+            f'<option value="DELIVERY">{_e(_FULFILLMENT_MODE_LABELS["DELIVERY"])}</option>'
+            f'<option value="PICKUP">{_e(_FULFILLMENT_MODE_LABELS["PICKUP"])}</option>'
+            "</select></p>"
+            '<p><button class="order-button" type="submit">Auftragsart speichern</button></p>'
+            "</fieldset></form>"
+            if context.can("inquiries.edit")
+            else ""
+        )
+        return (
+            '<section class="order-next-step muted">'
+            '<div class="order-eyebrow">Nächster Schritt</div>'
+            "<h2>Auftragsart festlegen</h2>"
+            "<p>Bitte auswählen, ob der Auftrag geliefert oder abgeholt wird.</p>"
+            f'<div class="order-next-actions">{action}</div></section>'
+        )
+    if _requires_delivery_address(source_inquiry, operational_data):
+        action = (
+            _customer_addresses_form(order, target, forms)
+            if context.can("inquiries.view") and context.can("orders.version.create")
+            else ""
+        )
+        return (
+            '<section class="order-next-step muted">'
+            '<div class="order-eyebrow">Nächster Schritt</div>'
+            "<h2>Lieferadresse ergänzen</h2>"
+            "<p>Für eine Lieferung muss eine Lieferadresse hinterlegt sein.</p>"
+            f'<div class="order-next-actions">{action}</div></section>'
+        )
     if next_action is None:
         if not ready.ready:
             blockers = " ".join(
@@ -360,6 +400,31 @@ def _primary_action(
                 '<div class="order-eyebrow">Nächster Schritt</div>'
                 "<h2>Auftragsdaten prüfen</h2>"
                 f"<p>{_e(blockers)}</p>"
+                "</section>"
+            )
+        document_action = _confirmation_create_form(
+            order,
+            confirmation,
+            forms,
+            live_preview,
+            context=context,
+            button_class="order-button",
+        )
+        if document_action:
+            return (
+                '<section class="order-next-step">'
+                '<div class="order-eyebrow">Nächster Schritt</div>'
+                "<h2>Auftragsbestätigung erstellen</h2>"
+                "<p>Der Küchenstand ist bestätigt. Erstellen Sie jetzt die "
+                "Auftragsbestätigung für den Kunden.</p>"
+                f'<div class="order-next-actions">{document_action}</div></section>'
+            )
+        if confirmation.available and confirmation.snapshot is None:
+            return (
+                '<section class="order-next-step muted">'
+                '<div class="order-eyebrow">Nächster Schritt</div>'
+                "<h2>Auftragsbestätigung prüfen</h2>"
+                f"<p>{_e(_confirmation_state_label(confirmation.state))}</p>"
                 "</section>"
             )
         ready_action = ""
@@ -438,6 +503,40 @@ def _primary_action(
             "manuellen Schritt zur Arbeitsgrundlage für die Küche.</p></section>"
         )
     return ""
+
+
+def _requires_fulfillment_choice(source_inquiry: Inquiry | None) -> bool:
+    return source_inquiry is not None and source_inquiry.fulfillment_mode == "UNKNOWN"
+
+
+def _requires_delivery_address(
+    source_inquiry: Inquiry | None,
+    operational_data: OrderDetailOperationalData | None,
+) -> bool:
+    return (
+        source_inquiry is not None
+        and source_inquiry.fulfillment_mode == "DELIVERY"
+        and (
+            operational_data is None
+            or not operational_data.operational_context_available
+            or not operational_data.delivery_address_lines
+        )
+    )
+
+
+def _confirmation_create_action_available(
+    confirmation: OrderConfirmationDocumentEligibility,
+    live_preview: ConfirmationLivePreviewView,
+    *,
+    context: OfficePageContext,
+) -> bool:
+    return (
+        confirmation.snapshot is None
+        and live_preview.state == "ready"
+        and live_preview.preview is not None
+        and live_preview.preview.eligible
+        and context.can("documents.prepare")
+    )
 
 
 def _progress_item(
@@ -754,6 +853,30 @@ def _confirmation_state_label(state: str) -> str:
     return _document_blocker_label(state)
 
 
+def _confirmation_create_form(
+    order: Order,
+    confirmation: OrderConfirmationDocumentEligibility,
+    forms: OrderDetailFormFields,
+    live_preview: ConfirmationLivePreviewView,
+    *,
+    context: OfficePageContext,
+    button_class: str | None = None,
+) -> str:
+    if not _confirmation_create_action_available(
+        confirmation,
+        live_preview,
+        context=context,
+    ):
+        return ""
+    class_attr = f' class="{_e(button_class)}"' if button_class else ""
+    return (
+        f'<form method="post" action="/order/{_e(order.order_id)}/confirmation-document">'
+        f"{forms.csrf_input}{forms.confirmation_command_fields}"
+        f'<button{class_attr} type="submit">Auftragsbestätigung erstellen</button>'
+        "</form>"
+    )
+
+
 def _confirmation_card(
     order: Order,
     confirmation: OrderConfirmationDocumentEligibility,
@@ -761,6 +884,7 @@ def _confirmation_card(
     live_preview: ConfirmationLivePreviewView,
     *,
     compact: bool = False,
+    show_create_action: bool = True,
     context: OfficePageContext,
 ) -> str:
     state_label = _confirmation_state_label(confirmation.state)
@@ -783,18 +907,16 @@ def _confirmation_card(
             facts.insert(3, ("Hash", snapshot.document_hash_short))
     live_html = _live_preview_diagnostics(live_preview)
     actions: list[str] = []
-    can_create = (
-        snapshot is None
-        and live_preview.state == "ready"
-        and live_preview.preview is not None
-        and live_preview.preview.eligible
-    )
-    if can_create and context.can("documents.prepare"):
-        actions.append(
-            f'<form method="post" action="/order/{_e(order.order_id)}/confirmation-document">'
-            f"{forms.csrf_input}{forms.confirmation_command_fields}"
-            '<button type="submit">Auftragsbestätigung erstellen</button></form>'
+    if show_create_action:
+        create_form = _confirmation_create_form(
+            order,
+            confirmation,
+            forms,
+            live_preview,
+            context=context,
         )
+        if create_form:
+            actions.append(create_form)
     if snapshot is not None:
         actions.append(
             f'<p><a class="order-action-link" '
@@ -1357,6 +1479,7 @@ def _customer_delivery_card(
     source_inquiry: Inquiry | None,
     forms: OrderDetailFormFields,
     *,
+    show_edit_action: bool = True,
     context: OfficePageContext,
 ) -> str:
     company = operational_data.company_name if operational_data is not None else None
@@ -1389,7 +1512,8 @@ def _customer_delivery_card(
     edit = (
         _customer_addresses_form(order, target, forms)
         if (
-            target is not None
+            show_edit_action
+            and target is not None
             and order.cancelled_at is None
             and context.can("inquiries.view")
             and context.can("orders.version.create")
@@ -1512,6 +1636,27 @@ def render_order_detail(
     state_title, state_description = _state_copy(
         order, target, next_action, ready, pause_view
     )
+    delivery_address_promoted = (
+        order.cancelled_at is None
+        and not pause_view.get("active")
+        and target is not None
+        and not _requires_fulfillment_choice(source_inquiry)
+        and _requires_delivery_address(source_inquiry, operational_data)
+    )
+    document_creation_promoted = (
+        order.cancelled_at is None
+        and not pause_view.get("active")
+        and target is not None
+        and not _requires_fulfillment_choice(source_inquiry)
+        and not _requires_delivery_address(source_inquiry, operational_data)
+        and next_action is None
+        and ready.ready
+        and _confirmation_create_action_available(
+            confirmation,
+            live_preview,
+            context=page_context,
+        )
+    )
     truncation_warning = (
         '<div class="order-notice blocked"><strong>Unvollständige Ansicht:</strong> '
         f"Es werden {len(versions)} von {_e(versions_total_count)} Auftragsständen "
@@ -1560,6 +1705,10 @@ def render_order_detail(
             next_action,
             forms,
             ready=ready,
+            confirmation=confirmation,
+            live_preview=live_preview,
+            source_inquiry=source_inquiry,
+            operational_data=operational_data,
             operational_pause=pause_view,
             context=page_context,
         )
@@ -1573,6 +1722,7 @@ def render_order_detail(
             operational_data,
             source_inquiry,
             forms,
+            show_edit_action=not delivery_address_promoted,
             context=page_context,
         )
         + _positions_card(operational_data)
@@ -1585,6 +1735,7 @@ def render_order_detail(
             forms,
             live_preview,
             compact=True,
+            show_create_action=not document_creation_promoted,
             context=page_context,
         )
         + _payment_card(order, payment, forms, context=page_context)

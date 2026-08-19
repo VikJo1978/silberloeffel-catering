@@ -17,7 +17,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
 from catering_system.domain.kitchen_print_job import KitchenPrintJob
-from catering_system.domain.customer_document_projection import CustomerAddress
+from catering_system.domain.customer_document_preview import CustomerDocumentPreview
+from catering_system.domain.customer_document_projection import (
+    CustomerAddress,
+    CustomerDocumentRecipient,
+)
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_operational_context import (
     OrderVersionOperationalContextSnapshot,
@@ -56,7 +60,7 @@ from catering_system.ui.office_panel_order_detail import (
     render_order_detail,
 )
 from catering_system.ui.office_panel_shell import OFFICE_PANEL_STYLE
-from catering_system.ui.office_panel_views import _page
+from catering_system.ui.office_panel_views import OfficePageContext, _page
 from tests.helpers.commercial_snapshot_seed import seed_commercial_snapshot
 from tests.helpers.office_panel_context import legacy_office_context
 from tests.helpers.order_seed import seed_order
@@ -208,6 +212,38 @@ def _convert(base: str, inquiry_id: str) -> str:
         replace(inquiry, crm_stage="Bestätigt / Auftrag")  # type: ignore[arg-type]
     )
     return order.order_id
+
+
+def _set_fulfillment_mode(
+    base: str,
+    inquiry_id: str,
+    fulfillment_mode: str,
+) -> None:
+    inquiries, _orders, _snapshots = _PANEL_REPOS[base]
+    InquiryService(inquiries).set_inquiry_fulfillment_mode(
+        inquiry_id,
+        fulfillment_mode=fulfillment_mode,
+    )
+
+
+def _set_delivery_address(base: str, inquiry_id: str) -> None:
+    inquiries, _orders, _snapshots = _PANEL_REPOS[base]
+    address = CustomerAddress(
+        street="Lieferweg 12",
+        postal_code="20095",
+        city="Hamburg",
+        country="Deutschland",
+    )
+    InquiryService(inquiries).set_inquiry_customer_addresses(
+        inquiry_id,
+        invoice_address=address,
+        delivery_address=address,
+        delivery_address_mode="SEPARATE",
+    )
+
+
+def _next_step_section(body: str) -> str:
+    return body.split('<section class="order-next-step', 1)[1].split("</section>", 1)[0]
 
 
 def _simulate_kitchen_agent_ack(base: str, order_version_id: str) -> None:
@@ -1144,6 +1180,7 @@ def test_v2_order_detail_guides_print_effective_and_release(
     premium_panel: str,
 ) -> None:
     inquiry_id = _create_inquiry(premium_panel)
+    _set_fulfillment_mode(premium_panel, inquiry_id, "PICKUP")
     order_id = _convert(premium_panel, inquiry_id)
 
     _status, initial = _get(f"{premium_panel}/order/{order_id}")
@@ -1191,12 +1228,192 @@ def test_v2_order_detail_guides_print_effective_and_release(
     assert "READY_TO_SEND" not in visible
 
 
+def test_v2_order_detail_promotes_confirmation_document_after_print_ready() -> None:
+    now = datetime.now(UTC)
+    order = Order(
+        order_id="order-document-next-step",
+        source_inquiry_id="inquiry-document-next-step",
+        created_at=now,
+        updated_at=now,
+    )
+    version = OrderVersion(
+        order_version_id="version-document-next-step",
+        order_id=order.order_id,
+        version_number=1,
+        created_at=now,
+        event_date=date(2026, 10, 1),
+        time_window_text="mittags",
+        location_text="Hamburg",
+        guest_count_estimate=25,
+        planning_mode="caterer_suggestion",
+        kitchen_print_confirmed_at=now,
+    )
+    forms = OrderDetailFormFields(
+        csrf_input="",
+        print_confirm_command_fields={},
+        effective_command_fields={},
+        ready_command_fields="",
+        cancel_command_fields="",
+        version_command_fields="",
+        payment_command_fields="",
+        confirmation_command_fields='<input type="hidden" name="_command_id" value="cmd-doc">',
+    )
+
+    detail = render_order_detail(
+        order,
+        [version],
+        ReadyToSendEvaluation(order_id=order.order_id, ready=True, reasons=()),
+        derive_payment_reminder(None, event_date=date(2026, 10, 1), today=date.today()),
+        None,
+        OrderConfirmationDocumentEligibility(
+            available=True,
+            state="bereit_zur_vorschau",
+            can_prepare=True,
+        ),
+        OutboundSendEligibility(state="dokument_fehlt", can_send=False),
+        forms,
+        ConfirmationLivePreviewView(
+            state="ready",
+            preview=CustomerDocumentPreview(
+                document_type="ORDER_CONFIRMATION",
+                eligible=True,
+                warnings=(),
+                blockers=(),
+                recipient=CustomerDocumentRecipient(name="Kunde"),
+            ),
+        ),
+        source_inquiry=None,
+        versions_total_count=1,
+        versions_truncated=False,
+        context=OfficePageContext(
+            employee_effective_permissions=frozenset({"documents.prepare"})
+        ),
+    )
+    next_step = _next_step_section(detail.body)
+
+    assert "<h2>Auftragsbestätigung erstellen</h2>" in next_step
+    assert f'action="/order/{order.order_id}/confirmation-document"' in next_step
+    assert (
+        detail.body.count(f'action="/order/{order.order_id}/confirmation-document"')
+        == 1
+    )
+    assert f'action="/order/{order.order_id}/ready"' not in next_step
+
+
+def test_v2_order_detail_prioritizes_missing_fulfillment_before_print(
+    premium_panel: str,
+) -> None:
+    inquiry_id = _create_inquiry(premium_panel)
+    order_id = _convert(premium_panel, inquiry_id)
+
+    _status, body = _get(f"{premium_panel}/order/{order_id}")
+    next_step = _next_step_section(body)
+
+    assert "<h2>Auftragsart festlegen</h2>" in next_step
+    assert "Bitte auswählen, ob der Auftrag geliefert oder abgeholt wird." in next_step
+    assert f'action="/inquiry/{inquiry_id}/fulfillment-mode"' in next_step
+    assert '<option value="DELIVERY">Lieferung</option>' in next_step
+    assert '<option value="PICKUP">Abholung</option>' in next_step
+    assert "print-confirm" not in next_step
+    assert "Küchenzettel für den aktuellen Stand drucken" not in next_step
+
+
+def test_v2_order_detail_prioritizes_delivery_address_for_delivery(
+    premium_panel: str,
+) -> None:
+    inquiry_id = _create_inquiry(premium_panel)
+    _set_fulfillment_mode(premium_panel, inquiry_id, "DELIVERY")
+    order_id = _convert(premium_panel, inquiry_id)
+
+    _status, body = _get(f"{premium_panel}/order/{order_id}")
+    version_id = re.search(r'name="parent_order_version_id" value="([^"]+)"', body)
+    next_step = _next_step_section(body)
+
+    assert "<h2>Lieferadresse ergänzen</h2>" in next_step
+    assert "Für eine Lieferung muss eine Lieferadresse hinterlegt sein." in next_step
+    assert f'action="/order/{order_id}/delivery-address"' in next_step
+    assert body.count(f'action="/order/{order_id}/delivery-address"') == 1
+    assert version_id is not None
+    assert f'value="{version_id.group(1)}"' in next_step
+    assert "print-confirm" not in next_step
+
+
+def test_v2_order_detail_pickup_and_delivery_with_address_allow_print(
+    premium_panel: str,
+) -> None:
+    pickup_inquiry_id = _create_inquiry(premium_panel)
+    _set_fulfillment_mode(premium_panel, pickup_inquiry_id, "PICKUP")
+    pickup_order_id = _convert(premium_panel, pickup_inquiry_id)
+
+    _status, pickup_body = _get(f"{premium_panel}/order/{pickup_order_id}")
+    pickup_next_step = _next_step_section(pickup_body)
+
+    assert "<h2>Lieferadresse ergänzen</h2>" not in pickup_next_step
+    assert "Küchenzettel für den aktuellen Stand drucken" in pickup_next_step
+    assert f'action="/order/{pickup_order_id}/print-confirm"' in pickup_next_step
+    assert f'action="/order/{pickup_order_id}/delivery-address"' in pickup_body
+
+    delivery_inquiry_id = _create_inquiry(premium_panel)
+    _set_fulfillment_mode(premium_panel, delivery_inquiry_id, "DELIVERY")
+    inquiries, orders, snapshots = _PANEL_REPOS[premium_panel]
+    inquiry = inquiries.get_by_id(delivery_inquiry_id)
+    assert inquiry is not None
+    now = datetime.now(UTC)
+    delivery_order_id = str(uuid.uuid4())
+    delivery_version_id = str(uuid.uuid4())
+    order = Order(
+        order_id=delivery_order_id,
+        source_inquiry_id=delivery_inquiry_id,
+        created_at=now,
+        updated_at=now,
+    )
+    version = OrderVersion(
+        order_version_id=delivery_version_id,
+        order_id=delivery_order_id,
+        version_number=1,
+        created_at=now,
+        event_date=inquiry.event_date,
+        time_window_text=inquiry.time_window_text,
+        location_text=inquiry.location_text,
+        guest_count_estimate=inquiry.guest_count_estimate,
+        planning_mode=inquiry.planning_mode,
+    )
+    orders.save_order_with_initial_version(
+        order,
+        version,
+        OrderVersionOperationalContextSnapshot(
+            order_version_id=delivery_version_id,
+            order_id=delivery_order_id,
+            recipient_company="Lieferkunde GmbH",
+            recipient_name="Lieferkunde",
+            recipient_phone="040 123456",
+            delivery_address=CustomerAddress(
+                street="Lieferweg 12",
+                postal_code="20095",
+                city="Hamburg",
+                country="Deutschland",
+            ),
+            created_at=now,
+            source="initial_inquiry_snapshot",
+        ),
+    )
+    seed_commercial_snapshot(snapshots, delivery_order_id)
+
+    _status, delivery_body = _get(f"{premium_panel}/order/{delivery_order_id}")
+    delivery_next_step = _next_step_section(delivery_body)
+
+    assert "<h2>Lieferadresse ergänzen</h2>" not in delivery_next_step
+    assert "Küchenzettel für den aktuellen Stand drucken" in delivery_next_step
+    assert f'action="/order/{delivery_order_id}/print-confirm"' in delivery_next_step
+
+
 def test_v2_order_detail_ready_false_without_action_stays_neutral(
     premium_panel: str,
 ) -> None:
     from dataclasses import replace
 
     inquiry_id = _create_inquiry(premium_panel)
+    _set_fulfillment_mode(premium_panel, inquiry_id, "PICKUP")
     order_id = _convert(premium_panel, inquiry_id)
     _inquiries, orders, _snapshots = _PANEL_REPOS[premium_panel]
     version = orders.list_order_versions(order_id)[0]
@@ -1322,6 +1539,209 @@ def test_v2_order_detail_without_versions_stays_review_only() -> None:
     assert "Küchendruck starten" not in detail.body
 
 
+def test_v2_order_detail_pause_and_cancel_outprioritize_missing_fulfillment() -> None:
+    now = datetime.now(UTC)
+    order = Order(
+        order_id="order-priority-paused",
+        source_inquiry_id="inquiry-priority-paused",
+        created_at=now,
+        updated_at=now,
+    )
+    version = OrderVersion(
+        order_version_id="version-priority-paused",
+        order_id=order.order_id,
+        version_number=1,
+        created_at=now,
+        event_date=date(2026, 10, 1),
+        time_window_text="mittags",
+        location_text="Hamburg",
+        guest_count_estimate=25,
+        planning_mode="caterer_suggestion",
+    )
+    inquiry = intake_from_website_form(
+        InquiryService(InMemoryInquiryRepository()),
+        {
+            "event_date": date(2026, 10, 1),
+            "location_text": "Hamburg",
+            "guest_count_estimate": 25,
+            "company": "Priorität GmbH",
+            "email": "kunde@example.com",
+            "phone": "040 123456",
+            "submission_id": "priority-unknown",
+        },
+    )
+    forms = OrderDetailFormFields(
+        csrf_input="",
+        print_confirm_command_fields={version.order_version_id: ""},
+        effective_command_fields={},
+        ready_command_fields="",
+        cancel_command_fields="",
+        version_command_fields="",
+        payment_command_fields="",
+    )
+
+    paused = render_order_detail(
+        order,
+        [version],
+        ReadyToSendEvaluation(
+            order_id=order.order_id,
+            ready=False,
+            reasons=("operational_pause",),
+        ),
+        derive_payment_reminder(None, event_date=date(2026, 10, 1), today=date.today()),
+        {"action": "print-confirm", "order_version_id": version.order_version_id},
+        OrderConfirmationDocumentEligibility(available=False, state="nicht_verfuegbar"),
+        OutboundSendEligibility(state="dokument_fehlt", can_send=False),
+        forms,
+        ConfirmationLivePreviewView(state="not_found"),
+        source_inquiry=inquiry,
+        operational_pause={"active": True, "reason_code": "customer_clarification"},
+        versions_total_count=1,
+        versions_truncated=False,
+        context=OfficePageContext(
+            employee_effective_permissions=frozenset({"orders.pause"})
+        ),
+    )
+
+    assert "Auftragspause klären" in paused.body
+    assert "Auftragsart festlegen" not in _next_step_section(paused.body)
+    assert "print-confirm" not in _next_step_section(paused.body)
+
+    cancelled = render_order_detail(
+        Order(
+            order_id="order-priority-cancelled",
+            source_inquiry_id=inquiry.inquiry_id,
+            created_at=now,
+            updated_at=now,
+            cancelled_at=now,
+        ),
+        [version],
+        ReadyToSendEvaluation(
+            order_id="order-priority-cancelled",
+            ready=False,
+            reasons=("order_cancelled",),
+        ),
+        derive_payment_reminder(None, event_date=date(2026, 10, 1), today=date.today()),
+        {"action": "print-confirm", "order_version_id": version.order_version_id},
+        OrderConfirmationDocumentEligibility(available=False, state="nicht_verfuegbar"),
+        OutboundSendEligibility(state="dokument_fehlt", can_send=False),
+        forms,
+        ConfirmationLivePreviewView(state="not_found"),
+        source_inquiry=inquiry,
+        versions_total_count=1,
+        versions_truncated=False,
+        context=legacy_office_context(),
+    )
+
+    assert "Keine weitere Bearbeitung" in cancelled.body
+    assert "Auftragsart festlegen" not in _next_step_section(cancelled.body)
+    assert "print-confirm" not in _next_step_section(cancelled.body)
+
+
+def test_v2_order_detail_hides_unauthorized_priority_actions() -> None:
+    now = datetime.now(UTC)
+    order = Order(
+        order_id="order-priority-permissions",
+        source_inquiry_id="inquiry-priority-permissions",
+        created_at=now,
+        updated_at=now,
+    )
+    version = OrderVersion(
+        order_version_id="version-priority-permissions",
+        order_id=order.order_id,
+        version_number=1,
+        created_at=now,
+        event_date=date(2026, 10, 1),
+        time_window_text="mittags",
+        location_text="Hamburg",
+        guest_count_estimate=25,
+        planning_mode="caterer_suggestion",
+    )
+    inquiry = intake_from_website_form(
+        InquiryService(InMemoryInquiryRepository()),
+        {
+            "event_date": date(2026, 10, 1),
+            "location_text": "Hamburg",
+            "guest_count_estimate": 25,
+            "company": "Rechte GmbH",
+            "email": "kunde@example.com",
+            "phone": "040 123456",
+            "submission_id": "priority-permissions",
+        },
+    )
+    forms = OrderDetailFormFields(
+        csrf_input="",
+        print_confirm_command_fields={version.order_version_id: ""},
+        effective_command_fields={},
+        ready_command_fields="",
+        cancel_command_fields="",
+        version_command_fields="",
+        payment_command_fields="",
+        confirmation_command_fields="",
+    )
+
+    no_inquiry_edit = render_order_detail(
+        order,
+        [version],
+        ReadyToSendEvaluation(
+            order_id=order.order_id,
+            ready=False,
+            reasons=("kitchen_print_not_confirmed",),
+        ),
+        derive_payment_reminder(None, event_date=date(2026, 10, 1), today=date.today()),
+        {"action": "print-confirm", "order_version_id": version.order_version_id},
+        OrderConfirmationDocumentEligibility(available=False, state="nicht_verfuegbar"),
+        OutboundSendEligibility(state="dokument_fehlt", can_send=False),
+        forms,
+        ConfirmationLivePreviewView(state="not_found"),
+        source_inquiry=inquiry,
+        versions_total_count=1,
+        versions_truncated=False,
+        context=OfficePageContext(
+            employee_effective_permissions=frozenset({"orders.print.confirm"})
+        ),
+    )
+    no_inquiry_edit_next = _next_step_section(no_inquiry_edit.body)
+
+    assert "Auftragsart festlegen" in no_inquiry_edit_next
+    assert "fulfillment-mode" not in no_inquiry_edit_next
+    assert "print-confirm" not in no_inquiry_edit_next
+
+    no_documents_prepare = render_order_detail(
+        order,
+        [version],
+        ReadyToSendEvaluation(order_id=order.order_id, ready=True, reasons=()),
+        derive_payment_reminder(None, event_date=date(2026, 10, 1), today=date.today()),
+        None,
+        OrderConfirmationDocumentEligibility(
+            available=True,
+            state="bereit_zur_vorschau",
+            can_prepare=True,
+        ),
+        OutboundSendEligibility(state="dokument_fehlt", can_send=False),
+        forms,
+        ConfirmationLivePreviewView(
+            state="ready",
+            preview=CustomerDocumentPreview(
+                document_type="ORDER_CONFIRMATION",
+                eligible=True,
+                warnings=(),
+                blockers=(),
+                recipient=CustomerDocumentRecipient(name="Kunde"),
+            ),
+        ),
+        source_inquiry=None,
+        versions_total_count=1,
+        versions_truncated=False,
+        context=OfficePageContext(employee_effective_permissions=frozenset()),
+    )
+    no_documents_prepare_next = _next_step_section(no_documents_prepare.body)
+
+    assert "Auftragsbestätigung prüfen" in no_documents_prepare_next
+    assert "Auftragsbestätigung erstellen" not in no_documents_prepare_next
+    assert "Vorbereitung vollständig" not in no_documents_prepare_next
+
+
 def test_v2_order_detail_uses_exact_target_delivery_address(
     premium_panel: str,
 ) -> None:
@@ -1432,6 +1852,7 @@ def test_v2_order_detail_prefers_new_candidate_over_ready_old_stand(
     premium_panel: str,
 ) -> None:
     inquiry_id = _create_inquiry(premium_panel)
+    _set_fulfillment_mode(premium_panel, inquiry_id, "PICKUP")
     order_id = _convert(premium_panel, inquiry_id)
     _status, initial = _get(f"{premium_panel}/order/{order_id}")
     version_id = re.search(r'name="order_version_id" value="([^"]+)"', initial).group(1)
@@ -1576,6 +1997,7 @@ def test_v2_order_detail_keeps_payment_separate_and_cancelled_read_only(
     premium_panel: str,
 ) -> None:
     inquiry_id = _create_inquiry(premium_panel)
+    _set_fulfillment_mode(premium_panel, inquiry_id, "PICKUP")
     order_id = _convert(premium_panel, inquiry_id)
 
     _post(
