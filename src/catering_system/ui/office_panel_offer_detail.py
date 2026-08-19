@@ -396,9 +396,7 @@ def _position_rows(variants: list[dict[str, object]]) -> str:
             name = _e(str(position.get("name", "Position")))
             unit_cents = position.get("unit_net_cents")
             unit_text = (
-                f"{int(unit_cents) / 100:.2f} €"
-                if isinstance(unit_cents, int)
-                else "–"
+                f"{int(unit_cents) / 100:.2f} €" if isinstance(unit_cents, int) else "–"
             )
             description = position.get("description")
             description_html = (
@@ -583,7 +581,7 @@ def _record_rejection_form(
         "<fieldset>"
         f'<label>Ablehnungszeitpunkt <input type="datetime-local" name="rejected_at" '
         f'step="1" value="{_e(default_at)}" required></label>'
-        '<label>Kommentar / Nachweis (optional) '
+        "<label>Kommentar / Nachweis (optional) "
         '<input name="evidence_reference" maxlength="1000" '
         'placeholder="Telefonische Absage"></label>'
         "</fieldset>"
@@ -713,9 +711,7 @@ def _next_step(
         return (
             "Kundenentscheidung erfassen",
             "Wenn der Kunde zugesagt hat, die angenommene Variante und den Nachweis erfassen.",
-            _record_acceptance_form(
-                offer_id, variants, forms=forms, context=context
-            ),
+            _record_acceptance_form(offer_id, variants, forms=forms, context=context),
         )
     if state == "Accepted":
         acceptance_id = detail.get("acceptance_id")
@@ -811,9 +807,7 @@ def _variant_card(variants: list[dict[str, object]]) -> str:
             "</div>"
         )
     if not cards:
-        cards.append(
-            '<div class="offer-variant-card"><h3>Keine Varianten</h3></div>'
-        )
+        cards.append('<div class="offer-variant-card"><h3>Keine Varianten</h3></div>')
     variant_suffix = "n" if len(variants) != 1 else ""
     position_suffix = "en" if total_positions != 1 else ""
     return (
@@ -897,8 +891,7 @@ def render_offer_detail(
         )
 
     pdf_link = (
-        f'<a class="offer-pdf-link" href="{_e(pdf_download_url)}">'
-        "PDF herunterladen</a>"
+        f'<a class="offer-pdf-link" href="{_e(pdf_download_url)}">PDF herunterladen</a>'
         if pdf_download_url is not None and context.can("offers.pdf.generate")
         else ""
     )
@@ -909,8 +902,8 @@ def render_offer_detail(
         '<p class="offer-eyebrow">Angebot</p>'
         f"<h1>Angebot {_e(offer_id[:8])}</h1>"
         f'<p class="offer-hero-meta">Version {version_number} · '
-        f'{_e(_long_date(str(surface["event_date"])))} · '
-        f'{_e(str(surface["location_text"]))}</p>'
+        f"{_e(_long_date(str(surface['event_date'])))} · "
+        f"{_e(str(surface['location_text']))}</p>"
         f"{pdf_link}"
         "</div>"
         f'<span class="offer-status-badge">{_e(state_label)}</span>'
