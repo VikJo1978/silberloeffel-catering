@@ -135,23 +135,58 @@ def test_pdf_contains_kitchen_projection_content() -> None:
     event = projection.event
     first_position = projection.commercial.positions[0]
     detail = first_position.description or first_position.composition
+    planning_label = {
+        "caterer_suggestion": "Vorschlag durch Silberlöffel",
+        "self_select": "Auswahl durch den Kunden",
+    }[event.planning_mode]
 
     assert "SILBERLÖFFEL" in text
     assert "Küchenzettel" in text
-    assert event.order_id in text
-    assert event.order_version_id in text
+    assert event.order_id not in text
+    assert event.order_version_id not in text
     assert event.event_date.strftime("%d.%m.%Y") in text
     assert event.time_window_text in text
     assert event.location_text in text
     assert str(event.guest_count_estimate) in text
-    assert event.planning_mode in text
-    assert f"Version {event.version_number}" in text
+    assert planning_label in text
+    assert event.planning_mode not in text
+    assert "Stand" in text
+    assert "KUNDE / LIEFERUNG" in text
     assert "MENÜ" in text
     assert first_position.name in text
     if detail is not None:
         assert detail in text
     if first_position.quantity_display is not None:
         assert first_position.quantity_display in text
+
+
+def test_pdf_contains_exact_customer_delivery_context() -> None:
+    factory, _store, job, _offer, _offers, _orders = _document_factory_world()
+    projection = factory._projection_service.resolve(
+        job.order_id,
+        job.order_version_id,
+        intent="kitchen_job",
+    )
+    projection = replace(
+        projection,
+        customer=replace(
+            projection.customer,
+            company_name="Grant Hotel",
+            contact_name="Frau Grant",
+            phone="040 123456",
+            delivery_address_lines=("Brombeerenstr. 4", "22041 Hamburg"),
+        ),
+    )
+
+    text = _pdf_text(render_kitchen_print_pdf(projection, created_at=_NOW))
+
+    assert "Grant Hotel" in text
+    assert "Frau Grant" in text
+    assert "040 123456" in text
+    assert "Brombeerenstr. 4" in text
+    assert "22041 Hamburg" in text
+    assert projection.event.order_id not in text
+    assert projection.event.order_version_id not in text
 
 
 def test_pdf_contains_cancelled_watermark_change_and_empty_menu_states() -> None:
@@ -180,9 +215,10 @@ def test_pdf_contains_cancelled_watermark_change_and_empty_menu_states() -> None
     assert "VERALTET" in text
     assert "Gäste" in text
     assert "-" in text
-    assert "Änderung" in text
-    assert "Grund: -" in text
-    assert "Felder: location_text, guest_count_estimate" in text
+    assert "ÄNDERUNG" in text
+    assert "Geändert: Ort, Gästezahl" in text
+    assert "location_text" not in text
+    assert "guest_count_estimate" not in text
     assert "Keine Positionen." in text
 
 
