@@ -7,12 +7,16 @@ No persistence. No Offer. No intake parsing. No PDF/HTML/email.
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from catering_system.domain.customer_document_preview import CustomerDocumentPreview
 from catering_system.domain.customer_document_projection import (
+    WARNING_DELIVERY_ADDRESS_DIFFERS,
     CustomerAddress,
     CustomerDocumentEvent,
+    CustomerDocumentRecipient,
+    customer_addresses_equal,
 )
 from catering_system.domain.inquiry import FulfillmentMode, Inquiry
 from catering_system.domain.order import Order, OrderVersion
@@ -52,6 +56,7 @@ def build_customer_document_preview(
     delivery_address: CustomerAddress | None = None,
     payment_reminder: OrderPaymentReminder | None = None,
     now: datetime | None = None,
+    recipient_override: CustomerDocumentRecipient | None = None,
 ) -> CustomerDocumentPreview:
     """Pure assemble of live preview facts + eligibility (no repos)."""
     fulfillment_mode: FulfillmentMode = (
@@ -59,7 +64,7 @@ def build_customer_document_preview(
         if recipient_inquiry is not None
         else "UNKNOWN"
     )
-    recipient = build_customer_document_recipient(
+    recipient = recipient_override or build_customer_document_recipient(
         recipient_inquiry,
         invoice_address=invoice_address,
         delivery_address=delivery_address,
@@ -139,6 +144,43 @@ def _event_from_version(
     )
 
 
+def _recipient_for_order_version(
+    orders: OrderRepository,
+    inquiry: Inquiry | None,
+    version: OrderVersion | None,
+    *,
+    invoice_address: CustomerAddress | None,
+    delivery_address: CustomerAddress | None,
+    fulfillment_mode: FulfillmentMode,
+) -> CustomerDocumentRecipient:
+    recipient = build_customer_document_recipient(
+        inquiry,
+        invoice_address=invoice_address,
+        delivery_address=delivery_address,
+        fulfillment_mode=fulfillment_mode,
+    )
+    if invoice_address is not None or delivery_address is not None:
+        return recipient
+    if version is None or version.parent_order_version_id is None:
+        return recipient
+    context = orders.get_operational_context(version.order_version_id)
+    if context is None:
+        return recipient
+    exact_delivery = None if fulfillment_mode == "PICKUP" else context.delivery_address
+    differs = (
+        recipient.invoice_address is not None
+        and exact_delivery is not None
+        and not customer_addresses_equal(recipient.invoice_address, exact_delivery)
+    )
+    warnings = (WARNING_DELIVERY_ADDRESS_DIFFERS,) if differs else ()
+    return replace(
+        recipient,
+        delivery_address=exact_delivery,
+        delivery_address_differs=differs,
+        warnings=warnings,
+    )
+
+
 class CustomerDocumentPreviewService:
     """Load order truth and build a live confirmation preview."""
 
@@ -172,6 +214,17 @@ class CustomerDocumentPreviewService:
             version = self._orders.get_order_version(order.effective_order_version_id)
         commercial = self._commercial_snapshots.get_by_order_id(order.order_id)
         inquiry = self._inquiries.get_by_id(order.source_inquiry_id)
+        fulfillment_mode: FulfillmentMode = (
+            inquiry.fulfillment_mode if inquiry is not None else "UNKNOWN"
+        )
+        recipient = _recipient_for_order_version(
+            self._orders,
+            inquiry,
+            version,
+            invoice_address=invoice_address,
+            delivery_address=delivery_address,
+            fulfillment_mode=fulfillment_mode,
+        )
         payment_reminder = (
             self._payment_reminders.get(order.order_id)
             if self._payment_reminders is not None
@@ -186,4 +239,5 @@ class CustomerDocumentPreviewService:
             delivery_address=delivery_address,
             payment_reminder=payment_reminder,
             now=self._now(),
+            recipient_override=recipient,
         )
