@@ -31,37 +31,45 @@ jobs:
           path = Path("src/catering_system/ui/office_panel.py")
           text = path.read_text()
 
-          old_import = '''from catering_system.ui.office_panel_offer_detail import (
-              OfferDetailFormFields,
-              render_offer_detail,
-              surface_version_id,
-          )'''
-          new_import = '''from catering_system.ui.office_panel_offer_detail import (
-              OfferDetailFormFields,
-              customer_display_from_offer_queue,
-              render_offer_detail,
-              surface_version_id,
-          )'''
+          old_import = (
+              "from catering_system.ui.office_panel_offer_detail import (\n"
+              "    OfferDetailFormFields,\n"
+              "    render_offer_detail,\n"
+              "    surface_version_id,\n"
+              ")"
+          )
+          new_import = (
+              "from catering_system.ui.office_panel_offer_detail import (\n"
+              "    OfferDetailFormFields,\n"
+              "    customer_display_from_offer_queue,\n"
+              "    render_offer_detail,\n"
+              "    surface_version_id,\n"
+              ")"
+          )
           assert text.count(old_import) == 1, "offer detail import boundary changed"
           text = text.replace(old_import, new_import, 1)
 
-          old_render = '''        else:
-              offer = self._offers.get(offer_id)
-              if offer is None:
-                  return None
-              detail = api_views.offer_detail(offer, today=api_views.berlin_today())
-          forms = OfferDetailFormFields('''
-          new_render = '''        else:
-              offer = self._offers.get(offer_id)
-              if offer is None:
-                  return None
-              detail = api_views.offer_detail(offer, today=api_views.berlin_today())
-          detail = dict(detail)
-          detail["customer_display"] = (
-              customer_display_from_offer_queue(self._offer_queue_snapshot(), offer_id)
-              or ""
+          old_render = (
+              "        else:\n"
+              "            offer = self._offers.get(offer_id)\n"
+              "            if offer is None:\n"
+              "                return None\n"
+              "            detail = api_views.offer_detail(offer, today=api_views.berlin_today())\n"
+              "        forms = OfferDetailFormFields("
           )
-          forms = OfferDetailFormFields('''
+          new_render = (
+              "        else:\n"
+              "            offer = self._offers.get(offer_id)\n"
+              "            if offer is None:\n"
+              "                return None\n"
+              "            detail = api_views.offer_detail(offer, today=api_views.berlin_today())\n"
+              "        detail = dict(detail)\n"
+              "        detail[\"customer_display\"] = (\n"
+              "            customer_display_from_offer_queue(self._offer_queue_snapshot(), offer_id)\n"
+              "            or \"\"\n"
+              "        )\n"
+              "        forms = OfferDetailFormFields("
+          )
           assert text.count(old_render) == 1, "render_offer boundary changed"
           text = text.replace(old_render, new_render, 1)
           path.write_text(text)
