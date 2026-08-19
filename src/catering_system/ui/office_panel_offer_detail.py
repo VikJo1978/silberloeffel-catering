@@ -904,9 +904,7 @@ def render_offer_detail(
     state_label = offer_state_label(state)  # type: ignore[arg-type]
     customer_display_raw = detail.get("customer_display")
     customer_display = (
-        customer_display_raw.strip()
-        if isinstance(customer_display_raw, str)
-        else ""
+        customer_display_raw.strip() if isinstance(customer_display_raw, str) else ""
     )
     hero_title = (
         f"Angebot · {customer_display}"

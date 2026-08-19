@@ -208,6 +208,7 @@ from catering_system.ui.office_panel_inquiry_detail import (
 )
 from catering_system.ui.office_panel_offer_detail import (
     OfferDetailFormFields,
+    customer_display_from_offer_queue,
     render_offer_detail,
     surface_version_id,
 )
@@ -1030,6 +1031,11 @@ class OfficePanel:
             if offer is None:
                 return None
             detail = api_views.offer_detail(offer, today=api_views.berlin_today())
+        detail = dict(detail)
+        detail["customer_display"] = (
+            customer_display_from_offer_queue(self._offer_queue_snapshot(), offer_id)
+            or ""
+        )
         forms = OfferDetailFormFields(
             csrf_input=_csrf_input(context),
             command_fields=self._command_fields(),
