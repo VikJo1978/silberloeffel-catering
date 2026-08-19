@@ -102,8 +102,7 @@ jobs:
           printf '%s\n' "$changed"
           test "$changed" = "$(printf '%s\n' \
             src/catering_system/ui/office_panel.py \
-            src/catering_system/ui/office_panel_offer_detail.py \
-            tests/unit/test_office_panel_offer_detail_guided.py)"
+            src/catering_system/ui/office_panel_offer_detail.py)"
       - name: Commit bounded patch
         run: |
           git config user.name "github-actions[bot]"
