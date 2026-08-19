@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 from catering_system.domain.customer_document_eligibility import (
@@ -18,9 +18,11 @@ from catering_system.domain.customer_document_eligibility import (
     CustomerDocumentEligibility as DocumentCreateEligibility,
 )
 from catering_system.domain.customer_document_projection import (
+    WARNING_DELIVERY_ADDRESS_DIFFERS,
     CustomerAddress,
     CustomerDocumentProjection,
     CustomerDocumentRecipient,
+    customer_addresses_equal,
 )
 from catering_system.domain.inquiry import FulfillmentMode
 from catering_system.domain.order import Order, OrderVersion
@@ -211,6 +213,7 @@ class OrderConfirmationDocumentService:
             payment_method=payment_method,
             payment_customer_visible_text=payment_customer_visible_text,
         )
+        projection = replace(projection, recipient=recipient)
         draft = _persist_snapshot_from_projection(
             projection,
             created_by=created_by,
@@ -318,6 +321,31 @@ class OrderConfirmationDocumentService:
             delivery_address=delivery_address,
             fulfillment_mode=fulfillment_mode,
         )
+        if (
+            invoice_address is None
+            and delivery_address is None
+            and version is not None
+            and version.parent_order_version_id is not None
+        ):
+            context = self._orders.get_operational_context(version.order_version_id)
+            if context is not None:
+                exact_delivery = (
+                    None if fulfillment_mode == "PICKUP" else context.delivery_address
+                )
+                differs = (
+                    recipient.invoice_address is not None
+                    and exact_delivery is not None
+                    and not customer_addresses_equal(
+                        recipient.invoice_address, exact_delivery
+                    )
+                )
+                warnings = (WARNING_DELIVERY_ADDRESS_DIFFERS,) if differs else ()
+                recipient = replace(
+                    recipient,
+                    delivery_address=exact_delivery,
+                    delivery_address_differs=differs,
+                    warnings=warnings,
+                )
         return version, commercial, recipient, fulfillment_mode
 
     def _payment_reminder(self, order_id: str) -> OrderPaymentReminder | None:
