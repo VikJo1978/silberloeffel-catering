@@ -246,6 +246,12 @@ def _next_step_section(body: str) -> str:
     return body.split('<section class="order-next-step', 1)[1].split("</section>", 1)[0]
 
 
+def _status_card_section(body: str) -> str:
+    return body.split(
+        '<section class="order-card order-content-card order-status-card"', 1
+    )[1].split("</section>", 1)[0]
+
+
 def _simulate_kitchen_agent_ack(base: str, order_version_id: str) -> None:
     from catering_system.services.kitchen_print_service import KitchenPrintService
 
@@ -1290,6 +1296,7 @@ def test_v2_order_detail_promotes_confirmation_document_after_print_ready() -> N
         ),
     )
     next_step = _next_step_section(detail.body)
+    status_card = _status_card_section(detail.body)
 
     assert "<h2>Auftragsbestätigung erstellen</h2>" in next_step
     assert f'action="/order/{order.order_id}/confirmation-document"' in next_step
@@ -1298,6 +1305,12 @@ def test_v2_order_detail_promotes_confirmation_document_after_print_ready() -> N
         == 1
     )
     assert f'action="/order/{order.order_id}/ready"' not in next_step
+    assert (
+        '<span class="order-header-badge status">Auftragsbestätigung erstellen</span>'
+        in detail.body
+    )
+    assert "<strong>Auftragsbestätigung erstellen</strong>" in status_card
+    assert "Vorbereitung vollständig" not in status_card
 
 
 def test_v2_order_detail_prioritizes_missing_fulfillment_before_print(
@@ -1308,6 +1321,7 @@ def test_v2_order_detail_prioritizes_missing_fulfillment_before_print(
 
     _status, body = _get(f"{premium_panel}/order/{order_id}")
     next_step = _next_step_section(body)
+    status_card = _status_card_section(body)
 
     assert "<h2>Auftragsart festlegen</h2>" in next_step
     assert "Bitte auswählen, ob der Auftrag geliefert oder abgeholt wird." in next_step
@@ -1316,6 +1330,11 @@ def test_v2_order_detail_prioritizes_missing_fulfillment_before_print(
     assert '<option value="PICKUP">Abholung</option>' in next_step
     assert "print-confirm" not in next_step
     assert "Küchenzettel für den aktuellen Stand drucken" not in next_step
+    assert (
+        '<span class="order-header-badge status">Auftragsart festlegen</span>' in body
+    )
+    assert "<strong>Auftragsart festlegen</strong>" in status_card
+    assert "Küchendruck erforderlich" not in status_card
 
 
 def test_v2_order_detail_prioritizes_delivery_address_for_delivery(
@@ -1328,6 +1347,7 @@ def test_v2_order_detail_prioritizes_delivery_address_for_delivery(
     _status, body = _get(f"{premium_panel}/order/{order_id}")
     version_id = re.search(r'name="parent_order_version_id" value="([^"]+)"', body)
     next_step = _next_step_section(body)
+    status_card = _status_card_section(body)
 
     assert "<h2>Lieferadresse ergänzen</h2>" in next_step
     assert "Für eine Lieferung muss eine Lieferadresse hinterlegt sein." in next_step
@@ -1336,6 +1356,11 @@ def test_v2_order_detail_prioritizes_delivery_address_for_delivery(
     assert version_id is not None
     assert f'value="{version_id.group(1)}"' in next_step
     assert "print-confirm" not in next_step
+    assert (
+        '<span class="order-header-badge status">Lieferadresse ergänzen</span>' in body
+    )
+    assert "<strong>Lieferadresse ergänzen</strong>" in status_card
+    assert "Küchendruck erforderlich" not in status_card
 
 
 def test_v2_order_detail_pickup_and_delivery_with_address_allow_print(
@@ -1347,11 +1372,17 @@ def test_v2_order_detail_pickup_and_delivery_with_address_allow_print(
 
     _status, pickup_body = _get(f"{premium_panel}/order/{pickup_order_id}")
     pickup_next_step = _next_step_section(pickup_body)
+    pickup_status = _status_card_section(pickup_body)
 
     assert "<h2>Lieferadresse ergänzen</h2>" not in pickup_next_step
     assert "Küchenzettel für den aktuellen Stand drucken" in pickup_next_step
     assert f'action="/order/{pickup_order_id}/print-confirm"' in pickup_next_step
     assert f'action="/order/{pickup_order_id}/delivery-address"' in pickup_body
+    assert (
+        '<span class="order-header-badge status">Küchendruck erforderlich</span>'
+        in pickup_body
+    )
+    assert "<strong>Küchendruck erforderlich</strong>" in pickup_status
 
     delivery_inquiry_id = _create_inquiry(premium_panel)
     _set_fulfillment_mode(premium_panel, delivery_inquiry_id, "DELIVERY")
@@ -1401,10 +1432,16 @@ def test_v2_order_detail_pickup_and_delivery_with_address_allow_print(
 
     _status, delivery_body = _get(f"{premium_panel}/order/{delivery_order_id}")
     delivery_next_step = _next_step_section(delivery_body)
+    delivery_status = _status_card_section(delivery_body)
 
     assert "<h2>Lieferadresse ergänzen</h2>" not in delivery_next_step
     assert "Küchenzettel für den aktuellen Stand drucken" in delivery_next_step
     assert f'action="/order/{delivery_order_id}/print-confirm"' in delivery_next_step
+    assert (
+        '<span class="order-header-badge status">Küchendruck erforderlich</span>'
+        in delivery_body
+    )
+    assert "<strong>Küchendruck erforderlich</strong>" in delivery_status
 
 
 def test_v2_order_detail_ready_false_without_action_stays_neutral(
@@ -1604,6 +1641,8 @@ def test_v2_order_detail_pause_and_cancel_outprioritize_missing_fulfillment() ->
     )
 
     assert "Auftragspause klären" in paused.body
+    assert '<span class="order-header-badge status">Pausiert</span>' in paused.body
+    assert "<strong>Betrieblich pausiert</strong>" in _status_card_section(paused.body)
     assert "Auftragsart festlegen" not in _next_step_section(paused.body)
     assert "print-confirm" not in _next_step_section(paused.body)
 
@@ -1634,6 +1673,8 @@ def test_v2_order_detail_pause_and_cancel_outprioritize_missing_fulfillment() ->
     )
 
     assert "Keine weitere Bearbeitung" in cancelled.body
+    assert '<span class="order-header-badge status">Storniert</span>' in cancelled.body
+    assert "<strong>Auftrag storniert</strong>" in _status_card_section(cancelled.body)
     assert "Auftragsart festlegen" not in _next_step_section(cancelled.body)
     assert "print-confirm" not in _next_step_section(cancelled.body)
 
@@ -1736,10 +1777,13 @@ def test_v2_order_detail_hides_unauthorized_priority_actions() -> None:
         context=OfficePageContext(employee_effective_permissions=frozenset()),
     )
     no_documents_prepare_next = _next_step_section(no_documents_prepare.body)
+    no_documents_prepare_status = _status_card_section(no_documents_prepare.body)
 
     assert "Auftragsbestätigung prüfen" in no_documents_prepare_next
     assert "Auftragsbestätigung erstellen" not in no_documents_prepare_next
     assert "Vorbereitung vollständig" not in no_documents_prepare_next
+    assert "Auftragsbestätigung erstellen" in no_documents_prepare_status
+    assert "Vorbereitung vollständig" not in no_documents_prepare_status
 
 
 def test_v2_order_detail_uses_exact_target_delivery_address(

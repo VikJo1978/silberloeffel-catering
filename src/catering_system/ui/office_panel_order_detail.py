@@ -275,6 +275,10 @@ def _state_copy(
     target: OrderVersion | None,
     next_action: Mapping[str, str] | None,
     ready: ReadyToSendEvaluation,
+    confirmation: OrderConfirmationDocumentEligibility,
+    live_preview: ConfirmationLivePreviewView,
+    source_inquiry: Inquiry | None,
+    operational_data: OrderDetailOperationalData | None,
     operational_pause: Mapping[str, object],
 ) -> tuple[str, str]:
     if order.cancelled_at is not None:
@@ -290,6 +294,16 @@ def _state_copy(
             "Betrieblich pausiert",
             f"Der Auftrag bleibt sichtbar, die Versandfreigabe ist gesperrt. Grund: {reason}.",
         )
+    if _requires_fulfillment_choice(source_inquiry):
+        return (
+            "Auftragsart festlegen",
+            "Bitte auswählen, ob der Auftrag geliefert oder abgeholt wird.",
+        )
+    if _requires_delivery_address(source_inquiry, operational_data):
+        return (
+            "Lieferadresse ergänzen",
+            "Für eine Lieferung muss eine Lieferadresse hinterlegt sein.",
+        )
     if next_action is not None and next_action.get("action") == "print-confirm":
         return (
             "Küchendruck erforderlich",
@@ -299,6 +313,16 @@ def _state_copy(
         return (
             "Küchenstand wird übernommen",
             "Der Ausdruck ist bestätigt. Der geprüfte Stand wird automatisch übernommen.",
+        )
+    if _requires_confirmation_document(confirmation, live_preview):
+        return (
+            "Auftragsbestätigung erstellen",
+            "Der Küchenstand ist bestätigt. Erstellen Sie jetzt die Auftragsbestätigung für den Kunden.",
+        )
+    if confirmation.available and confirmation.snapshot is None:
+        return (
+            "Auftragsbestätigung prüfen",
+            _confirmation_state_label(confirmation.state),
         )
     if ready.ready:
         return (
@@ -530,12 +554,21 @@ def _confirmation_create_action_available(
     *,
     context: OfficePageContext,
 ) -> bool:
+    return _requires_confirmation_document(
+        confirmation,
+        live_preview,
+    ) and context.can("documents.prepare")
+
+
+def _requires_confirmation_document(
+    confirmation: OrderConfirmationDocumentEligibility,
+    live_preview: ConfirmationLivePreviewView,
+) -> bool:
     return (
         confirmation.snapshot is None
         and live_preview.state == "ready"
         and live_preview.preview is not None
         and live_preview.preview.eligible
-        and context.can("documents.prepare")
     )
 
 
@@ -1634,7 +1667,15 @@ def render_order_detail(
         )
     title = f"Auftrag · {customer_label}"
     state_title, state_description = _state_copy(
-        order, target, next_action, ready, pause_view
+        order,
+        target,
+        next_action,
+        ready,
+        confirmation,
+        live_preview,
+        source_inquiry,
+        operational_data,
+        pause_view,
     )
     delivery_address_promoted = (
         order.cancelled_at is None
