@@ -339,6 +339,31 @@ def surface_version_id(detail: dict[str, object]) -> str:
     return str(_surface_version(detail).get("offer_version_id", ""))
 
 
+def customer_display_from_offer_queue(
+    snapshot: dict[str, object], offer_id: str
+) -> str | None:
+    """Read the queue's canonical human customer label for one offer."""
+
+    sections = snapshot.get("sections")
+    if not isinstance(sections, list):
+        return None
+    for section in sections:
+        if not isinstance(section, dict):
+            continue
+        items = section.get("items")
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, dict) or str(item.get("offer_id", "")) != offer_id:
+                continue
+            raw = item.get("customer_display")
+            if not isinstance(raw, str):
+                return None
+            display = raw.strip()
+            return display if display and display != "–" else None
+    return None
+
+
 def _version_list(detail: dict[str, object]) -> str:
     versions = cast(list[dict[str, object]], detail["versions"])
     current_id = str(detail["offer_version_id"])
@@ -877,6 +902,17 @@ def render_offer_detail(
     variants = cast(list[dict[str, object]], surface["variants"])
     version_number = int(cast(int, surface.get("version", 1)))
     state_label = offer_state_label(state)  # type: ignore[arg-type]
+    customer_display_raw = detail.get("customer_display")
+    customer_display = (
+        customer_display_raw.strip()
+        if isinstance(customer_display_raw, str)
+        else ""
+    )
+    hero_title = (
+        f"Angebot · {customer_display}"
+        if customer_display and customer_display != "–"
+        else "Angebot"
+    )
 
     next_title, next_copy, next_action = _next_step(
         detail,
@@ -907,7 +943,7 @@ def render_offer_detail(
         '<header class="offer-hero">'
         "<div>"
         '<p class="offer-eyebrow">Angebot</p>'
-        f"<h1>Angebot {_e(offer_id[:8])}</h1>"
+        f"<h1>{_e(hero_title)}</h1>"
         f'<p class="offer-hero-meta">Version {version_number} · '
         f"{_e(_long_date(str(surface['event_date'])))} · "
         f"{_e(str(surface['location_text']))}</p>"
