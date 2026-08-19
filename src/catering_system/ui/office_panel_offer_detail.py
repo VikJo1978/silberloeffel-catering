@@ -721,16 +721,23 @@ def _next_step(
             and acceptance is not None
             and acceptance.get("accepted_variant_id") is not None
         ):
+            action = _convert_form(
+                offer_id,
+                accepted_variant_id=str(acceptance["accepted_variant_id"]),
+                acceptance_id=acceptance_id,
+                forms=forms,
+                context=context,
+            )
+            if action:
+                return (
+                    "In Auftrag umwandeln",
+                    "Die Kundenannahme ist erfasst. Jetzt den verbindlichen Auftrag anlegen.",
+                    action,
+                )
             return (
-                "In Auftrag umwandeln",
-                "Die Kundenannahme ist erfasst. Jetzt den verbindlichen Auftrag anlegen.",
-                _convert_form(
-                    offer_id,
-                    accepted_variant_id=str(acceptance["accepted_variant_id"]),
-                    acceptance_id=acceptance_id,
-                    forms=forms,
-                    context=context,
-                ),
+                "Kundenannahme erfasst",
+                "Das Angebot wurde vom Kunden angenommen.",
+                "",
             )
     if state in ("Expired", "Rejected", "Withdrawn"):
         return (
@@ -812,7 +819,7 @@ def _variant_card(variants: list[dict[str, object]]) -> str:
     position_suffix = "en" if total_positions != 1 else ""
     return (
         '<section class="offer-card">'
-        "<h2>Angebot</h2>"
+        "<h2>Angebotsvarianten</h2>"
         f'<p class="offer-next-copy">{len(variants)} Variante{variant_suffix} · '
         f"{total_positions} Position{position_suffix}</p>"
         f'<div class="offer-variant-grid">{"".join(cards)}</div>'
