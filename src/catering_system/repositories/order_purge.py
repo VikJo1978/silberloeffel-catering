@@ -29,6 +29,36 @@ def _quote_identifier(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
 
 
+def _delete_direct_fk_dependents(
+    connection: sqlite3.Connection,
+    table_name: str,
+    order_id: str,
+    version_ids: list[str],
+) -> None:
+    """Delete rows whose declared FK points directly at the target Order/version.
+
+    Production schemas do not guarantee that FK columns are literally named
+    ``order_id`` or ``order_version_id``. Inspect SQLite's FK metadata instead
+    of guessing column names.
+    """
+    quoted_table = _quote_identifier(table_name)
+    for row in connection.execute(f"PRAGMA foreign_key_list({quoted_table})").fetchall():
+        parent_table = str(row[2])
+        child_column = str(row[3])
+        if parent_table == "orders":
+            connection.execute(
+                f"DELETE FROM {quoted_table} WHERE {_quote_identifier(child_column)} = ?",
+                (order_id,),
+            )
+        elif parent_table == "order_versions" and version_ids:
+            placeholders = ",".join("?" for _ in version_ids)
+            connection.execute(
+                f"DELETE FROM {quoted_table} "
+                f"WHERE {_quote_identifier(child_column)} IN ({placeholders})",
+                tuple(version_ids),
+            )
+
+
 def _sqlite_purge(repo: _SQLiteBackedOrderRepository, order_id: str) -> None:
     connection = repo._conn
     with repo._write_scope():
@@ -93,6 +123,7 @@ def _sqlite_purge(repo: _SQLiteBackedOrderRepository, order_id: str) -> None:
                     f"WHERE order_version_id IN ({placeholders})",
                     tuple(version_ids),
                 )
+            _delete_direct_fk_dependents(connection, table_name, order_id, version_ids)
 
         # Break root references before deleting immutable version history.
         connection.execute(
