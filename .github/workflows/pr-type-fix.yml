@@ -1,0 +1,56 @@
+name: PR Type Fix
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  type-fix:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/order-hard-delete
+      - name: Apply nullable operational-data guard
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/catering_system/ui/office_panel_http.py')
+          text = path.read_text()
+          old = '''            operational_data = panel._order_detail_operational_data(
+              order_id, target.order_version_id
+            )
+            expected_name = (
+              operational_data.company_name or operational_data.contact_name or ""
+            ).strip()
+          '''
+          new = '''            operational_data = panel._order_detail_operational_data(
+              order_id, target.order_version_id
+            )
+            if operational_data is None:
+              raise ValueError("order_delete_name_unavailable")
+            expected_name = (
+              operational_data.company_name or operational_data.contact_name or ""
+            ).strip()
+          '''
+          if old not in text:
+              raise SystemExit('target snippet not found')
+          path.write_text(text.replace(old, new, 1))
+          PY
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: 0.11.32
+          python-version: '3.12'
+      - run: uv sync --dev
+      - run: uv run ruff format src/catering_system/ui/office_panel_http.py src/catering_system/repositories/order_purge.py
+      - name: Commit type fix
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/catering_system/ui/office_panel_http.py src/catering_system/repositories/order_purge.py
+          if ! git diff --cached --quiet; then
+            git commit -m "fix: narrow order delete operational data"
+            git push origin HEAD:feat/order-hard-delete
+          fi
