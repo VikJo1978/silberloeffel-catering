@@ -40,7 +40,9 @@ _LATER_DELIVERY = CustomerAddress(
 )
 
 
-def _set_live_delivery(inquiries: object, inquiry_id: str, address: CustomerAddress) -> None:
+def _set_live_delivery(
+    inquiries: object, inquiry_id: str, address: CustomerAddress
+) -> None:
     inquiry = inquiries.get_by_id(inquiry_id)  # type: ignore[attr-defined]
     assert inquiry is not None
     updated = set_inquiry_customer_addresses(
