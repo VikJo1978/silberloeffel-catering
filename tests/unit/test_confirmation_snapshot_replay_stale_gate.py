@@ -44,8 +44,5 @@ def test_prepare_rejects_old_snapshot_replay_after_effective_version_changes() -
     stored = documents.get_by_id(first.document_snapshot_id)
     assert stored is not None
     assert stored.document_snapshot_id == first.document_snapshot_id
-    assert (
-        service.get_snapshot(order.order_id, first.document_snapshot_id)
-        .document_snapshot_id
-        == first.document_snapshot_id
-    )
+    read_back = service.get_snapshot(order.order_id, first.document_snapshot_id)
+    assert read_back.document_snapshot_id == first.document_snapshot_id
