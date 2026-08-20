@@ -161,10 +161,12 @@ def _recipient_for_order_version(
     )
     if invoice_address is not None or delivery_address is not None:
         return recipient
-    if version is None or version.parent_order_version_id is None:
+    if version is None:
         return recipient
     context = orders.get_operational_context(version.order_version_id)
     if context is None:
+        return recipient
+    if version.parent_order_version_id is None and context.delivery_address is None:
         return recipient
     exact_delivery = None if fulfillment_mode == "PICKUP" else context.delivery_address
     differs = (
