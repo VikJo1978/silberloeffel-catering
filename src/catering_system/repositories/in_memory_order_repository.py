@@ -149,6 +149,32 @@ class InMemoryOrderRepository:
     ) -> OrderVersionOperationalContextSnapshot | None:
         return self._operational_contexts.get(order_version_id)
 
+    def purge_order(self, order_id: str) -> None:
+        """Maintenance-only hard delete of one Order aggregate.
+
+        Normal business operations remain append-only; this explicit purge exists
+        for accidental/test orders and removes the root, all versions and their
+        frozen operational contexts as one in-memory state replacement.
+        """
+        if order_id not in self._orders:
+            raise KeyError(order_id)
+        version_ids = {
+            version_id
+            for version_id, version in self._versions.items()
+            if version.order_id == order_id
+        }
+        self._orders = {
+            key: value for key, value in self._orders.items() if key != order_id
+        }
+        self._versions = {
+            key: value for key, value in self._versions.items() if key not in version_ids
+        }
+        self._operational_contexts = {
+            key: value
+            for key, value in self._operational_contexts.items()
+            if key not in version_ids
+        }
+
     @staticmethod
     def _validate_operational_context(
         version: OrderVersion,
