@@ -1,7 +1,9 @@
 name: PR Type Fix
 
 on:
-  pull_request:
+  push:
+    branches:
+      - feat/order-hard-delete
 
 permissions:
   contents: write
@@ -19,8 +21,7 @@ jobs:
           from pathlib import Path
 
           auth_path = Path('src/catering_system/domain/employee_auth.py')
-          auth_text = auth_path.read_text()
-          lines = auth_text.splitlines()
+          lines = auth_path.read_text().splitlines()
           seen = 0
           out = []
           for line in lines:
@@ -29,9 +30,7 @@ jobs:
                   seen += 1
                   if seen <= 3:
                       indent = line[: len(line) - len(line.lstrip())]
-                      next_line = indent + '"orders.delete",'
-                      if not (out and len(out) >= 2 and out[-2].strip() == '"orders.delete",'):
-                          out.append(next_line)
+                      out.append(indent + '"orders.delete",')
           if seen < 3:
               raise SystemExit(f'expected at least 3 orders.cancel entries, got {seen}')
           auth_path.write_text('\n'.join(out) + '\n')
@@ -47,10 +46,9 @@ jobs:
           http_path = Path('src/catering_system/ui/office_panel_http.py')
           http_text = http_path.read_text()
           old_perm = '"delete": ("orders.cancel",),'
-          new_perm = '"delete": ("orders.delete",),'
           if old_perm not in http_text:
               raise SystemExit('delete permission mapping not found')
-          http_text = http_text.replace(old_perm, new_perm, 1)
+          http_text = http_text.replace(old_perm, '"delete": ("orders.delete",),', 1)
 
           old_guard = '''            if (
                 auth is None
