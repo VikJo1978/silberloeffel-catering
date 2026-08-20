@@ -158,7 +158,9 @@ def _create_initial_order(
     )
 
 
-def test_create_order_from_offer_version_requires_acceptance_before_persistence() -> None:
+def test_create_order_from_offer_version_requires_acceptance_before_persistence() -> (
+    None
+):
     repo = InMemoryOrderRepository()
     inquiry = _sample_inquiry()
     offer_version = _offer_version_from_inquiry(inquiry)

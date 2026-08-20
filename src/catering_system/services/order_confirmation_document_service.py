@@ -321,14 +321,12 @@ class OrderConfirmationDocumentService:
             delivery_address=delivery_address,
             fulfillment_mode=fulfillment_mode,
         )
-        if (
-            invoice_address is None
-            and delivery_address is None
-            and version is not None
-            and version.parent_order_version_id is not None
-        ):
+        if invoice_address is None and delivery_address is None and version is not None:
             context = self._orders.get_operational_context(version.order_version_id)
-            if context is not None:
+            if context is not None and (
+                version.parent_order_version_id is not None
+                or context.delivery_address is not None
+            ):
                 exact_delivery = (
                     None if fulfillment_mode == "PICKUP" else context.delivery_address
                 )
