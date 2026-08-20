@@ -1,0 +1,36 @@
+name: Remote order delete runner
+
+on:
+  push:
+    paths:
+      - '.github/workflows/remote-order-delete-runner.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/remote-order-hard-delete
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: 0.11.32
+          python-version: '3.12'
+      - name: Apply patch
+        run: python tools/remote_order_delete_patch.py
+      - name: Format and targeted tests
+        run: |
+          uv sync --dev
+          uv run ruff format src/catering_system/ui/office_api.py src/catering_system/ui/remote_core_client.py src/catering_system/ui/office_panel_http.py tests/unit/test_office_api.py
+          uv run ruff check src/catering_system/ui/office_api.py src/catering_system/ui/remote_core_client.py src/catering_system/ui/office_panel_http.py tests/unit/test_office_api.py
+          uv run pytest -q tests/unit/test_office_api.py -k 'remote_order_delete'
+      - name: Commit patch to feature branch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'Support protected order hard delete in remote mode'
+          git push origin HEAD:fix/remote-order-hard-delete
