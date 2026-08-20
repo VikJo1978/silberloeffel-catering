@@ -4,13 +4,15 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   format-export:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: feat/order-hard-delete
       - uses: astral-sh/setup-uv@v9.0.0
         with:
           version: 0.11.32
@@ -24,13 +26,17 @@ jobs:
             src/catering_system/ui/office_panel_http.py \
             src/catering_system/ui/office_panel_order_detail.py \
             tests/unit/test_order_hard_delete.py
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ruff-formatted-order-delete
-          path: |
-            src/catering_system/repositories/in_memory_order_repository.py
-            src/catering_system/repositories/order_purge.py
-            src/catering_system/ui/office_panel_http.py
-            src/catering_system/ui/office_panel_order_detail.py
+      - name: Commit formatter output
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            src/catering_system/repositories/in_memory_order_repository.py \
+            src/catering_system/repositories/order_purge.py \
+            src/catering_system/ui/office_panel_http.py \
+            src/catering_system/ui/office_panel_order_detail.py \
             tests/unit/test_order_hard_delete.py
-          if-no-files-found: error
+          if ! git diff --cached --quiet; then
+            git commit -m "style: format order hard delete"
+            git push origin HEAD:feat/order-hard-delete
+          fi
