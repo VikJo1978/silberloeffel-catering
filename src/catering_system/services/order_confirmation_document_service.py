@@ -181,7 +181,9 @@ class OrderConfirmationDocumentService:
         )
         if existing is not None:
             if existing.order_id != order_id:
-                raise OrderConfirmationDocumentNotFoundError(existing.document_snapshot_id)
+                raise OrderConfirmationDocumentNotFoundError(
+                    existing.document_snapshot_id
+                )
             return existing
 
         version, commercial, recipient, fulfillment_mode = self._create_inputs(
