@@ -309,6 +309,8 @@ def role_default_grants(role: EmployeeRole) -> frozenset[str]:
 def effective_permissions(
     role: EmployeeRole, explicit_permissions: set[str] | frozenset[str]
 ) -> frozenset[str]:
+    if role == "SUPERADMIN":
+        return PERMISSION_SET
     ceiling = role_ceiling(role)
     return frozenset(
         permission for permission in explicit_permissions if permission in ceiling
