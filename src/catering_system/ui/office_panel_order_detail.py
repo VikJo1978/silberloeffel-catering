@@ -270,6 +270,19 @@ def _target_version(
     return max(versions, key=lambda version: version.version_number, default=None)
 
 
+def _kitchen_print_waiting(
+    target: OrderVersion | None,
+    next_action: Mapping[str, str] | None,
+    forms: OrderDetailFormFields,
+) -> bool:
+    return (
+        target is not None
+        and next_action is not None
+        and next_action.get("action") == "print-confirm"
+        and not forms.print_action_available.get(target.order_version_id, True)
+    )
+
+
 def _state_copy(
     order: Order,
     target: OrderVersion | None,
@@ -490,11 +503,23 @@ def _primary_action(
             target.order_version_id,
             "",
         )
-        status_html = f"<p>{_e(status_message)}</p>" if status_message else ""
-        heading = "Küchenzettel für den aktuellen Stand drucken"
         action_available = forms.print_action_available.get(
             target.order_version_id, True
         )
+        if action_available:
+            heading = "Küchenzettel für den aktuellen Stand drucken"
+            status_html = f"<p>{_e(status_message)}</p>" if status_message else ""
+            auto_refresh = ""
+        else:
+            heading = "Druckauftrag gesendet"
+            status_html = (
+                '<p aria-live="polite">Druckauftrag wird verarbeitet – '
+                "warte auf Druckbestätigung…</p>"
+            )
+            auto_refresh = (
+                "<script>window.setTimeout(function () { "
+                "window.location.reload(); }, 1500);</script>"
+            )
         primary = (
             f'<form method="post" action="/order/{_e(order.order_id)}/print-confirm">'
             f"{forms.csrf_input}{command_fields}"
@@ -517,6 +542,7 @@ def _primary_action(
             f"{status_html}"
             '<div class="order-next-actions">'
             f"{primary}{secondary}</div></section>"
+            f"{auto_refresh}"
         )
     if next_action_name == "effective":
         return (
@@ -1677,6 +1703,9 @@ def render_order_detail(
         operational_data,
         pause_view,
     )
+    if _kitchen_print_waiting(target, next_action, forms):
+        state_title = "Druckauftrag gesendet"
+        state_description = "Warte auf die Druckbestätigung der Küche."
     delivery_address_promoted = (
         order.cancelled_at is None
         and not pause_view.get("active")
