@@ -820,7 +820,7 @@ def make_office_panel_handler(
                     "pause": ("orders.pause",),
                     "resume": ("orders.pause",),
                     "cancel": ("orders.cancel",),
-                    "delete": ("orders.cancel",),
+                    "delete": ("orders.delete",),
                     "payment-reminder": ("orders.payment.reminder",),
                     "confirmation-document": ("documents.prepare",),
                 }
@@ -1783,7 +1783,7 @@ def make_office_panel_handler(
                     )
                 except CsrfValidationError:
                     self._error_page(
-                        "Ungültiger oder fehlender CSRF-Sicherheitstoken.", status=403
+                        "Ungültiger или fehlender CSRF-Sicherheitstoken.", status=403
                     )
                     return
                 except (AuthenticationError, ValueError):
@@ -2453,7 +2453,7 @@ def make_office_panel_handler(
                 or auth.kind != "employee"
                 or auth.employee is None
                 or auth.legacy_shared_access
-                or auth.employee.account.role != "SUPERADMIN"
+                or "orders.delete" not in auth.employee.effective_permissions
             ):
                 self._business_forbidden(active_section="orders")
                 return
@@ -2480,6 +2480,8 @@ def make_office_panel_handler(
             operational_data = panel._order_detail_operational_data(
                 order_id, target.order_version_id
             )
+            if operational_data is None:
+                raise ValueError("order_delete_name_unavailable")
             expected_name = (
                 operational_data.company_name or operational_data.contact_name or ""
             ).strip()
