@@ -14,4 +14,6 @@ def test_superadmin_effective_permissions_follow_current_registry() -> None:
 def test_non_superadmin_does_not_gain_unassigned_permission() -> None:
     explicit_permissions = {"orders.view"}
 
-    assert effective_permissions("USER", explicit_permissions) == frozenset({"orders.view"})
+    assert effective_permissions("USER", explicit_permissions) == frozenset(
+        {"orders.view"}
+    )
