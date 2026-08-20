@@ -32,6 +32,14 @@ def _quote_identifier(value: str) -> str:
 def _sqlite_purge(repo: _SQLiteBackedOrderRepository, order_id: str) -> None:
     connection = repo._conn
     with repo._write_scope():
+        # sqlite3 starts transactions lazily. `defer_foreign_keys` only applies
+        # to the active transaction, so explicitly begin one in standalone
+        # repository mode before enabling deferred FK validation. Core API mode
+        # already enters this helper with its coordinator transaction active.
+        if not connection.in_transaction:
+            connection.execute("BEGIN")
+        connection.execute("PRAGMA defer_foreign_keys = ON")
+
         if (
             connection.execute(
                 "SELECT 1 FROM orders WHERE order_id = ?", (order_id,)
