@@ -606,6 +606,51 @@ def test_permission_revoked_after_mint_rejected(api) -> None:
     assert row == (None,)
 
 
+def test_remote_order_delete_requires_exact_name_and_employee_permission(api) -> None:
+    base, _ids, db = api
+    auth = _employee_auth(db)
+    order_id, _version_id = _create_order_with_operational_context(db)
+    headers = {**_AUTH, "X-Employee-Session": auth["session_token"]}
+
+    wrong_status, wrong_body, _ = _post(
+        f"{base}/office/v1/orders/{order_id}/delete",
+        args={"confirmation_name": "Wrong GmbH"},
+        headers=headers,
+    )
+    assert (wrong_status, wrong_body["error"]) == (
+        422,
+        "order_delete_confirmation_mismatch",
+    )
+    repo = SQLiteOrderRepository(db)
+    assert repo.get_order(order_id) is not None
+    repo.close()
+
+    status, body, _ = _post(
+        f"{base}/office/v1/orders/{order_id}/delete",
+        args={"confirmation_name": "A GmbH"},
+        headers=headers,
+    )
+    assert status == 200
+    assert body["order_id"] == order_id
+    repo = SQLiteOrderRepository(db)
+    assert repo.get_order(order_id) is None
+    repo.close()
+
+
+def test_remote_order_delete_without_employee_session_is_denied(api) -> None:
+    base, _ids, db = api
+    order_id, _version_id = _create_order_with_operational_context(db)
+
+    status, body, _ = _post(
+        f"{base}/office/v1/orders/{order_id}/delete",
+        args={"confirmation_name": "A GmbH"},
+    )
+    assert (status, body["error"]) == (401, "unauthorized")
+    repo = SQLiteOrderRepository(db)
+    assert repo.get_order(order_id) is not None
+    repo.close()
+
+
 def test_unknown_handoff_rejected(api) -> None:
     base, _ids, db = api
     auth = _employee_auth(db)
