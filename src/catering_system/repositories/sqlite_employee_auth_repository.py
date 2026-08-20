@@ -184,12 +184,30 @@ def _migration_5_audit_target_index(connection: sqlite3.Connection) -> None:
     connection.execute(_AUDIT_TARGET_TYPE_ID_INDEX)
 
 
+def _migration_6_grant_orders_delete_to_existing_superadmins(
+    connection: sqlite3.Connection,
+) -> None:
+    connection.execute(
+        """
+        INSERT OR IGNORE INTO account_permissions (account_id, permission_code)
+        SELECT account_id, 'orders.delete'
+        FROM employee_accounts
+        WHERE role = 'SUPERADMIN'
+        """
+    )
+
+
 _MIGRATIONS = (
     (1, "create_employee_accounts", _migration_1_create_employee_accounts),
     (2, "create_account_permissions", _migration_2_create_account_permissions),
     (3, "create_employee_sessions", _migration_3_create_employee_sessions),
     (4, "create_security_audit_events", _migration_4_create_security_audit_events),
     (5, "audit_target_index", _migration_5_audit_target_index),
+    (
+        6,
+        "grant_orders_delete_to_existing_superadmins",
+        _migration_6_grant_orders_delete_to_existing_superadmins,
+    ),
 )
 
 
