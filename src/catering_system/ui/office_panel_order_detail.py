@@ -1489,10 +1489,10 @@ def _secondary_actions(
     if context.current_user_role_label == "Superadmin" and delete_confirmation_name:
         delete_block = (
             '<details class="order-danger"><summary>Auftrag dauerhaft löschen</summary>'
-            '<p><strong>Nur für Test- oder versehentlich angelegte Aufträge.</strong> '
+            "<p><strong>Nur für Test- oder versehentlich angelegte Aufträge.</strong> "
             "Diese Aktion kann nicht rückgängig gemacht werden. Die verknüpfte "
             "Anfrage und das Angebot bleiben erhalten.</p>"
-            '<p>Zur Bestätigung exakt <strong>'
+            "<p>Zur Bestätigung exakt <strong>"
             f"{_e(delete_confirmation_name)}</strong> eingeben.</p>"
             f'<form method="post" action="/order/{_e(order.order_id)}/delete">'
             f"{forms.csrf_input}"

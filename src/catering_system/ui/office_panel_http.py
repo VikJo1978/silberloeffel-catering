@@ -2472,7 +2472,9 @@ def make_office_panel_handler(
                 None,
             )
             if target is None:
-                target = max(versions, key=lambda item: item.version_number, default=None)
+                target = max(
+                    versions, key=lambda item: item.version_number, default=None
+                )
             if target is None:
                 raise ValueError("order_delete_name_unavailable")
             operational_data = panel._order_detail_operational_data(

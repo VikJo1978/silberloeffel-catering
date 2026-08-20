@@ -167,7 +167,9 @@ class InMemoryOrderRepository:
             key: value for key, value in self._orders.items() if key != order_id
         }
         self._versions = {
-            key: value for key, value in self._versions.items() if key not in version_ids
+            key: value
+            for key, value in self._versions.items()
+            if key not in version_ids
         }
         self._operational_contexts = {
             key: value

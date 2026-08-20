@@ -49,7 +49,9 @@ def _aggregate(suffix: str) -> tuple[Order, OrderVersion]:
     )
 
 
-def _context(order: Order, version: OrderVersion) -> OrderVersionOperationalContextSnapshot:
+def _context(
+    order: Order, version: OrderVersion
+) -> OrderVersionOperationalContextSnapshot:
     return OrderVersionOperationalContextSnapshot(
         order_version_id=version.order_version_id,
         order_id=order.order_id,
@@ -136,9 +138,12 @@ def test_sqlite_purge_removes_owned_rows_and_restores_delete_guards(tmp_path) ->
 
     assert repo.get_order(order.order_id) is None
     assert repo.list_order_versions(order.order_id) == []
-    assert connection.execute(
-        "SELECT 1 FROM purge_probe WHERE order_id = ?", (order.order_id,)
-    ).fetchone() is None
+    assert (
+        connection.execute(
+            "SELECT 1 FROM purge_probe WHERE order_id = ?", (order.order_id,)
+        ).fetchone()
+        is None
+    )
     trigger_names = {
         str(row[0])
         for row in connection.execute(

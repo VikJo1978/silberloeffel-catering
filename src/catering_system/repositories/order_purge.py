@@ -32,9 +32,12 @@ def _quote_identifier(value: str) -> str:
 def _sqlite_purge(repo: _SQLiteBackedOrderRepository, order_id: str) -> None:
     connection = repo._conn
     with repo._write_scope():
-        if connection.execute(
-            "SELECT 1 FROM orders WHERE order_id = ?", (order_id,)
-        ).fetchone() is None:
+        if (
+            connection.execute(
+                "SELECT 1 FROM orders WHERE order_id = ?", (order_id,)
+            ).fetchone()
+            is None
+        ):
             raise KeyError(order_id)
 
         version_ids = [
