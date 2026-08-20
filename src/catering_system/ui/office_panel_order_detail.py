@@ -1486,7 +1486,7 @@ def _secondary_actions(
         "Zugehörige Anfrage öffnen</a>"
     )
     delete_block = ""
-    if context.current_user_role_label == "Superadmin" and delete_confirmation_name:
+    if context.can("orders.delete") and delete_confirmation_name:
         delete_block = (
             '<details class="order-danger"><summary>Auftrag dauerhaft löschen</summary>'
             "<p><strong>Nur für Test- oder versehentlich angelegte Aufträge.</strong> "
