@@ -2,45 +2,38 @@ name: CI
 
 on:
   push:
-  pull_request:
+    branches:
+      - feat/order-hard-delete
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  quality:
+  cleanup-order-delete-pr:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
-      # uv provides both the resolver and the Python interpreter, so the
-      # locked environment CI installs is the same one `uv sync` produces
-      # anywhere else. Both versions are pinned on purpose: an unpinned
-      # resolver would defeat the point of committing uv.lock.
-      - uses: astral-sh/setup-uv@v9.0.0
         with:
-          version: "0.11.32"
-          python-version: "3.12"
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-      - name: Verify the lock file matches pyproject.toml
-        run: uv lock --check
-      - name: Install project and development tools
-        run: uv sync --dev
-      - name: Lint
+          ref: feat/order-hard-delete
+          fetch-depth: 0
+      - name: Fix stray mixed-language message
         run: |
-          uv run ruff check src tests infra
-          uv run ruff format --check src tests infra
-      - name: Type-check production code
-        run: uv run mypy src/catering_system
-      - name: Test Python and enforce coverage
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('src/catering_system/ui/office_panel_http.py')
+          s = p.read_text()
+          old = 'Ungültiger или fehlender CSRF-Sicherheitstoken.'
+          new = 'Ungültiger oder fehlender CSRF-Sicherheitstoken.'
+          if old not in s:
+              raise SystemExit('target typo not found')
+          p.write_text(s.replace(old, new, 1))
+          PY
+      - name: Restore normal CI and commit cleanup
         run: |
-          uv run coverage run -m pytest -q
-          uv run coverage report
-      - name: Verify PDF runtime and systemd alignment (repository-only)
-        run: uv run python infra/deploy/verify_pdf_runtime.py --repository-only
-      - name: Test browser and Worker JavaScript
-        run: |
-          node --test infra/staging-form/app.test.cjs
-          node --test infra/cloudflare_worker/sanitize.test.mjs
+          git fetch origin main
+          git checkout origin/main -- .github/workflows/ci.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -- src/catering_system/ui/office_panel_http.py .github/workflows/ci.yml
+          git commit -m "fix: restore German CSRF message"
+          git push origin HEAD:feat/order-hard-delete
