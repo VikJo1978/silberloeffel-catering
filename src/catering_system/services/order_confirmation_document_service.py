@@ -169,10 +169,22 @@ class OrderConfirmationDocumentService:
         order = self._orders.get_order(order_id)
         if order is None:
             raise OrderConfirmationDocumentNotFoundError(order_id)
+        if (
+            order.effective_order_version_id is not None
+            and order.effective_order_version_id
+            != expected_effective_order_version_id
+        ):
+            raise OrderConfirmationDocumentStaleVersionError(
+                "expected effective order version is stale"
+            )
         existing = self._documents.get_by_order_version_id(
             expected_effective_order_version_id
         )
         if existing is not None:
+            if existing.order_id != order_id:
+                raise OrderConfirmationDocumentNotFoundError(
+                    existing.document_snapshot_id
+                )
             return existing
 
         version, commercial, recipient, fulfillment_mode = self._create_inputs(
