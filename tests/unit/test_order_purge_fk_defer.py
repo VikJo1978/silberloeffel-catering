@@ -8,6 +8,7 @@ from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepo
 def test_sqlite_purge_defers_fk_checks_until_all_owned_rows_are_deleted(
     tmp_path,
 ) -> None:
+    # Regression for the production hard-delete FK failure.
     repo = SQLiteOrderRepository(tmp_path / "core.db")
     connection = repo._conn
     connection.execute("PRAGMA foreign_keys = ON")
