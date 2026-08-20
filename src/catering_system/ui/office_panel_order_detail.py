@@ -1478,17 +1478,36 @@ def _secondary_actions(
     forms: OrderDetailFormFields,
     *,
     operational_pause: Mapping[str, object],
+    delete_confirmation_name: str,
     context: OfficePageContext,
 ) -> str:
     inquiry_link = (
         f'<a class="order-text-link" href="/inquiry/{_e(order.source_inquiry_id)}">'
         "Zugehörige Anfrage öffnen</a>"
     )
+    delete_block = ""
+    if context.can("orders.delete") and delete_confirmation_name:
+        delete_block = (
+            '<details class="order-danger"><summary>Auftrag dauerhaft löschen</summary>'
+            "<p><strong>Nur für Test- oder versehentlich angelegte Aufträge.</strong> "
+            "Diese Aktion kann nicht rückgängig gemacht werden. Die verknüpfte "
+            "Anfrage und das Angebot bleiben erhalten.</p>"
+            "<p>Zur Bestätigung exakt <strong>"
+            f"{_e(delete_confirmation_name)}</strong> eingeben.</p>"
+            f'<form method="post" action="/order/{_e(order.order_id)}/delete">'
+            f"{forms.csrf_input}"
+            '<p><label>Kunde / Firma</label><input name="confirmation_name" '
+            'autocomplete="off" required></p>'
+            '<button type="submit">Auftrag endgültig löschen</button>'
+            "</form></details>"
+        )
     if order.cancelled_at is not None:
         return (
             '<details class="order-lower-section order-more-actions">'
             "<summary>Weitere Aktionen</summary>"
-            f'<div class="order-lower-body"><p>{inquiry_link}</p></div></details>'
+            f'<div class="order-lower-body"><p>{inquiry_link}</p>'
+            + delete_block
+            + "</div></details>"
         )
     cancel_block = ""
     if context.can("orders.cancel"):
@@ -1508,6 +1527,7 @@ def _secondary_actions(
         + _version_change_form(order, forms, context=context)
         + _operational_pause_controls(order, operational_pause, forms, context=context)
         + cancel_block
+        + delete_block
         + "</div></details>"
     )
 
@@ -1685,12 +1705,16 @@ def render_order_detail(
     pause_view = operational_pause or {"active": False}
     target = _target_version(order, versions)
     customer_label = "Kunde nicht verfügbar"
+    delete_confirmation_name = ""
     if operational_data is not None:
         customer_label = (
             operational_data.company_name
             or operational_data.contact_name
             or customer_label
         )
+        delete_confirmation_name = (
+            operational_data.company_name or operational_data.contact_name or ""
+        ).strip()
     title = f"Auftrag · {customer_label}"
     state_title, state_description = _state_copy(
         order,
@@ -1813,7 +1837,11 @@ def render_order_detail(
         + '<div class="order-lower-sections">'
         + _version_history(order, versions, forms, context=page_context)
         + _secondary_actions(
-            order, forms, operational_pause=pause_view, context=page_context
+            order,
+            forms,
+            operational_pause=pause_view,
+            delete_confirmation_name=delete_confirmation_name,
+            context=page_context,
         )
         + technical
         + "</div>"

@@ -54,6 +54,7 @@ from catering_system.repositories.order_confirmation_outbound_repository import 
 from catering_system.repositories.order_operational_pause_repository import (
     OrderOperationalPauseRepository,
 )
+from catering_system.repositories.order_purge import purge_order_with_dependencies
 from catering_system.repositories.order_repository import OrderRepository
 from catering_system.repositories.payment_reminder_repository import (
     PaymentReminderRepository,
@@ -192,6 +193,17 @@ _INQUIRY_COMMAND_ERROR_LABELS: dict[str, str] = {
     "operational_context_missing": (
         "Der gewählte Auftragsstand hat keinen eingefrorenen Empfängerkontext. "
         "Bitte Support kontaktieren; es wurde nichts gespeichert."
+    ),
+    "order_delete_confirmation_mismatch": (
+        "Der eingegebene Kunden-/Firmenname stimmt nicht überein. "
+        "Der Auftrag wurde nicht gelöscht."
+    ),
+    "order_delete_name_unavailable": (
+        "Der Auftrag kann nicht gelöscht werden, weil kein Kunden-/Firmenname "
+        "für die Sicherheitsbestätigung verfügbar ist."
+    ),
+    "order_delete_unavailable": (
+        "Auftrag löschen ist in dieser Betriebsart nicht verfügbar."
     ),
 }
 
@@ -808,6 +820,7 @@ def make_office_panel_handler(
                     "pause": ("orders.pause",),
                     "resume": ("orders.pause",),
                     "cancel": ("orders.cancel",),
+                    "delete": ("orders.delete",),
                     "payment-reminder": ("orders.payment.reminder",),
                     "confirmation-document": ("documents.prepare",),
                 }
@@ -2433,6 +2446,60 @@ def make_office_panel_handler(
             else:
                 self.send_error(404)
 
+        def _delete_order(self, order_id: str) -> None:
+            auth = self._request_auth
+            if (
+                auth is None
+                or auth.kind != "employee"
+                or auth.employee is None
+                or auth.legacy_shared_access
+                or "orders.delete" not in auth.employee.effective_permissions
+            ):
+                self._business_forbidden(active_section="orders")
+                return
+            if remote is not None:
+                raise ValueError("order_delete_unavailable")
+            order = order_repo.get_order(order_id)
+            if order is None:
+                raise KeyError(order_id)
+            versions = order_repo.list_order_versions(order_id)
+            target = next(
+                (
+                    version
+                    for version in versions
+                    if version.order_version_id == order.candidate_order_version_id
+                ),
+                None,
+            )
+            if target is None:
+                target = max(
+                    versions, key=lambda item: item.version_number, default=None
+                )
+            if target is None:
+                raise ValueError("order_delete_name_unavailable")
+            operational_data = panel._order_detail_operational_data(
+                order_id, target.order_version_id
+            )
+            if operational_data is None:
+                raise ValueError("order_delete_name_unavailable")
+            expected_name = (
+                operational_data.company_name or operational_data.contact_name or ""
+            ).strip()
+            if not expected_name:
+                raise ValueError("order_delete_name_unavailable")
+            submitted_name = self._form().get("confirmation_name", "").strip()
+            if not hmac.compare_digest(submitted_name, expected_name):
+                raise ValueError("order_delete_confirmation_mismatch")
+
+            def work() -> None:
+                purge_order_with_dependencies(order_repo, order_id)
+
+            if command_executor is not None:
+                command_executor.run(work)
+            else:
+                work()
+            self._redirect("/orders")
+
         def _order_action(self, order_id: str, action: str) -> None:
             if action == "version":
                 panel.create_version(order_id, self._form())
@@ -2450,6 +2517,9 @@ def make_office_panel_handler(
                 panel.core.request_ready_to_send(order_id)
             elif action == "cancel":
                 panel.core.cancel_order(order_id)
+            elif action == "delete":
+                self._delete_order(order_id)
+                return
             elif action == "payment-reminder":
                 panel.save_payment_reminder(order_id, self._form())
             elif action == "confirmation-document":
