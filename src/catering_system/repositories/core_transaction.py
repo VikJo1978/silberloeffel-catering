@@ -101,9 +101,9 @@ class CoreCommandExecutor:
             raise
         try:
             self._conn.execute("COMMIT")
-        except sqlite3.OperationalError as exc:
+        except sqlite3.Error as exc:
             self._rollback()
-            if _is_busy(exc):
+            if isinstance(exc, sqlite3.OperationalError) and _is_busy(exc):
                 raise CoreBusyError from exc
             raise
         self._events.flush()
