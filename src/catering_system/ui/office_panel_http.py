@@ -1783,7 +1783,7 @@ def make_office_panel_handler(
                     )
                 except CsrfValidationError:
                     self._error_page(
-                        "Ungültiger или fehlender CSRF-Sicherheitstoken.", status=403
+                        "Ungültiger oder fehlender CSRF-Sicherheitstoken.", status=403
                     )
                     return
                 except (AuthenticationError, ValueError):
