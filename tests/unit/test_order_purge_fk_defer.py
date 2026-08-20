@@ -61,5 +61,7 @@ def test_sqlite_purge_defers_fk_checks_until_all_owned_rows_are_deleted(
     assert (
         connection.execute("SELECT COUNT(*) FROM purge_fk_parent").fetchone()[0] == 0
     )
-    assert connection.execute("SELECT COUNT(*) FROM purge_fk_child").fetchone()[0] == 0
+    assert (
+        connection.execute("SELECT COUNT(*) FROM purge_fk_child").fetchone()[0] == 0
+    )
     assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
