@@ -9,7 +9,7 @@ restores every trigger before the transaction can commit.
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import ContextManager
+from contextlib import AbstractContextManager
 from typing import Protocol, cast
 
 from catering_system.repositories.order_repository import OrderRepository
@@ -18,7 +18,7 @@ from catering_system.repositories.order_repository import OrderRepository
 class _SQLiteBackedOrderRepository(Protocol):
     _conn: sqlite3.Connection
 
-    def _write_scope(self) -> ContextManager[object]: ...
+    def _write_scope(self) -> AbstractContextManager[object]: ...
 
 
 class _PurgeCapableOrderRepository(Protocol):
