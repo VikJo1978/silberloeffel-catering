@@ -39,6 +39,8 @@ def test_migration_grants_orders_delete_only_to_existing_superadmins() -> None:
 
 
 def test_superadmin_permission_can_still_be_revoked_after_migration() -> None:
-    assert effective_permissions("SUPERADMIN", {"orders.view"}) == frozenset(
+    explicit_permissions = {"orders.view"}
+
+    assert effective_permissions("SUPERADMIN", explicit_permissions) == frozenset(
         {"orders.view"}
     )
