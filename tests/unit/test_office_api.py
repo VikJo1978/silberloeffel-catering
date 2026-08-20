@@ -577,34 +577,21 @@ def test_different_employee_handoff_rejected_without_consuming(api) -> None:
 
 def test_permission_revoked_after_mint_rejected(api) -> None:
     base, ids, db = api
-    super_auth = _employee_auth(db)
-    repo = SQLiteEmployeeAuthRepository(db)
-    service = EmployeeAuthService(repo, service_tokens=_SERVICE_TOKENS)
-    actor = service.authenticate_session(super_auth["session_token"])
-    employee = service.create_account(
-        actor,
-        username="handoff.employee",
-        display_name="Handoff Employee",
-        password="EmployeePassw0rd!",
-        role="USER",
-        explicit_permissions={"offers.view", "offers.prepare"},
-        must_change_password=False,
-    )
+    auth = _employee_auth(db)
     code, handoff_id = _mint_first_offer_handoff(
         db,
         inquiry_id=ids["inquiry_offer_ready"],
-        account_id=employee.id,
+        account_id=auth["account_id"],
     )
-    repo.set_explicit_permissions(employee.id, {"offers.view"})
-    refreshed = service.authenticate(
-        username="handoff.employee", password="EmployeePassw0rd!"
-    )
+    repo = SQLiteEmployeeAuthRepository(db)
+    repo.set_explicit_permissions(auth["account_id"], {"offers.view"})
     repo.close()
 
+    refreshed = _employee_auth(db)
     status, body, _headers = _exchange_handoff(
         base,
         code=code,
-        session_token=refreshed.session_token,
+        session_token=refreshed["session_token"],
     )
 
     assert (status, body["error"]) == (403, "forbidden")
