@@ -513,7 +513,7 @@ def _primary_action(
         else:
             heading = "Druckauftrag gesendet"
             status_html = (
-                '<p aria-live="polite">Druckauftrag gesendet – '
+                '<p aria-live="polite">Druckauftrag wird verarbeitet – '
                 "warte auf Druckbestätigung…</p>"
             )
             auto_refresh = (
