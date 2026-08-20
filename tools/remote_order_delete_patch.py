@@ -1,0 +1,89 @@
+from pathlib import Path
+
+
+def replace_once(path: str, old: str, new: str) -> None:
+    p = Path(path)
+    text = p.read_text()
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(
+            f"{path}: expected exactly one anchor, found {count}: {old[:80]!r}"
+        )
+    p.write_text(text.replace(old, new, 1))
+
+
+replace_once(
+    "src/catering_system/ui/office_api.py",
+    "from catering_system.repositories.sqlite_order_repository import (\n    SQLiteOrderRepository,\n)\n",
+    "from catering_system.repositories.order_purge import purge_order_with_dependencies\n"
+    "from catering_system.repositories.sqlite_order_repository import (\n"
+    "    SQLiteOrderRepository,\n)\n",
+)
+replace_once(
+    "src/catering_system/ui/office_api.py",
+    '_VERSION_ID_ARGS = _ArgKeys(required=frozenset({"order_version_id"}))\n',
+    '_VERSION_ID_ARGS = _ArgKeys(required=frozenset({"order_version_id"}))\n'
+    '_ORDER_DELETE_ARGS = _ArgKeys(required=frozenset({"confirmation_name"}))\n',
+)
+
+cancel_block = '''    def cmd_cancel(\n        self, path_ids: dict[str, str], args: dict[str, object], expect: dict\n    ) -> tuple[int, dict[str, object]]:\n        order = self._require_order(path_ids["id"])\n        if _v_datetime(expect["updated_at"]) != order.updated_at:\n            raise ApiError(409, "stale_state")\n        cancelled = self.core.cancel_order(order.order_id)\n        assert cancelled.cancelled_at is not None\n        return 200, {\n            "order_id": cancelled.order_id,\n            "cancelled_at": cancelled.cancelled_at.isoformat(),\n            "updated_at": cancelled.updated_at.isoformat(),\n        }\n\n'''
+delete_block = cancel_block + '''    def cmd_delete_order(\n        self, path_ids: dict[str, str], args: dict[str, object], expect: dict\n    ) -> tuple[int, dict[str, object]]:\n        order = self._require_order(path_ids["id"])\n        versions = self.orders.list_order_versions(order.order_id)\n        target = next(\n            (\n                version\n                for version in versions\n                if version.order_version_id == order.candidate_order_version_id\n            ),\n            None,\n        )\n        if target is None:\n            target = max(versions, key=lambda item: item.version_number, default=None)\n        if target is None:\n            raise ApiError(422, "order_delete_name_unavailable")\n        operational = self.orders.get_operational_context(target.order_version_id)\n        if operational is None:\n            raise ApiError(422, "order_delete_name_unavailable")\n        expected_name = (\n            operational.recipient_company or operational.recipient_name or ""\n        ).strip()\n        if not expected_name:\n            raise ApiError(422, "order_delete_name_unavailable")\n        submitted_name = _v_str(args["confirmation_name"], 500).strip()\n        if not hmac.compare_digest(submitted_name, expected_name):\n            raise ApiError(422, "order_delete_confirmation_mismatch")\n        purge_order_with_dependencies(self.orders, order.order_id)\n        return 200, {"order_id": order.order_id}\n\n'''
+replace_once("src/catering_system/ui/office_api.py", cancel_block, delete_block)
+replace_once(
+    "src/catering_system/ui/office_api.py",
+    '    "cancel": _CommandSpec("cmd_cancel", _NO_ARGS, {"updated_at"}),\n',
+    '    "cancel": _CommandSpec("cmd_cancel", _NO_ARGS, {"updated_at"}),\n'
+    '    "delete-order": _CommandSpec("cmd_delete_order", _ORDER_DELETE_ARGS, set()),\n',
+)
+cancel_route = '''    (\n        re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/cancel$"),\n        "/office/v1/orders/{id}/cancel",\n        {"POST": "cancel"},\n    ),\n'''
+replace_once(
+    "src/catering_system/ui/office_api.py",
+    cancel_route,
+    cancel_route
+    + '''    (\n        re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/delete$"),\n        "/office/v1/orders/{id}/delete",\n        {"POST": "delete-order"},\n    ),\n''',
+)
+old_employee = '''            employee = (\n                self._chat_employee(kind)\n                if kind\n                in {"create_chat_thread", "send_chat_message", "mark_chat_thread_read"}\n                else self._manual_task_employee(kind, args)\n                if kind in {"create_manual_task", "complete_manual_task"}\n                else None\n            )\n'''
+new_employee = '''            employee = (\n                self._chat_employee(kind)\n                if kind\n                in {"create_chat_thread", "send_chat_message", "mark_chat_thread_read"}\n                else self._manual_task_employee(kind, args)\n                if kind in {"create_manual_task", "complete_manual_task"}\n                else self._employee_with_permission("orders.delete")\n                if kind == "delete-order"\n                else None\n            )\n'''
+replace_once("src/catering_system/ui/office_api.py", old_employee, new_employee)
+
+replace_once(
+    "src/catering_system/ui/remote_core_client.py",
+    '            "operational_context_missing",\n            "validation_error",\n',
+    '            "operational_context_missing",\n'
+    '            "order_delete_confirmation_mismatch",\n'
+    '            "order_delete_name_unavailable",\n'
+    '            "validation_error",\n',
+)
+replace_once(
+    "src/catering_system/ui/remote_core_client.py",
+    '    # -- reads / repository-shaped facade ---------------------------------\n',
+    '''    def delete_order(\n        self,\n        order_id: str,\n        *,\n        confirmation_name: str,\n        employee_session_token: str,\n    ) -> None:\n        result = self.command(\n            f"/office/v1/orders/{quote(order_id, safe='')}/delete",\n            {"confirmation_name": confirmation_name},\n            {},\n            expected={200},\n            result_keys={"order_id"},\n            employee_session_token=employee_session_token,\n        )\n        if _uuid4(result["order_id"]) != order_id:\n            _bad_response()\n\n    # -- reads / repository-shaped facade ---------------------------------\n''',
+)
+
+replace_once(
+    "src/catering_system/ui/office_panel_http.py",
+    '''            if remote is not None:\n                raise ValueError("order_delete_unavailable")\n            order = order_repo.get_order(order_id)\n''',
+    '''            order = order_repo.get_order(order_id)\n''',
+)
+compare_block = '''            if not hmac.compare_digest(submitted_name, expected_name):\n                raise ValueError("order_delete_confirmation_mismatch")\n\n            def work() -> None:\n                purge_order_with_dependencies(order_repo, order_id)\n'''
+remote_compare_block = '''            if not hmac.compare_digest(submitted_name, expected_name):\n                raise ValueError("order_delete_confirmation_mismatch")\n\n            if remote is not None:\n                session_token = session_token_from_headers(self.headers)\n                if session_token is None:\n                    self._business_forbidden(active_section="orders")\n                    return\n                remote.delete_order(\n                    order_id,\n                    confirmation_name=submitted_name,\n                    employee_session_token=session_token,\n                )\n                self._redirect("/orders")\n                return\n\n            def work() -> None:\n                purge_order_with_dependencies(order_repo, order_id)\n'''
+replace_once(
+    "src/catering_system/ui/office_panel_http.py",
+    compare_block,
+    remote_compare_block,
+)
+
+p = Path("tests/unit/test_office_api.py")
+text = p.read_text()
+anchor = "def test_unknown_handoff_rejected(api) -> None:\n"
+if text.count(anchor) != 1:
+    raise SystemExit("test_office_api.py: unknown-handoff anchor mismatch")
+tests = '''def test_remote_order_delete_requires_exact_name_and_employee_permission(api) -> None:\n    base, _ids, db = api\n    auth = _employee_auth(db)\n    order_id, _version_id = _create_order_with_operational_context(db)\n    headers = {**_AUTH, "X-Employee-Session": auth["session_token"]}\n\n    wrong_status, wrong_body, _ = _post(\n        f"{base}/office/v1/orders/{order_id}/delete",\n        args={"confirmation_name": "Wrong GmbH"},\n        headers=headers,\n    )\n    assert (wrong_status, wrong_body["error"]) == (\n        422,\n        "order_delete_confirmation_mismatch",\n    )\n    repo = SQLiteOrderRepository(db)\n    assert repo.get_order(order_id) is not None\n    repo.close()\n\n    status, body, _ = _post(\n        f"{base}/office/v1/orders/{order_id}/delete",\n        args={"confirmation_name": "A GmbH"},\n        headers=headers,\n    )\n    assert status == 200\n    assert body["order_id"] == order_id\n    repo = SQLiteOrderRepository(db)\n    assert repo.get_order(order_id) is None\n    repo.close()\n\n\ndef test_remote_order_delete_without_employee_session_is_denied(api) -> None:\n    base, _ids, db = api\n    order_id, _version_id = _create_order_with_operational_context(db)\n\n    status, body, _ = _post(\n        f"{base}/office/v1/orders/{order_id}/delete",\n        args={"confirmation_name": "A GmbH"},\n    )\n    assert (status, body["error"]) == (401, "unauthorized")\n    repo = SQLiteOrderRepository(db)\n    assert repo.get_order(order_id) is not None\n    repo.close()\n\n\n'''
+p.write_text(text.replace(anchor, tests + anchor, 1))
+
+for temporary in (
+    Path(".github/workflows/remote-order-delete-patch.yml"),
+    Path("tools/remote_order_delete_patch.py"),
+):
+    if temporary.exists():
+        temporary.unlink()
