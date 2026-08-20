@@ -1,0 +1,36 @@
+name: PR Format Export
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  format-export:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: 0.11.32
+          python-version: '3.12'
+      - run: uv sync --dev
+      - name: Format changed Python files
+        run: |
+          uv run ruff format \
+            src/catering_system/repositories/in_memory_order_repository.py \
+            src/catering_system/repositories/order_purge.py \
+            src/catering_system/ui/office_panel_http.py \
+            src/catering_system/ui/office_panel_order_detail.py \
+            tests/unit/test_order_hard_delete.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ruff-formatted-order-delete
+          path: |
+            src/catering_system/repositories/in_memory_order_repository.py
+            src/catering_system/repositories/order_purge.py
+            src/catering_system/ui/office_panel_http.py
+            src/catering_system/ui/office_panel_order_detail.py
+            tests/unit/test_order_hard_delete.py
+          if-no-files-found: error
