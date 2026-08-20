@@ -5,7 +5,9 @@ from catering_system.repositories.order_purge import purge_order_with_dependenci
 from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepository
 
 
-def test_sqlite_purge_defers_fk_checks_until_all_owned_rows_are_deleted(tmp_path) -> None:
+def test_sqlite_purge_defers_fk_checks_until_all_owned_rows_are_deleted(
+    tmp_path,
+) -> None:
     repo = SQLiteOrderRepository(tmp_path / "core.db")
     connection = repo._conn
     connection.execute("PRAGMA foreign_keys = ON")
@@ -56,6 +58,8 @@ def test_sqlite_purge_defers_fk_checks_until_all_owned_rows_are_deleted(tmp_path
     purge_order_with_dependencies(repo, order.order_id)
 
     assert repo.get_order(order.order_id) is None
-    assert connection.execute("SELECT COUNT(*) FROM purge_fk_parent").fetchone()[0] == 0
+    assert (
+        connection.execute("SELECT COUNT(*) FROM purge_fk_parent").fetchone()[0] == 0
+    )
     assert connection.execute("SELECT COUNT(*) FROM purge_fk_child").fetchone()[0] == 0
     assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
