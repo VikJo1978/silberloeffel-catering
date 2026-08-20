@@ -76,16 +76,19 @@ def _forms() -> OrderDetailFormFields:
     )
 
 
-def test_delete_form_requires_exact_customer_name_and_is_superadmin_only() -> None:
+def test_delete_form_requires_exact_customer_name_and_order_delete_permission() -> None:
     order, _version = _aggregate("ui")
-    superadmin = OfficePageContext(current_user_role_label="Superadmin")
+    authorized_admin = OfficePageContext(
+        current_user_role_label="Administrator",
+        employee_effective_permissions=frozenset({"orders.delete"}),
+    )
 
     html = _secondary_actions(
         order,
         _forms(),
         operational_pause={"active": False},
         delete_confirmation_name="Art.draw GmbH",
-        context=superadmin,
+        context=authorized_admin,
     )
 
     assert 'action="/order/order-ui/delete"' in html
@@ -98,7 +101,10 @@ def test_delete_form_requires_exact_customer_name_and_is_superadmin_only() -> No
         _forms(),
         operational_pause={"active": False},
         delete_confirmation_name="Art.draw GmbH",
-        context=OfficePageContext(current_user_role_label="Benutzer"),
+        context=OfficePageContext(
+            current_user_role_label="Benutzer",
+            employee_effective_permissions=frozenset(),
+        ),
     )
     assert 'action="/order/order-ui/delete"' not in normal_user_html
 
