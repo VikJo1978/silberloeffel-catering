@@ -13,44 +13,107 @@ jobs:
       - uses: actions/checkout@v7
         with:
           ref: feat/order-hard-delete
-      - name: Apply nullable operational-data guard
+      - name: Apply order delete RBAC and nullable guard
         run: |
           python - <<'PY'
           from pathlib import Path
-          path = Path('src/catering_system/ui/office_panel_http.py')
-          text = path.read_text()
-          old = '''            operational_data = panel._order_detail_operational_data(
-              order_id, target.order_version_id
+
+          auth_path = Path('src/catering_system/domain/employee_auth.py')
+          auth_text = auth_path.read_text()
+          lines = auth_text.splitlines()
+          seen = 0
+          out = []
+          for line in lines:
+              out.append(line)
+              if line.strip() == '"orders.cancel",':
+                  seen += 1
+                  if seen <= 3:
+                      indent = line[: len(line) - len(line.lstrip())]
+                      next_line = indent + '"orders.delete",'
+                      if not (out and len(out) >= 2 and out[-2].strip() == '"orders.delete",'):
+                          out.append(next_line)
+          if seen < 3:
+              raise SystemExit(f'expected at least 3 orders.cancel entries, got {seen}')
+          auth_path.write_text('\n'.join(out) + '\n')
+
+          detail_path = Path('src/catering_system/ui/office_panel_order_detail.py')
+          detail_text = detail_path.read_text()
+          old = 'if context.current_user_role_label == "Superadmin" and delete_confirmation_name:'
+          new = 'if context.can("orders.delete") and delete_confirmation_name:'
+          if old not in detail_text:
+              raise SystemExit('order detail superadmin guard not found')
+          detail_path.write_text(detail_text.replace(old, new, 1))
+
+          http_path = Path('src/catering_system/ui/office_panel_http.py')
+          http_text = http_path.read_text()
+          old_perm = '"delete": ("orders.cancel",),'
+          new_perm = '"delete": ("orders.delete",),'
+          if old_perm not in http_text:
+              raise SystemExit('delete permission mapping not found')
+          http_text = http_text.replace(old_perm, new_perm, 1)
+
+          old_guard = '''            if (
+                auth is None
+                or auth.kind != "employee"
+                or auth.employee is None
+                or auth.legacy_shared_access
+                or auth.employee.account.role != "SUPERADMIN"
+            ):
+'''
+          new_guard = '''            if (
+                auth is None
+                or auth.kind != "employee"
+                or auth.employee is None
+                or auth.legacy_shared_access
+                or "orders.delete" not in auth.employee.effective_permissions
+            ):
+'''
+          if old_guard not in http_text:
+              raise SystemExit('hardcoded superadmin HTTP guard not found')
+          http_text = http_text.replace(old_guard, new_guard, 1)
+
+          needle = '''            operational_data = panel._order_detail_operational_data(
+                order_id, target.order_version_id
             )
             expected_name = (
-              operational_data.company_name or operational_data.contact_name or ""
-            ).strip()
-          '''
-          new = '''            operational_data = panel._order_detail_operational_data(
-              order_id, target.order_version_id
+'''
+          replacement = '''            operational_data = panel._order_detail_operational_data(
+                order_id, target.order_version_id
             )
             if operational_data is None:
-              raise ValueError("order_delete_name_unavailable")
+                raise ValueError("order_delete_name_unavailable")
             expected_name = (
-              operational_data.company_name or operational_data.contact_name or ""
-            ).strip()
-          '''
-          if old not in text:
-              raise SystemExit('target snippet not found')
-          path.write_text(text.replace(old, new, 1))
+'''
+          if needle in http_text:
+              http_text = http_text.replace(needle, replacement, 1)
+          elif 'if operational_data is None:' not in http_text:
+              raise SystemExit('nullable operational-data target not found')
+          http_path.write_text(http_text)
+
+          test_path = Path('tests/unit/test_order_hard_delete.py')
+          test_text = test_path.read_text()
+          test_text = test_text.replace(
+              'current_user_role_label="Superadmin",',
+              'current_user_role_label="Administrator",\n        employee_effective_permissions=frozenset({"orders.delete"}),',
+          )
+          test_text = test_text.replace(
+              'current_user_role_label="Benutzer",',
+              'current_user_role_label="Benutzer",\n        employee_effective_permissions=frozenset(),',
+          )
+          test_path.write_text(test_text)
           PY
       - uses: astral-sh/setup-uv@v9.0.0
         with:
           version: 0.11.32
           python-version: '3.12'
       - run: uv sync --dev
-      - run: uv run ruff format src/catering_system/ui/office_panel_http.py src/catering_system/repositories/order_purge.py
-      - name: Commit type fix
+      - run: uv run ruff format src/catering_system/domain/employee_auth.py src/catering_system/ui/office_panel_http.py src/catering_system/ui/office_panel_order_detail.py src/catering_system/repositories/order_purge.py tests/unit/test_order_hard_delete.py
+      - name: Commit permission fix
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add src/catering_system/ui/office_panel_http.py src/catering_system/repositories/order_purge.py
+          git add src/catering_system/domain/employee_auth.py src/catering_system/ui/office_panel_http.py src/catering_system/ui/office_panel_order_detail.py src/catering_system/repositories/order_purge.py tests/unit/test_order_hard_delete.py
           if ! git diff --cached --quiet; then
-            git commit -m "fix: narrow order delete operational data"
+            git commit -m "fix: authorize order delete by permission"
             git push origin HEAD:feat/order-hard-delete
           fi
