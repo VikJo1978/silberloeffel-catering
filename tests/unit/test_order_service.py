@@ -23,7 +23,12 @@ from catering_system.domain.inquiry import (
 from catering_system.domain.inquiry_customer_snapshot import (
     InquiryCustomerSnapshot as _CCSnapshot,
 )
-from catering_system.domain.offer import OfferPosition, OfferVariant, OfferVersion
+from catering_system.domain.offer import (
+    AcceptanceEvidence,
+    OfferPosition,
+    OfferVariant,
+    OfferVersion,
+)
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_operational_context import (
     OrderOperationalContextData,
@@ -127,6 +132,79 @@ def _offer_version_from_inquiry(inquiry: Inquiry) -> OfferVersion:
     )
 
 
+def _acceptance_for_offer_version(offer_version: OfferVersion) -> AcceptanceEvidence:
+    return AcceptanceEvidence(
+        acceptance_id="acceptance-1",
+        offer_id=offer_version.offer_id,
+        accepted_offer_version_id=offer_version.offer_version_id,
+        accepted_variant_id=offer_version.variants[0].variant_id,
+        accepted_at=offer_version.created_at,
+        recorded_at=offer_version.created_at,
+        channel="phone",
+        evidence_reference="unit-test",
+        recorded_by="unit-test",
+    )
+
+
+def _create_initial_order(
+    svc: OrderService, inquiry: Inquiry
+) -> tuple[Order, OrderVersion]:
+    offer_version = _offer_version_from_inquiry(inquiry)
+    return svc.create_order_from_offer_version(
+        inquiry.inquiry_id,
+        offer_version,
+        inquiry,
+        acceptance_evidence=_acceptance_for_offer_version(offer_version),
+    )
+
+
+def test_create_order_from_offer_version_requires_acceptance_before_persistence() -> None:
+    repo = InMemoryOrderRepository()
+    inquiry = _sample_inquiry()
+    offer_version = _offer_version_from_inquiry(inquiry)
+
+    with pytest.raises(ValueError, match="AcceptanceEvidence required"):
+        OrderService(repo).create_order_from_offer_version(
+            inquiry.inquiry_id,
+            offer_version,
+            inquiry,
+        )
+
+    assert repo.list_orders() == []
+
+
+@pytest.mark.parametrize(
+    ("field_name", "field_value", "message"),
+    (
+        ("offer_id", "other-offer", "different Offer"),
+        ("accepted_offer_version_id", "other-version", "does not match OfferVersion"),
+        ("accepted_variant_id", "other-variant", "does not belong to OfferVersion"),
+    ),
+)
+def test_create_order_from_offer_version_rejects_mismatched_acceptance_before_persistence(
+    field_name: str,
+    field_value: str,
+    message: str,
+) -> None:
+    repo = InMemoryOrderRepository()
+    inquiry = _sample_inquiry()
+    offer_version = _offer_version_from_inquiry(inquiry)
+    acceptance = replace(
+        _acceptance_for_offer_version(offer_version),
+        **{field_name: field_value},
+    )
+
+    with pytest.raises(ValueError, match=message):
+        OrderService(repo).create_order_from_offer_version(
+            inquiry.inquiry_id,
+            offer_version,
+            inquiry,
+            acceptance_evidence=acceptance,
+        )
+
+    assert repo.list_orders() == []
+
+
 def test_convert_inquiry_to_order_requires_accepted_offer_when_missing() -> None:
     svc = OrderService(InMemoryOrderRepository())
     with pytest.raises(ValueError, match="accepted offer required"):
@@ -173,11 +251,7 @@ def test_create_relevant_order_change_version_second_preserves_first() -> None:
 def test_initial_version_stores_frozen_operational_context() -> None:
     repo = InMemoryOrderRepository()
     svc = OrderService(repo)
-    order, version = svc.create_order_from_offer_version(
-        _sample_inquiry().inquiry_id,
-        _offer_version_from_inquiry(_sample_inquiry()),
-        _sample_inquiry(),
-    )
+    order, version = _create_initial_order(svc, _sample_inquiry())
 
     context = repo.get_operational_context(version.order_version_id)
     assert context is not None
@@ -194,11 +268,7 @@ def test_child_version_inherits_parent_operational_context_not_live_inquiry() ->
     inquiry = _sample_inquiry()
     repo = InMemoryOrderRepository()
     svc = OrderService(repo)
-    order, v1 = svc.create_order_from_offer_version(
-        inquiry.inquiry_id,
-        _offer_version_from_inquiry(inquiry),
-        inquiry,
-    )
+    order, v1 = _create_initial_order(svc, inquiry)
     mutated = replace(
         inquiry,
         customer_snapshot=replace(
@@ -235,11 +305,7 @@ def test_explicit_operational_context_change_and_grandchild_inheritance() -> Non
     inquiry = _sample_inquiry()
     repo = InMemoryOrderRepository()
     svc = OrderService(repo)
-    order, v1 = svc.create_order_from_offer_version(
-        inquiry.inquiry_id,
-        _offer_version_from_inquiry(inquiry),
-        inquiry,
-    )
+    order, v1 = _create_initial_order(svc, inquiry)
     new_address = CustomerAddress(
         street="Neuer Weg 5",
         postal_code="20095",
@@ -293,11 +359,7 @@ def test_operational_context_inherits_from_exact_parent_not_latest_branch() -> N
     inquiry = _sample_inquiry()
     repo = InMemoryOrderRepository()
     svc = OrderService(repo)
-    order, v1 = svc.create_order_from_offer_version(
-        inquiry.inquiry_id,
-        _offer_version_from_inquiry(inquiry),
-        inquiry,
-    )
+    order, v1 = _create_initial_order(svc, inquiry)
     explicit_b = OrderOperationalContextData(
         recipient_company="Branch B GmbH",
         recipient_name="Berta Branch",
@@ -351,11 +413,7 @@ def test_delivery_address_change_creates_explicit_context_without_inquiry_mutati
     inquiry = _sample_inquiry()
     repo = InMemoryOrderRepository()
     svc = OrderService(repo)
-    order, v1 = svc.create_order_from_offer_version(
-        inquiry.inquiry_id,
-        _offer_version_from_inquiry(inquiry),
-        inquiry,
-    )
+    order, v1 = _create_initial_order(svc, inquiry)
     before_context = repo.get_operational_context(v1.order_version_id)
     assert before_context is not None
     new_address = CustomerAddress(
@@ -392,11 +450,7 @@ def test_delivery_address_change_uses_explicit_parent_not_latest_branch() -> Non
     inquiry = _sample_inquiry()
     repo = InMemoryOrderRepository()
     svc = OrderService(repo)
-    order, v1 = svc.create_order_from_offer_version(
-        inquiry.inquiry_id,
-        _offer_version_from_inquiry(inquiry),
-        inquiry,
-    )
+    order, v1 = _create_initial_order(svc, inquiry)
     branch_b = OrderOperationalContextData(
         recipient_company="Branch B GmbH",
         recipient_name="Berta Branch",
@@ -471,17 +525,9 @@ def test_delivery_address_change_rejects_parent_not_owned_without_partial_versio
     inquiry = _sample_inquiry()
     repo = InMemoryOrderRepository()
     svc = OrderService(repo)
-    order_a, v1a = svc.create_order_from_offer_version(
-        inquiry.inquiry_id,
-        _offer_version_from_inquiry(inquiry),
-        inquiry,
-    )
+    order_a, v1a = _create_initial_order(svc, inquiry)
     other_inquiry = replace(inquiry, inquiry_id="22222222-2222-2222-2222-222222222222")
-    order_b, v1b = svc.create_order_from_offer_version(
-        other_inquiry.inquiry_id,
-        _offer_version_from_inquiry(other_inquiry),
-        other_inquiry,
-    )
+    order_b, v1b = _create_initial_order(svc, other_inquiry)
     before_versions = repo.list_order_versions(order_a.order_id)
 
     with pytest.raises(ValueError, match="not a version of order"):

@@ -577,16 +577,17 @@ class OfferService:
                 f"(inquiry_id={inquiry.inquiry_id!r})"
             )
 
-        order, order_version = self._order_service.create_order_from_offer_version(
-            offer.source_inquiry_id,
-            version,
-            inquiry,
-        )
         acceptance = offer.acceptance_evidence
         if acceptance is None or acceptance.acceptance_id != acceptance_id:
             raise ValueError(
                 f"acceptance_id {acceptance_id!r} does not match offer acceptance"
             )
+        order, order_version = self._order_service.create_order_from_offer_version(
+            offer.source_inquiry_id,
+            version,
+            inquiry,
+            acceptance_evidence=acceptance,
+        )
         variant = next(
             item for item in version.variants if item.variant_id == accepted_variant_id
         )

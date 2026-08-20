@@ -19,7 +19,10 @@ from catering_system.domain.inquiry import (
     Inquiry,
     validate_planning_mode,
 )
-from catering_system.domain.offer import OfferVersion as CommercialOfferVersion
+from catering_system.domain.offer import (
+    AcceptanceEvidence,
+    OfferVersion as CommercialOfferVersion,
+)
 from catering_system.domain.operational_core_events import (
     OrderVersionCandidateSuperseded,
     OrderVersionChangeProposed,
@@ -100,8 +103,25 @@ class OrderService:
         source_inquiry_id: str,
         offer_version: CommercialOfferVersion,
         inquiry: Inquiry | None = None,
+        *,
+        acceptance_evidence: AcceptanceEvidence | None = None,
     ) -> tuple[Order, OrderVersion]:
-        """Create Order + v1 from commercial OfferVersion facts (not Inquiry)."""
+        """Create Order + v1 only from an exactly accepted OfferVersion."""
+        if acceptance_evidence is None:
+            raise ValueError("AcceptanceEvidence required for Order creation")
+        if acceptance_evidence.offer_id != offer_version.offer_id:
+            raise ValueError("acceptance belongs to a different Offer")
+        if (
+            acceptance_evidence.accepted_offer_version_id
+            != offer_version.offer_version_id
+        ):
+            raise ValueError("acceptance does not match OfferVersion")
+        if not any(
+            variant.variant_id == acceptance_evidence.accepted_variant_id
+            for variant in offer_version.variants
+        ):
+            raise ValueError("accepted variant does not belong to OfferVersion")
+
         now = _utc_now()
         order_id = str(uuid.uuid4())
         order = Order(
