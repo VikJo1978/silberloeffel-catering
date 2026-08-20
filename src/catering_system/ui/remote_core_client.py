@@ -310,6 +310,8 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
             "invalid_withdrawal_evidence",
             "order_version_not_current_candidate",
             "operational_context_missing",
+            "order_delete_confirmation_mismatch",
+            "order_delete_name_unavailable",
             "validation_error",
             # Issue #39: the three document blockers. All are real Office API
             # business errors that were missing here, so the status whitelist
@@ -1752,6 +1754,24 @@ class RemoteCoreClient:
             expected={200},
             result_keys={"offer_id", "offer_version_id", "withdrawn_at"},
         )
+
+    def delete_order(
+        self,
+        order_id: str,
+        *,
+        confirmation_name: str,
+        employee_session_token: str,
+    ) -> None:
+        result = self.command(
+            f"/office/v1/orders/{quote(order_id, safe='')}/delete",
+            {"confirmation_name": confirmation_name},
+            {},
+            expected={200},
+            result_keys={"order_id"},
+            employee_session_token=employee_session_token,
+        )
+        if _uuid4(result["order_id"]) != order_id:
+            _bad_response()
 
     # -- reads / repository-shaped facade ---------------------------------
 

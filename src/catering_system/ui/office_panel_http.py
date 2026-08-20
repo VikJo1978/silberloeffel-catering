@@ -2457,8 +2457,6 @@ def make_office_panel_handler(
             ):
                 self._business_forbidden(active_section="orders")
                 return
-            if remote is not None:
-                raise ValueError("order_delete_unavailable")
             order = order_repo.get_order(order_id)
             if order is None:
                 raise KeyError(order_id)
@@ -2490,6 +2488,19 @@ def make_office_panel_handler(
             submitted_name = self._form().get("confirmation_name", "").strip()
             if not hmac.compare_digest(submitted_name, expected_name):
                 raise ValueError("order_delete_confirmation_mismatch")
+
+            if remote is not None:
+                session_token = session_token_from_headers(self.headers)
+                if session_token is None:
+                    self._business_forbidden(active_section="orders")
+                    return
+                remote.delete_order(
+                    order_id,
+                    confirmation_name=submitted_name,
+                    employee_session_token=session_token,
+                )
+                self._redirect("/orders")
+                return
 
             def work() -> None:
                 purge_order_with_dependencies(order_repo, order_id)

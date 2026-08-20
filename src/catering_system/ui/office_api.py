@@ -155,6 +155,7 @@ from catering_system.repositories.sqlite_order_confirmation_outbound_repository 
 from catering_system.repositories.sqlite_order_operational_pause_repository import (
     SQLiteOrderOperationalPauseRepository,
 )
+from catering_system.repositories.order_purge import purge_order_with_dependencies
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
 )
@@ -2806,6 +2807,37 @@ class OfficeApi:
             "updated_at": cancelled.updated_at.isoformat(),
         }
 
+    def cmd_delete_order(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        order = self._require_order(path_ids["id"])
+        versions = self.orders.list_order_versions(order.order_id)
+        target = next(
+            (
+                version
+                for version in versions
+                if version.order_version_id == order.candidate_order_version_id
+            ),
+            None,
+        )
+        if target is None:
+            target = max(versions, key=lambda item: item.version_number, default=None)
+        if target is None:
+            raise ApiError(422, "order_delete_name_unavailable")
+        operational = self.orders.get_operational_context(target.order_version_id)
+        if operational is None:
+            raise ApiError(422, "order_delete_name_unavailable")
+        expected_name = (
+            operational.recipient_company or operational.recipient_name or ""
+        ).strip()
+        if not expected_name:
+            raise ApiError(422, "order_delete_name_unavailable")
+        submitted_name = _v_str(args["confirmation_name"], 500).strip()
+        if not hmac.compare_digest(submitted_name, expected_name):
+            raise ApiError(422, "order_delete_confirmation_mismatch")
+        purge_order_with_dependencies(self.orders, order.order_id)
+        return 200, {"order_id": order.order_id}
+
     def cmd_payment_reminder(
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict
     ) -> tuple[int, dict[str, object]]:
@@ -3093,6 +3125,7 @@ _CONVERT_ACCEPTED_ARGS = _ArgKeys(
     required=frozenset({"accepted_variant_id", "acceptance_id"})
 )
 _VERSION_ID_ARGS = _ArgKeys(required=frozenset({"order_version_id"}))
+_ORDER_DELETE_ARGS = _ArgKeys(required=frozenset({"confirmation_name"}))
 _PAYMENT_REMINDER_ARGS = _ArgKeys(
     required=frozenset(
         {
@@ -3231,6 +3264,7 @@ _COMMANDS: dict[str, _CommandSpec] = {
         },
     ),
     "cancel": _CommandSpec("cmd_cancel", _NO_ARGS, {"updated_at"}),
+    "delete-order": _CommandSpec("cmd_delete_order", _ORDER_DELETE_ARGS, set()),
     "payment-reminder": _CommandSpec(
         "cmd_payment_reminder", _PAYMENT_REMINDER_ARGS, {"updated_at"}
     ),
@@ -3565,6 +3599,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/cancel$"),
         "/office/v1/orders/{id}/cancel",
         {"POST": "cancel"},
+    ),
+    (
+        re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/delete$"),
+        "/office/v1/orders/{id}/delete",
+        {"POST": "delete-order"},
     ),
     (
         re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/payment-reminder$"),
@@ -4305,6 +4344,8 @@ def make_office_api_handler(
                 in {"create_chat_thread", "send_chat_message", "mark_chat_thread_read"}
                 else self._manual_task_employee(kind, args)
                 if kind in {"create_manual_task", "complete_manual_task"}
+                else self._employee_with_permission("orders.delete")
+                if kind == "delete-order"
                 else None
             )
 
