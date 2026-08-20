@@ -47,12 +47,21 @@ def test_sqlite_purge_defers_fk_checks_until_all_owned_rows_are_deleted(
         "FOREIGN KEY(parent_id) REFERENCES purge_fk_parent(parent_id))"
     )
     connection.execute(
+        "CREATE TABLE purge_fk_alias ("
+        "alias_id TEXT PRIMARY KEY, linked_version TEXT NOT NULL, "
+        "FOREIGN KEY(linked_version) REFERENCES order_versions(order_version_id))"
+    )
+    connection.execute(
         "INSERT INTO purge_fk_parent (parent_id, order_id) VALUES (?, ?)",
         ("parent-1", order.order_id),
     )
     connection.execute(
         "INSERT INTO purge_fk_child (child_id, order_id, parent_id) VALUES (?, ?, ?)",
         ("child-1", order.order_id, "parent-1"),
+    )
+    connection.execute(
+        "INSERT INTO purge_fk_alias (alias_id, linked_version) VALUES (?, ?)",
+        ("alias-1", version.order_version_id),
     )
     connection.commit()
 
@@ -61,4 +70,5 @@ def test_sqlite_purge_defers_fk_checks_until_all_owned_rows_are_deleted(
     assert repo.get_order(order.order_id) is None
     assert connection.execute("SELECT COUNT(*) FROM purge_fk_parent").fetchone()[0] == 0
     assert connection.execute("SELECT COUNT(*) FROM purge_fk_child").fetchone()[0] == 0
+    assert connection.execute("SELECT COUNT(*) FROM purge_fk_alias").fetchone()[0] == 0
     assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
