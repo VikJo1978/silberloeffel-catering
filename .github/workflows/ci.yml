@@ -1,8 +1,8 @@
 name: CI
 
 on:
-  push:
   pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
@@ -114,8 +114,7 @@ jobs:
           version: "0.11.32"
           python-version: "3.12"
       - run: uv sync --dev
-      - name: Format touched Python files
-        run: |
+      - run: |
           uv run ruff format \
             src/catering_system/domain/employee_auth.py \
             src/catering_system/repositories/order_purge.py \
