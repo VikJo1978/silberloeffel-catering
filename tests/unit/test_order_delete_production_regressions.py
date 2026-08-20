@@ -40,14 +40,26 @@ def _seed_order(repo: SQLiteOrderRepository) -> Order:
     return order
 
 
+def _count_rows(connection: sqlite3.Connection, table_name: str) -> int:
+    row = connection.execute(f'SELECT COUNT(*) FROM "{table_name}"').fetchone()
+    assert row is not None
+    return int(row[0])
+
+
+def _commit_parent_ids(connection: sqlite3.Connection) -> list[str]:
+    rows = connection.execute(
+        "SELECT parent_id FROM commit_parent ORDER BY parent_id"
+    ).fetchall()
+    return [str(row[0]) for row in rows]
+
+
 def test_purge_removes_transitive_fk_children_without_order_id(tmp_path) -> None:
     repo = SQLiteOrderRepository(tmp_path / "core.db")
     connection = repo._conn
     connection.execute("PRAGMA foreign_keys = ON")
     order = _seed_order(repo)
 
-    # Production-shaped chain:
-    # order-owned snapshot -> position(snapshot_id only) -> grandchild(position_id only).
+    # Production-shaped chain: order -> snapshot -> position -> grandchild.
     connection.executescript(
         """
         CREATE TABLE purge_owned_snapshot (
@@ -85,15 +97,9 @@ def test_purge_removes_transitive_fk_children_without_order_id(tmp_path) -> None
     purge_order_with_dependencies(repo, order.order_id)
 
     assert repo.get_order(order.order_id) is None
-    assert connection.execute(
-        "SELECT COUNT(*) FROM purge_owned_snapshot"
-    ).fetchone()[0] == 0
-    assert connection.execute(
-        "SELECT COUNT(*) FROM purge_snapshot_position"
-    ).fetchone()[0] == 0
-    assert connection.execute(
-        "SELECT COUNT(*) FROM purge_position_note"
-    ).fetchone()[0] == 0
+    assert _count_rows(connection, "purge_owned_snapshot") == 0
+    assert _count_rows(connection, "purge_snapshot_position") == 0
+    assert _count_rows(connection, "purge_position_note") == 0
     assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
 
 
@@ -133,18 +139,13 @@ def test_commit_integrity_error_rolls_back_and_connection_is_reusable(tmp_path) 
 
     assert connection.in_transaction is False
     assert delivered == []
-    assert connection.execute(
-        "SELECT parent_id FROM commit_parent"
-    ).fetchall() == [("parent-1",)]
+    assert _commit_parent_ids(connection) == ["parent-1"]
 
-    # The same shared connection must accept the next command.
     executor.run(
         lambda: connection.execute(
             "INSERT INTO commit_parent (parent_id) VALUES (?)",
             ("parent-2",),
         )
     )
-    assert connection.execute(
-        "SELECT parent_id FROM commit_parent ORDER BY parent_id"
-    ).fetchall() == [("parent-1",), ("parent-2",)]
+    assert _commit_parent_ids(connection) == ["parent-1", "parent-2"]
     connection.close()
