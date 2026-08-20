@@ -32,6 +32,13 @@ def _quote_identifier(value: str) -> str:
 def _sqlite_purge(repo: _SQLiteBackedOrderRepository, order_id: str) -> None:
     connection = repo._conn
     with repo._write_scope():
+        # The purge spans many tables whose FK dependencies are not guaranteed
+        # to follow sqlite_master ordering. Keep foreign_keys enabled, but defer
+        # their validation until the surrounding atomic transaction commits.
+        # This allows all owned rows to disappear before SQLite checks the final
+        # graph and still fails closed if any reference survives the purge.
+        connection.execute("PRAGMA defer_foreign_keys = ON")
+
         if (
             connection.execute(
                 "SELECT 1 FROM orders WHERE order_id = ?", (order_id,)
