@@ -4,7 +4,7 @@ from catering_system.domain.employee_auth import (
 )
 
 
-def test_superadmin_effective_permissions_follow_current_registry() -> None:
+def test_legacy_superadmin_effective_permissions_follow_current_registry() -> None:
     legacy_permissions = set(PERMISSION_SET) - {"orders.delete"}
 
     assert "orders.delete" not in legacy_permissions
