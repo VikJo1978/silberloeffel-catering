@@ -25,8 +25,68 @@ class _PurgeCapableOrderRepository(Protocol):
     def purge_order(self, order_id: str) -> None: ...
 
 
+_ForeignKeyViolation = tuple[str, int | None, str, int]
+
+
 def _quote_identifier(value: str) -> str:
     return '"' + value.replace('"', '""') + '"'
+
+
+def _foreign_key_violations(
+    connection: sqlite3.Connection,
+) -> set[_ForeignKeyViolation]:
+    return {
+        (
+            str(row[0]),
+            int(row[1]) if row[1] is not None else None,
+            str(row[2]),
+            int(row[3]),
+        )
+        for row in connection.execute("PRAGMA foreign_key_check").fetchall()
+    }
+
+
+def _purge_new_fk_dependents(
+    connection: sqlite3.Connection,
+    baseline: set[_ForeignKeyViolation],
+) -> None:
+    """Delete rows orphaned transitively by the maintenance purge.
+
+    Direct order-owned rows are discovered by ``order_id`` /
+    ``order_version_id`` below. Some of those rows own child rows only through
+    another key (for example snapshot_id). Deferred FK checking lets the root
+    delete finish first; this loop then follows the actual FK violations until
+    the whole dependent closure is gone.
+
+    Pre-existing unrelated FK violations are deliberately left untouched.
+    """
+
+    while True:
+        new_violations = _foreign_key_violations(connection) - baseline
+        if not new_violations:
+            return
+
+        targets: set[tuple[str, int]] = set()
+        for table_name, rowid, parent_table, fk_id in new_violations:
+            if rowid is None:
+                raise sqlite3.IntegrityError(
+                    "maintenance purge cannot resolve dependent row in "
+                    f"WITHOUT ROWID table {table_name!r} "
+                    f"(parent={parent_table!r}, fk_id={fk_id})"
+                )
+            targets.add((table_name, rowid))
+
+        deleted = 0
+        for table_name, rowid in sorted(targets):
+            deleted += connection.execute(
+                f"DELETE FROM {_quote_identifier(table_name)} WHERE rowid = ?",
+                (rowid,),
+            ).rowcount
+
+        if deleted == 0:
+            raise sqlite3.IntegrityError(
+                "maintenance purge could not remove newly orphaned FK dependents"
+            )
 
 
 def _sqlite_purge(repo: _SQLiteBackedOrderRepository, order_id: str) -> None:
@@ -39,6 +99,7 @@ def _sqlite_purge(repo: _SQLiteBackedOrderRepository, order_id: str) -> None:
         if not connection.in_transaction:
             connection.execute("BEGIN")
         connection.execute("PRAGMA defer_foreign_keys = ON")
+        baseline_fk_violations = _foreign_key_violations(connection)
 
         if (
             connection.execute(
@@ -86,7 +147,7 @@ def _sqlite_purge(repo: _SQLiteBackedOrderRepository, order_id: str) -> None:
                 connection.execute(
                     f"DELETE FROM {quoted_table} WHERE order_id = ?", (order_id,)
                 )
-            elif "order_version_id" in columns and version_ids:
+            if "order_version_id" in columns and version_ids:
                 placeholders = ",".join("?" for _ in version_ids)
                 connection.execute(
                     f"DELETE FROM {quoted_table} "
@@ -107,12 +168,14 @@ def _sqlite_purge(repo: _SQLiteBackedOrderRepository, order_id: str) -> None:
         if deleted != 1:
             raise KeyError(order_id)
 
+        _purge_new_fk_dependents(connection, baseline_fk_violations)
+
         for _trigger_name, trigger_sql in triggers:
             connection.execute(trigger_sql)
 
 
 def purge_order_with_dependencies(repo: OrderRepository, order_id: str) -> None:
-    """Purge one Order and every row directly owned by its id/version ids.
+    """Purge one Order and every row directly or transitively owned by it.
 
     Inquiry/Offer rows are intentionally untouched because they are keyed by
     their own aggregate identifiers, not by ``order_id``.
