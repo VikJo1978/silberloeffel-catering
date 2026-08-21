@@ -1,0 +1,64 @@
+name: One-off human-readable orders list patch
+
+on:
+  push:
+    branches:
+      - fix/human-readable-orders-list
+    paths:
+      - .github/workflows/oneoff-human-readable-orders.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/human-readable-orders-list
+          fetch-depth: 0
+
+      - name: Replace legacy UUID-only order list
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          panel = Path('src/catering_system/ui/office_panel.py')
+          text = panel.read_text()
+          pattern = re.compile(
+              r'    def render_auftraege\(.*?\n    _ORDERS_ZEITRAUM_LABELS = \(',
+              re.S,
+          )
+          replacement = '''    def render_auftraege(\n        self, q: str = "", *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT\n    ) -> str:\n        """Compatibility route for the legacy /auftraege URL.\n\n        Keep old bookmarks working, but render the same human-readable operative\n        order list as /orders instead of exposing UUIDs as the primary identity.\n        """\n        return self.render_orders(q=q, context=context)\n\n    _ORDERS_ZEITRAUM_LABELS = ('''
+          new_text, count = pattern.subn(replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'expected one render_auftraege block, replaced {count}')
+          panel.write_text(new_text)
+
+          views = Path('src/catering_system/ui/office_panel_views.py')
+          text = views.read_text()
+          old = '_nav_link("/auftraege", "Aufträge", "briefcase", "orders", active_section)'
+          new = '_nav_link("/orders", "Aufträge", "briefcase", "orders", active_section)'
+          if old not in text:
+              raise SystemExit('orders navigation link not found')
+          views.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Syntax check
+        run: python3 -m compileall -q src/catering_system/ui/office_panel.py src/catering_system/ui/office_panel_views.py
+
+      - name: Run office panel tests
+        run: |
+          python3 -m pip install -e '.[dev]' >/dev/null
+          pytest -q tests -k 'office_panel or orders' --maxfail=1
+
+      - name: Commit patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/catering_system/ui/office_panel.py src/catering_system/ui/office_panel_views.py
+          git diff --cached --quiet && exit 0
+          git commit -m 'fix: show human-readable order list'
+          git push origin HEAD:fix/human-readable-orders-list
