@@ -19,12 +19,23 @@ Never commit or document values for:
 - `OFFICE_PANEL_PASSWORD`
 - `WEBSITE_INTAKE_TOKEN`
 - `UPSTREAM_TOKEN`
+- `OFFICE_API_TOKEN` / `CORE_OFFICE_API_TOKEN`
+- employee-introspection service tokens
+- Kitchen API / print-agent bearer tokens
+- kiosk/courier pickup-signal tokens
 - `AUERSWALD_SYNC_PASSWORD`
-- SSH private keys
-- Cloudflare, GitHub, CRM, email, or hosting credentials
+- SSH or GPG private keys
+- Cloudflare, GitHub, CRM, email, hosting, or recovery credentials
 
-Production values belong in root-readable environment files or the relevant
-provider's secret store. `.env.example` lists names only.
+The master human recovery store is the password-manager vault
+`Bitwarden / Silberloeffel Catering`. Production runtime values belong in
+root-readable environment files or the relevant provider's secret store.
+`.env.example` lists names only; `docs/operations/secrets-registry.md` records
+secret names, consumers and locations without values.
+
+A production host must not be the only recoverable copy of a credential required
+to rebuild itself. Conversely, do not copy secrets from the host into GitHub,
+issues, logs, screenshots, or chat to create an ad-hoc backup.
 
 ## Network exposure
 
@@ -33,11 +44,26 @@ provider's secret store. `.env.example` lists names only.
 | Office panel `8081` | private LAN/Tailscale only |
 | Kitchen kiosk `8082` | private LAN/Tailscale only |
 | Website intake `8083` | Lenovo loopback only |
+| Core Office API `8084` | Tailscale only |
+| Kitchen API `8086` | Lenovo loopback only |
 | VPS staging `8080` | temporary public HTTP; fake data only |
 | VPS staging intake forward `18083` | VPS loopback only; restricted reverse SSH |
 
-The production public website must reach Lenovo only through the Cloudflare
-Worker/Tunnel intake path. Never proxy office or kiosk routes.
+The production public website must reach Lenovo only through the approved
+Cloudflare/ingress path. Never proxy office, Core API, Kitchen API or kiosk routes
+onto the public Internet.
+
+## Privileged automation
+
+The private `silberloeffel-ops` self-hosted runner runs as unprivileged user
+`chatops`. It must never receive unrestricted sudo or be attached to untrusted
+pull-request code. Privileged actions are restricted to exact commands exposed by
+the root-owned `/usr/local/sbin/catering-ops` wrapper and an explicit sudoers
+allowlist.
+
+Automation output must be designed not to print environment values, customer
+payloads, private keys or bearer tokens. Revoking the runner must not stop the
+application itself.
 
 ## Data handling
 
@@ -57,7 +83,8 @@ Worker/Tunnel intake path. Never proxy office or kiosk routes.
 
 ## Application controls
 
-- Office panel uses HTTP Basic authentication and CSRF tokens for POST actions.
+- Office panel uses its configured authentication mode and CSRF tokens for POST
+  actions.
 - Public production intake uses field allowlisting, body limits, bearer-token
   authentication between Worker and receiver, and idempotency keys.
 - Staging forwarding accepts only the exact loopback receiver URL, refuses
@@ -71,8 +98,9 @@ Worker/Tunnel intake path. Never proxy office or kiosk routes.
 
 1. Remove or block the exposed surface.
 2. Preserve relevant journals without customer payloads.
-3. Rotate affected credentials.
+3. Rotate affected credentials and update the password-manager recovery record.
 4. Verify database integrity and backup availability.
 5. Patch and test locally/CI.
 6. Deploy through the production runbook.
-7. Record the incident, impact window, rotation, and verification privately.
+7. Record the incident, impact window, rotation names (never values), and
+   verification privately.
