@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, date, datetime
 
+from catering_system.domain.customer_document_projection import CustomerAddress
 from catering_system.domain.inquiry import Inquiry
 from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot
 from catering_system.domain.inquiry_offer_preparation import (
@@ -33,6 +34,7 @@ def _inquiry(**overrides: object) -> Inquiry:
             email="kunde@example.test",
             phone="+49401234567",
         ),
+        "fulfillment_mode": "PICKUP",
     }
     values.update(overrides)
     return Inquiry(**values)  # type: ignore[arg-type]
@@ -73,6 +75,62 @@ def test_contact_blocker_uses_existing_progression_reason() -> None:
         customer_snapshot=InquiryCustomerSnapshot(phone="+49401234567"),
     )
     assert _evaluate(inquiry).reasons == ("inquiry_contact_missing_email",)
+
+
+def test_unknown_fulfillment_blocks_offer_preparation() -> None:
+    eligibility = _evaluate(_inquiry(fulfillment_mode="UNKNOWN"))
+    assert eligibility.reasons == ("fulfillment_mode_unresolved",)
+
+
+def test_pickup_does_not_require_delivery_address() -> None:
+    assert _evaluate(_inquiry(fulfillment_mode="PICKUP")).blocked is False
+
+
+def test_delivery_requires_resolved_delivery_context() -> None:
+    unresolved = _inquiry(fulfillment_mode="DELIVERY")
+    assert _evaluate(unresolved).reasons == ("delivery_address_unresolved",)
+
+
+def test_delivery_same_as_invoice_is_resolved_when_invoice_address_exists() -> None:
+    inquiry = _inquiry(
+        fulfillment_mode="DELIVERY",
+        customer_snapshot=InquiryCustomerSnapshot(
+            email="kunde@example.test",
+            phone="+49401234567",
+            invoice_address=CustomerAddress(
+                street="Musterstraße 1",
+                postal_code="20095",
+                city="Hamburg",
+                country="DE",
+            ),
+            delivery_address_mode="SAME_AS_INVOICE",
+        ),
+    )
+    assert _evaluate(inquiry).blocked is False
+
+
+def test_delivery_separate_address_is_resolved() -> None:
+    inquiry = _inquiry(
+        fulfillment_mode="DELIVERY",
+        customer_snapshot=InquiryCustomerSnapshot(
+            email="kunde@example.test",
+            phone="+49401234567",
+            invoice_address=CustomerAddress(
+                street="Musterstraße 1",
+                postal_code="20095",
+                city="Hamburg",
+                country="DE",
+            ),
+            delivery_address=CustomerAddress(
+                street="Eventweg 7",
+                postal_code="22041",
+                city="Hamburg",
+                country="DE",
+            ),
+            delivery_address_mode="SEPARATE",
+        ),
+    )
+    assert _evaluate(inquiry).blocked is False
 
 
 def test_active_order_and_existing_offer_have_distinct_blockers() -> None:
