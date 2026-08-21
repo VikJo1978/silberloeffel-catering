@@ -5,50 +5,9 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  patch-orders-list:
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: fix/orders-list-route-20260821
-          fetch-depth: 0
-      - name: Apply focused orders-list patch to the fix branch
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-
-          views = Path('src/catering_system/ui/office_panel_views.py')
-          text = views.read_text()
-          old = '_nav_link("/auftraege", "Aufträge", "briefcase", "orders", active_section)'
-          new = '_nav_link("/orders", "Aufträge", "briefcase", "orders", active_section)'
-          if text.count(old) != 1:
-              raise SystemExit(f'expected exactly one legacy nav link, found {text.count(old)}')
-          views.write_text(text.replace(old, new, 1))
-
-          http = Path('src/catering_system/ui/office_panel_http.py')
-          text = http.read_text()
-          old = 'self._html(panel.render_auftraege(search_query, context=context))'
-          new = 'self._html(panel.render_orders(search_query, context=context))'
-          if text.count(old) != 1:
-              raise SystemExit(f'expected exactly one legacy route renderer, found {text.count(old)}')
-          http.write_text(text.replace(old, new, 1))
-
-          oneoff = Path('.github/workflows/orders-list-patch.yml')
-          if oneoff.exists():
-              oneoff.unlink()
-          PY
-          python3 -m compileall -q src/catering_system/ui/office_panel_http.py src/catering_system/ui/office_panel_views.py
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git diff --cached --quiet && exit 1
-          git commit -m 'fix: use human-readable orders list'
-          git push origin HEAD:fix/orders-list-route-20260821
-
   quality:
     runs-on: ubuntu-latest
     timeout-minutes: 25
