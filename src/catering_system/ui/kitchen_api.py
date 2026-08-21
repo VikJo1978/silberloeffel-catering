@@ -375,3 +375,35 @@ def create_kitchen_api_server(
     server = HTTPServer((host, port), make_kitchen_api_handler(api, token))
     server.kitchen_connection = connection  # type: ignore[attr-defined]
     return server, api
+
+
+def main() -> None:
+    import argparse
+    import os
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    parser = argparse.ArgumentParser(description="Kitchen Print Agent HTTP API")
+    parser.add_argument("--db", required=True, help="Path to the Core SQLite database")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8086)
+    args = parser.parse_args()
+
+    token = os.environ.get("KITCHEN_API_TOKEN", "")
+    if not token:
+        raise SystemExit(
+            "KITCHEN_API_TOKEN is required (root-owned EnvironmentFile); "
+            "refusing to start unauthenticated"
+        )
+
+    server, _api = create_kitchen_api_server(
+        args.db,
+        token,
+        args.host,
+        args.port,
+    )
+    print(f"Kitchen API on http://{args.host}:{args.port}/kitchen/v1/")
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()
