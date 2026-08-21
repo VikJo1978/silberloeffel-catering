@@ -106,6 +106,9 @@ class CoreCommandExecutor:
             if _is_busy(exc):
                 raise CoreBusyError from exc
             raise
+        except BaseException:
+            self._rollback()
+            raise
         self._events.flush()
         return result
 
