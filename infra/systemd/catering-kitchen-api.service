@@ -1,0 +1,19 @@
+# Kitchen Print Agent HTTP API (Phase 3B) — loopback-only bearer service.
+# Pair KITCHEN_API_TOKEN with KITCHEN_PRINT_AGENT_TOKEN in agent env.
+
+[Unit]
+Description=Catering Kitchen Print Agent API (loopback, bearer-gated)
+After=network.target
+
+[Service]
+Type=simple
+User=viktor
+WorkingDirectory=/home/viktor/projects/silberloeffel-catering
+Environment=PYTHONPATH=/home/viktor/projects/silberloeffel-catering/src
+EnvironmentFile=/etc/catering/kitchen-api.env
+ExecStart=/home/viktor/projects/silberloeffel-catering/.venv/bin/python3 -m catering_system.ui.kitchen_api --db /home/viktor/catering-runtime/core.db --host 127.0.0.1 --port 8086
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
