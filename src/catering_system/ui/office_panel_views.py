@@ -224,7 +224,7 @@ def _page(
     betrieb: list[str] = []
     if _nav_visible(context, "orders.view"):
         betrieb.append(
-            _nav_link("/auftraege", "Aufträge", "briefcase", "orders", active_section)
+            _nav_link("/orders", "Aufträge", "briefcase", "orders", active_section)
         )
     if _nav_visible(context, "calendar.view"):
         betrieb.append(
