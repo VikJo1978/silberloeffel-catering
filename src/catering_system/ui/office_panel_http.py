@@ -1298,7 +1298,7 @@ def make_office_panel_handler(
                     return
                 context = self._page_context()
                 search_query = parse_qs(parsed.query).get("q", [""])[0]
-                self._html(panel.render_auftraege(search_query, context=context))
+                self._html(panel.render_orders(search_query, context=context))
             elif parts == ["orders"]:
                 if not self._require_business_permission_get(
                     auth, "orders.view", active_section="orders"
