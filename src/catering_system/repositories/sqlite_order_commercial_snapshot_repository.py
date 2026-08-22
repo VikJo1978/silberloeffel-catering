@@ -10,12 +10,6 @@ from decimal import Decimal
 from pathlib import Path
 
 from catering_system.domain.catalog import AllergenCode, validate_allergen_codes
-from catering_system.domain.customer_document_projection import CustomerAddress
-from catering_system.domain.inquiry import validate_fulfillment_mode
-from catering_system.domain.inquiry_customer_snapshot import (
-    customer_address_from_mapping,
-    customer_address_to_mapping,
-)
 from catering_system.domain.offer import (
     POSITION_KINDS,
     POSITION_QUANTITY_MODES,
@@ -110,28 +104,7 @@ def _migration_1_create_tables(connection: sqlite3.Connection) -> None:
     )
 
 
-def _migration_2_add_fulfillment_context(connection: sqlite3.Connection) -> None:
-    columns = {
-        row[1]
-        for row in connection.execute(
-            "PRAGMA table_info(order_commercial_snapshots)"
-        ).fetchall()
-    }
-    for name, declaration in (
-        ("fulfillment_mode", "TEXT NOT NULL DEFAULT 'UNKNOWN'"),
-        ("invoice_address_json", "TEXT"),
-        ("delivery_address_json", "TEXT"),
-    ):
-        if name not in columns:
-            connection.execute(
-                f"ALTER TABLE order_commercial_snapshots ADD COLUMN {name} {declaration}"
-            )
-
-
-_MIGRATIONS = (
-    (1, "create_order_commercial_snapshots", _migration_1_create_tables),
-    (2, "add_fulfillment_context", _migration_2_add_fulfillment_context),
-)
+_MIGRATIONS = ((1, "create_order_commercial_snapshots", _migration_1_create_tables),)
 
 
 def _allergens_storage(value: tuple[str, ...] | None) -> str | None:
@@ -147,26 +120,6 @@ def _optional_allergens(value: str | None) -> tuple[AllergenCode, ...] | None:
     if not isinstance(parsed, list):
         raise ValueError("allergens_json must decode to a list")
     return validate_allergen_codes([str(item) for item in parsed])
-
-
-def _address_storage(value: CustomerAddress | None) -> str | None:
-    if value is None:
-        return None
-    return json.dumps(
-        customer_address_to_mapping(value),
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-
-
-def _optional_address(value: str | None) -> CustomerAddress | None:
-    if value is None:
-        return None
-    parsed = json.loads(value)
-    if not isinstance(parsed, dict):
-        raise ValueError("address JSON must decode to an object")
-    return customer_address_from_mapping(parsed)
 
 
 def _quantity_storage(value: Decimal | None) -> str | None:
@@ -236,9 +189,8 @@ class SQLiteOrderCommercialSnapshotRepository:
                         snapshot_id, order_id, source_offer_id, source_offer_version_id,
                         source_variant_id, acceptance_id, accepted_at, recorded_by,
                         variant_label, variant_description, payment_method,
-                        payment_customer_visible_text, created_at, fulfillment_mode,
-                        invoice_address_json, delivery_address_json
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        payment_customer_visible_text, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         snapshot.snapshot_id,
@@ -254,9 +206,6 @@ class SQLiteOrderCommercialSnapshotRepository:
                         snapshot.payment_method,
                         snapshot.payment_customer_visible_text,
                         snapshot.created_at.isoformat(),
-                        snapshot.fulfillment_mode,
-                        _address_storage(snapshot.invoice_address),
-                        _address_storage(snapshot.delivery_address),
                     ),
                 )
             except sqlite3.IntegrityError as exc:
@@ -317,8 +266,7 @@ class SQLiteOrderCommercialSnapshotRepository:
             SELECT snapshot_id, order_id, source_offer_id, source_offer_version_id,
                    source_variant_id, acceptance_id, accepted_at, recorded_by,
                    variant_label, variant_description, payment_method,
-                   payment_customer_visible_text, created_at, fulfillment_mode,
-                   invoice_address_json, delivery_address_json
+                   payment_customer_visible_text, created_at
             FROM order_commercial_snapshots WHERE snapshot_id = ?
             """,
             (snapshot_id,),
@@ -340,9 +288,6 @@ class SQLiteOrderCommercialSnapshotRepository:
             payment_method=validate_payment_method(row[10]),
             payment_customer_visible_text=row[11],
             created_at=datetime.fromisoformat(row[12]),
-            fulfillment_mode=validate_fulfillment_mode(row[13]),
-            invoice_address=_optional_address(row[14]),
-            delivery_address=_optional_address(row[15]),
             positions=positions,
         )
 
