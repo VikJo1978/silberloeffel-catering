@@ -112,7 +112,9 @@ class KitchenApi:
         self._orders = SQLiteOrderRepository(db_path)
         self._jobs = SQLiteKitchenPrintJobRepository(db_path)
         self._snapshots = SQLiteOrderCommercialSnapshotRepository(db_path)
-        self._confirmation_documents = SQLiteOrderConfirmationDocumentRepository(db_path)
+        self._confirmation_documents = SQLiteOrderConfirmationDocumentRepository(
+            db_path
+        )
         self._print_service = KitchenPrintService(
             self._orders,
             self._jobs,
