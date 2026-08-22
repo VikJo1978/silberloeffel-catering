@@ -34,6 +34,9 @@ from catering_system.repositories.sqlite_kitchen_print_job_repository import (
 from catering_system.repositories.sqlite_order_commercial_snapshot_repository import (
     SQLiteOrderCommercialSnapshotRepository,
 )
+from catering_system.repositories.sqlite_order_confirmation_document_repository import (
+    SQLiteOrderConfirmationDocumentRepository,
+)
 from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepository
 from catering_system.services.kitchen_print_application_service import (
     KitchenPrintApplicationService,
@@ -109,13 +112,18 @@ class KitchenApi:
         self._orders = SQLiteOrderRepository(db_path)
         self._jobs = SQLiteKitchenPrintJobRepository(db_path)
         self._snapshots = SQLiteOrderCommercialSnapshotRepository(db_path)
+        self._confirmation_documents = SQLiteOrderConfirmationDocumentRepository(db_path)
         self._print_service = KitchenPrintService(
             self._orders,
             self._jobs,
             policy=self._policy,
             clock=self._clock,
         )
-        projection_service = OrderPrintProjectionService(self._orders, self._snapshots)
+        projection_service = OrderPrintProjectionService(
+            self._orders,
+            self._snapshots,
+            self._confirmation_documents,
+        )
         self._document_factory = KitchenPrintDocumentFactory(
             projection_service,
             self._document_store,
@@ -134,6 +142,7 @@ class KitchenApi:
     def close(self) -> None:
         self._jobs.close()
         self._snapshots.close()
+        self._confirmation_documents.close()
         self._orders.close()
 
     def execute_claim(self, command_id: str) -> tuple[int, str]:
