@@ -273,7 +273,7 @@ def test_v2_shell_uses_explicit_active_section_and_semantic_landmarks() -> None:
 
     assert '<nav class="office-nav" aria-label="Office Panel">' in body
     assert '<main class="office-workspace">' in body
-    assert '<a class="office-nav-link" href="/auftraege" aria-current="page">' in body
+    assert '<a class="office-nav-link" href="/orders" aria-current="page">' in body
     assert (
         '<a class="office-nav-link" href="/anfragen" aria-current="page">' not in body
     )
@@ -297,7 +297,7 @@ def test_v2_shell_is_local_no_js_and_has_complete_inline_icon_sprite() -> None:
     for target in (
         'href="/"',
         'href="/anfragen"',
-        'href="/auftraege"',
+        'href="/orders"',
         'href="/#diese-woche"',
         'href="/rueckruf"',
     ):
@@ -359,7 +359,7 @@ def test_v2_mobile_navigation_is_visible_without_javascript() -> None:
     (
         ("/", "/"),
         ("/anfragen", "/anfragen"),
-        ("/auftraege", "/auftraege"),
+        ("/orders", "/orders"),
         ("/inquiry/new", "/anfragen"),
         ("/rueckruf", "/rueckruf"),
     ),
@@ -390,8 +390,7 @@ def test_detail_routes_mark_their_parent_navigation(panel: str) -> None:
     order_id = _convert(panel, inquiry_id)
     _status, order_body = _get(f"{panel}/order/{order_id}")
     assert (
-        '<a class="office-nav-link" href="/auftraege" aria-current="page">'
-        in order_body
+        '<a class="office-nav-link" href="/orders" aria-current="page">' in order_body
     )
 
 
@@ -2543,12 +2542,13 @@ def test_diese_woche_shows_only_effective_orders_in_current_iso_week(
     assert other_oid[:8] not in diese_woche_html
 
 
-def test_queue_tables_put_id_last_not_first(panel: str) -> None:
-    """OFFICE_PANEL_NAVIGATION_RETHINK_PACK_V1 §4: ID demoted to a trailing
-    link column so office staff scan Datum/Ort/Status first. Full tables
-    live on /anfragen and /auftraege (§11 addendum), not the Startseite."""
+def test_full_list_tables_use_scan_first_columns_and_trailing_action(
+    panel: str,
+) -> None:
+    """The full inquiry and order lists expose scan-first operational columns."""
     iid = _create_inquiry(panel)
     oid = _convert(panel, iid)
+
     _status, anfragen_body = _get(f"{panel}/anfragen")
     assert (
         "<th>Datum</th><th>Ort</th><th>Betreff</th><th>CRM-Stufe</th>"
@@ -2556,18 +2556,16 @@ def test_queue_tables_put_id_last_not_first(panel: str) -> None:
     ) in anfragen_body
     assert iid[:8] in anfragen_body
 
-    _status, auftraege_body = _get(f"{panel}/auftraege")
+    _status, orders_body = _get(f"{panel}/orders")
     assert (
-        "<th>Freigabe</th><th>Blocker</th><th>Anfrage</th><th>Bestätigt</th><th>ID</th>"
-    ) in auftraege_body
-    assert "noch nicht bestätigt" in auftraege_body
-    assert (
-        f'<a href="/order/{oid}">{oid[:8]}</a></td></tr>' in auftraege_body
-    )  # ID cell is last
+        "<th>Datum</th><th>Uhrzeit</th><th>Kunde</th>"
+        "<th>Gäste</th><th>Nächster Schritt</th><th>Aktion</th>"
+    ) in orders_body
+    assert f'<a href="/order/{oid}">Öffnen</a></td></tr>' in orders_body
 
 
 def test_search_filters_inquiries_and_orders(panel: str) -> None:
-    """Search lives on /anfragen and /auftraege, not the Startseite (§11
+    """Search lives on /anfragen and /orders, not the Startseite (§11
     addendum: the dashboard is an action queue, not a searchable table)."""
     hamburg_iid = _create_inquiry(panel)  # default location "Hamburg"
     luebeck_iid = _create_inquiry(panel, location_text="Lübeck")

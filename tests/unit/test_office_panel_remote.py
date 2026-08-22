@@ -630,10 +630,10 @@ def test_anfragen_search_parity_direct_vs_remote(parity_world) -> None:
         _assert_same_modulo_remote_fields(d_html, r_html)
 
 
-def test_auftraege_parity_direct_vs_remote(parity_world) -> None:
+def test_orders_parity_direct_vs_remote(parity_world) -> None:
     direct_url, remote_url, _ids = parity_world
-    d_status, d_html = _get(f"{direct_url}/auftraege")
-    r_status, r_html = _get(f"{remote_url}/auftraege")
+    d_status, d_html = _get(f"{direct_url}/orders")
+    r_status, r_html = _get(f"{remote_url}/orders")
     assert d_status == r_status == 200
     _assert_same_modulo_remote_fields(d_html, r_html)
 
@@ -1291,9 +1291,12 @@ def test_full_write_flow_through_remote_panel(remote_world) -> None:
     assert status == 200
     assert "Bestätigt / Auftrag" in converted_inquiry_html
 
-    status, order_list_html = _get(f"{base}/auftraege?q={inquiry_id[:8]}")
-    assert status == 200
-    order_id = re.search(r'/order/([0-9a-f-]{36})"', order_list_html).group(1)
+    order_id_match = re.search(
+        r'/order/([0-9a-f-]{36})"',
+        converted_inquiry_html,
+    )
+    assert order_id_match is not None
+    order_id = order_id_match.group(1)
 
     status, order_html = _get(f"{base}/order/{order_id}")
     assert status == 200
@@ -1735,10 +1738,9 @@ def test_idempotent_retry_same_command_id_and_preconditions(remote_world) -> Non
     status2, _ = _post_form(f"{base}/inquiry/{inquiry_id}/convert", lookup_fields)
     assert status1 == status2 == 200  # replay / lookup of existing Order
 
-    _status, orders_html = _get(f"{base}/auftraege?q={inquiry_id[:8]}")
-    # exactly one order row for this inquiry, not two — one header <tr> plus
-    # one data <tr>
-    assert orders_html.count("<tr>") == 2
+    _status, detail_html = _get(f"{base}/inquiry/{inquiry_id}")
+    linked_order_ids = set(re.findall(r'/order/([0-9a-f-]{36})"', detail_html))
+    assert len(linked_order_ids) == 1
 
 
 # --- degradation: unreachable Core Office API --------------------------------
