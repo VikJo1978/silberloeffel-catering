@@ -7,7 +7,10 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal, Protocol
 
-from catering_system.domain.customer_document_projection import CustomerAddress
+from catering_system.domain.customer_document_projection import (
+    CustomerAddress,
+    customer_addresses_equal,
+)
 from catering_system.domain.inquiry import FulfillmentMode
 from catering_system.domain.offer import PositionQuantityMode
 from catering_system.domain.order import Order, OrderVersion
@@ -99,6 +102,7 @@ class PrintCustomerBlock:
     phone: str | None = None
     delivery_address_lines: tuple[str, ...] = ()
     fulfillment_mode: FulfillmentMode = "UNKNOWN"
+    delivery_address_differs: bool = False
 
 
 @dataclass(frozen=True)
@@ -192,6 +196,7 @@ class OrderPrintProjectionService:
             raise PrintFinalRequiresEffectiveError(
                 "final print requires the effective order version"
             )
+        operational_context = self._orders.get_operational_context(order_version_id)
         return OrderPrintProjection(
             event=_event_block(
                 order,
@@ -201,7 +206,8 @@ class OrderPrintProjectionService:
             commercial=commercial,
             flags=flags,
             customer=_customer_block(
-                self._orders.get_operational_context(order_version_id)
+                operational_context,
+                confirmation_snapshot=confirmation_snapshot,
             ),
         )
 
@@ -376,14 +382,39 @@ def _position_line_from_snapshot(
 
 def _customer_block(
     snapshot: OrderVersionOperationalContextSnapshot | None,
+    *,
+    confirmation_snapshot: OrderConfirmationDocumentSnapshot | None = None,
 ) -> PrintCustomerBlock:
     if snapshot is None:
-        return PrintCustomerBlock()
+        return PrintCustomerBlock(
+            fulfillment_mode=(
+                confirmation_snapshot.fulfillment_mode
+                if confirmation_snapshot is not None
+                and confirmation_snapshot.fulfillment_mode is not None
+                else "UNKNOWN"
+            )
+        )
+    delivery_address_differs = (
+        confirmation_snapshot is not None
+        and confirmation_snapshot.invoice_address is not None
+        and snapshot.delivery_address is not None
+        and not customer_addresses_equal(
+            confirmation_snapshot.invoice_address,
+            snapshot.delivery_address,
+        )
+    )
     return PrintCustomerBlock(
         company_name=(snapshot.recipient_company or "").strip() or None,
         contact_name=(snapshot.recipient_name or "").strip() or None,
         phone=(snapshot.recipient_phone or "").strip() or None,
         delivery_address_lines=_address_lines(snapshot.delivery_address),
+        fulfillment_mode=(
+            confirmation_snapshot.fulfillment_mode
+            if confirmation_snapshot is not None
+            and confirmation_snapshot.fulfillment_mode is not None
+            else "UNKNOWN"
+        ),
+        delivery_address_differs=delivery_address_differs,
     )
 
 
