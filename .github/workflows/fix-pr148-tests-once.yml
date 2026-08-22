@@ -4,12 +4,16 @@ on:
   push:
     branches:
       - fix/pr148-office-panel-tests
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
 
 jobs:
   patch-tests:
+    if: github.event_name == 'push' || github.event.pull_request.head.ref == 'fix/pr148-office-panel-tests'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -106,10 +110,7 @@ jobs:
           remote = remote_path.read_text()
           old = '    status, order_list_html = _get(f"{base}/auftraege?q={inquiry_id[:8]}")'
           assert remote.count(old) == 1, remote.count(old)
-          remote = remote.replace(
-              old,
-              '    status, order_list_html = _get(f"{base}/orders")',
-          )
+          remote = remote.replace(old, '    status, order_list_html = _get(f"{base}/orders")')
           remote_path.write_text(remote)
           PY
 
