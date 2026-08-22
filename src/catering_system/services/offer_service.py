@@ -537,7 +537,14 @@ class OfferService:
         inquiry = self._inquiry_repository.get_by_id(offer.source_inquiry_id)
         if inquiry is None:
             raise KeyError(offer.source_inquiry_id)
-        if not inquiry_allows_order_conversion(inquiry):
+        # Preserve the pre-existing Inquiry progression gate for both NEW
+        # conversion and replay. Delivery resolution is intentionally excluded
+        # here because legacy/incomplete Orders must remain replayable and keep
+        # their existing repair path.
+        if inquiry.crm_stage == "Abgelehnt / verloren" or (
+            inquiry.call_verification_required
+            and inquiry.call_verification_status != "verified"
+        ):
             raise ValueError(
                 "inquiry conversion blocked "
                 f"(inquiry_id={inquiry.inquiry_id!r}, "
@@ -566,6 +573,17 @@ class OfferService:
         if self._has_linked_order(offer.source_inquiry_id):
             raise ValueError(
                 f"active order blocks conversion (inquiry_id={offer.source_inquiry_id!r})"
+            )
+
+        # Defensive fulfillment/address gate for NEW conversions only. The
+        # generic Inquiry helper also includes the pre-existing progression
+        # checks above, so reaching False here means explicit DELIVERY data is
+        # unresolved.
+        if not inquiry_allows_order_conversion(inquiry):
+            raise ValueError(
+                "inquiry delivery context unresolved "
+                f"(inquiry_id={inquiry.inquiry_id!r}, "
+                f"fulfillment_mode={inquiry.fulfillment_mode!r})"
             )
 
         # Contact-completeness gate for NEW conversions only — placed after the

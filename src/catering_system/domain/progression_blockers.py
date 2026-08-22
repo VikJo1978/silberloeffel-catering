@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from catering_system.domain.inquiry import Inquiry, inquiry_allows_order_conversion
+from catering_system.domain.inquiry import (
+    Inquiry,
+    inquiry_delivery_context_resolved,
+)
 from catering_system.domain.inquiry_contact_completeness import (
     derive_inquiry_contact_completeness,
 )
@@ -12,6 +15,7 @@ from catering_system.domain.inquiry_contact_completeness import (
 # Narrow reason codes for office/Core evaluation only; not production-floor or release semantics.
 REASON_INQUIRY_CALL_VERIFICATION_UNSATISFIED = "inquiry_call_verification_unsatisfied"
 REASON_INQUIRY_REJECTED = "inquiry_rejected"
+REASON_INQUIRY_DELIVERY_CONTEXT_UNRESOLVED = "inquiry_delivery_context_unresolved"
 REASON_INQUIRY_CONTACT_MISSING_EMAIL = "inquiry_contact_missing_email"
 REASON_INQUIRY_CONTACT_MISSING_PHONE = "inquiry_contact_missing_phone"
 REASON_INQUIRY_CONTACT_MISSING_EMAIL_AND_PHONE = (
@@ -37,13 +41,24 @@ class ProgressionEvaluation:
 
 
 def evaluate_inquiry_to_order_progression(inquiry: Inquiry) -> ProgressionEvaluation:
-    """Derive the inquiry → order blockers from the same facts as the Core gates."""
+    """Derive the inquiry → order blockers from the same facts as the Core gates.
+
+    Keep the delivery-context reason distinct from call verification. Offer
+    preparation intentionally filters only the pre-offer blockers, so an
+    unresolved delivery address can still be resolved in the configurator
+    before a customer-facing offer is finalized.
+    """
     reasons: list[str] = []
-    if not inquiry_allows_order_conversion(inquiry):
-        if inquiry.crm_stage == "Abgelehnt / verloren":
-            reasons.append(REASON_INQUIRY_REJECTED)
-        else:
-            reasons.append(REASON_INQUIRY_CALL_VERIFICATION_UNSATISFIED)
+    if inquiry.crm_stage == "Abgelehnt / verloren":
+        reasons.append(REASON_INQUIRY_REJECTED)
+    elif (
+        inquiry.call_verification_required
+        and inquiry.call_verification_status != "verified"
+    ):
+        reasons.append(REASON_INQUIRY_CALL_VERIFICATION_UNSATISFIED)
+    elif not inquiry_delivery_context_resolved(inquiry):
+        reasons.append(REASON_INQUIRY_DELIVERY_CONTEXT_UNRESOLVED)
+
     completeness = derive_inquiry_contact_completeness(inquiry)
     if completeness != "complete":
         reasons.append(_CONTACT_REASONS[completeness])

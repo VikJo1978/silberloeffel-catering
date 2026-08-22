@@ -226,9 +226,41 @@ def inquiry_allows_convert_accepted_command(state: InquiryOfficeState) -> bool:
     )
 
 
+def _address_is_complete(address: object | None) -> bool:
+    """Structural address check kept local to avoid a circular document import."""
+    if address is None:
+        return False
+    return all(
+        (getattr(address, field, None) or "").strip()
+        for field in ("street", "postal_code", "city", "country")
+    )
+
+
+def inquiry_delivery_context_resolved(inquiry: Inquiry) -> bool:
+    """Defensive conversion gate for DELIVERY inquiries.
+
+    UNKNOWN remains legacy-compatible here; the normal Office flow resolves it
+    before customer-facing offer finalization. Once a row explicitly says
+    DELIVERY, however, conversion must never create an Order without a complete
+    effective delivery address.
+    """
+    if inquiry.fulfillment_mode != "DELIVERY":
+        return True
+    snapshot = inquiry.customer_snapshot
+    if snapshot is None:
+        return False
+    if snapshot.delivery_address_mode == "SAME_AS_INVOICE":
+        return _address_is_complete(snapshot.invoice_address)
+    if snapshot.delivery_address_mode == "SEPARATE":
+        return _address_is_complete(snapshot.delivery_address)
+    return False
+
+
 def inquiry_allows_order_conversion(inquiry: Inquiry) -> bool:
-    """Core gate: rejected inquiries cannot convert; required calls need verification."""
+    """Core gate: verification plus a resolved explicit DELIVERY context."""
     if inquiry.crm_stage == "Abgelehnt / verloren":
+        return False
+    if not inquiry_delivery_context_resolved(inquiry):
         return False
     if not inquiry.call_verification_required:
         return True
@@ -330,11 +362,9 @@ def derive_inquiry_office_state(
     if offer_projection is not None:
         commercial = offer_projection.commercial_state
         if commercial == "Accepted":
-            # Contact-completeness gate (INQUIRY_CONTACT_COMPLETENESS_V1 §8):
-            # an accepted offer must not be convertible while e-mail/phone are
-            # missing. Converted offers below stay untouched — an existing
-            # conversion link is never blocked retroactively.
-            if not contact_complete:
+            # Contact-completeness and explicit DELIVERY-context gates apply to
+            # a NEW conversion. Existing conversion links below remain replayable.
+            if not contact_complete or not inquiry_delivery_context_resolved(inquiry):
                 return state(is_open=is_open, next_action=None)
             return state(is_open=is_open, next_action="convert-accepted")
         if commercial == "Converted":
