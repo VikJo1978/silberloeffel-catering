@@ -90,7 +90,9 @@ def _projection(customer: PrintCustomerBlock) -> OrderPrintProjection:
 
 def _pdf_text(projection: OrderPrintProjection) -> str:
     body = render_kitchen_print_pdf(projection, created_at=_NOW)
-    return "\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(body)).pages)
+    return "\n".join(
+        page.extract_text() or "" for page in PdfReader(io.BytesIO(body)).pages
+    )
 
 
 def test_print_customer_derives_difference_from_structured_addresses() -> None:
