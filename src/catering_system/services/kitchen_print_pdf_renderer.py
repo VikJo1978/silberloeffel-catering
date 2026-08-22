@@ -22,6 +22,7 @@ from reportlab.platypus import (
 from catering_system.services.order_print_projection_service import OrderPrintProjection
 
 _TITLE = "Küchenzettel"
+_DELIVERY_ADDRESS_WARNING = "⚠ Lieferadresse weicht von Rechnungsadresse ab"
 _PAGE_SIZE = A4
 _LEFT_MARGIN = 18 * mm
 _RIGHT_MARGIN = 18 * mm
@@ -246,9 +247,18 @@ def _customer_story(
 ) -> list[Flowable]:
     customer = projection.customer
     address = "\n".join(customer.delivery_address_lines) or "-"
-    return [
+    story: list[Flowable] = [
         Spacer(1, 5 * mm),
         _p("KUNDE / LIEFERUNG", styles.h2),
+    ]
+    if customer.delivery_address_differs:
+        story.extend(
+            [
+                _p(_DELIVERY_ADDRESS_WARNING, styles.body_bold),
+                Spacer(1, 2 * mm),
+            ]
+        )
+    story.append(
         Table(
             [
                 [
@@ -275,8 +285,9 @@ def _customer_story(
                     ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
                 ]
             ),
-        ),
-    ]
+        )
+    )
+    return story
 
 
 def _planning_mode_label(value: str) -> str:
