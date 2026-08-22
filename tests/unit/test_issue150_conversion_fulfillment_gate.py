@@ -18,7 +18,9 @@ _COMPLETE = CustomerAddress(
 )
 
 
-def _inquiry(*, fulfillment_mode: str, snapshot: InquiryCustomerSnapshot | None) -> Inquiry:
+def _inquiry(
+    *, fulfillment_mode: str, snapshot: InquiryCustomerSnapshot | None
+) -> Inquiry:
     return Inquiry(
         inquiry_id="11111111-1111-4111-8111-111111111111",
         event_date=date(2026, 9, 1),
