@@ -103,9 +103,16 @@ def test_unknown_stays_legacy_compatible_at_defensive_conversion_gate() -> None:
 
 
 def test_new_accepted_offer_conversion_rejects_unresolved_delivery() -> None:
-    offer, version_id, variant_id, acceptance_id, _offers, orders, inquiries, service = (
-        _accepted_offer_state()
-    )
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        _offers,
+        orders,
+        inquiries,
+        service,
+    ) = _accepted_offer_state()
     _set_unresolved_delivery(inquiries, offer.source_inquiry_id)
 
     with pytest.raises(ValueError, match="delivery context unresolved"):
@@ -120,9 +127,16 @@ def test_new_accepted_offer_conversion_rejects_unresolved_delivery() -> None:
 
 
 def test_existing_conversion_replay_ignores_later_unresolved_delivery() -> None:
-    offer, version_id, variant_id, acceptance_id, _offers, orders, inquiries, service = (
-        _accepted_offer_state()
-    )
+    (
+        offer,
+        version_id,
+        variant_id,
+        acceptance_id,
+        _offers,
+        orders,
+        inquiries,
+        service,
+    ) = _accepted_offer_state()
     first = service.convert_accepted_offer(
         offer.offer_id,
         version_id,
