@@ -12,6 +12,8 @@ from datetime import datetime
 from decimal import Decimal
 
 from catering_system.domain.catalog import AllergenCode, validate_allergen_codes
+from catering_system.domain.customer_document_projection import CustomerAddress
+from catering_system.domain.inquiry import FulfillmentMode, validate_fulfillment_mode
 from catering_system.domain.offer import (
     POSITION_KINDS,
     POSITION_QUANTITY_MODES,
@@ -73,6 +75,20 @@ def _validate_optional_quantity(value: Decimal | None) -> None:
     exponent = value.as_tuple().exponent
     if isinstance(exponent, int) and exponent < -3:
         raise ValueError("quantity exceeds fractional precision")
+
+
+def _address_complete(address: CustomerAddress | None) -> bool:
+    if address is None:
+        return False
+    return all(
+        (value or "").strip()
+        for value in (
+            address.street,
+            address.postal_code,
+            address.city,
+            address.country,
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -152,6 +168,9 @@ class OrderCommercialSnapshot:
     created_at: datetime
     positions: tuple[OrderCommercialPosition, ...]
     variant_description: str | None = None
+    fulfillment_mode: FulfillmentMode = "UNKNOWN"
+    invoice_address: CustomerAddress | None = None
+    delivery_address: CustomerAddress | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.snapshot_id, "snapshot_id")
@@ -164,6 +183,7 @@ class OrderCommercialSnapshot:
         _require_text(self.recorded_by, "recorded_by")
         _require_text(self.variant_label, "variant_label")
         validate_payment_method(self.payment_method)
+        validate_fulfillment_mode(self.fulfillment_mode)
         _require_text(
             self.payment_customer_visible_text, "payment_customer_visible_text"
         )
@@ -173,6 +193,12 @@ class OrderCommercialSnapshot:
         _optional_bounded_text(
             self.variant_description, "variant_description", max_len=_MAX_TEXT
         )
+        if self.fulfillment_mode == "PICKUP" and self.delivery_address is not None:
+            raise ValueError("PICKUP commercial snapshot must not store delivery address")
+        if self.fulfillment_mode == "DELIVERY" and not _address_complete(
+            self.delivery_address
+        ):
+            raise ValueError("DELIVERY commercial snapshot requires delivery address")
         if not self.positions:
             raise ValueError(
                 "an OrderCommercialSnapshot requires at least one position"
@@ -222,6 +248,9 @@ def build_order_commercial_snapshot(
     acceptance: AcceptanceEvidence,
     created_at: datetime,
     snapshot_id: str | None = None,
+    fulfillment_mode: FulfillmentMode = "UNKNOWN",
+    invoice_address: CustomerAddress | None = None,
+    delivery_address: CustomerAddress | None = None,
 ) -> OrderCommercialSnapshot:
     """Pure factory: Accepted commercial facts → OrderCommercialSnapshot."""
     if offer.offer_id != acceptance.offer_id:
@@ -249,4 +278,7 @@ def build_order_commercial_snapshot(
         payment_customer_visible_text=offer_version.payment_customer_visible_text,
         created_at=created_at,
         positions=tuple(map_offer_position(item) for item in variant.positions),
+        fulfillment_mode=fulfillment_mode,
+        invoice_address=invoice_address,
+        delivery_address=delivery_address,
     )
