@@ -16,6 +16,7 @@ from datetime import UTC, date, datetime
 
 from catering_system.domain.customer_document_projection import CustomerAddress
 from catering_system.domain.inquiry import (
+    FulfillmentMode,
     Inquiry,
     validate_planning_mode,
 )
@@ -384,6 +385,7 @@ class OrderService:
             version=version,
             data=operational_context,
             created_at=now,
+            fulfillment_mode=parent_context.fulfillment_mode,
         )
         previous_candidate_id = current.candidate_order_version_id
         updated = replace(
@@ -509,6 +511,7 @@ def _initial_operational_context(
         delivery_address=delivery_address,
         created_at=created_at,
         source="initial_inquiry_snapshot",
+        fulfillment_mode=inquiry.fulfillment_mode,
     )
 
 
@@ -539,21 +542,34 @@ def _operational_context_for_new_version(
     data: OrderOperationalContextData | None,
     created_at: datetime,
 ) -> OrderVersionOperationalContextSnapshot | None:
+    parent_id = version.parent_order_version_id
+    parent_context = (
+        order_repository.get_operational_context(parent_id)
+        if parent_id is not None
+        else None
+    )
     if data is not None:
         return _explicit_operational_context(
             order=order,
             version=version,
             data=data,
             created_at=created_at,
+            fulfillment_mode=(
+                parent_context.fulfillment_mode
+                if parent_context is not None
+                else "UNKNOWN"
+            ),
         )
-    parent_id = version.parent_order_version_id
     if parent_id is None:
         return None
-    return _inherited_operational_context(
-        order_repository,
-        parent_id,
-        version,
+    if parent_context is None:
+        return None
+    return copy_operational_context_for_version(
+        parent_context,
+        order_version_id=version.order_version_id,
+        order_id=version.order_id,
         created_at=created_at,
+        source="inherited_parent",
     )
 
 
@@ -563,6 +579,7 @@ def _explicit_operational_context(
     version: OrderVersion,
     data: OrderOperationalContextData,
     created_at: datetime,
+    fulfillment_mode: FulfillmentMode = "UNKNOWN",
 ) -> OrderVersionOperationalContextSnapshot:
     return OrderVersionOperationalContextSnapshot(
         order_version_id=version.order_version_id,
@@ -573,4 +590,5 @@ def _explicit_operational_context(
         delivery_address=data.delivery_address,
         created_at=created_at,
         source="explicit_change",
+        fulfillment_mode=fulfillment_mode,
     )
