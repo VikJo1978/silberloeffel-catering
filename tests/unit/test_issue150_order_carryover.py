@@ -89,6 +89,7 @@ def test_delivery_same_as_invoice_reuses_invoice_address_in_order() -> None:
         delivery_address_mode="SAME_AS_INVOICE",
     )
 
+    assert context.fulfillment_mode == "DELIVERY"
     assert context.delivery_address == _INVOICE
 
 
@@ -99,6 +100,7 @@ def test_delivery_separate_carries_actual_delivery_address_into_order() -> None:
         delivery_address=_DELIVERY,
     )
 
+    assert context.fulfillment_mode == "DELIVERY"
     assert context.delivery_address == _DELIVERY
 
 
@@ -109,4 +111,5 @@ def test_pickup_carries_no_delivery_address_even_if_one_is_stored() -> None:
         delivery_address=_DELIVERY,
     )
 
+    assert context.fulfillment_mode == "PICKUP"
     assert context.delivery_address is None
