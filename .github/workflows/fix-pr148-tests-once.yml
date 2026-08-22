@@ -1,0 +1,123 @@
+name: Fix PR148 stale tests once
+
+on:
+  push:
+    branches:
+      - fix/pr148-office-panel-tests
+
+permissions:
+  contents: write
+
+jobs:
+  patch-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/pr148-office-panel-tests
+
+      - name: Update stale Office Panel route expectations
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          panel_path = Path("tests/unit/test_office_panel.py")
+          text = panel_path.read_text()
+
+          old = 'assert \'<a class="office-nav-link" href="/auftraege" aria-current="page">\' in body'
+          assert text.count(old) == 1, text.count(old)
+          text = text.replace(
+              old,
+              'assert \'<a class="office-nav-link" href="/orders" aria-current="page">\' in body',
+          )
+
+          old = "        'href=\"/auftraege\"',"
+          assert text.count(old) == 1, text.count(old)
+          text = text.replace(old, "        'href=\"/orders\"',")
+
+          old = '        ("/auftraege", "/auftraege"),'
+          assert text.count(old) == 1, text.count(old)
+          text = text.replace(old, '        ("/auftraege", "/orders"),')
+
+          old = '''    assert (
+        '<a class="office-nav-link" href="/auftraege" aria-current="page">'
+        in order_body
+    )'''
+          assert text.count(old) == 1, text.count(old)
+          text = text.replace(
+              old,
+              '''    assert (
+        '<a class="office-nav-link" href="/orders" aria-current="page">'
+        in order_body
+    )''',
+          )
+
+          old = '''def test_queue_tables_put_id_last_not_first(panel: str) -> None:
+    """OFFICE_PANEL_NAVIGATION_RETHINK_PACK_V1 §4: ID demoted to a trailing
+    link column so office staff scan Datum/Ort/Status first. Full tables
+    live on /anfragen and /auftraege (§11 addendum), not the Startseite."""
+    iid = _create_inquiry(panel)
+    oid = _convert(panel, iid)
+    _status, anfragen_body = _get(f"{panel}/anfragen")
+    assert (
+        "<th>Datum</th><th>Ort</th><th>Betreff</th><th>CRM-Stufe</th>"
+        "<th>Verifizierung</th><th>Auftrag</th><th>ID</th>"
+    ) in anfragen_body
+    assert iid[:8] in anfragen_body
+
+    _status, auftraege_body = _get(f"{panel}/auftraege")
+    assert (
+        "<th>Freigabe</th><th>Blocker</th><th>Anfrage</th><th>Bestätigt</th><th>ID</th>"
+    ) in auftraege_body
+    assert "noch nicht bestätigt" in auftraege_body
+    assert (
+        f'<a href="/order/{oid}">{oid[:8]}</a></td></tr>' in auftraege_body
+    )  # ID cell is last
+'''
+          new = '''def test_inquiry_queue_keeps_id_trailing_and_orders_list_is_human_readable(
+    panel: str,
+) -> None:
+    """Inquiry list keeps its trailing technical ID while the canonical
+    orders list shows operational facts and an Öffnen action instead of a
+    UUID-oriented table."""
+    iid = _create_inquiry(panel)
+    oid = _convert(panel, iid)
+    _status, anfragen_body = _get(f"{panel}/anfragen")
+    assert (
+        "<th>Datum</th><th>Ort</th><th>Betreff</th><th>CRM-Stufe</th>"
+        "<th>Verifizierung</th><th>Auftrag</th><th>ID</th>"
+    ) in anfragen_body
+    assert iid[:8] in anfragen_body
+
+    _status, orders_body = _get(f"{panel}/orders")
+    assert (
+        "<th>Datum</th><th>Uhrzeit</th><th>Kunde</th>"
+        "<th>Gäste</th><th>Nächster Schritt</th><th>Aktion</th>"
+    ) in orders_body
+    assert f'<a href="/order/{oid}">Öffnen</a>' in orders_body
+    visible_orders = html.unescape(re.sub(r"<[^>]+>", " ", orders_body))
+    assert oid[:8] not in visible_orders
+'''
+          assert text.count(old) == 1, text.count(old)
+          text = text.replace(old, new)
+          panel_path.write_text(text)
+
+          remote_path = Path("tests/unit/test_office_panel_remote.py")
+          remote = remote_path.read_text()
+          old = '    status, order_list_html = _get(f"{base}/auftraege?q={inquiry_id[:8]}")'
+          assert remote.count(old) == 1, remote.count(old)
+          remote = remote.replace(
+              old,
+              '    status, order_list_html = _get(f"{base}/orders")',
+          )
+          remote_path.write_text(remote)
+          PY
+
+      - name: Remove one-shot workflow and commit repairs
+        run: |
+          git rm .github/workflows/fix-pr148-tests-once.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/unit/test_office_panel.py tests/unit/test_office_panel_remote.py
+          git commit -m "Update Office Panel tests for canonical orders route"
+          git push origin HEAD:fix/pr148-office-panel-tests
