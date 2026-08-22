@@ -14,7 +14,10 @@ from datetime import date, datetime
 from pathlib import Path
 
 from catering_system.domain.customer_document_projection import CustomerAddress
-from catering_system.domain.inquiry import validate_planning_mode
+from catering_system.domain.inquiry import (
+    validate_fulfillment_mode,
+    validate_planning_mode,
+)
 from catering_system.domain.inquiry_customer_snapshot import (
     customer_address_from_mapping,
     customer_address_to_mapping,
@@ -136,6 +139,7 @@ def _create_operational_context_table(connection: sqlite3.Connection) -> None:
             delivery_address_json TEXT,
             created_at TEXT NOT NULL,
             source TEXT NOT NULL,
+            fulfillment_mode TEXT NOT NULL DEFAULT 'UNKNOWN',
             CHECK (
                 source IN (
                     'initial_inquiry_snapshot',
@@ -144,6 +148,7 @@ def _create_operational_context_table(connection: sqlite3.Connection) -> None:
                     'confirmation_snapshot_backfill'
                 )
             ),
+            CHECK (fulfillment_mode IN ('UNKNOWN', 'DELIVERY', 'PICKUP')),
             FOREIGN KEY (order_version_id) REFERENCES order_versions(order_version_id),
             FOREIGN KEY (order_id) REFERENCES orders(order_id)
         );
@@ -193,6 +198,12 @@ def _backfill_operational_context_from_confirmations(
     for (raw,) in rows:
         payload = json.loads(raw)
         delivery_address = payload.get("delivery_address")
+        try:
+            fulfillment_mode = validate_fulfillment_mode(
+                str(payload.get("fulfillment_mode", "UNKNOWN"))
+            )
+        except ValueError:
+            fulfillment_mode = "UNKNOWN"
         connection.execute(
             """
             INSERT OR IGNORE INTO order_version_operational_context_snapshots (
@@ -203,8 +214,9 @@ def _backfill_operational_context_from_confirmations(
                 recipient_phone,
                 delivery_address_json,
                 created_at,
-                source
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                source,
+                fulfillment_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(payload["order_version_id"]),
@@ -219,6 +231,7 @@ def _backfill_operational_context_from_confirmations(
                 ),
                 str(payload["created_at"]),
                 "confirmation_snapshot_backfill",
+                fulfillment_mode,
             ),
         )
 
@@ -364,6 +377,23 @@ def _migration_8_operational_context_snapshots(connection: sqlite3.Connection) -
     _backfill_operational_context_from_confirmations(connection)
 
 
+def _migration_9_operational_context_fulfillment_mode(
+    connection: sqlite3.Connection,
+) -> None:
+    columns = {
+        row[1]
+        for row in connection.execute(
+            "PRAGMA table_info(order_version_operational_context_snapshots)"
+        ).fetchall()
+    }
+    if "fulfillment_mode" not in columns:
+        connection.execute(
+            "ALTER TABLE order_version_operational_context_snapshots "
+            "ADD COLUMN fulfillment_mode TEXT NOT NULL DEFAULT 'UNKNOWN' "
+            "CHECK (fulfillment_mode IN ('UNKNOWN', 'DELIVERY', 'PICKUP'))"
+        )
+
+
 _MIGRATIONS = (
     (1, "create_order_tables", _migration_1_create_tables),
     (2, "add_cancelled_at", _migration_2_add_cancelled_at),
@@ -380,6 +410,11 @@ _MIGRATIONS = (
         8,
         "operational_context_snapshots",
         _migration_8_operational_context_snapshots,
+    ),
+    (
+        9,
+        "operational_context_fulfillment_mode",
+        _migration_9_operational_context_fulfillment_mode,
     ),
 )
 
@@ -593,8 +628,9 @@ class SQLiteOrderRepository:
                 recipient_phone,
                 delivery_address_json,
                 created_at,
-                source
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                source,
+                fulfillment_mode
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 context.order_version_id,
@@ -605,6 +641,7 @@ class SQLiteOrderRepository:
                 _address_json(context.delivery_address),
                 context.created_at.isoformat(),
                 context.source,
+                context.fulfillment_mode,
             ),
         )
 
@@ -663,7 +700,8 @@ class SQLiteOrderRepository:
         row = self._conn.execute(
             """
             SELECT order_version_id, order_id, recipient_company, recipient_name,
-                   recipient_phone, delivery_address_json, created_at, source
+                   recipient_phone, delivery_address_json, created_at, source,
+                   fulfillment_mode
             FROM order_version_operational_context_snapshots
             WHERE order_version_id = ?
             """,
@@ -683,6 +721,7 @@ class SQLiteOrderRepository:
             delivery_address=_address_from_json(row[5]),
             created_at=_dt(row[6]),
             source=source,
+            fulfillment_mode=validate_fulfillment_mode(row[8]),
         )
 
     @staticmethod
