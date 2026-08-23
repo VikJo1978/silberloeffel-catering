@@ -35,7 +35,12 @@ def _order(
     )
 
 
-def _version(version_id: str, order_id: str, event_date: date, number: int = 1) -> OrderVersion:
+def _version(
+    version_id: str,
+    order_id: str,
+    event_date: date,
+    number: int = 1,
+) -> OrderVersion:
     return OrderVersion(
         order_version_id=version_id,
         order_id=order_id,
