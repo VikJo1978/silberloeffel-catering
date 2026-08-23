@@ -1,0 +1,172 @@
+name: Fix PR160 stale fulfillment tests once
+
+on:
+  push:
+    branches:
+      - feat/issue-150-freeze-fulfillment-mode
+
+permissions:
+  contents: write
+
+jobs:
+  patch-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/issue-150-freeze-fulfillment-mode
+
+      - name: Align tests with frozen order fulfillment
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          helper_path = Path("tests/unit/test_order_confirmation_document.py")
+          text = helper_path.read_text()
+          old = "def _services() -> tuple["
+          new = '''def _services(
+              *,
+              fulfillment_mode: str = "PICKUP",
+              invoice_address: CustomerAddress | None = None,
+              delivery_address: CustomerAddress | None = None,
+              delivery_address_mode: str | None = None,
+          ) -> tuple['''
+          assert text.count(old) == 1, text.count(old)
+          text = text.replace(old, new, 1)
+
+          old = '''    inquiry = inquiries.get_by_id(_INQUIRY_ID)
+              assert inquiry is not None
+              inquiries.update(
+                  replace(
+                      inquiry,
+                      intake_message="Firma: Example GmbH\\nE-Mail: customer@example.invalid\\n",
+                      # FULFILLMENT_SOURCE_V1: PICKUP is this fixture's neutral default
+                      # — no address setup here, and PICKUP never requires one. Tests
+                      # that specifically need DELIVERY set fulfillment_mode themselves.
+                      fulfillment_mode="PICKUP",
+                  )
+              )'''.replace("              ", "")
+          new = '''    inquiry = inquiries.get_by_id(_INQUIRY_ID)
+              assert inquiry is not None
+              customer_snapshot = inquiry.customer_snapshot
+              if delivery_address_mode is not None:
+                  assert customer_snapshot is not None
+                  customer_snapshot = replace(
+                      customer_snapshot,
+                      invoice_address=invoice_address,
+                      delivery_address=delivery_address,
+                      delivery_address_mode=delivery_address_mode,
+                  )
+              inquiries.update(
+                  replace(
+                      inquiry,
+                      intake_message="Firma: Example GmbH\\nE-Mail: customer@example.invalid\\n",
+                      fulfillment_mode=fulfillment_mode,
+                      customer_snapshot=customer_snapshot,
+                  )
+              )'''.replace("              ", "")
+          assert text.count(old) == 1, text.count(old)
+          text = text.replace(old, new, 1)
+
+          marker = "def test_address_warning_flows_into_confirmation_document() -> None:\n"
+          start = text.index(marker) + len(marker)
+          call = "    services = _services()\n"
+          idx = text.index(call, start)
+          replacement = '''    services = _services(
+              fulfillment_mode="DELIVERY",
+              invoice_address=CustomerAddress(
+                  street="Bürostraße 1",
+                  postal_code="20095",
+                  city="Hamburg",
+                  country="DE",
+              ),
+              delivery_address=CustomerAddress(
+                  street="Eventplatz 9",
+                  postal_code="20457",
+                  city="Hamburg",
+                  country="DE",
+              ),
+              delivery_address_mode="SEPARATE",
+          )
+          '''.replace("          ", "")
+          text = text[:idx] + replacement + text[idx + len(call):]
+          helper_path.write_text(text)
+
+          address_path = Path("tests/unit/test_confirmation_address_snapshot_v1.py")
+          address = address_path.read_text()
+          cases = {
+              "test_a_same_as_invoice_persists_effective_delivery": '''_services(
+                  fulfillment_mode="DELIVERY",
+                  invoice_address=_INVOICE,
+                  delivery_address=None,
+                  delivery_address_mode="SAME_AS_INVOICE",
+              )''',
+              "test_b_separate_persists_differs_warning": '''_services(
+                  fulfillment_mode="DELIVERY",
+                  invoice_address=_INVOICE,
+                  delivery_address=_DELIVERY,
+                  delivery_address_mode="SEPARATE",
+              )''',
+              "test_c_persisted_addresses_immutable_after_inquiry_change": '''_services(
+                  fulfillment_mode="DELIVERY",
+                  invoice_address=_INVOICE,
+                  delivery_address=None,
+                  delivery_address_mode="SAME_AS_INVOICE",
+              )''',
+              "test_g_api_preview_shape_exposes_address_contract_keys": '''_services(
+                  fulfillment_mode="DELIVERY",
+                  invoice_address=_INVOICE,
+                  delivery_address=_DELIVERY,
+                  delivery_address_mode="SEPARATE",
+              )''',
+              "test_same_as_invoice_html_may_show_differs_nein": '''_services(
+                  fulfillment_mode="DELIVERY",
+                  invoice_address=_INVOICE,
+                  delivery_address=None,
+                  delivery_address_mode="SAME_AS_INVOICE",
+              )''',
+          }
+          for name, replacement in cases.items():
+              pattern = rf"(def {name}\(\) -> None:\n\s+[^\n]*= )_services\(\)"
+              address, count = re.subn(pattern, rf"\1{replacement}", address, count=1)
+              assert count == 1, (name, count)
+          address_path.write_text(address)
+
+          effective_path = Path("tests/unit/test_confirmation_effective_delivery_context.py")
+          effective = effective_path.read_text()
+          replacement = '''_services(
+              fulfillment_mode="DELIVERY",
+              invoice_address=_INVOICE,
+              delivery_address=_OLD_DELIVERY,
+              delivery_address_mode="SEPARATE",
+          )'''
+          effective, count = re.subn(
+              r"services = _services\(\)",
+              "services = " + replacement,
+              effective,
+          )
+          assert count == 2, count
+          effective_path.write_text(effective)
+
+          sqlite_path = Path("tests/unit/test_sqlite_repositories.py")
+          sqlite = sqlite_path.read_text()
+          old = '        ("orders", 8),  # frozen operational context per order version\n'
+          new = old + '        ("orders", 9),  # frozen fulfillment mode in operational context\n'
+          assert sqlite.count(old) == 1, sqlite.count(old)
+          sqlite = sqlite.replace(old, new, 1)
+          sqlite_path.write_text(sqlite)
+          PY
+
+      - name: Format targeted tests
+        run: |
+          uv run ruff format tests/unit/test_order_confirmation_document.py tests/unit/test_confirmation_address_snapshot_v1.py tests/unit/test_confirmation_effective_delivery_context.py tests/unit/test_sqlite_repositories.py
+
+      - name: Remove one-shot workflow and commit repairs
+        run: |
+          git rm .github/workflows/fix-pr160-tests-once.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/unit/test_order_confirmation_document.py tests/unit/test_confirmation_address_snapshot_v1.py tests/unit/test_confirmation_effective_delivery_context.py tests/unit/test_sqlite_repositories.py
+          git commit -m "Align fulfillment tests with frozen order context"
+          git push origin HEAD:feat/issue-150-freeze-fulfillment-mode

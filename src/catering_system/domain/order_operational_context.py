@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Literal
 
 from catering_system.domain.customer_document_projection import CustomerAddress
+from catering_system.domain.inquiry import FulfillmentMode, validate_fulfillment_mode
 
 OrderOperationalContextSource = Literal[
     "initial_inquiry_snapshot",
@@ -41,10 +42,16 @@ class OrderVersionOperationalContextSnapshot:
     delivery_address: CustomerAddress | None
     created_at: datetime
     source: OrderOperationalContextSource
+    fulfillment_mode: FulfillmentMode = "UNKNOWN"
 
     def __post_init__(self) -> None:
         if self.source not in ORDER_OPERATIONAL_CONTEXT_SOURCES:
             raise ValueError("invalid operational context source")
+        object.__setattr__(
+            self,
+            "fulfillment_mode",
+            validate_fulfillment_mode(self.fulfillment_mode),
+        )
 
 
 def copy_operational_context_for_version(

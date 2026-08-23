@@ -224,7 +224,11 @@ class OrderConfirmationDocumentService:
             payment_method=payment_method,
             payment_customer_visible_text=payment_customer_visible_text,
         )
-        projection = replace(projection, recipient=recipient)
+        projection = replace(
+            projection,
+            recipient=recipient,
+            fulfillment_mode=fulfillment_mode,
+        )
         draft = _persist_snapshot_from_projection(
             projection,
             created_by=created_by,
@@ -319,12 +323,20 @@ class OrderConfirmationDocumentService:
         FulfillmentMode,
     ]:
         version: OrderVersion | None = None
+        context = None
         if order.effective_order_version_id is not None:
             version = self._orders.get_order_version(order.effective_order_version_id)
+            if version is not None:
+                context = self._orders.get_operational_context(version.order_version_id)
         commercial = self._commercial_snapshots.get_by_order_id(order.order_id)
         inquiry = self._inquiries.get_by_id(order.source_inquiry_id)
-        fulfillment_mode: FulfillmentMode = (
+        live_fulfillment_mode: FulfillmentMode = (
             inquiry.fulfillment_mode if inquiry is not None else "UNKNOWN"
+        )
+        fulfillment_mode: FulfillmentMode = (
+            context.fulfillment_mode
+            if context is not None and context.fulfillment_mode != "UNKNOWN"
+            else live_fulfillment_mode
         )
         recipient = build_customer_document_recipient(
             inquiry,
@@ -333,10 +345,10 @@ class OrderConfirmationDocumentService:
             fulfillment_mode=fulfillment_mode,
         )
         if invoice_address is None and delivery_address is None and version is not None:
-            context = self._orders.get_operational_context(version.order_version_id)
             if context is not None and (
                 version.parent_order_version_id is not None
                 or context.delivery_address is not None
+                or context.fulfillment_mode != "UNKNOWN"
             ):
                 exact_delivery = (
                     None if fulfillment_mode == "PICKUP" else context.delivery_address
