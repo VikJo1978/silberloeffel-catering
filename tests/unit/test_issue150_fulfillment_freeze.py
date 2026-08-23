@@ -40,7 +40,7 @@ def test_sqlite_operational_context_roundtrip_preserves_fulfillment_mode(
         time_window_text="12:00-14:00",
         location_text="Hamburg",
         guest_count_estimate=20,
-        planning_mode="STANDARD",
+        planning_mode="caterer_suggestion",
     )
     address = CustomerAddress(
         street="Eventweg 2",
