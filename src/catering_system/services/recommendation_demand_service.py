@@ -50,8 +50,8 @@ class RecommendationDemandService:
         for order in self._orders.list_orders():
             if order.cancelled_at is not None:
                 continue
-            version = self._target_order_version(order)
-            if version is None or version.event_date != event_date:
+            order_version = self._target_order_version(order)
+            if order_version is None or order_version.event_date != event_date:
                 continue
             snapshot = self._commercial_snapshots.get_by_order_id(order.order_id)
             if snapshot is None:
@@ -70,17 +70,17 @@ class RecommendationDemandService:
         for offer in self._offers.list_all():
             if offer.offer_id in covered_offer_ids:
                 continue
-            version = max(offer.versions, key=lambda item: item.version_number)
-            if version.event_date != event_date:
+            offer_version = max(offer.versions, key=lambda item: item.version_number)
+            if offer_version.event_date != event_date:
                 continue
             if (
                 derive_offer_state(
-                    offer, version.offer_version_id, today=operating_today
+                    offer, offer_version.offer_version_id, today=operating_today
                 )
                 != "Sent"
             ):
                 continue
-            for variant in version.variants:
+            for variant in offer_version.variants:
                 rows.extend(self._variant_rows(variant))
 
         return tuple(sorted(rows, key=lambda row: (row.catalog_item_id, row.lifecycle)))
