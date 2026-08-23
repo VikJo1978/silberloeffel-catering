@@ -1,0 +1,66 @@
+name: Wire issue151 demand endpoint once
+
+on:
+  push:
+    branches:
+      - feat/issue-151-core-demand-read-model
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/issue-151-core-demand-read-model
+          fetch-depth: 0
+      - name: Patch Office API
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/catering_system/ui/office_api.py')
+          text = path.read_text()
+
+          old = 'from catering_system.services.operational_core_service import OperationalCoreService\n'
+          new = old + 'from catering_system.services.recommendation_demand_service import (\n    RecommendationDemandService,\n)\n'
+          assert old in text and 'RecommendationDemandService' not in text
+          text = text.replace(old, new, 1)
+
+          old = '        self.catalog_dish_write_service = CatalogDishWriteService(self.catalog)\n'
+          new = old + '        self.recommendation_demand_service = RecommendationDemandService(\n            self.orders,\n            self.offers,\n            self.commercial_snapshots,\n            today=views.berlin_today,\n        )\n'
+          assert old in text and 'self.recommendation_demand_service' not in text
+          text = text.replace(old, new, 1)
+
+          old = '    def list_calendar(self, from_date: date, to_date: date) -> dict[str, object]:\n        return {\n            "entries": views.calendar_list_view(\n                self.calendar_projection_service.list_entries(from_date, to_date)\n            )\n        }\n\n'
+          new = old + '    def recommendation_demand(self, event_date: date) -> dict[str, object]:\n        rows = self.recommendation_demand_service.list_same_day(event_date)\n        return {\n            "event_date": event_date.isoformat(),\n            "rows": [\n                {\n                    "catalog_item_id": row.catalog_item_id,\n                    "lifecycle": row.lifecycle,\n                }\n                for row in rows\n            ],\n        }\n\n'
+          assert old in text and 'def recommendation_demand' not in text
+          text = text.replace(old, new, 1)
+
+          old = '    (\n        re.compile(r"^/office/v1/calendar$"),\n        "/office/v1/calendar",\n        {"GET": "list_calendar"},\n    ),\n'
+          new = old + '    (\n        re.compile(r"^/office/v1/recommendation-demand$"),\n        "/office/v1/recommendation-demand",\n        {"GET": "recommendation_demand"},\n    ),\n'
+          assert old in text and '/office/v1/recommendation-demand' not in text
+          text = text.replace(old, new, 1)
+
+          old = '            elif kind == "list_calendar":\n                params = self._query({"from", "to"})\n                if "from" not in params or "to" not in params:\n                    raise _invalid()\n                self._respond(\n                    200,\n                    api.list_calendar(\n                        _v_date(params["from"]),\n                        _v_date(params["to"]),\n                    ),\n                )\n'
+          new = old + '            elif kind == "recommendation_demand":\n                params = self._query({"date"})\n                if "date" not in params:\n                    raise _invalid()\n                self._respond(\n                    200, api.recommendation_demand(_v_date(params["date"]))\n                )\n'
+          assert old in text
+          text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+      - name: Format changed Python
+        run: |
+          if command -v uv >/dev/null 2>&1; then
+            uv run ruff format src/catering_system/ui/office_api.py src/catering_system/services/recommendation_demand_service.py || true
+          fi
+      - name: Remove one-shot workflow and commit
+        run: |
+          git rm .github/workflows/issue151-core-demand-endpoint-once.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/catering_system/ui/office_api.py src/catering_system/services/recommendation_demand_service.py
+          git commit -m "Expose same-day recommendation demand endpoint"
+          git push origin HEAD:feat/issue-151-core-demand-read-model
