@@ -1,7 +1,8 @@
 """Read model for same-day production demand consumed by the configurator.
 
 Only catalog item ids and lifecycle confidence leave Core through this projection.
-Customer identity and other PII are deliberately excluded.
+Customer identity and other PII are deliberately excluded. Rows stay item-level
+so the configurator can deterministically collapse repeated demand by confidence.
 """
 
 from __future__ import annotations
