@@ -16,110 +16,148 @@ jobs:
         with:
           ref: feat/issue-150-freeze-fulfillment-mode
 
-      - name: Align tests with frozen fulfillment semantics
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.11.32"
+          python-version: "3.12"
+
+      - name: Install test environment
+        run: uv sync --dev
+
+      - name: Align stale tests with frozen fulfillment semantics
         run: |
           python - <<'PY'
           from pathlib import Path
           import re
 
-          # Shared confirmation fixture: allow callers to define the Inquiry facts
-          # that must be frozen at Order conversion time.
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f"{label}: expected one match, got {count}")
+              return text.replace(old, new, 1)
+
           path = Path("tests/unit/test_order_confirmation_document.py")
-          text = path.read_text()
-
-          old = "from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot\n"
-          new = """from catering_system.domain.inquiry_customer_snapshot import (\n    InquiryCustomerSnapshot,\n    set_inquiry_customer_addresses,\n)\n"""
-          assert text.count(old) == 1, text.count(old)
-          text = text.replace(old, new)
-
-          old = "def _services() -> tuple[\n"
-          new = """def _services(\n    *,\n    fulfillment_mode: str = \"PICKUP\",\n    invoice_address: CustomerAddress | None = None,\n    delivery_address: CustomerAddress | None = None,\n    delivery_address_mode: str = \"UNKNOWN\",\n) -> tuple[\n"""
-          assert text.count(old) == 1, text.count(old)
-          text = text.replace(old, new)
-
-          old = '''    inquiries.update(\n        replace(\n            inquiry,\n            intake_message="Firma: Example GmbH\\nE-Mail: customer@example.invalid\\n",\n            # FULFILLMENT_SOURCE_V1: PICKUP is this fixture's neutral default\n            # — no address setup here, and PICKUP never requires one. Tests\n            # that specifically need DELIVERY set fulfillment_mode themselves.\n            fulfillment_mode="PICKUP",\n        )\n    )\n'''
-          new = '''    updated_inquiry = replace(\n        inquiry,\n        intake_message="Firma: Example GmbH\\nE-Mail: customer@example.invalid\\n",\n        fulfillment_mode=fulfillment_mode,\n    )\n    if (\n        invoice_address is not None\n        or delivery_address is not None\n        or delivery_address_mode != "UNKNOWN"\n    ):\n        updated_inquiry = set_inquiry_customer_addresses(\n            updated_inquiry,\n            invoice_address=invoice_address,\n            delivery_address=delivery_address,\n            delivery_address_mode=delivery_address_mode,\n        )\n    inquiries.update(updated_inquiry)\n'''
-          assert text.count(old) == 1, text.count(old)
-          text = text.replace(old, new)
-
-          def patch_test_block(source: str, name: str, replacement: str) -> str:
-              pattern = rf"(def {re.escape(name)}\(\) -> None:\n)(.*?)(?=\ndef |\Z)"
-              match = re.search(pattern, source, flags=re.S)
-              assert match is not None, name
-              block = match.group(0)
-              assert block.count("services = _services()") == 1, (name, block.count("services = _services()"))
-              patched = block.replace("services = _services()", replacement, 1)
-              return source[: match.start()] + patched + source[match.end() :]
-
-          text = patch_test_block(
+          text = path.read_text(encoding="utf-8")
+          text = replace_once(
               text,
-              "test_address_warning_flows_into_confirmation_document",
-              '''services = _services(\n        fulfillment_mode="DELIVERY",\n        invoice_address=CustomerAddress(\n            street="Bürostraße 1", postal_code="20095", city="Hamburg", country="DE"\n        ),\n        delivery_address=CustomerAddress(\n            street="Eventplatz 9", postal_code="20457", city="Hamburg", country="DE"\n        ),\n        delivery_address_mode="SEPARATE",\n    )''',
+              "from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot\n",
+              "from catering_system.domain.inquiry_customer_snapshot import (\n"
+              "    InquiryCustomerSnapshot,\n"
+              "    set_inquiry_customer_addresses,\n"
+              ")\n",
+              "snapshot import",
           )
-          path.write_text(text)
+          text = replace_once(
+              text,
+              "def _services() -> tuple[\n",
+              "def _services(\n"
+              "    *,\n"
+              "    fulfillment_mode: str = \"PICKUP\",\n"
+              "    invoice_address: CustomerAddress | None = None,\n"
+              "    delivery_address: CustomerAddress | None = None,\n"
+              "    delivery_address_mode: str = \"UNKNOWN\",\n"
+              ") -> tuple[\n",
+              "services signature",
+          )
+          start = text.index("    inquiry = inquiries.get_by_id(_INQUIRY_ID)\n")
+          end = text.index("    _converted, order, order_version = offer_service.convert_accepted_offer(\n", start)
+          replacement = '''    inquiry = inquiries.get_by_id(_INQUIRY_ID)\n    assert inquiry is not None\n    updated_inquiry = replace(\n        inquiry,\n        intake_message="Firma: Example GmbH\\nE-Mail: customer@example.invalid\\n",\n        fulfillment_mode=fulfillment_mode,\n    )\n    if (\n        invoice_address is not None\n        or delivery_address is not None\n        or delivery_address_mode != "UNKNOWN"\n    ):\n        updated_inquiry = set_inquiry_customer_addresses(\n            updated_inquiry,\n            invoice_address=invoice_address,\n            delivery_address=delivery_address,\n            delivery_address_mode=delivery_address_mode,\n        )\n    inquiries.update(updated_inquiry)\n'''
+          text = text[:start] + replacement + text[end:]
 
-          # Address snapshot tests previously changed Inquiry after Order creation.
-          # With frozen OrderVersion context they must establish DELIVERY before conversion.
+          pattern = re.compile(
+              r"(def test_address_warning_flows_into_confirmation_document\(\) -> None:\n)(.*?)(?=\ndef |\Z)",
+              re.S,
+          )
+          match = pattern.search(text)
+          if match is None:
+              raise RuntimeError("address warning test not found")
+          block = match.group(0)
+          block = replace_once(
+              block,
+              "services = _services()",
+              '''services = _services(\n        fulfillment_mode="DELIVERY",\n        invoice_address=CustomerAddress(\n            street="Bürostraße 1", postal_code="20095", city="Hamburg", country="DE"\n        ),\n        delivery_address=CustomerAddress(\n            street="Eventplatz 9", postal_code="20457", city="Hamburg", country="DE"\n        ),\n        delivery_address_mode="SEPARATE",\n    )''',
+              "address warning fixture",
+          )
+          text = text[:match.start()] + block + text[match.end():]
+          path.write_text(text, encoding="utf-8")
+
           path = Path("tests/unit/test_confirmation_address_snapshot_v1.py")
-          text = path.read_text()
+          text = path.read_text(encoding="utf-8")
 
-          def patch_assignment(source: str, name: str, call: str) -> str:
-              pattern = rf"(def {re.escape(name)}\(\) -> None:\n)(.*?)(?=\ndef |\Z)"
-              match = re.search(pattern, source, flags=re.S)
-              assert match is not None, name
+          def replace_services_call(source: str, test_name: str, replacement: str) -> str:
+              pattern = re.compile(
+                  rf"(def {re.escape(test_name)}\(\) -> None:\n)(.*?)(?=\ndef |\Z)",
+                  re.S,
+              )
+              match = pattern.search(source)
+              if match is None:
+                  raise RuntimeError(f"{test_name}: not found")
               block = match.group(0)
-              needle = "orders, _offers, inquiries, documents, service, _core, _offer = _services()"
-              assert block.count(needle) == 1, (name, block.count(needle))
-              patched = block.replace(needle, call, 1)
-              return source[: match.start()] + patched + source[match.end() :]
+              block = replace_once(
+                  block,
+                  "orders, _offers, inquiries, documents, service, _core, _offer = _services()",
+                  replacement,
+                  test_name,
+              )
+              return source[:match.start()] + block + source[match.end():]
 
-          same_call = '''orders, _offers, inquiries, documents, service, _core, _offer = _services(\n        fulfillment_mode="DELIVERY",\n        invoice_address=_INVOICE,\n        delivery_address=None,\n        delivery_address_mode="SAME_AS_INVOICE",\n    )'''
-          separate_call = '''orders, _offers, inquiries, documents, service, _core, _offer = _services(\n        fulfillment_mode="DELIVERY",\n        invoice_address=_INVOICE,\n        delivery_address=_DELIVERY,\n        delivery_address_mode="SEPARATE",\n    )'''
+          same = '''orders, _offers, inquiries, documents, service, _core, _offer = _services(\n        fulfillment_mode="DELIVERY",\n        invoice_address=_INVOICE,\n        delivery_address=None,\n        delivery_address_mode="SAME_AS_INVOICE",\n    )'''
+          separate = '''orders, _offers, inquiries, documents, service, _core, _offer = _services(\n        fulfillment_mode="DELIVERY",\n        invoice_address=_INVOICE,\n        delivery_address=_DELIVERY,\n        delivery_address_mode="SEPARATE",\n    )'''
           for name in (
               "test_a_same_as_invoice_persists_effective_delivery",
               "test_c_persisted_addresses_immutable_after_inquiry_change",
               "test_same_as_invoice_html_may_show_differs_nein",
           ):
-              text = patch_assignment(text, name, same_call)
+              text = replace_services_call(text, name, same)
           for name in (
               "test_b_separate_persists_differs_warning",
               "test_g_api_preview_shape_exposes_address_contract_keys",
           ):
-              text = patch_assignment(text, name, separate_call)
-          path.write_text(text)
+              text = replace_services_call(text, name, separate)
+          path.write_text(text, encoding="utf-8")
 
-          # Effective delivery-address changes require the parent OrderVersion to
-          # already be DELIVERY; changing the live Inquiry afterwards is intentionally
-          # no longer allowed to change Order semantics.
           path = Path("tests/unit/test_confirmation_effective_delivery_context.py")
-          text = path.read_text()
+          text = path.read_text(encoding="utf-8")
           call = '''services = _services(\n        fulfillment_mode="DELIVERY",\n        invoice_address=_INVOICE,\n        delivery_address=_OLD_DELIVERY,\n        delivery_address_mode="SEPARATE",\n    )'''
           for name in (
               "test_effective_delivery_change_drives_confirmation_context",
               "test_effective_delivery_removal_does_not_fall_back_to_stale_inquiry",
           ):
-              pattern = rf"(def {re.escape(name)}\(\) -> None:\n)(.*?)(?=\ndef |\Z)"
-              match = re.search(pattern, text, flags=re.S)
-              assert match is not None, name
-              block = match.group(0)
-              assert block.count("services = _services()") == 1, (name, block.count("services = _services()"))
-              patched = block.replace("services = _services()", call, 1)
-              text = text[: match.start()] + patched + text[match.end() :]
-          path.write_text(text)
+              pattern = re.compile(
+                  rf"(def {re.escape(name)}\(\) -> None:\n)(.*?)(?=\ndef |\Z)",
+                  re.S,
+              )
+              match = pattern.search(text)
+              if match is None:
+                  raise RuntimeError(f"{name}: not found")
+              block = replace_once(match.group(0), "services = _services()", call, name)
+              text = text[:match.start()] + block + text[match.end():]
+          path.write_text(text, encoding="utf-8")
 
-          # Schema migration registry now legitimately includes orders v9.
           path = Path("tests/unit/test_sqlite_repositories.py")
-          text = path.read_text()
-          old = '        ("orders", 8),  # frozen operational context per order version\n'
-          new = old + '        ("orders", 9),  # frozen fulfillment mode in operational context\n'
-          assert text.count(old) == 1, text.count(old)
-          text = text.replace(old, new)
-          path.write_text(text)
+          text = path.read_text(encoding="utf-8")
+          marker = '        ("orders", 8),  # frozen operational context per order version\n'
+          if '("orders", 9)' not in text:
+              text = replace_once(
+                  text,
+                  marker,
+                  marker + '        ("orders", 9),  # frozen fulfillment mode in operational context\n',
+                  "migration expectation",
+              )
+          path.write_text(text, encoding="utf-8")
           PY
 
           uv run ruff format tests/unit/test_order_confirmation_document.py \
             tests/unit/test_confirmation_address_snapshot_v1.py \
             tests/unit/test_confirmation_effective_delivery_context.py \
+            tests/unit/test_sqlite_repositories.py
+
+      - name: Run focused regressions
+        run: |
+          uv run pytest -q \
+            tests/unit/test_confirmation_address_snapshot_v1.py \
+            tests/unit/test_confirmation_effective_delivery_context.py \
+            tests/unit/test_order_confirmation_document.py \
             tests/unit/test_sqlite_repositories.py
 
       - name: Commit repairs and remove one-shot workflow
