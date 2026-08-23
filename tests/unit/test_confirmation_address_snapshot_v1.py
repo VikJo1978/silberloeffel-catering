@@ -147,7 +147,12 @@ def _set_inquiry_addresses(
 
 
 def test_a_same_as_invoice_persists_effective_delivery() -> None:
-    orders, _offers, inquiries, documents, service, _core, _offer = _services()
+    orders, _offers, inquiries, documents, service, _core, _offer = _services(
+        fulfillment_mode="DELIVERY",
+        invoice_address=_INVOICE,
+        delivery_address=None,
+        delivery_address_mode="SAME_AS_INVOICE",
+    )
     order, version = _effective_order(
         (orders, _offers, inquiries, documents, service, _core, _offer)
     )
@@ -176,7 +181,12 @@ def test_a_same_as_invoice_persists_effective_delivery() -> None:
 
 
 def test_b_separate_persists_differs_warning() -> None:
-    orders, _offers, inquiries, documents, service, _core, _offer = _services()
+    orders, _offers, inquiries, documents, service, _core, _offer = _services(
+        fulfillment_mode="DELIVERY",
+        invoice_address=_INVOICE,
+        delivery_address=_DELIVERY,
+        delivery_address_mode="SEPARATE",
+    )
     order, version = _effective_order(
         (orders, _offers, inquiries, documents, service, _core, _offer)
     )
@@ -203,7 +213,12 @@ def test_b_separate_persists_differs_warning() -> None:
 
 
 def test_c_persisted_addresses_immutable_after_inquiry_change() -> None:
-    orders, _offers, inquiries, documents, service, _core, _offer = _services()
+    orders, _offers, inquiries, documents, service, _core, _offer = _services(
+        fulfillment_mode="DELIVERY",
+        invoice_address=_INVOICE,
+        delivery_address=None,
+        delivery_address_mode="SAME_AS_INVOICE",
+    )
     order, version = _effective_order(
         (orders, _offers, inquiries, documents, service, _core, _offer)
     )
@@ -353,7 +368,12 @@ def test_f_boundary_no_offer_or_inquiry_in_persisted_preview_path() -> None:
 
 
 def test_g_api_preview_shape_exposes_address_contract_keys() -> None:
-    orders, _offers, inquiries, documents, service, _core, _offer = _services()
+    orders, _offers, inquiries, documents, service, _core, _offer = _services(
+        fulfillment_mode="DELIVERY",
+        invoice_address=_INVOICE,
+        delivery_address=_DELIVERY,
+        delivery_address_mode="SEPARATE",
+    )
     order, version = _effective_order(
         (orders, _offers, inquiries, documents, service, _core, _offer)
     )
@@ -501,7 +521,12 @@ def test_schema2_rejects_unsupported_schema_version() -> None:
 
 
 def test_same_as_invoice_html_may_show_differs_nein() -> None:
-    orders, _offers, inquiries, documents, service, _core, _offer = _services()
+    orders, _offers, inquiries, documents, service, _core, _offer = _services(
+        fulfillment_mode="DELIVERY",
+        invoice_address=_INVOICE,
+        delivery_address=None,
+        delivery_address_mode="SAME_AS_INVOICE",
+    )
     order, version = _effective_order(
         (orders, _offers, inquiries, documents, service, _core, _offer)
     )

@@ -57,7 +57,12 @@ def _set_delivery_inquiry(
 
 
 def test_effective_delivery_change_drives_confirmation_context() -> None:
-    services = _services()
+    services = _services(
+        fulfillment_mode="DELIVERY",
+        invoice_address=_INVOICE,
+        delivery_address=_OLD_DELIVERY,
+        delivery_address_mode="SEPARATE",
+    )
     orders, _offers, inquiries, _documents, service, core, offer_service = services
     order, v1 = _effective_order(services)
     _set_delivery_inquiry(inquiries, order, delivery_address=None)
@@ -114,7 +119,12 @@ def test_effective_delivery_change_drives_confirmation_context() -> None:
 
 
 def test_effective_delivery_removal_does_not_fall_back_to_stale_inquiry() -> None:
-    services = _services()
+    services = _services(
+        fulfillment_mode="DELIVERY",
+        invoice_address=_INVOICE,
+        delivery_address=_OLD_DELIVERY,
+        delivery_address_mode="SEPARATE",
+    )
     orders, _offers, inquiries, _documents, service, core, offer_service = services
     order, v1 = _effective_order(services)
     _set_delivery_inquiry(inquiries, order, delivery_address=_OLD_DELIVERY)

@@ -19,7 +19,10 @@ from catering_system.domain.customer_document_projection import (
     CustomerAddress,
 )
 from catering_system.domain.inquiry import Inquiry
-from catering_system.domain.inquiry_customer_snapshot import InquiryCustomerSnapshot
+from catering_system.domain.inquiry_customer_snapshot import (
+    InquiryCustomerSnapshot,
+    set_inquiry_customer_addresses,
+)
 from catering_system.domain.order_commercial_snapshot import (
     OrderCommercialPosition,
     OrderCommercialSnapshot,
@@ -85,7 +88,13 @@ from tests.unit.test_offer_service import (
 )
 
 
-def _services() -> tuple[
+def _services(
+    *,
+    fulfillment_mode: str = "PICKUP",
+    invoice_address: CustomerAddress | None = None,
+    delivery_address: CustomerAddress | None = None,
+    delivery_address_mode: str = "UNKNOWN",
+) -> tuple[
     InMemoryOrderRepository,
     InMemoryOfferRepository,
     InMemoryInquiryRepository,
@@ -106,16 +115,23 @@ def _services() -> tuple[
     ) = _accepted_offer_state()
     inquiry = inquiries.get_by_id(_INQUIRY_ID)
     assert inquiry is not None
-    inquiries.update(
-        replace(
-            inquiry,
-            intake_message="Firma: Example GmbH\nE-Mail: customer@example.invalid\n",
-            # FULFILLMENT_SOURCE_V1: PICKUP is this fixture's neutral default
-            # — no address setup here, and PICKUP never requires one. Tests
-            # that specifically need DELIVERY set fulfillment_mode themselves.
-            fulfillment_mode="PICKUP",
-        )
+    updated_inquiry = replace(
+        inquiry,
+        intake_message="Firma: Example GmbH\nE-Mail: customer@example.invalid\n",
+        fulfillment_mode=fulfillment_mode,
     )
+    if (
+        invoice_address is not None
+        or delivery_address is not None
+        or delivery_address_mode != "UNKNOWN"
+    ):
+        updated_inquiry = set_inquiry_customer_addresses(
+            updated_inquiry,
+            invoice_address=invoice_address,
+            delivery_address=delivery_address,
+            delivery_address_mode=delivery_address_mode,
+        )
+    inquiries.update(updated_inquiry)
     _converted, order, order_version = offer_service.convert_accepted_offer(
         offer.offer_id,
         version_id,
@@ -700,7 +716,16 @@ def test_missing_customer_contact_blocks_prepare() -> None:
 
 
 def test_address_warning_flows_into_confirmation_document() -> None:
-    services = _services()
+    services = _services(
+        fulfillment_mode="DELIVERY",
+        invoice_address=CustomerAddress(
+            street="Bürostraße 1", postal_code="20095", city="Hamburg", country="DE"
+        ),
+        delivery_address=CustomerAddress(
+            street="Eventplatz 9", postal_code="20457", city="Hamburg", country="DE"
+        ),
+        delivery_address_mode="SEPARATE",
+    )
     order, version = _effective_order(services)
     inquiries = services[2]
     inquiry = inquiries.get_by_id(order.source_inquiry_id)
