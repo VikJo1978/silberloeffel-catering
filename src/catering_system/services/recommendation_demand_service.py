@@ -6,6 +6,7 @@ Customer identity and other PII are deliberately excluded.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from typing import Literal
@@ -34,7 +35,7 @@ class RecommendationDemandService:
         offers: OfferRepository,
         commercial_snapshots: SQLiteOrderCommercialSnapshotRepository,
         *,
-        today: date,
+        today: Callable[[], date],
     ) -> None:
         self._orders = orders
         self._offers = offers
@@ -62,17 +63,18 @@ class RecommendationDemandService:
             covered_offer_ids.add(snapshot.source_offer_id)
             for position in snapshot.positions:
                 if position.kind == "catalog" and position.catalog_item_id is not None:
-                    rows.append(
-                        SameDayDemandRow(position.catalog_item_id, lifecycle)
-                    )
+                    rows.append(SameDayDemandRow(position.catalog_item_id, lifecycle))
 
+        operating_today = self._today()
         for offer in self._offers.list_all():
             if offer.offer_id in covered_offer_ids:
                 continue
             version = max(offer.versions, key=lambda item: item.version_number)
             if version.event_date != event_date:
                 continue
-            if derive_offer_state(offer, version.offer_version_id, today=self._today) != "Sent":
+            if derive_offer_state(
+                offer, version.offer_version_id, today=operating_today
+            ) != "Sent":
                 continue
             for variant in version.variants:
                 rows.extend(self._variant_rows(variant))
