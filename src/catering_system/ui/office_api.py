@@ -212,6 +212,9 @@ from catering_system.services.offer_service import (
     OfferService,
 )
 from catering_system.services.operational_core_service import OperationalCoreService
+from catering_system.services.recommendation_demand_service import (
+    RecommendationDemandService,
+)
 from catering_system.services.order_confirmation_document_preview import (
     build_preview,
     render_preview_html,
@@ -821,6 +824,12 @@ class OfficeApi:
         )
         self.catalog_dish_service = CatalogDishService(self.catalog)
         self.catalog_dish_write_service = CatalogDishWriteService(self.catalog)
+        self.recommendation_demand_service = RecommendationDemandService(
+            self.orders,
+            self.offers,
+            self.commercial_snapshots,
+            today=views.berlin_today,
+        )
 
     def _employee_account_exists(self, employee_id: str) -> bool:
         account = self.employee_auth_repository.get_account_by_id(employee_id)
@@ -1233,6 +1242,19 @@ class OfficeApi:
             "entries": views.calendar_list_view(
                 self.calendar_projection_service.list_entries(from_date, to_date)
             )
+        }
+
+    def recommendation_demand(self, event_date: date) -> dict[str, object]:
+        rows = self.recommendation_demand_service.list_same_day(event_date)
+        return {
+            "event_date": event_date.isoformat(),
+            "rows": [
+                {
+                    "catalog_item_id": row.catalog_item_id,
+                    "lifecycle": row.lifecycle,
+                }
+                for row in rows
+            ],
         }
 
     def list_inquiries(self, q: str, limit: int, offset: int) -> dict[str, object]:
@@ -3441,6 +3463,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         {"GET": "list_calendar"},
     ),
     (
+        re.compile(r"^/office/v1/recommendation-demand$"),
+        "/office/v1/recommendation-demand",
+        {"GET": "recommendation_demand"},
+    ),
+    (
         re.compile(r"^/office/v1/emails$"),
         "/office/v1/emails",
         {"GET": "list_emails"},
@@ -4217,6 +4244,13 @@ def make_office_api_handler(
                         _v_date(params["from"]),
                         _v_date(params["to"]),
                     ),
+                )
+            elif kind == "recommendation_demand":
+                params = self._query({"date"})
+                if "date" not in params:
+                    raise _invalid()
+                self._respond(
+                    200, api.recommendation_demand(_v_date(params["date"]))
                 )
             elif kind == "email_detail":
                 self._query(set())
