@@ -72,9 +72,12 @@ class RecommendationDemandService:
             version = max(offer.versions, key=lambda item: item.version_number)
             if version.event_date != event_date:
                 continue
-            if derive_offer_state(
-                offer, version.offer_version_id, today=operating_today
-            ) != "Sent":
+            if (
+                derive_offer_state(
+                    offer, version.offer_version_id, today=operating_today
+                )
+                != "Sent"
+            ):
                 continue
             for variant in version.variants:
                 rows.extend(self._variant_rows(variant))
