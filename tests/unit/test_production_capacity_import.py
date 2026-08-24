@@ -6,7 +6,9 @@ from datetime import UTC, date, datetime
 import pytest
 
 from catering_system.domain.catalog import CatalogDish
-from catering_system.repositories.sqlite_catalog_repository import SQLiteCatalogRepository
+from catering_system.repositories.sqlite_catalog_repository import (
+    SQLiteCatalogRepository,
+)
 from catering_system.repositories.sqlite_production_capacity_repository import (
     SQLiteProductionCapacityRepository,
 )
