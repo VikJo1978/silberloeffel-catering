@@ -130,13 +130,13 @@ def parse_production_capacity_config(payload: object) -> ProductionCapacityImpor
                 label=f"requirements[{index}].load_units_per_item",
             ),
         )
-        key = (requirement.catalog_item_id, requirement.station_id)
-        if key in requirement_keys:
+        requirement_key = (requirement.catalog_item_id, requirement.station_id)
+        if requirement_key in requirement_keys:
             raise ValueError(
                 "duplicate requirement: "
                 f"{requirement.catalog_item_id}/{requirement.station_id}"
             )
-        requirement_keys.add(key)
+        requirement_keys.add(requirement_key)
         requirements.append(requirement)
 
     capacity_days: list[ProductionStationCapacityDay] = []
@@ -162,12 +162,12 @@ def parse_production_capacity_config(payload: object) -> ProductionCapacityImpor
                 row["unavailable"], label=f"capacity_days[{index}].unavailable"
             ),
         )
-        key = (capacity.event_date, capacity.station_id)
-        if key in capacity_keys:
+        capacity_key = (capacity.event_date, capacity.station_id)
+        if capacity_key in capacity_keys:
             raise ValueError(
                 f"duplicate capacity day: {capacity.event_date}/{capacity.station_id}"
             )
-        capacity_keys.add(key)
+        capacity_keys.add(capacity_key)
         capacity_days.append(capacity)
 
     return ProductionCapacityImportPlan(
