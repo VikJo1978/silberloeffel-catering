@@ -62,7 +62,6 @@ class RecommendationCapacityService:
             for item in self._capacity.list_capacity_days(event_date)
         }
         used_by_station: dict[str, int] = {}
-        unknown_stations: set[str] = set()
         global_demand_unknown = False
 
         for order in self._orders.list_orders():
@@ -110,9 +109,6 @@ class RecommendationCapacityService:
                 station = stations.get(requirement.station_id)
                 if station is None or not station.active:
                     blocked_reason = "STATION_INACTIVE"
-                    break
-                if requirement.station_id in unknown_stations:
-                    blocked_reason = "DEMAND_SOURCE_INCOMPLETE"
                     break
                 capacity_day = capacity_days.get(requirement.station_id)
                 if capacity_day is None:
