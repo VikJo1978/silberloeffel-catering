@@ -33,6 +33,7 @@ jobs:
       - name: Lint
         run: |
           uv run ruff check src tests infra
+          uv run ruff format --diff src/catering_system/ui/office_api.py
           uv run ruff format --check src tests infra
       - name: Type-check production code
         run: uv run mypy src/catering_system
