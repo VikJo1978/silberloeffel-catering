@@ -155,6 +155,9 @@ from catering_system.repositories.sqlite_order_confirmation_outbound_repository 
 from catering_system.repositories.sqlite_order_operational_pause_repository import (
     SQLiteOrderOperationalPauseRepository,
 )
+from catering_system.repositories.sqlite_production_capacity_repository import (
+    SQLiteProductionCapacityRepository,
+)
 from catering_system.repositories.order_purge import purge_order_with_dependencies
 from catering_system.repositories.sqlite_order_repository import (
     SQLiteOrderRepository,
@@ -212,6 +215,9 @@ from catering_system.services.offer_service import (
     OfferService,
 )
 from catering_system.services.operational_core_service import OperationalCoreService
+from catering_system.services.recommendation_capacity_service import (
+    RecommendationCapacityService,
+)
 from catering_system.services.recommendation_demand_service import (
     RecommendationDemandService,
 )
@@ -700,6 +706,9 @@ class OfficeApi:
         self.commercial_snapshots = (
             SQLiteOrderCommercialSnapshotRepository.from_connection(connection)
         )
+        self.production_capacity = SQLiteProductionCapacityRepository.from_connection(
+            connection
+        )
         self.confirmation_outbound = (
             SQLiteOrderConfirmationOutboundRepository.from_connection(connection)
         )
@@ -829,6 +838,12 @@ class OfficeApi:
             self.offers,
             self.commercial_snapshots,
             today=views.berlin_today,
+        )
+        self.recommendation_capacity_service = RecommendationCapacityService(
+            self.catalog,
+            self.production_capacity,
+            self.orders,
+            self.commercial_snapshots,
         )
 
     def _employee_account_exists(self, employee_id: str) -> bool:
@@ -1252,6 +1267,21 @@ class OfficeApi:
                 {
                     "catalog_item_id": row.catalog_item_id,
                     "lifecycle": row.lifecycle,
+                }
+                for row in rows
+            ],
+        }
+
+    def recommendation_capacity(self, event_date: date) -> dict[str, object]:
+        rows = self.recommendation_capacity_service.list_for_date(event_date)
+        return {
+            "event_date": event_date.isoformat(),
+            "rows": [
+                {
+                    "catalog_item_id": row.catalog_item_id,
+                    "feasible": row.feasible,
+                    "overload_penalty": row.overload_penalty,
+                    "reason_code": row.reason_code,
                 }
                 for row in rows
             ],
@@ -3468,6 +3498,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         {"GET": "recommendation_demand"},
     ),
     (
+        re.compile(r"^/office/v1/recommendation-capacity$"),
+        "/office/v1/recommendation-capacity",
+        {"GET": "recommendation_capacity"},
+    ),
+    (
         re.compile(r"^/office/v1/emails$"),
         "/office/v1/emails",
         {"GET": "list_emails"},
@@ -4250,6 +4285,13 @@ def make_office_api_handler(
                 if "date" not in params:
                     raise _invalid()
                 self._respond(200, api.recommendation_demand(_v_date(params["date"])))
+            elif kind == "recommendation_capacity":
+                params = self._query({"date"})
+                if "date" not in params:
+                    raise _invalid()
+                self._respond(
+                    200, api.recommendation_capacity(_v_date(params["date"]))
+                )
             elif kind == "email_detail":
                 self._query(set())
                 self._respond(200, api.email_detail(path_ids["inquiry_id"]))
