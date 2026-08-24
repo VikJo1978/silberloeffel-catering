@@ -198,3 +198,25 @@ class SQLiteProductionCapacityRepository:
             capacity_units=int(row[2]),
             unavailable=bool(row[3]),
         )
+
+    def list_capacity_days(
+        self, event_date: date
+    ) -> list[ProductionStationCapacityDay]:
+        rows = self._conn.execute(
+            """
+            SELECT event_date, station_id, capacity_units, unavailable
+            FROM production_station_capacity_days
+            WHERE event_date = ?
+            ORDER BY station_id ASC
+            """,
+            (event_date.isoformat(),),
+        ).fetchall()
+        return [
+            ProductionStationCapacityDay(
+                event_date=date.fromisoformat(str(row[0])),
+                station_id=str(row[1]),
+                capacity_units=int(row[2]),
+                unavailable=bool(row[3]),
+            )
+            for row in rows
+        ]
