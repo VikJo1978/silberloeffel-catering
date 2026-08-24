@@ -69,9 +69,7 @@ class _Capacity:
     def list_stations(self) -> list[ProductionStation]:
         return self._stations
 
-    def list_capacity_days(
-        self, event_date: date
-    ) -> list[ProductionStationCapacityDay]:
+    def list_capacity_days(self, event_date: date) -> list[ProductionStationCapacityDay]:
         assert event_date == EVENT_DATE
         return self._capacity_days
 
