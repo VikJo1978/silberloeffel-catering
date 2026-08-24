@@ -45,26 +45,36 @@ def _seed_dish(db_path, dish_id: str) -> None:  # noqa: ANN001
 
 
 def _payload(dish_id: str) -> dict[str, object]:
-    return {
-        "stations": [
-            {"station_id": "cold", "name": "Cold kitchen", "active": True}
-        ],
-        "requirements": [
-            {
-                "catalog_item_id": dish_id,
-                "station_id": "cold",
-                "load_units_per_item": 2,
-            }
-        ],
-        "capacity_days": [
-            {
-                "event_date": "2026-08-25",
-                "station_id": "cold",
-                "capacity_units": 120,
-                "unavailable": False,
-            }
-        ],
+    station = {
+        "station_id": "cold",
+        "name": "Cold kitchen",
+        "active": True,
     }
+    requirement = {
+        "catalog_item_id": dish_id,
+        "station_id": "cold",
+        "load_units_per_item": 2,
+    }
+    capacity_day = {
+        "event_date": "2026-08-25",
+        "station_id": "cold",
+        "capacity_units": 120,
+        "unavailable": False,
+    }
+    return {
+        "stations": [station],
+        "requirements": [requirement],
+        "capacity_days": [capacity_day],
+    }
+
+
+def _first_row(payload: dict[str, object], key: str) -> dict[str, object]:
+    rows = payload[key]
+    assert isinstance(rows, list)
+    assert rows
+    row = rows[0]
+    assert isinstance(row, dict)
+    return row
 
 
 def test_import_applies_explicit_facts_and_is_idempotent(tmp_path) -> None:
@@ -117,8 +127,7 @@ def test_dry_run_validates_without_writing(tmp_path) -> None:
 def test_unknown_catalog_item_fails_before_any_fact_is_written(tmp_path) -> None:
     db_path = tmp_path / "core.db"
     _seed_dish(db_path, _dish_id())
-    payload = _payload(_dish_id())
-    plan = parse_production_capacity_config(payload)
+    plan = parse_production_capacity_config(_payload(_dish_id()))
 
     with pytest.raises(ValueError, match="unknown catalog_item_id"):
         apply_production_capacity_config(db_path, plan)
@@ -161,28 +170,27 @@ def test_parser_rejects_duplicates_and_unknown_fields() -> None:
         parse_production_capacity_config(payload)
 
     payload = _payload(dish_id)
-    assert isinstance(payload["stations"], list)
-    payload["stations"][0]["surprise"] = True  # type: ignore[index]
+    _first_row(payload, "stations")["surprise"] = True
     with pytest.raises(ValueError, match="unknown=surprise"):
         parse_production_capacity_config(payload)
 
 
 def test_parser_rejects_implicit_or_malformed_business_facts() -> None:
     dish_id = _dish_id()
+
     payload = _payload(dish_id)
-    assert isinstance(payload["requirements"], list)
-    payload["requirements"][0]["load_units_per_item"] = True  # type: ignore[index]
+    _first_row(payload, "requirements")["load_units_per_item"] = True
     with pytest.raises(ValueError, match="must be an integer"):
         parse_production_capacity_config(payload)
 
     payload = _payload(dish_id)
-    assert isinstance(payload["capacity_days"], list)
-    payload["capacity_days"][0]["event_date"] = "25.08.2026"  # type: ignore[index]
+    _first_row(payload, "capacity_days")["event_date"] = "25.08.2026"
     with pytest.raises(ValueError, match="must be YYYY-MM-DD"):
         parse_production_capacity_config(payload)
 
     payload = _payload(dish_id)
-    payload["capacity_days"][0]["capacity_units"] = 1  # type: ignore[index]
-    payload["capacity_days"][0]["unavailable"] = True  # type: ignore[index]
+    capacity_day = _first_row(payload, "capacity_days")
+    capacity_day["capacity_units"] = 1
+    capacity_day["unavailable"] = True
     with pytest.raises(ValueError, match="unavailable station"):
         parse_production_capacity_config(payload)
