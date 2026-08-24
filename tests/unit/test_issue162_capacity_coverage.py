@@ -45,9 +45,9 @@ def test_sqlite_capacity_repository_roundtrip_and_filters(tmp_path) -> None:
     try:
         repo.upsert_station(ProductionStation("cold", "Cold", active=True))
         repo.upsert_station(ProductionStation("hot", "Hot", active=False))
-        assert [station.station_id for station in repo.list_stations(active_only=True)] == [
-            "cold"
-        ]
+        assert [
+            station.station_id for station in repo.list_stations(active_only=True)
+        ] == ["cold"]
 
         repo.set_catalog_requirement(CatalogStationRequirement("dish", "cold", 2))
         assert repo.list_catalog_requirements("dish") == [
@@ -85,7 +85,9 @@ class _Capacity:
     def list_stations(self) -> list[ProductionStation]:
         return self.stations
 
-    def list_capacity_days(self, _event_date: date) -> list[ProductionStationCapacityDay]:
+    def list_capacity_days(
+        self, _event_date: date
+    ) -> list[ProductionStationCapacityDay]:
         return self.days
 
     def list_catalog_requirements(
@@ -187,7 +189,9 @@ def test_capacity_ignores_cancelled_and_non_catalog_positions() -> None:
         orders=[cancelled],
         snapshots={
             "o1": SimpleNamespace(
-                positions=(SimpleNamespace(kind="text", catalog_item_id=None, quantity=None),)
+                positions=(
+                    SimpleNamespace(kind="text", catalog_item_id=None, quantity=None),
+                )
             )
         },
     ).list_for_date(EVENT_DATE)[0]
