@@ -14,6 +14,7 @@ from catering_system.services.recommendation_capacity_service import (
 )
 
 EVENT_DATE = date(2026, 8, 31)
+CapacityDay = ProductionStationCapacityDay
 
 
 def _dish(dish_id: str) -> SimpleNamespace:
@@ -38,12 +39,16 @@ def _version(order_id: str, version_id: str) -> SimpleNamespace:
     )
 
 
-def _position(catalog_item_id: str, quantity: Decimal | None) -> SimpleNamespace:
+def _position(catalog_item_id: str, quantity: str) -> SimpleNamespace:
     return SimpleNamespace(
         kind="catalog",
         catalog_item_id=catalog_item_id,
-        quantity=quantity,
+        quantity=Decimal(quantity),
     )
+
+
+def _snapshot(*positions: SimpleNamespace) -> SimpleNamespace:
+    return SimpleNamespace(positions=positions)
 
 
 class _Catalog:
@@ -57,9 +62,8 @@ class _Catalog:
 class _Capacity:
     def __init__(
         self,
-        *,
         requirements: dict[str, list[CatalogStationRequirement]],
-        capacity_days: list[ProductionStationCapacityDay],
+        capacity_days: list[CapacityDay],
         stations: list[ProductionStation] | None = None,
     ) -> None:
         self._requirements = requirements
@@ -69,7 +73,7 @@ class _Capacity:
     def list_stations(self) -> list[ProductionStation]:
         return self._stations
 
-    def list_capacity_days(self, event_date: date) -> list[ProductionStationCapacityDay]:
+    def list_capacity_days(self, event_date: date) -> list[CapacityDay]:
         assert event_date == EVENT_DATE
         return self._capacity_days
 
@@ -114,19 +118,16 @@ def _service(
     *,
     dish_ids: tuple[str, ...] = ("dish-a",),
     requirements: dict[str, list[CatalogStationRequirement]],
-    capacity_days: list[ProductionStationCapacityDay],
+    capacity_days: list[CapacityDay],
     orders: list[SimpleNamespace] | None = None,
     versions: dict[str, SimpleNamespace] | None = None,
     snapshots: dict[str, SimpleNamespace] | None = None,
     stations: list[ProductionStation] | None = None,
 ) -> RecommendationCapacityService:
+    capacity = _Capacity(requirements, capacity_days, stations)
     return RecommendationCapacityService(  # type: ignore[arg-type]
         _Catalog(*dish_ids),
-        _Capacity(
-            requirements=requirements,
-            capacity_days=capacity_days,
-            stations=stations,
-        ),
+        capacity,
         _Orders(orders or [], versions or {}),
         _Snapshots(snapshots or {}),
     )
@@ -137,26 +138,24 @@ def test_capacity_penalty_uses_committed_order_load() -> None:
     order = _order("order-1", "version-1")
     service = _service(
         requirements={"dish-a": [requirement]},
-        capacity_days=[ProductionStationCapacityDay(EVENT_DATE, "cold", 100)],
+        capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
         orders=[order],
         versions={"version-1": _version("order-1", "version-1")},
-        snapshots={
-            "order-1": SimpleNamespace(positions=(_position("dish-a", Decimal("40")),))
-        },
+        snapshots={"order-1": _snapshot(_position("dish-a", "40"))},
     )
 
-    rows = service.list_for_date(EVENT_DATE)
+    row = service.list_for_date(EVENT_DATE)[0]
 
-    assert len(rows) == 1
-    assert rows[0].catalog_item_id == "dish-a"
-    assert rows[0].feasible is True
-    assert rows[0].overload_penalty == 40
-    assert rows[0].reason_code is None
+    assert row.catalog_item_id == "dish-a"
+    assert row.feasible is True
+    assert row.overload_penalty == 40
+    assert row.reason_code is None
 
 
 def test_capacity_fails_closed_when_capacity_day_missing() -> None:
+    requirement = CatalogStationRequirement("dish-a", "cold", 1)
     service = _service(
-        requirements={"dish-a": [CatalogStationRequirement("dish-a", "cold", 1)]},
+        requirements={"dish-a": [requirement]},
         capacity_days=[],
     )
 
@@ -172,12 +171,10 @@ def test_capacity_exhausted_when_committed_load_reaches_limit() -> None:
     order = _order("order-1", "version-1")
     service = _service(
         requirements={"dish-a": [requirement]},
-        capacity_days=[ProductionStationCapacityDay(EVENT_DATE, "cold", 20)],
+        capacity_days=[CapacityDay(EVENT_DATE, "cold", 20)],
         orders=[order],
         versions={"version-1": _version("order-1", "version-1")},
-        snapshots={
-            "order-1": SimpleNamespace(positions=(_position("dish-a", Decimal("10")),))
-        },
+        snapshots={"order-1": _snapshot(_position("dish-a", "10"))},
     )
 
     row = service.list_for_date(EVENT_DATE)[0]
@@ -186,21 +183,16 @@ def test_capacity_exhausted_when_committed_load_reaches_limit() -> None:
     assert row.reason_code == "CAPACITY_EXHAUSTED"
 
 
-def test_capacity_fails_closed_when_existing_demand_cannot_be_accounted() -> None:
+def test_capacity_fails_closed_when_demand_is_incomplete() -> None:
+    requirement = CatalogStationRequirement("candidate", "cold", 1)
     order = _order("order-1", "version-1")
     service = _service(
         dish_ids=("candidate",),
-        requirements={
-            "candidate": [CatalogStationRequirement("candidate", "cold", 1)]
-        },
-        capacity_days=[ProductionStationCapacityDay(EVENT_DATE, "cold", 100)],
+        requirements={"candidate": [requirement]},
+        capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
         orders=[order],
         versions={"version-1": _version("order-1", "version-1")},
-        snapshots={
-            "order-1": SimpleNamespace(
-                positions=(_position("legacy-unmapped", Decimal("10")),)
-            )
-        },
+        snapshots={"order-1": _snapshot(_position("legacy-unmapped", "10"))},
     )
 
     row = service.list_for_date(EVENT_DATE)[0]
