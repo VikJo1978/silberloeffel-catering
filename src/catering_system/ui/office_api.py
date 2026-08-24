@@ -4289,9 +4289,7 @@ def make_office_api_handler(
                 params = self._query({"date"})
                 if "date" not in params:
                     raise _invalid()
-                self._respond(
-                    200, api.recommendation_capacity(_v_date(params["date"]))
-                )
+                self._respond(200, api.recommendation_capacity(_v_date(params["date"])))
             elif kind == "email_detail":
                 self._query(set())
                 self._respond(200, api.email_detail(path_ids["inquiry_id"]))
