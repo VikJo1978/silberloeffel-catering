@@ -1,0 +1,72 @@
+name: Issue 162 capacity HTTP patch
+
+on:
+  push:
+    branches:
+      - feat/issue-162-recommendation-capacity-http
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message == 'chore: prepare issue 162 HTTP wiring patch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/issue-162-recommendation-capacity-http
+      - name: Patch Office API
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/catering_system/ui/office_api.py")
+          text = path.read_text()
+
+          replacements = [
+              (
+                  "from catering_system.repositories.sqlite_order_operational_pause_repository import (\n    SQLiteOrderOperationalPauseRepository,\n)\n",
+                  "from catering_system.repositories.sqlite_order_operational_pause_repository import (\n    SQLiteOrderOperationalPauseRepository,\n)\nfrom catering_system.repositories.sqlite_production_capacity_repository import (\n    SQLiteProductionCapacityRepository,\n)\n",
+              ),
+              (
+                  "from catering_system.services.recommendation_demand_service import (\n    RecommendationDemandService,\n)\n",
+                  "from catering_system.services.recommendation_capacity_service import (\n    RecommendationCapacityService,\n)\nfrom catering_system.services.recommendation_demand_service import (\n    RecommendationDemandService,\n)\n",
+              ),
+              (
+                  "        self.commercial_snapshots = (\n            SQLiteOrderCommercialSnapshotRepository.from_connection(connection)\n        )\n",
+                  "        self.commercial_snapshots = (\n            SQLiteOrderCommercialSnapshotRepository.from_connection(connection)\n        )\n        self.production_capacity = SQLiteProductionCapacityRepository.from_connection(\n            connection\n        )\n",
+              ),
+              (
+                  "        self.recommendation_demand_service = RecommendationDemandService(\n            self.orders,\n            self.offers,\n            self.commercial_snapshots,\n            today=views.berlin_today,\n        )\n",
+                  "        self.recommendation_demand_service = RecommendationDemandService(\n            self.orders,\n            self.offers,\n            self.commercial_snapshots,\n            today=views.berlin_today,\n        )\n        self.recommendation_capacity_service = RecommendationCapacityService(\n            self.catalog,\n            self.production_capacity,\n            self.orders,\n            self.commercial_snapshots,\n        )\n",
+              ),
+              (
+                  "    def list_inquiries(self, q: str, limit: int, offset: int) -> dict[str, object]:\n",
+                  "    def recommendation_capacity(self, event_date: date) -> dict[str, object]:\n        rows = self.recommendation_capacity_service.list_for_date(event_date)\n        return {\n            \"event_date\": event_date.isoformat(),\n            \"rows\": [\n                {\n                    \"catalog_item_id\": row.catalog_item_id,\n                    \"feasible\": row.feasible,\n                    \"overload_penalty\": row.overload_penalty,\n                    \"reason_code\": row.reason_code,\n                }\n                for row in rows\n            ],\n        }\n\n    def list_inquiries(self, q: str, limit: int, offset: int) -> dict[str, object]:\n",
+              ),
+              (
+                  "    (\n        re.compile(r\"^/office/v1/recommendation-demand$\"),\n        \"/office/v1/recommendation-demand\",\n        {\"GET\": \"recommendation_demand\"},\n    ),\n",
+                  "    (\n        re.compile(r\"^/office/v1/recommendation-demand$\"),\n        \"/office/v1/recommendation-demand\",\n        {\"GET\": \"recommendation_demand\"},\n    ),\n    (\n        re.compile(r\"^/office/v1/recommendation-capacity$\"),\n        \"/office/v1/recommendation-capacity\",\n        {\"GET\": \"recommendation_capacity\"},\n    ),\n",
+              ),
+              (
+                  "            elif kind == \"recommendation_demand\":\n                params = self._query({\"date\"})\n                if \"date\" not in params:\n                    raise _invalid()\n                self._respond(200, api.recommendation_demand(_v_date(params[\"date\"])))\n",
+                  "            elif kind == \"recommendation_demand\":\n                params = self._query({\"date\"})\n                if \"date\" not in params:\n                    raise _invalid()\n                self._respond(200, api.recommendation_demand(_v_date(params[\"date\"])))\n            elif kind == \"recommendation_capacity\":\n                params = self._query({\"date\"})\n                if \"date\" not in params:\n                    raise _invalid()\n                self._respond(\n                    200, api.recommendation_capacity(_v_date(params[\"date\"]))\n                )\n",
+              ),
+          ]
+
+          for old, new in replacements:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"expected one replacement, found {count}: {old[:80]!r}")
+              text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/catering_system/ui/office_api.py
+          git commit -m "CAP-3: expose recommendation capacity over Office API"
+          git push origin HEAD:feat/issue-162-recommendation-capacity-http
