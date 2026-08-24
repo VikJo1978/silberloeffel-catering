@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import date
-from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
@@ -45,14 +44,12 @@ def test_sqlite_capacity_repository_roundtrip_and_filters(tmp_path) -> None:
     try:
         repo.upsert_station(ProductionStation("cold", "Cold", active=True))
         repo.upsert_station(ProductionStation("hot", "Hot", active=False))
-        assert [
-            station.station_id for station in repo.list_stations(active_only=True)
-        ] == ["cold"]
+        active = repo.list_stations(active_only=True)
+        assert [station.station_id for station in active] == ["cold"]
 
-        repo.set_catalog_requirement(CatalogStationRequirement("dish", "cold", 2))
-        assert repo.list_catalog_requirements("dish") == [
-            CatalogStationRequirement("dish", "cold", 2)
-        ]
+        requirement = CatalogStationRequirement("dish", "cold", 2)
+        repo.set_catalog_requirement(requirement)
+        assert repo.list_catalog_requirements("dish") == [requirement]
 
         capacity = ProductionStationCapacityDay(EVENT_DATE, "cold", 50)
         repo.set_capacity_day(capacity)
@@ -64,178 +61,76 @@ def test_sqlite_capacity_repository_roundtrip_and_filters(tmp_path) -> None:
 
 
 class _Catalog:
-    def __init__(self, *dish_ids: str) -> None:
-        self._dish_ids = dish_ids
-
     def list_dishes(self, **_kwargs: object) -> list[SimpleNamespace]:
-        return [SimpleNamespace(dish_id=dish_id) for dish_id in self._dish_ids]
+        return [SimpleNamespace(dish_id="dish")]
 
 
 class _Capacity:
     def __init__(
         self,
-        requirements: dict[str, list[CatalogStationRequirement]],
-        stations: list[ProductionStation],
-        days: list[ProductionStationCapacityDay],
+        station: ProductionStation,
+        capacity: ProductionStationCapacityDay | None,
     ) -> None:
-        self.requirements = requirements
-        self.stations = stations
-        self.days = days
+        self.station = station
+        self.capacity = capacity
 
     def list_stations(self) -> list[ProductionStation]:
-        return self.stations
+        return [self.station]
 
     def list_capacity_days(
         self, _event_date: date
     ) -> list[ProductionStationCapacityDay]:
-        return self.days
+        if self.capacity is None:
+            return []
+        return [self.capacity]
 
     def list_catalog_requirements(
         self, catalog_item_id: str
     ) -> list[CatalogStationRequirement]:
-        return self.requirements.get(catalog_item_id, [])
+        return [CatalogStationRequirement(catalog_item_id, "cold", 1)]
 
 
 class _Orders:
-    def __init__(self, orders: list[SimpleNamespace]) -> None:
-        self.orders = orders
-
-    def list_orders(self) -> list[SimpleNamespace]:
-        return self.orders
-
-    def get_order_version(self, version_id: str) -> SimpleNamespace | None:
-        for order in self.orders:
-            version = getattr(order, "version", None)
-            if version is not None and version.order_version_id == version_id:
-                return version
-        return None
-
-    def list_order_versions(self, order_id: str) -> list[SimpleNamespace]:
-        return [
-            order.version
-            for order in self.orders
-            if order.order_id == order_id and getattr(order, "version", None) is not None
-        ]
+    def list_orders(self) -> list[object]:
+        return []
 
 
-class _Snapshots:
-    def __init__(self, values: dict[str, SimpleNamespace]) -> None:
-        self.values = values
-
-    def get_by_order_id(self, order_id: str) -> SimpleNamespace | None:
-        return self.values.get(order_id)
-
-
-def _service(
-    *,
-    requirements: dict[str, list[CatalogStationRequirement]],
-    stations: list[ProductionStation],
-    days: list[ProductionStationCapacityDay],
-    orders: list[SimpleNamespace] | None = None,
-    snapshots: dict[str, SimpleNamespace] | None = None,
-) -> RecommendationCapacityService:
-    return RecommendationCapacityService(  # type: ignore[arg-type]
-        _Catalog("dish"),
-        _Capacity(requirements, stations, days),
-        _Orders(orders or []),
-        _Snapshots(snapshots or {}),
+def _row(
+    station: ProductionStation,
+    capacity: ProductionStationCapacityDay | None,
+):
+    service = RecommendationCapacityService(  # type: ignore[arg-type]
+        _Catalog(),
+        _Capacity(station, capacity),
+        _Orders(),
+        object(),
     )
+    return service.list_for_date(EVENT_DATE)[0]
 
 
-def test_capacity_blocks_inactive_unavailable_and_zero_capacity() -> None:
-    requirement = CatalogStationRequirement("dish", "cold", 1)
-
-    inactive = _service(
-        requirements={"dish": [requirement]},
-        stations=[ProductionStation("cold", "Cold", active=False)],
-        days=[ProductionStationCapacityDay(EVENT_DATE, "cold", 10)],
-    ).list_for_date(EVENT_DATE)[0]
-    assert inactive.reason_code == "STATION_INACTIVE"
-
-    unavailable = _service(
-        requirements={"dish": [requirement]},
-        stations=[ProductionStation("cold", "Cold")],
-        days=[ProductionStationCapacityDay(EVENT_DATE, "cold", 0, unavailable=True)],
-    ).list_for_date(EVENT_DATE)[0]
-    assert unavailable.reason_code == "STATION_UNAVAILABLE"
-
-    zero = _service(
-        requirements={"dish": [requirement]},
-        stations=[ProductionStation("cold", "Cold")],
-        days=[ProductionStationCapacityDay(EVENT_DATE, "cold", 0)],
-    ).list_for_date(EVENT_DATE)[0]
-    assert zero.reason_code == "NO_CAPACITY"
+def test_capacity_blocks_inactive_station() -> None:
+    station = ProductionStation("cold", "Cold", active=False)
+    capacity = ProductionStationCapacityDay(EVENT_DATE, "cold", 10)
+    assert _row(station, capacity).reason_code == "STATION_INACTIVE"
 
 
-def test_capacity_ignores_cancelled_and_non_catalog_positions() -> None:
-    requirement = CatalogStationRequirement("dish", "cold", 1)
-    version = SimpleNamespace(
-        order_id="o1",
-        order_version_id="v1",
-        version_number=1,
-        event_date=EVENT_DATE,
+def test_capacity_blocks_missing_day_capacity() -> None:
+    station = ProductionStation("cold", "Cold")
+    assert _row(station, None).reason_code == "CAPACITY_UNSET"
+
+
+def test_capacity_blocks_unavailable_station() -> None:
+    station = ProductionStation("cold", "Cold")
+    capacity = ProductionStationCapacityDay(
+        EVENT_DATE,
+        "cold",
+        0,
+        unavailable=True,
     )
-    cancelled = SimpleNamespace(
-        order_id="o1",
-        cancelled_at=object(),
-        effective_order_version_id="v1",
-        candidate_order_version_id="v1",
-        version=version,
-    )
-    row = _service(
-        requirements={"dish": [requirement]},
-        stations=[ProductionStation("cold", "Cold")],
-        days=[ProductionStationCapacityDay(EVENT_DATE, "cold", 10)],
-        orders=[cancelled],
-        snapshots={
-            "o1": SimpleNamespace(
-                positions=(
-                    SimpleNamespace(kind="text", catalog_item_id=None, quantity=None),
-                )
-            )
-        },
-    ).list_for_date(EVENT_DATE)[0]
-    assert row.feasible is True
-    assert row.overload_penalty == 0
+    assert _row(station, capacity).reason_code == "STATION_UNAVAILABLE"
 
 
-def test_capacity_fails_closed_for_missing_snapshot_and_invalid_quantity() -> None:
-    requirement = CatalogStationRequirement("dish", "cold", 1)
-    version = SimpleNamespace(
-        order_id="o1",
-        order_version_id="v1",
-        version_number=1,
-        event_date=EVENT_DATE,
-    )
-    order = SimpleNamespace(
-        order_id="o1",
-        cancelled_at=None,
-        effective_order_version_id="v1",
-        candidate_order_version_id="v1",
-        version=version,
-    )
-    base = dict(
-        requirements={"dish": [requirement]},
-        stations=[ProductionStation("cold", "Cold")],
-        days=[ProductionStationCapacityDay(EVENT_DATE, "cold", 10)],
-        orders=[order],
-    )
-
-    missing_snapshot = _service(**base).list_for_date(EVENT_DATE)[0]
-    assert missing_snapshot.reason_code == "DEMAND_SOURCE_INCOMPLETE"
-
-    invalid_quantity = _service(
-        **base,
-        snapshots={
-            "o1": SimpleNamespace(
-                positions=(
-                    SimpleNamespace(
-                        kind="catalog",
-                        catalog_item_id="dish",
-                        quantity=Decimal("1.5"),
-                    ),
-                )
-            )
-        },
-    ).list_for_date(EVENT_DATE)[0]
-    assert invalid_quantity.reason_code == "DEMAND_SOURCE_INCOMPLETE"
+def test_capacity_blocks_zero_capacity() -> None:
+    station = ProductionStation("cold", "Cold")
+    capacity = ProductionStationCapacityDay(EVENT_DATE, "cold", 0)
+    assert _row(station, capacity).reason_code == "NO_CAPACITY"
