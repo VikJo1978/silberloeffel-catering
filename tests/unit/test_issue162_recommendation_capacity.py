@@ -69,7 +69,9 @@ class _Capacity:
     def list_stations(self) -> list[ProductionStation]:
         return self._stations
 
-    def list_capacity_days(self, event_date: date) -> list[ProductionStationCapacityDay]:
+    def list_capacity_days(
+        self, event_date: date
+    ) -> list[ProductionStationCapacityDay]:
         assert event_date == EVENT_DATE
         return self._capacity_days
 
@@ -141,9 +143,7 @@ def test_capacity_penalty_uses_committed_order_load() -> None:
         orders=[order],
         versions={"version-1": _version("order-1", "version-1")},
         snapshots={
-            "order-1": SimpleNamespace(
-                positions=(_position("dish-a", Decimal("40")),)
-            )
+            "order-1": SimpleNamespace(positions=(_position("dish-a", Decimal("40")),))
         },
     )
 
@@ -158,9 +158,7 @@ def test_capacity_penalty_uses_committed_order_load() -> None:
 
 def test_capacity_fails_closed_when_capacity_day_missing() -> None:
     service = _service(
-        requirements={
-            "dish-a": [CatalogStationRequirement("dish-a", "cold", 1)]
-        },
+        requirements={"dish-a": [CatalogStationRequirement("dish-a", "cold", 1)]},
         capacity_days=[],
     )
 
@@ -180,9 +178,7 @@ def test_capacity_exhausted_when_committed_load_reaches_limit() -> None:
         orders=[order],
         versions={"version-1": _version("order-1", "version-1")},
         snapshots={
-            "order-1": SimpleNamespace(
-                positions=(_position("dish-a", Decimal("10")),)
-            )
+            "order-1": SimpleNamespace(positions=(_position("dish-a", Decimal("10")),))
         },
     )
 
