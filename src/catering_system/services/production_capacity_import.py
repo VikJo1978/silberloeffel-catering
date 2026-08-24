@@ -12,7 +12,9 @@ from catering_system.domain.production_capacity import (
     ProductionStation,
     ProductionStationCapacityDay,
 )
-from catering_system.repositories.sqlite_catalog_repository import SQLiteCatalogRepository
+from catering_system.repositories.sqlite_catalog_repository import (
+    SQLiteCatalogRepository,
+)
 from catering_system.repositories.sqlite_production_capacity_repository import (
     SQLiteProductionCapacityRepository,
 )
