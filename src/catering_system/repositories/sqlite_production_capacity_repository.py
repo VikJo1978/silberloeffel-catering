@@ -112,7 +112,9 @@ class SQLiteProductionCapacityRepository:
             """
         ).fetchall()
         return [
-            ProductionStation(station_id=str(row[0]), name=str(row[1]), active=bool(row[2]))
+            ProductionStation(
+                station_id=str(row[0]), name=str(row[1]), active=bool(row[2])
+            )
             for row in rows
         ]
 
