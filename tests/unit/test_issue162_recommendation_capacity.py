@@ -39,11 +39,11 @@ def _version(order_id: str, version_id: str) -> SimpleNamespace:
     )
 
 
-def _position(catalog_item_id: str, quantity: str) -> SimpleNamespace:
+def _position(catalog_item_id: str, quantity: str | None) -> SimpleNamespace:
     return SimpleNamespace(
         kind="catalog",
         catalog_item_id=catalog_item_id,
-        quantity=Decimal(quantity),
+        quantity=None if quantity is None else Decimal(quantity),
     )
 
 
@@ -208,3 +208,129 @@ def test_capacity_fails_closed_for_missing_station_requirement() -> None:
 
     assert row.feasible is False
     assert row.reason_code == "MISSING_STATION_REQUIREMENT"
+
+
+def test_cancelled_order_does_not_consume_capacity() -> None:
+    requirement = CatalogStationRequirement("dish-a", "cold", 1)
+    order = _order("order-1", "version-1")
+    order.cancelled_at = object()
+    service = _service(
+        requirements={"dish-a": [requirement]},
+        capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
+        orders=[order],
+        versions={"version-1": _version("order-1", "version-1")},
+        snapshots={"order-1": _snapshot(_position("dish-a", "100"))},
+    )
+
+    row = service.list_for_date(EVENT_DATE)[0]
+
+    assert row.feasible is True
+    assert row.overload_penalty == 0
+
+
+def test_capacity_fails_closed_when_committed_snapshot_is_missing() -> None:
+    requirement = CatalogStationRequirement("dish-a", "cold", 1)
+    order = _order("order-1", "version-1")
+    service = _service(
+        requirements={"dish-a": [requirement]},
+        capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
+        orders=[order],
+        versions={"version-1": _version("order-1", "version-1")},
+        snapshots={},
+    )
+
+    row = service.list_for_date(EVENT_DATE)[0]
+
+    assert row.feasible is False
+    assert row.reason_code == "DEMAND_SOURCE_INCOMPLETE"
+
+
+def test_capacity_fails_closed_when_committed_quantity_is_not_whole() -> None:
+    requirement = CatalogStationRequirement("dish-a", "cold", 1)
+    order = _order("order-1", "version-1")
+    service = _service(
+        requirements={"dish-a": [requirement]},
+        capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
+        orders=[order],
+        versions={"version-1": _version("order-1", "version-1")},
+        snapshots={"order-1": _snapshot(_position("dish-a", "1.5"))},
+    )
+
+    row = service.list_for_date(EVENT_DATE)[0]
+
+    assert row.feasible is False
+    assert row.reason_code == "DEMAND_SOURCE_INCOMPLETE"
+
+
+def test_capacity_blocks_inactive_station() -> None:
+    requirement = CatalogStationRequirement("dish-a", "cold", 1)
+    service = _service(
+        requirements={"dish-a": [requirement]},
+        capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
+        stations=[ProductionStation("cold", "Kalte Küche", active=False)],
+    )
+
+    row = service.list_for_date(EVENT_DATE)[0]
+
+    assert row.feasible is False
+    assert row.reason_code == "STATION_INACTIVE"
+
+
+def test_capacity_blocks_unavailable_station() -> None:
+    requirement = CatalogStationRequirement("dish-a", "cold", 1)
+    service = _service(
+        requirements={"dish-a": [requirement]},
+        capacity_days=[CapacityDay(EVENT_DATE, "cold", 0, unavailable=True)],
+    )
+
+    row = service.list_for_date(EVENT_DATE)[0]
+
+    assert row.feasible is False
+    assert row.reason_code == "STATION_UNAVAILABLE"
+
+
+def test_capacity_blocks_zero_station_capacity() -> None:
+    requirement = CatalogStationRequirement("dish-a", "cold", 1)
+    service = _service(
+        requirements={"dish-a": [requirement]},
+        capacity_days=[CapacityDay(EVENT_DATE, "cold", 0)],
+    )
+
+    row = service.list_for_date(EVENT_DATE)[0]
+
+    assert row.feasible is False
+    assert row.reason_code == "NO_CAPACITY"
+
+
+def test_capacity_falls_back_to_latest_order_version() -> None:
+    requirement = CatalogStationRequirement("dish-a", "cold", 1)
+    order = SimpleNamespace(
+        order_id="order-1",
+        cancelled_at=None,
+        effective_order_version_id=None,
+        candidate_order_version_id=None,
+    )
+    older = SimpleNamespace(
+        order_id="order-1",
+        order_version_id="version-1",
+        version_number=1,
+        event_date=date(2026, 8, 30),
+    )
+    latest = SimpleNamespace(
+        order_id="order-1",
+        order_version_id="version-2",
+        version_number=2,
+        event_date=EVENT_DATE,
+    )
+    service = _service(
+        requirements={"dish-a": [requirement]},
+        capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
+        orders=[order],
+        versions={"version-1": older, "version-2": latest},
+        snapshots={"order-1": _snapshot(_position("dish-a", "10"))},
+    )
+
+    row = service.list_for_date(EVENT_DATE)[0]
+
+    assert row.feasible is True
+    assert row.overload_penalty == 10
