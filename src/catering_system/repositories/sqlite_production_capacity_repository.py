@@ -199,7 +199,9 @@ class SQLiteProductionCapacityRepository:
             unavailable=bool(row[3]),
         )
 
-    def list_capacity_days(self, event_date: date) -> list[ProductionStationCapacityDay]:
+    def list_capacity_days(
+        self, event_date: date
+    ) -> list[ProductionStationCapacityDay]:
         rows = self._conn.execute(
             """
             SELECT event_date, station_id, capacity_units, unavailable
