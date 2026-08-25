@@ -10,6 +10,7 @@ from catering_system.domain.production_capacity import (
     ProductionStationCapacityDay,
 )
 from catering_system.services.recommendation_capacity_service import (
+    CAPACITY_WARNING_TEXT,
     RecommendationCapacityService,
 )
 
@@ -133,7 +134,7 @@ def _service(
     )
 
 
-def test_capacity_penalty_uses_committed_order_load() -> None:
+def _row_for_used_capacity(used: int):  # noqa: ANN202
     requirement = CatalogStationRequirement("dish-a", "cold", 1)
     order = _order("order-1", "version-1")
     service = _service(
@@ -141,10 +142,13 @@ def test_capacity_penalty_uses_committed_order_load() -> None:
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
         orders=[order],
         versions={"version-1": _version("order-1", "version-1")},
-        snapshots={"order-1": _snapshot(_position("dish-a", "40"))},
+        snapshots={"order-1": _snapshot(_position("dish-a", str(used)))},
     )
+    return service.list_for_date(EVENT_DATE)[0]
 
-    row = service.list_for_date(EVENT_DATE)[0]
+
+def test_capacity_penalty_uses_committed_order_load() -> None:
+    row = _row_for_used_capacity(40)
 
     assert row.catalog_item_id == "dish-a"
     assert row.feasible is True
@@ -152,7 +156,40 @@ def test_capacity_penalty_uses_committed_order_load() -> None:
     assert row.reason_code is None
 
 
-def test_capacity_fails_closed_when_capacity_day_missing() -> None:
+def test_capacity_warns_in_four_advisory_tiers() -> None:
+    expected = (
+        (69, None),
+        (70, "CAPACITY_ELEVATED"),
+        (79, "CAPACITY_ELEVATED"),
+        (80, "CAPACITY_HIGH"),
+        (89, "CAPACITY_HIGH"),
+        (90, "CAPACITY_NEAR_LIMIT"),
+        (99, "CAPACITY_NEAR_LIMIT"),
+        (100, "CAPACITY_EXCEEDED"),
+        (120, "CAPACITY_EXCEEDED"),
+    )
+
+    for used, reason_code in expected:
+        row = _row_for_used_capacity(used)
+        assert row.feasible is True
+        assert row.overload_penalty == min(100, used)
+        assert row.reason_code == reason_code
+
+
+def test_capacity_warning_tiers_have_text_labels() -> None:
+    assert CAPACITY_WARNING_TEXT["CAPACITY_ELEVATED"] == "Erhöhte Auslastung"
+    assert CAPACITY_WARNING_TEXT["CAPACITY_HIGH"] == "Hohe Auslastung"
+    assert (
+        CAPACITY_WARNING_TEXT["CAPACITY_NEAR_LIMIT"]
+        == "Auslastung nahe am empfohlenen Grenzwert"
+    )
+    assert (
+        CAPACITY_WARNING_TEXT["CAPACITY_EXCEEDED"]
+        == "Empfohlener Kapazitätsgrenzwert überschritten"
+    )
+
+
+def test_capacity_missing_day_is_advisory() -> None:
     requirement = CatalogStationRequirement("dish-a", "cold", 1)
     service = _service(
         requirements={"dish-a": [requirement]},
@@ -161,12 +198,12 @@ def test_capacity_fails_closed_when_capacity_day_missing() -> None:
 
     row = service.list_for_date(EVENT_DATE)[0]
 
-    assert row.feasible is False
+    assert row.feasible is True
     assert row.overload_penalty == 100
     assert row.reason_code == "CAPACITY_UNSET"
 
 
-def test_capacity_exhausted_when_committed_load_reaches_limit() -> None:
+def test_capacity_limit_is_advisory() -> None:
     requirement = CatalogStationRequirement("dish-a", "cold", 2)
     order = _order("order-1", "version-1")
     service = _service(
@@ -179,11 +216,12 @@ def test_capacity_exhausted_when_committed_load_reaches_limit() -> None:
 
     row = service.list_for_date(EVENT_DATE)[0]
 
-    assert row.feasible is False
-    assert row.reason_code == "CAPACITY_EXHAUSTED"
+    assert row.feasible is True
+    assert row.overload_penalty == 100
+    assert row.reason_code == "CAPACITY_EXCEEDED"
 
 
-def test_capacity_fails_closed_when_demand_is_incomplete() -> None:
+def test_capacity_incomplete_demand_is_advisory() -> None:
     requirement = CatalogStationRequirement("candidate", "cold", 1)
     order = _order("order-1", "version-1")
     service = _service(
@@ -197,16 +235,16 @@ def test_capacity_fails_closed_when_demand_is_incomplete() -> None:
 
     row = service.list_for_date(EVENT_DATE)[0]
 
-    assert row.feasible is False
+    assert row.feasible is True
     assert row.reason_code == "DEMAND_SOURCE_INCOMPLETE"
 
 
-def test_capacity_fails_closed_for_missing_station_requirement() -> None:
+def test_capacity_missing_station_requirement_is_advisory() -> None:
     service = _service(requirements={}, capacity_days=[])
 
     row = service.list_for_date(EVENT_DATE)[0]
 
-    assert row.feasible is False
+    assert row.feasible is True
     assert row.reason_code == "MISSING_STATION_REQUIREMENT"
 
 
@@ -228,7 +266,7 @@ def test_cancelled_order_does_not_consume_capacity() -> None:
     assert row.overload_penalty == 0
 
 
-def test_capacity_fails_closed_when_committed_snapshot_is_missing() -> None:
+def test_capacity_missing_committed_snapshot_is_advisory() -> None:
     requirement = CatalogStationRequirement("dish-a", "cold", 1)
     order = _order("order-1", "version-1")
     service = _service(
@@ -241,11 +279,11 @@ def test_capacity_fails_closed_when_committed_snapshot_is_missing() -> None:
 
     row = service.list_for_date(EVENT_DATE)[0]
 
-    assert row.feasible is False
+    assert row.feasible is True
     assert row.reason_code == "DEMAND_SOURCE_INCOMPLETE"
 
 
-def test_capacity_fails_closed_when_committed_quantity_is_not_whole() -> None:
+def test_capacity_non_whole_committed_quantity_is_advisory() -> None:
     requirement = CatalogStationRequirement("dish-a", "cold", 1)
     order = _order("order-1", "version-1")
     service = _service(
@@ -258,11 +296,11 @@ def test_capacity_fails_closed_when_committed_quantity_is_not_whole() -> None:
 
     row = service.list_for_date(EVENT_DATE)[0]
 
-    assert row.feasible is False
+    assert row.feasible is True
     assert row.reason_code == "DEMAND_SOURCE_INCOMPLETE"
 
 
-def test_capacity_blocks_inactive_station() -> None:
+def test_capacity_inactive_station_is_advisory() -> None:
     requirement = CatalogStationRequirement("dish-a", "cold", 1)
     service = _service(
         requirements={"dish-a": [requirement]},
@@ -272,11 +310,11 @@ def test_capacity_blocks_inactive_station() -> None:
 
     row = service.list_for_date(EVENT_DATE)[0]
 
-    assert row.feasible is False
+    assert row.feasible is True
     assert row.reason_code == "STATION_INACTIVE"
 
 
-def test_capacity_blocks_unavailable_station() -> None:
+def test_capacity_unavailable_station_is_advisory() -> None:
     requirement = CatalogStationRequirement("dish-a", "cold", 1)
     service = _service(
         requirements={"dish-a": [requirement]},
@@ -285,11 +323,11 @@ def test_capacity_blocks_unavailable_station() -> None:
 
     row = service.list_for_date(EVENT_DATE)[0]
 
-    assert row.feasible is False
+    assert row.feasible is True
     assert row.reason_code == "STATION_UNAVAILABLE"
 
 
-def test_capacity_blocks_zero_station_capacity() -> None:
+def test_capacity_zero_station_capacity_is_advisory() -> None:
     requirement = CatalogStationRequirement("dish-a", "cold", 1)
     service = _service(
         requirements={"dish-a": [requirement]},
@@ -298,7 +336,7 @@ def test_capacity_blocks_zero_station_capacity() -> None:
 
     row = service.list_for_date(EVENT_DATE)[0]
 
-    assert row.feasible is False
+    assert row.feasible is True
     assert row.reason_code == "NO_CAPACITY"
 
 
