@@ -119,9 +119,7 @@ class RecommendationCapacityService:
         for dish in self._catalog.list_dishes(active=True, limit=10_000):
             requirements = self._capacity.list_catalog_requirements(dish.dish_id)
             if not requirements:
-                rows.append(
-                    self._advisory(dish.dish_id, "MISSING_STATION_REQUIREMENT")
-                )
+                rows.append(self._advisory(dish.dish_id, "MISSING_STATION_REQUIREMENT"))
                 continue
             if global_demand_unknown:
                 rows.append(self._advisory(dish.dish_id, "DEMAND_SOURCE_INCOMPLETE"))
