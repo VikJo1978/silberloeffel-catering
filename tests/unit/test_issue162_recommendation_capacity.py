@@ -149,9 +149,7 @@ def _row_for_used_capacity(used: int):  # noqa: ANN202
         requirements={"dish-a": [requirement]},
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
         orders=[order],
-        versions={
-            "version-1": _version("order-1", "version-1", guest_count=used)
-        },
+        versions={"version-1": _version("order-1", "version-1", guest_count=used)},
         snapshots={"order-1": _snapshot(_position("dish-a"))},
     )
     return service.list_for_date(EVENT_DATE)[0]
@@ -177,9 +175,7 @@ def test_multiple_dishes_on_same_station_count_guest_load_once() -> None:
         requirements=requirements,
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
         orders=[order],
-        versions={
-            "version-1": _version("order-1", "version-1", guest_count=40)
-        },
+        versions={"version-1": _version("order-1", "version-1", guest_count=40)},
         snapshots={
             "order-1": _snapshot(_position("dish-a", "40"), _position("dish-b", "40"))
         },
@@ -245,9 +241,7 @@ def test_capacity_limit_is_advisory() -> None:
         requirements={"dish-a": [requirement]},
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 20)],
         orders=[order],
-        versions={
-            "version-1": _version("order-1", "version-1", guest_count=20)
-        },
+        versions={"version-1": _version("order-1", "version-1", guest_count=20)},
         snapshots={"order-1": _snapshot(_position("dish-a", "10"))},
     )
 
@@ -266,9 +260,7 @@ def test_capacity_incomplete_demand_is_advisory() -> None:
         requirements={"candidate": [requirement]},
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
         orders=[order],
-        versions={
-            "version-1": _version("order-1", "version-1", guest_count=10)
-        },
+        versions={"version-1": _version("order-1", "version-1", guest_count=10)},
         snapshots={"order-1": _snapshot(_position("legacy-unmapped", "10"))},
     )
 
@@ -295,9 +287,7 @@ def test_cancelled_order_does_not_consume_capacity() -> None:
         requirements={"dish-a": [requirement]},
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
         orders=[order],
-        versions={
-            "version-1": _version("order-1", "version-1", guest_count=100)
-        },
+        versions={"version-1": _version("order-1", "version-1", guest_count=100)},
         snapshots={"order-1": _snapshot(_position("dish-a", "100"))},
     )
 
@@ -314,9 +304,7 @@ def test_capacity_missing_committed_snapshot_is_advisory() -> None:
         requirements={"dish-a": [requirement]},
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
         orders=[order],
-        versions={
-            "version-1": _version("order-1", "version-1", guest_count=10)
-        },
+        versions={"version-1": _version("order-1", "version-1", guest_count=10)},
         snapshots={},
     )
 
@@ -333,9 +321,7 @@ def test_capacity_missing_guest_count_is_advisory() -> None:
         requirements={"dish-a": [requirement]},
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
         orders=[order],
-        versions={
-            "version-1": _version("order-1", "version-1", guest_count=None)
-        },
+        versions={"version-1": _version("order-1", "version-1", guest_count=None)},
         snapshots={"order-1": _snapshot(_position("dish-a"))},
     )
 
