@@ -1,4 +1,4 @@
-name: Issue 175 timing core once v2
+name: Issue 175 timing core once v3
 
 on:
   push:
@@ -6,6 +6,7 @@ on:
       - issue-175-logistics-timing-core
     paths:
       - .github/workflows/issue175-timing-core-once-v2.yml
+      - scripts_issue175_update_guard_tests.py
 
 permissions:
   contents: write
