@@ -1,0 +1,41 @@
+name: Fix issue 171 patch workflow once
+
+on:
+  push:
+    branches:
+      - issue-171-return-logistics-wire
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: issue-171-return-logistics-wire
+
+      - name: Fix literal newline escapes in patch runner
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path(".github/workflows/issue171-return-logistics-wire-once.yml")
+          text = path.read_text()
+          old = 'order_repo = Path(\\n              "src/catering_system/repositories/sqlite_order_commercial_snapshot_repository.py"\\n          )'
+          new = '''order_repo = Path(
+              "src/catering_system/repositories/sqlite_order_commercial_snapshot_repository.py"
+          )'''
+          assert text.count(old) == 1, text.count(old)
+          path.write_text(text.replace(old, new, 1))
+          PY
+
+      - name: Remove fixer and commit corrected runner
+        run: |
+          git rm .github/workflows/issue171-fix-patch-workflow-once.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/issue171-return-logistics-wire-once.yml
+          git commit -m "Fix issue 171 patch runner syntax"
+          git push origin HEAD:issue-171-return-logistics-wire
