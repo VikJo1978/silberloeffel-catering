@@ -256,11 +256,13 @@ def test_order_feed_happy_path_exact_shape(kiosk_url: str) -> None:
         "time_window_text",
         "location_text",
         "guest_count_estimate",
+        "return_logistics",
     }
     assert order["event_date"] == "2026-10-01"
     assert order["time_window_text"] == "mittags"
     assert order["location_text"] == "Hamburg"
     assert order["guest_count_estimate"] == 25
+    assert order["return_logistics"] is None
 
 
 def test_order_feed_empty_date_returns_empty_orders(kiosk_url: str) -> None:

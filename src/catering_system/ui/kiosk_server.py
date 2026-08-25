@@ -10,13 +10,18 @@ import argparse
 import html
 import json
 import re
-from datetime import date
+from collections.abc import Mapping
+from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
+from catering_system.domain.offer_charges import ReturnLogisticsDefinition
 from catering_system.domain.wochenuebersicht import (
     Wochenuebersicht,
     WochenuebersichtEntry,
+)
+from catering_system.repositories.order_commercial_snapshot_repository import (
+    OrderCommercialSnapshotRepository,
 )
 from catering_system.repositories.order_repository import OrderRepository
 from catering_system.repositories.order_operational_pause_repository import (
@@ -127,14 +132,50 @@ def parse_order_feed_date(query: str) -> date | None:
         return None
 
 
-def render_order_feed_json(
-    feed_date: date, entries: tuple[WochenuebersichtEntry, ...]
-) -> bytes:
-    """Pure renderer: per-date entries → courier order feed document (pack §3).
+def next_return_working_day(event_date: date) -> date:
+    """Return the next Monday-Friday date after ``event_date``.
 
-    Exactly the courier app's CoreOrderSummary slice; version numbers,
-    planning mode, and direct customer identity and contact fields stay out.
-    The event address itself remains sensitive operational data."""
+    Issue #171 deliberately does not invent public-holiday knowledge: Core has
+    no business-calendar source yet. Weekend skipping is deterministic and the
+    only working-day rule this projection may truthfully derive today.
+    """
+    candidate = event_date + timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def _return_logistics_projection(
+    event_date: date, definition: ReturnLogisticsDefinition | None
+) -> dict[str, str | None] | None:
+    if definition is None:
+        return None
+    return_date = (
+        event_date
+        if definition.mode == "SAME_DAY"
+        else next_return_working_day(event_date)
+    )
+    return {
+        "mode": definition.mode,
+        "return_date": return_date.isoformat(),
+        "pickup_window_text": definition.pickup_window_text,
+    }
+
+
+def render_order_feed_json(
+    feed_date: date,
+    entries: tuple[WochenuebersichtEntry, ...],
+    return_logistics_by_order_id: Mapping[str, ReturnLogisticsDefinition | None]
+    | None = None,
+) -> bytes:
+    """Pure renderer: per-date entries → courier order feed document (v2).
+
+    Selection still comes exclusively from ``WochenuebersichtService``. The
+    additive ``return_logistics`` planning fact is joined from the immutable
+    accepted OrderCommercialSnapshot. Prices and courier execution state stay
+    out of this payload.
+    """
+    return_logistics = return_logistics_by_order_id or {}
     document = {
         "date": feed_date.isoformat(),
         "orders": [
@@ -144,6 +185,9 @@ def render_order_feed_json(
                 "time_window_text": e.time_window_text,
                 "location_text": e.location_text,
                 "guest_count_estimate": e.guest_count_estimate,
+                "return_logistics": _return_logistics_projection(
+                    e.event_date, return_logistics.get(e.order_id)
+                ),
             }
             for e in entries
         ],
@@ -167,6 +211,7 @@ def make_kiosk_handler(
     pickup_signal: PickupSignalRefresher | None = None,
     *,
     pause_repository: OrderOperationalPauseRepository | None = None,
+    commercial_snapshot_repository: OrderCommercialSnapshotRepository | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     service = WochenuebersichtService(
         order_repository, pause_repository=pause_repository
@@ -194,8 +239,20 @@ def make_kiosk_handler(
                 if feed_date is None:
                     self.send_error(400, "date must be one strict YYYY-MM-DD value")
                     return
+                entries = service.get_day_overview(feed_date)
+                return_logistics_by_order_id: dict[
+                    str, ReturnLogisticsDefinition | None
+                ] = {}
+                if commercial_snapshot_repository is not None:
+                    for entry in entries:
+                        snapshot = commercial_snapshot_repository.get_by_order_id(
+                            entry.order_id
+                        )
+                        return_logistics_by_order_id[entry.order_id] = (
+                            snapshot.return_logistics if snapshot is not None else None
+                        )
                 payload = render_order_feed_json(
-                    feed_date, service.get_day_overview(feed_date)
+                    feed_date, entries, return_logistics_by_order_id
                 )
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -243,6 +300,7 @@ def create_kiosk_server(
     pickup_signal: PickupSignalRefresher | None = None,
     *,
     pause_repository: OrderOperationalPauseRepository | None = None,
+    commercial_snapshot_repository: OrderCommercialSnapshotRepository | None = None,
 ) -> HTTPServer:
     # Single-threaded on purpose: the shared sqlite3 connection must stay on the
     # thread that serves requests (bring-up bug, WORKLOG Entry 048). A read-only
@@ -251,7 +309,10 @@ def create_kiosk_server(
     return HTTPServer(
         (host, port),
         make_kiosk_handler(
-            order_repository, pickup_signal, pause_repository=pause_repository
+            order_repository,
+            pickup_signal,
+            pause_repository=pause_repository,
+            commercial_snapshot_repository=commercial_snapshot_repository,
         ),
     )
 
@@ -287,18 +348,23 @@ def main() -> None:
     from catering_system.repositories.sqlite_order_operational_pause_repository import (
         SQLiteOrderOperationalPauseRepository,
     )
+    from catering_system.repositories.sqlite_order_commercial_snapshot_repository import (
+        SQLiteOrderCommercialSnapshotRepository,
+    )
     from catering_system.repositories.sqlite_order_repository import (
         SQLiteOrderRepository,
     )
 
     order_repo = SQLiteOrderRepository(args.db)
     pause_repo = SQLiteOrderOperationalPauseRepository(args.db)
+    commercial_snapshot_repo = SQLiteOrderCommercialSnapshotRepository(args.db)
     server = create_kiosk_server(
         order_repo,
         args.host,
         args.port,
         pickup_signal,
         pause_repository=pause_repo,
+        commercial_snapshot_repository=commercial_snapshot_repo,
     )
     if pickup_signal is not None:
         pickup_signal.start()
