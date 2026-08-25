@@ -27,7 +27,10 @@ class InMemoryCustomerGastronomicPreferenceRepository:
             for preference in self._preferences.values()
             if preference.customer_id == customer_id
         ]
-        rows.sort(key=lambda preference: (preference.updated_at, preference.preference_id), reverse=True)
+        rows.sort(
+            key=lambda preference: (preference.updated_at, preference.preference_id),
+            reverse=True,
+        )
         return rows
 
     def update(self, preference: CustomerGastronomicPreference) -> None:

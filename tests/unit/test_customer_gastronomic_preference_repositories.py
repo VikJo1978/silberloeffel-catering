@@ -86,7 +86,9 @@ def test_repository_crud_and_customer_isolation(
 
 
 @pytest.mark.parametrize("repository_kind", ["memory", "sqlite"])
-def test_repository_rejects_duplicate_and_missing_ids(repository_kind: str, tmp_path) -> None:
+def test_repository_rejects_duplicate_and_missing_ids(
+    repository_kind: str, tmp_path
+) -> None:
     if repository_kind == "memory":
         repo = InMemoryCustomerGastronomicPreferenceRepository()
     else:
