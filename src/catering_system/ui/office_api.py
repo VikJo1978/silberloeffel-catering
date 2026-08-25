@@ -47,6 +47,11 @@ from catering_system.domain.chat import (
     validate_chat_reference_type,
     validate_chat_thread_type,
 )
+from catering_system.domain.customer_gastronomic_preference import (
+    CustomerGastronomicPreference,
+    validate_preference_kind,
+    validate_preference_source,
+)
 from catering_system.domain.customer_document_eligibility import (
     CustomerDocumentCreationBlocked,
 )
@@ -125,6 +130,12 @@ from catering_system.repositories.sqlite_configurator_handoff_repository import 
 from catering_system.repositories.sqlite_contact_profile_repository import (
     SQLiteContactProfileRepository,
 )
+from catering_system.repositories.sqlite_customer_gastronomic_preference_repository import (
+    SQLiteCustomerGastronomicPreferenceRepository,
+)
+from catering_system.repositories.sqlite_customer_identity_repository import (
+    SQLiteCustomerIdentityRepository,
+)
 from catering_system.repositories.sqlite_employee_auth_repository import (
     SQLiteEmployeeAuthRepository,
 )
@@ -176,6 +187,11 @@ from catering_system.services.chat_service import (
     ChatNotFoundError,
     ChatReferenceNotFoundError,
     ChatService,
+)
+from catering_system.services.customer_gastronomic_preference_service import (
+    CustomerGastronomicPreferenceNotFoundError,
+    CustomerGastronomicPreferenceService,
+    CustomerNotFoundError,
 )
 from catering_system.services.configurator_handoff_service import (
     HANDOFF_OPERATION_PREPARE_FIRST_OFFER,
@@ -649,6 +665,20 @@ def _manual_task_shape(task: ManualTask) -> dict[str, object]:
     }
 
 
+def _gastronomic_preference_shape(
+    preference: CustomerGastronomicPreference,
+) -> dict[str, object]:
+    return {
+        "preference_id": preference.preference_id,
+        "customer_id": preference.customer_id,
+        "kind": preference.kind,
+        "value": preference.value,
+        "source": preference.source,
+        "created_at": preference.created_at.isoformat(),
+        "updated_at": preference.updated_at.isoformat(),
+    }
+
+
 # --- API core ----------------------------------------------------------------
 
 
@@ -667,6 +697,12 @@ class OfficeApi:
         self.offer_pdf_static_content = offer_pdf_static_content
         self.inquiries = SQLiteInquiryRepository.from_connection(connection)
         bootstrap_customer_identity_schema(connection)
+        self.customer_identities = SQLiteCustomerIdentityRepository.from_connection(
+            connection
+        )
+        self.customer_gastronomic_preferences = (
+            SQLiteCustomerGastronomicPreferenceRepository.from_connection(connection)
+        )
         bootstrap_employee_auth_schema(connection)
         self.orders = SQLiteOrderRepository.from_connection(connection)
         self.kitchen_print_jobs = SQLiteKitchenPrintJobRepository.from_connection(
@@ -724,6 +760,11 @@ class OfficeApi:
         self._active_command_id: str | None = None
         self._active_employee: AuthenticatedEmployee | None = None
         self.inquiry_service = InquiryService(self.inquiries, event_sink=self.events)
+        self.customer_gastronomic_preference_service = (
+            CustomerGastronomicPreferenceService(
+                self.customer_identities, self.customer_gastronomic_preferences
+            )
+        )
         self.order_service = OrderService(self.orders, event_sink=self.events)
         self.offer_service = OfferService(
             self.offers,
@@ -919,6 +960,24 @@ class OfficeApi:
             }
 
         return self.executor.run(work)
+
+    def list_customer_gastronomic_preferences(
+        self, customer_id: str
+    ) -> dict[str, object]:
+        try:
+            preferences = (
+                self.customer_gastronomic_preference_service.list_for_customer(
+                    customer_id
+                )
+            )
+        except CustomerNotFoundError as exc:
+            raise ApiError(404, "customer_not_found") from exc
+        return {
+            "customer_id": customer_id,
+            "preferences": [
+                _gastronomic_preference_shape(preference) for preference in preferences
+            ],
+        }
 
     # -- reads -----------------------------------------------------------
 
@@ -1928,6 +1987,56 @@ class OfficeApi:
             "employee_id": employee.account.id,
             "last_read_message_id": last_read_message_id,
         }
+
+    def cmd_create_customer_gastronomic_preference(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        try:
+            preference = self.customer_gastronomic_preference_service.create(
+                customer_id=path_ids["customer_id"],
+                kind=validate_preference_kind(_v_str(args["kind"], 100)),
+                value=_v_str(args["value"], 1000),
+                source=validate_preference_source(_v_str(args["source"], 100)),
+            )
+        except CustomerNotFoundError as exc:
+            raise ApiError(404, "customer_not_found") from exc
+        except (TypeError, ValueError) as exc:
+            raise ApiError(422, "invalid_gastronomic_preference") from exc
+        return 201, {"preference": _gastronomic_preference_shape(preference)}
+
+    def cmd_update_customer_gastronomic_preference(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        try:
+            preference = self.customer_gastronomic_preference_service.update(
+                customer_id=path_ids["customer_id"],
+                preference_id=path_ids["preference_id"],
+                kind=validate_preference_kind(_v_str(args["kind"], 100)),
+                value=_v_str(args["value"], 1000),
+                source=validate_preference_source(_v_str(args["source"], 100)),
+            )
+        except CustomerNotFoundError as exc:
+            raise ApiError(404, "customer_not_found") from exc
+        except CustomerGastronomicPreferenceNotFoundError as exc:
+            raise ApiError(404, "gastronomic_preference_not_found") from exc
+        except (TypeError, ValueError) as exc:
+            raise ApiError(422, "invalid_gastronomic_preference") from exc
+        return 200, {"preference": _gastronomic_preference_shape(preference)}
+
+    def cmd_delete_customer_gastronomic_preference(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        preference_id = path_ids["preference_id"]
+        try:
+            self.customer_gastronomic_preference_service.delete(
+                customer_id=path_ids["customer_id"],
+                preference_id=preference_id,
+            )
+        except CustomerNotFoundError as exc:
+            raise ApiError(404, "customer_not_found") from exc
+        except CustomerGastronomicPreferenceNotFoundError as exc:
+            raise ApiError(404, "gastronomic_preference_not_found") from exc
+        return 200, {"deleted_preference_id": preference_id}
 
     def cmd_create_inquiry(
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict
@@ -3248,7 +3357,22 @@ _CHAT_MESSAGE_CREATE_ARGS = _ArgKeys(
 )
 _CHAT_READ_ARGS = _ArgKeys(required=frozenset({"last_read_message_id"}))
 
+_GASTRONOMIC_PREFERENCE_ARGS = _ArgKeys(required=frozenset({"kind", "value", "source"}))
+
 _COMMANDS: dict[str, _CommandSpec] = {
+    "create_customer_gastronomic_preference": _CommandSpec(
+        "cmd_create_customer_gastronomic_preference",
+        _GASTRONOMIC_PREFERENCE_ARGS,
+        set(),
+    ),
+    "update_customer_gastronomic_preference": _CommandSpec(
+        "cmd_update_customer_gastronomic_preference",
+        _GASTRONOMIC_PREFERENCE_ARGS,
+        set(),
+    ),
+    "delete_customer_gastronomic_preference": _CommandSpec(
+        "cmd_delete_customer_gastronomic_preference", _NO_ARGS, set()
+    ),
     "create_inquiry": _CommandSpec("cmd_create_inquiry", _CREATE_ARGS, set()),
     "update_inquiry": _CommandSpec("cmd_update_inquiry", _UPDATE_ARGS, {"updated_at"}),
     "contact-completion": _CommandSpec(
@@ -3411,6 +3535,36 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/chat/threads/(?P<thread_id>[^/]+)/participants$"),
         "/office/v1/chat/threads/{thread_id}/participants",
         {"GET": "chat_thread_participants"},
+    ),
+    (
+        re.compile(
+            r"^/office/v1/customers/(?P<customer_id>[^/]+)/gastronomic-preferences$"
+        ),
+        "/office/v1/customers/{customer_id}/gastronomic-preferences",
+        {"GET": "list_customer_gastronomic_preferences"},
+    ),
+    (
+        re.compile(
+            r"^/office/v1/customers/(?P<customer_id>[^/]+)/gastronomic-preferences/create$"
+        ),
+        "/office/v1/customers/{customer_id}/gastronomic-preferences/create",
+        {"POST": "create_customer_gastronomic_preference"},
+    ),
+    (
+        re.compile(
+            r"^/office/v1/customers/(?P<customer_id>[^/]+)/gastronomic-preferences/"
+            r"(?P<preference_id>[^/]+)/update$"
+        ),
+        "/office/v1/customers/{customer_id}/gastronomic-preferences/{preference_id}/update",
+        {"POST": "update_customer_gastronomic_preference"},
+    ),
+    (
+        re.compile(
+            r"^/office/v1/customers/(?P<customer_id>[^/]+)/gastronomic-preferences/"
+            r"(?P<preference_id>[^/]+)/delete$"
+        ),
+        "/office/v1/customers/{customer_id}/gastronomic-preferences/{preference_id}/delete",
+        {"POST": "delete_customer_gastronomic_preference"},
     ),
     (
         re.compile(r"^/office/v1/inquiries$"),
@@ -4143,6 +4297,12 @@ def make_office_api_handler(
             elif kind == "work_center":
                 self._query(set())
                 self._respond(200, api.work_center())
+            elif kind == "list_customer_gastronomic_preferences":
+                self._query(set())
+                self._respond(
+                    200,
+                    api.list_customer_gastronomic_preferences(path_ids["customer_id"]),
+                )
             elif kind == "list_inquiries":
                 params = self._query({"q", "limit", "offset"})
                 q = _v_str(params.get("q", ""), _MAX_Q_CHARS).strip().lower()
