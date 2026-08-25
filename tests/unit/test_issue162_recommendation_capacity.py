@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from datetime import date
-from decimal import Decimal
 from types import SimpleNamespace
 
 from catering_system.domain.production_capacity import (
@@ -30,20 +29,26 @@ def _order(order_id: str, version_id: str) -> SimpleNamespace:
     )
 
 
-def _version(order_id: str, version_id: str) -> SimpleNamespace:
+def _version(
+    order_id: str,
+    version_id: str,
+    *,
+    guest_count_estimate: int | None = 0,
+) -> SimpleNamespace:
     return SimpleNamespace(
         order_id=order_id,
         order_version_id=version_id,
         version_number=1,
         event_date=EVENT_DATE,
+        guest_count_estimate=guest_count_estimate,
     )
 
 
-def _position(catalog_item_id: str, quantity: str | None) -> SimpleNamespace:
+def _position(catalog_item_id: str) -> SimpleNamespace:
     return SimpleNamespace(
         kind="catalog",
         catalog_item_id=catalog_item_id,
-        quantity=None if quantity is None else Decimal(quantity),
+        quantity=None,
     )
 
 
@@ -133,15 +138,19 @@ def _service(
     )
 
 
-def test_capacity_penalty_uses_committed_order_load() -> None:
+def test_capacity_penalty_uses_committed_guest_count() -> None:
     requirement = CatalogStationRequirement("dish-a", "cold", 1)
     order = _order("order-1", "version-1")
     service = _service(
         requirements={"dish-a": [requirement]},
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
         orders=[order],
-        versions={"version-1": _version("order-1", "version-1")},
-        snapshots={"order-1": _snapshot(_position("dish-a", "40"))},
+        versions={
+            "version-1": _version(
+                "order-1", "version-1", guest_count_estimate=40
+            )
+        },
+        snapshots={"order-1": _snapshot(_position("dish-a"))},
     )
 
     row = service.list_for_date(EVENT_DATE)[0]
@@ -150,6 +159,33 @@ def test_capacity_penalty_uses_committed_order_load() -> None:
     assert row.feasible is True
     assert row.overload_penalty == 40
     assert row.reason_code is None
+
+
+def test_multiple_positions_do_not_multiply_guest_capacity() -> None:
+    requirements = {
+        "dish-a": [CatalogStationRequirement("dish-a", "cold", 1)],
+        "dish-b": [CatalogStationRequirement("dish-b", "cold", 1)],
+    }
+    order = _order("order-1", "version-1")
+    service = _service(
+        dish_ids=("dish-a", "dish-b"),
+        requirements=requirements,
+        capacity_days=[CapacityDay(EVENT_DATE, "cold", 500)],
+        orders=[order],
+        versions={
+            "version-1": _version(
+                "order-1", "version-1", guest_count_estimate=100
+            )
+        },
+        snapshots={
+            "order-1": _snapshot(_position("dish-a"), _position("dish-b"))
+        },
+    )
+
+    rows = service.list_for_date(EVENT_DATE)
+
+    assert len(rows) == 2
+    assert {row.overload_penalty for row in rows} == {20}
 
 
 def test_capacity_fails_closed_when_capacity_day_missing() -> None:
@@ -166,15 +202,19 @@ def test_capacity_fails_closed_when_capacity_day_missing() -> None:
     assert row.reason_code == "CAPACITY_UNSET"
 
 
-def test_capacity_exhausted_when_committed_load_reaches_limit() -> None:
-    requirement = CatalogStationRequirement("dish-a", "cold", 2)
+def test_capacity_exhausted_when_committed_guests_reach_limit() -> None:
+    requirement = CatalogStationRequirement("dish-a", "cold", 1)
     order = _order("order-1", "version-1")
     service = _service(
         requirements={"dish-a": [requirement]},
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 20)],
         orders=[order],
-        versions={"version-1": _version("order-1", "version-1")},
-        snapshots={"order-1": _snapshot(_position("dish-a", "10"))},
+        versions={
+            "version-1": _version(
+                "order-1", "version-1", guest_count_estimate=20
+            )
+        },
+        snapshots={"order-1": _snapshot(_position("dish-a"))},
     )
 
     row = service.list_for_date(EVENT_DATE)[0]
@@ -191,8 +231,12 @@ def test_capacity_fails_closed_when_demand_is_incomplete() -> None:
         requirements={"candidate": [requirement]},
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
         orders=[order],
-        versions={"version-1": _version("order-1", "version-1")},
-        snapshots={"order-1": _snapshot(_position("legacy-unmapped", "10"))},
+        versions={
+            "version-1": _version(
+                "order-1", "version-1", guest_count_estimate=10
+            )
+        },
+        snapshots={"order-1": _snapshot(_position("legacy-unmapped"))},
     )
 
     row = service.list_for_date(EVENT_DATE)[0]
@@ -218,8 +262,12 @@ def test_cancelled_order_does_not_consume_capacity() -> None:
         requirements={"dish-a": [requirement]},
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
         orders=[order],
-        versions={"version-1": _version("order-1", "version-1")},
-        snapshots={"order-1": _snapshot(_position("dish-a", "100"))},
+        versions={
+            "version-1": _version(
+                "order-1", "version-1", guest_count_estimate=100
+            )
+        },
+        snapshots={"order-1": _snapshot(_position("dish-a"))},
     )
 
     row = service.list_for_date(EVENT_DATE)[0]
@@ -235,7 +283,11 @@ def test_capacity_fails_closed_when_committed_snapshot_is_missing() -> None:
         requirements={"dish-a": [requirement]},
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
         orders=[order],
-        versions={"version-1": _version("order-1", "version-1")},
+        versions={
+            "version-1": _version(
+                "order-1", "version-1", guest_count_estimate=10
+            )
+        },
         snapshots={},
     )
 
@@ -245,15 +297,19 @@ def test_capacity_fails_closed_when_committed_snapshot_is_missing() -> None:
     assert row.reason_code == "DEMAND_SOURCE_INCOMPLETE"
 
 
-def test_capacity_fails_closed_when_committed_quantity_is_not_whole() -> None:
+def test_capacity_fails_closed_when_guest_count_is_missing() -> None:
     requirement = CatalogStationRequirement("dish-a", "cold", 1)
     order = _order("order-1", "version-1")
     service = _service(
         requirements={"dish-a": [requirement]},
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
         orders=[order],
-        versions={"version-1": _version("order-1", "version-1")},
-        snapshots={"order-1": _snapshot(_position("dish-a", "1.5"))},
+        versions={
+            "version-1": _version(
+                "order-1", "version-1", guest_count_estimate=None
+            )
+        },
+        snapshots={"order-1": _snapshot(_position("dish-a"))},
     )
 
     row = service.list_for_date(EVENT_DATE)[0]
@@ -315,19 +371,21 @@ def test_capacity_falls_back_to_latest_order_version() -> None:
         order_version_id="version-1",
         version_number=1,
         event_date=date(2026, 8, 30),
+        guest_count_estimate=50,
     )
     latest = SimpleNamespace(
         order_id="order-1",
         order_version_id="version-2",
         version_number=2,
         event_date=EVENT_DATE,
+        guest_count_estimate=10,
     )
     service = _service(
         requirements={"dish-a": [requirement]},
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
         orders=[order],
         versions={"version-1": older, "version-2": latest},
-        snapshots={"order-1": _snapshot(_position("dish-a", "10"))},
+        snapshots={"order-1": _snapshot(_position("dish-a"))},
     )
 
     row = service.list_for_date(EVENT_DATE)[0]
