@@ -7,11 +7,15 @@ from datetime import date
 from typing import Protocol
 
 from catering_system.domain.customer_order_history import CustomerOrderHistoryEntry
-from catering_system.domain.customer_recommendation_hint import CustomerRecommendationHint
+from catering_system.domain.customer_recommendation_hint import (
+    CustomerRecommendationHint,
+)
 
 
 class CustomerOrderHistoryReader(Protocol):
-    def list_for_customer(self, customer_id: str) -> list[CustomerOrderHistoryEntry]: ...
+    def list_for_customer(
+        self, customer_id: str
+    ) -> list[CustomerOrderHistoryEntry]: ...
 
 
 class CustomerRecommendationHintService:
@@ -31,8 +35,8 @@ class CustomerRecommendationHintService:
             for entry in self._history.list_for_customer(customer_id)
             if entry.cancelled_at is None
         ]
-        by_item: dict[str, list[tuple[CustomerOrderHistoryEntry, str]]] = (
-            defaultdict(list)
+        by_item: dict[str, list[tuple[CustomerOrderHistoryEntry, str]]] = defaultdict(
+            list
         )
         for entry in orders:
             seen_in_order: set[str] = set()
