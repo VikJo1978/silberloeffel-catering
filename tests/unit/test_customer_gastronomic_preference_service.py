@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from typing import TypeAlias
 
 import pytest
 
@@ -18,6 +19,12 @@ from catering_system.services.customer_gastronomic_preference_service import (
 
 NOW = datetime(2026, 8, 25, 18, 0, tzinfo=UTC)
 
+ServiceFixture: TypeAlias = tuple[
+    CustomerGastronomicPreferenceService,
+    InMemoryCustomerIdentityRepository,
+    InMemoryCustomerGastronomicPreferenceRepository,
+]
+
 
 def _customer(customer_id: str = "customer-1") -> CustomerIdentity:
     return CustomerIdentity(
@@ -30,7 +37,7 @@ def _customer(customer_id: str = "customer-1") -> CustomerIdentity:
     )
 
 
-def _service():
+def _service() -> ServiceFixture:
     customers = InMemoryCustomerIdentityRepository()
     preferences = InMemoryCustomerGastronomicPreferenceRepository()
     service = CustomerGastronomicPreferenceService(
@@ -143,7 +150,9 @@ def test_delete_removes_preference_but_not_customer_identity() -> None:
         source="customer_stated",
     )
 
-    service.delete(customer_id=customer.customer_id, preference_id=created.preference_id)
+    service.delete(
+        customer_id=customer.customer_id, preference_id=created.preference_id
+    )
 
     assert preferences.get_by_id(created.preference_id) is None
     assert customers.get_by_id(customer.customer_id) == customer

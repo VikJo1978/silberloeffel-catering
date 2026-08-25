@@ -46,7 +46,9 @@ class CustomerGastronomicPreferenceService:
         self._now = now or (lambda: datetime.now(UTC))
         self._new_id = new_id or (lambda: str(uuid.uuid4()))
 
-    def list_for_customer(self, customer_id: str) -> list[CustomerGastronomicPreference]:
+    def list_for_customer(
+        self, customer_id: str
+    ) -> list[CustomerGastronomicPreference]:
         self._require_customer(customer_id)
         return self._preferences.list_by_customer(customer_id)
 

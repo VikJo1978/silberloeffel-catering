@@ -13,6 +13,8 @@ from pathlib import Path
 import pytest
 
 from catering_system.domain.customer_identity import CustomerIdentity
+from tests.helpers.offer_pdf_static_content import fake_offer_pdf_static_content
+
 from catering_system.repositories.sqlite_customer_identity_repository import (
     SQLiteCustomerIdentityRepository,
 )
@@ -48,6 +50,7 @@ def _start_api_server(db: Path) -> tuple[HTTPServer, threading.Thread, str]:
             _TOKEN,
             "127.0.0.1",
             0,
+            offer_pdf_static_content=fake_offer_pdf_static_content(),
         )
         ready.put(server)
         server.serve_forever()
