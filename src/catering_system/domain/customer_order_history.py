@@ -27,7 +27,11 @@ class CustomerOrderHistoryDish:
 
 @dataclass(frozen=True)
 class CustomerOrderHistoryEntry:
-    """Factual projection for one Order explicitly linked to a CustomerIdentity."""
+    """Factual projection for one Order explicitly linked to a CustomerIdentity.
+
+    Accepted commercial fields are optional so legacy Orders without a complete
+    Offer conversion trail remain visible instead of being silently discarded.
+    """
 
     order_id: str
     source_inquiry_id: str
@@ -35,11 +39,11 @@ class CustomerOrderHistoryEntry:
     event_date: date
     guest_count: int | None
     fulfillment_mode: FulfillmentMode
-    accepted_offer_id: str
-    accepted_offer_version_id: str
-    accepted_variant_id: str
-    accepted_variant_label: str
+    accepted_offer_id: str | None
+    accepted_offer_version_id: str | None
+    accepted_variant_id: str | None
+    accepted_variant_label: str | None
     dishes: tuple[CustomerOrderHistoryDish, ...]
-    gross_total_cents: int
+    gross_total_cents: int | None
     order_created_at: datetime
     cancelled_at: datetime | None
