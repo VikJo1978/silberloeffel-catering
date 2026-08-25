@@ -18,6 +18,12 @@ text = replace_once(
     '    ]',
     "offer migration expectation",
 )
+text = replace_once(
+    text,
+    "    assert rows_after == (9,)\n",
+    "    assert rows_after == (10,)\n",
+    "offer migration count expectation",
+)
 path.write_text(text, encoding="utf-8")
 
 path = Path("tests/unit/test_sqlite_repositories.py")
