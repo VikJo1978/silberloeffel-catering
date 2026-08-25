@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import sqlite3
 from datetime import date, datetime, timezone
 from decimal import Decimal
@@ -18,6 +19,7 @@ from catering_system.domain.offer import (
     OfferVersion,
     SentEvidence,
 )
+from catering_system.domain.offer_charges import ReturnLogisticsDefinition
 from catering_system.domain.order_commercial_snapshot import (
     build_order_commercial_snapshot,
 )
@@ -219,4 +221,32 @@ def test_sqlite_owner_trigger_rejects_orphan_order_id(tmp_path: Path) -> None:
     snapshots = SQLiteOrderCommercialSnapshotRepository.from_connection(connection)
     with pytest.raises(sqlite3.Error, match="owner is invalid"):
         snapshots.create(_snapshot(order_id="missing-order"))
+    connection.close()
+
+
+def test_sqlite_roundtrips_structured_return_logistics(tmp_path: Path) -> None:
+    connection = open_core_connection(tmp_path / "core.db")
+    inquiries = SQLiteInquiryRepository.from_connection(connection)
+    orders = SQLiteOrderRepository.from_connection(connection)
+    snapshots = SQLiteOrderCommercialSnapshotRepository.from_connection(connection)
+    inquiry = _inquiry()
+    inquiries.save(inquiry)
+    order, _version = seed_order(orders, inquiry)
+    connection.commit()
+
+    return_logistics = ReturnLogisticsDefinition(
+        mode="SAME_DAY",
+        pickup_window_text="22:00-23:00",
+        same_day_fee_cents=4500,
+    )
+    snapshot = replace(
+        _snapshot(order_id=order.order_id),
+        return_logistics=return_logistics,
+    )
+    snapshots.create(snapshot)
+    connection.commit()
+
+    loaded = snapshots.get_by_order_id(order.order_id)
+    assert loaded is not None
+    assert loaded.return_logistics == return_logistics
     connection.close()

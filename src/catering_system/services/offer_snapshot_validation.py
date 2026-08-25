@@ -22,7 +22,9 @@ from catering_system.domain.offer_charges import (
     DishwareAdditionalLineDefinition,
     DishwareChargeDefinition,
     OfferChargesDefinition,
+    ReturnLogisticsDefinition,
     validate_charge_base_mode,
+    validate_return_mode,
 )
 from catering_system.domain.offer_snapshot import (
     CURRENCY,
@@ -80,13 +82,17 @@ _ENVELOPE_KEYS = frozenset(
     }
 )
 _BUDGET_DEFINITION_KEYS = frozenset({"amount_cents", "type", "tax_basis", "cost_scope"})
-_CHARGES_DEFINITION_KEYS = frozenset({"delivery", "dishware", "buffet"})
+_CHARGES_DEFINITION_KEYS = frozenset(
+    {"delivery", "dishware", "buffet", "return_logistics"}
+)
 _DELIVERY_CHARGE_KEYS = frozenset({"amount_cents"})
 _DISHWARE_CHARGE_KEYS = frozenset(
     {"base_mode", "pauschale_per_person_cents", "additional_lines"}
 )
 _DISHWARE_LINE_KEYS = frozenset({"description", "quantity", "unit_net_cents"})
 _BUFFET_CHARGE_KEYS = frozenset({"base_mode", "pauschale_per_person_cents"})
+_RETURN_LOGISTICS_KEYS = frozenset({"mode", "pickup_window_text", "same_day_fee_cents"})
+_RETURN_PICKUP_FEE_NAME = "Rückholung am Veranstaltungstag"
 _RECIPIENT_KEYS = frozenset({"company_name", "contact_name", "email", "postal_address"})
 _EVENT_KEYS = frozenset(
     {
@@ -581,6 +587,48 @@ def _parse_buffet_charge(payload: dict[str, object]) -> BuffetChargeDefinition:
     )
 
 
+def _parse_return_logistics(
+    payload: dict[str, object],
+) -> ReturnLogisticsDefinition:
+    _reject_unknown_keys(
+        payload, _RETURN_LOGISTICS_KEYS, "charges_definition.return_logistics"
+    )
+    mode = validate_return_mode(
+        _require_exact_str(
+            payload.get("mode"), "charges_definition.return_logistics.mode"
+        )
+    )
+    pickup_window_raw = payload.get("pickup_window_text")
+    pickup_window_text: str | None
+    if pickup_window_raw is None:
+        pickup_window_text = None
+    else:
+        pickup_window_text = _require_exact_str(
+            pickup_window_raw,
+            "charges_definition.return_logistics.pickup_window_text",
+        )
+        if len(pickup_window_text) > MAX_SHORT_TEXT_LEN:
+            raise ValueError(
+                "charges_definition.return_logistics.pickup_window_text exceeds length limit"
+            )
+        if pickup_window_text != pickup_window_text.strip():
+            raise ValueError(
+                "charges_definition.return_logistics.pickup_window_text must be trimmed"
+            )
+        if not pickup_window_text:
+            raise ValueError(
+                "charges_definition.return_logistics.pickup_window_text is required"
+            )
+    return ReturnLogisticsDefinition(
+        mode=mode,
+        pickup_window_text=pickup_window_text,
+        same_day_fee_cents=_require_cents(
+            payload.get("same_day_fee_cents"),
+            "charges_definition.return_logistics.same_day_fee_cents",
+        ),
+    )
+
+
 def _parse_charges_definition(value: object) -> OfferChargesDefinition | None:
     """CONFIGURABLE_OFFER_CHARGES_V1: optional, strictly validated when present.
 
@@ -602,7 +650,20 @@ def _parse_charges_definition(value: object) -> OfferChargesDefinition | None:
     buffet = _parse_buffet_charge(
         _require_object(payload.get("buffet"), "charges_definition.buffet")
     )
-    return OfferChargesDefinition(delivery=delivery, dishware=dishware, buffet=buffet)
+    return_logistics_raw = payload.get("return_logistics")
+    return_logistics = (
+        ReturnLogisticsDefinition()
+        if return_logistics_raw is None
+        else _parse_return_logistics(
+            _require_object(return_logistics_raw, "charges_definition.return_logistics")
+        )
+    )
+    return OfferChargesDefinition(
+        delivery=delivery,
+        dishware=dishware,
+        buffet=buffet,
+        return_logistics=return_logistics,
+    )
 
 
 def _parse_calculator(payload: dict[str, object]) -> OfferSnapshotCalculator:
@@ -842,6 +903,9 @@ def _validate_variant_charges_consistency(
     _validate_delivery_consistency(charges.delivery, variant, label=label)
     _validate_dishware_consistency(charges.dishware, variant, event, label=label)
     _validate_buffet_consistency(charges.buffet, variant, event, label=label)
+    _validate_return_logistics_consistency(
+        charges.return_logistics, variant, label=label
+    )
 
 
 def _validate_delivery_consistency(
@@ -856,6 +920,40 @@ def _validate_delivery_consistency(
     if positions[0].net_total_cents != delivery.amount_cents:
         raise ValueError(
             f"{label}: delivery position does not match charges_definition"
+        )
+
+
+def _validate_return_logistics_consistency(
+    return_logistics: ReturnLogisticsDefinition,
+    variant: OfferSnapshotVariant,
+    *,
+    label: str,
+) -> None:
+    positions = [
+        position
+        for position in variant.positions
+        if position.kind == "fee" and position.name == _RETURN_PICKUP_FEE_NAME
+    ]
+    if return_logistics.mode == "NEXT_WORKING_DAY":
+        if positions:
+            raise ValueError(f"{label}: return pickup fee is only valid for SAME_DAY")
+        return
+
+    if len(positions) != 1:
+        raise ValueError(
+            f"{label}: SAME_DAY return requires exactly one return pickup fee position"
+        )
+    position = positions[0]
+    if position.quantity_mode != "total" or position.quantity != "1":
+        raise ValueError(
+            f"{label}: return pickup fee position must use total quantity 1"
+        )
+    if (
+        position.unit_net_cents != return_logistics.same_day_fee_cents
+        or position.net_total_cents != return_logistics.same_day_fee_cents
+    ):
+        raise ValueError(
+            f"{label}: return pickup fee position does not match charges_definition"
         )
 
 

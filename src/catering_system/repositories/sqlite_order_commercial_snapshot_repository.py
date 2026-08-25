@@ -18,6 +18,7 @@ from catering_system.domain.offer import (
     PositionQuantityMode,
     VatRatePercent,
 )
+from catering_system.domain.offer_charges import ReturnLogisticsDefinition
 from catering_system.domain.order_commercial_snapshot import (
     OrderCommercialPosition,
     OrderCommercialSnapshot,
@@ -104,7 +105,22 @@ def _migration_1_create_tables(connection: sqlite3.Connection) -> None:
     )
 
 
-_MIGRATIONS = ((1, "create_order_commercial_snapshots", _migration_1_create_tables),)
+def _migration_2_return_logistics(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1]
+        for row in connection.execute("PRAGMA table_info(order_commercial_snapshots)")
+    }
+    if "return_logistics_json" not in columns:
+        connection.execute(
+            "ALTER TABLE order_commercial_snapshots "
+            "ADD COLUMN return_logistics_json TEXT"
+        )
+
+
+_MIGRATIONS = (
+    (1, "create_order_commercial_snapshots", _migration_1_create_tables),
+    (2, "order_commercial_snapshot_return_logistics", _migration_2_return_logistics),
+)
 
 
 def _allergens_storage(value: tuple[str, ...] | None) -> str | None:
@@ -154,6 +170,37 @@ def _position_quantity_mode(value: str | None) -> PositionQuantityMode | None:
     return value
 
 
+def _return_logistics_storage(
+    value: ReturnLogisticsDefinition | None,
+) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(
+        {
+            "mode": value.mode,
+            "pickup_window_text": value.pickup_window_text,
+            "same_day_fee_cents": value.same_day_fee_cents,
+        },
+        ensure_ascii=False,
+    )
+
+
+def _stored_return_logistics(value: str | None) -> ReturnLogisticsDefinition | None:
+    if value is None:
+        return None
+    parsed = json.loads(value)
+    if not isinstance(parsed, dict):
+        raise ValueError("return_logistics_json must decode to an object")
+    try:
+        return ReturnLogisticsDefinition(
+            mode=parsed["mode"],
+            pickup_window_text=parsed["pickup_window_text"],
+            same_day_fee_cents=parsed["same_day_fee_cents"],
+        )
+    except (KeyError, TypeError) as exc:
+        raise ValueError("return_logistics_json missing required field") from exc
+
+
 class SQLiteOrderCommercialSnapshotRepository:
     def __init__(self, db_path: str | Path) -> None:
         self._conn = sqlite3.connect(str(db_path))
@@ -189,8 +236,9 @@ class SQLiteOrderCommercialSnapshotRepository:
                         snapshot_id, order_id, source_offer_id, source_offer_version_id,
                         source_variant_id, acceptance_id, accepted_at, recorded_by,
                         variant_label, variant_description, payment_method,
-                        payment_customer_visible_text, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        payment_customer_visible_text, created_at,
+                        return_logistics_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         snapshot.snapshot_id,
@@ -206,6 +254,7 @@ class SQLiteOrderCommercialSnapshotRepository:
                         snapshot.payment_method,
                         snapshot.payment_customer_visible_text,
                         snapshot.created_at.isoformat(),
+                        _return_logistics_storage(snapshot.return_logistics),
                     ),
                 )
             except sqlite3.IntegrityError as exc:
@@ -266,7 +315,8 @@ class SQLiteOrderCommercialSnapshotRepository:
             SELECT snapshot_id, order_id, source_offer_id, source_offer_version_id,
                    source_variant_id, acceptance_id, accepted_at, recorded_by,
                    variant_label, variant_description, payment_method,
-                   payment_customer_visible_text, created_at
+                   payment_customer_visible_text, created_at,
+                   return_logistics_json
             FROM order_commercial_snapshots WHERE snapshot_id = ?
             """,
             (snapshot_id,),
@@ -289,6 +339,7 @@ class SQLiteOrderCommercialSnapshotRepository:
             payment_customer_visible_text=row[11],
             created_at=datetime.fromisoformat(row[12]),
             positions=positions,
+            return_logistics=_stored_return_logistics(row[13]),
         )
 
     def _load_positions(self, snapshot_id: str) -> tuple[OrderCommercialPosition, ...]:

@@ -25,6 +25,7 @@ from catering_system.domain.offer import (
     PositionQuantityMode,
     VatRatePercent,
 )
+from catering_system.domain.offer_charges import ReturnLogisticsDefinition
 from catering_system.domain.order_payment_reminder import (
     PaymentMethod,
     validate_payment_method,
@@ -152,6 +153,7 @@ class OrderCommercialSnapshot:
     created_at: datetime
     positions: tuple[OrderCommercialPosition, ...]
     variant_description: str | None = None
+    return_logistics: ReturnLogisticsDefinition | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.snapshot_id, "snapshot_id")
@@ -249,4 +251,9 @@ def build_order_commercial_snapshot(
         payment_customer_visible_text=offer_version.payment_customer_visible_text,
         created_at=created_at,
         positions=tuple(map_offer_position(item) for item in variant.positions),
+        return_logistics=(
+            offer_version.charges_definition.return_logistics
+            if offer_version.charges_definition is not None
+            else None
+        ),
     )
