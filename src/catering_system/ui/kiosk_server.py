@@ -175,17 +175,39 @@ def _return_logistics_projection(
         if definition.mode == "SAME_DAY"
         else next_return_working_day(event_date)
     )
-    return {
+    projection: dict[str, str | None] = {
         "mode": definition.mode,
         "return_date": return_date.isoformat(),
         "pickup_window_text": definition.pickup_window_text,
-        "pickup_window_start_local": _format_local_time(
+    }
+    if definition.pickup_window_start_local is not None:
+        projection["pickup_window_start_local"] = _format_local_time(
             definition.pickup_window_start_local
-        ),
-        "pickup_window_end_local": _format_local_time(
+        )
+        projection["pickup_window_end_local"] = _format_local_time(
             definition.pickup_window_end_local
+        )
+    return projection
+
+
+def _order_feed_entry_projection(
+    entry: WochenuebersichtEntry,
+    return_logistics: ReturnLogisticsDefinition | None,
+) -> dict[str, object]:
+    projection: dict[str, object] = {
+        "order_id": entry.order_id,
+        "event_date": entry.event_date.isoformat(),
+        "time_window_text": entry.time_window_text,
+        "location_text": entry.location_text,
+        "guest_count_estimate": entry.guest_count_estimate,
+        "return_logistics": _return_logistics_projection(
+            entry.event_date, return_logistics
         ),
     }
+    delivery_window = _delivery_window_projection(entry)
+    if delivery_window is not None:
+        projection["delivery_window"] = delivery_window
+    return projection
 
 
 def render_order_feed_json(
@@ -205,17 +227,7 @@ def render_order_feed_json(
     document = {
         "date": feed_date.isoformat(),
         "orders": [
-            {
-                "order_id": e.order_id,
-                "event_date": e.event_date.isoformat(),
-                "time_window_text": e.time_window_text,
-                "location_text": e.location_text,
-                "guest_count_estimate": e.guest_count_estimate,
-                "delivery_window": _delivery_window_projection(e),
-                "return_logistics": _return_logistics_projection(
-                    e.event_date, return_logistics.get(e.order_id)
-                ),
-            }
+            _order_feed_entry_projection(e, return_logistics.get(e.order_id))
             for e in entries
         ],
     }

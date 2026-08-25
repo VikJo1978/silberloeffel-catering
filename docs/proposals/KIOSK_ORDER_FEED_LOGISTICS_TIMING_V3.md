@@ -15,7 +15,8 @@ checklist execution state.
 
 ## Delivery timing
 
-Each order gains an additive `delivery_window` field:
+An order with a complete canonical outbound window gains an additive
+`delivery_window` field:
 
 ```json
 "delivery_window": {
@@ -26,8 +27,9 @@ Each order gains an additive `delivery_window` field:
 ```
 
 If the effective `OrderVersion` has no complete canonical delivery date/start/end,
-`delivery_window` is `null`. `time_window_text` remains unchanged and is never
-parsed or used to manufacture this object.
+the `delivery_window` key is absent. `time_window_text` remains unchanged and is
+never parsed or used to manufacture this object. This preserves the exact V2
+shape for legacy/non-canonical rows.
 
 The values come only from the effective immutable `OrderVersion` mirrored by the
 existing `WochenuebersichtEntry` read model. Order selection remains exclusively
@@ -42,8 +44,10 @@ For non-null `return_logistics`, V3 adds:
 "pickup_window_end_local": "23:00"
 ```
 
-Both values are `null` when no accepted canonical SAME_DAY pickup window exists.
-`pickup_window_text` remains display text and is never parsed.
+The two canonical pickup keys are present only when an accepted canonical
+SAME_DAY pickup window exists. Otherwise both keys are absent, preserving the
+existing V2 `return_logistics` shape. `pickup_window_text` remains display text
+and is never parsed.
 
 `NEXT_WORKING_DAY` still carries no canonical pickup time. Its deterministic
 planned `return_date` continues to use the current Monday-Friday rule from V2;
@@ -65,5 +69,5 @@ Core does not invent public-holiday or company-closure knowledge.
 ## Backward compatibility
 
 Existing consumers may ignore the new fields. V1/V2 producers and legacy
-accepted rows remain readable: canonical timing is explicitly absent/null rather
+accepted rows remain readable: canonical timing keys are simply absent rather
 than inferred from `time_window_text` or `pickup_window_text`.

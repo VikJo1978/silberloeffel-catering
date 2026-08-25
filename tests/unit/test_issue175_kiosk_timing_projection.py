@@ -43,7 +43,9 @@ def _render(
     return document["orders"][0]
 
 
-def test_weekly_read_model_carries_canonical_delivery_timing_from_effective_version() -> None:
+def test_weekly_read_model_carries_canonical_delivery_timing_from_effective_version() -> (
+    None
+):
     now = datetime(2026, 8, 25, 10, 0, tzinfo=timezone.utc)
     order = Order(
         order_id="order-1",
@@ -88,7 +90,7 @@ def test_legacy_delivery_text_is_not_parsed_into_canonical_window() -> None:
     order = _render(_entry(canonical=False))
 
     assert order["time_window_text"] == "18:00-19:00"
-    assert order["delivery_window"] is None
+    assert "delivery_window" not in order
 
 
 def test_same_day_return_projects_explicit_canonical_pickup_times() -> None:
@@ -126,6 +128,4 @@ def test_same_day_pickup_text_is_not_parsed_when_canonical_times_are_missing() -
         "mode": "SAME_DAY",
         "return_date": "2026-10-01",
         "pickup_window_text": "22:00-23:00",
-        "pickup_window_start_local": None,
-        "pickup_window_end_local": None,
     }
