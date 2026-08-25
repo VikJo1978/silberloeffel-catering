@@ -152,7 +152,8 @@ def test_office_can_create_list_update_and_delete_explicit_preference(
 
     status, deleted = _post(f"{root}/{preference_id}/delete")
     assert status == 200
-    assert deleted == {"deleted_preference_id": preference_id}
+    assert deleted["deleted_preference_id"] == preference_id
+    assert isinstance(deleted["command_id"], str)
 
     status, listed = _get(root)
     assert status == 200
