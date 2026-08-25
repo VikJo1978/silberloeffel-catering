@@ -1,0 +1,184 @@
+name: Issue 152 customer order history once
+
+on:
+  push:
+    branches: [issue-152-customer-order-history]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-quality:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: issue-152-customer-order-history
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: 0.11.32
+          python-version: '3.12'
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - name: Wire order history into Office API
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/catering_system/ui/office_api.py")
+          text = path.read_text()
+
+          def add_before(anchor: str, addition: str) -> None:
+              global text
+              if addition.strip() in text:
+                  return
+              if anchor not in text:
+                  raise SystemExit(f"missing anchor: {anchor!r}")
+              text = text.replace(anchor, addition + anchor, 1)
+
+          def add_after(anchor: str, addition: str) -> None:
+              global text
+              if addition.strip() in text:
+                  return
+              if anchor not in text:
+                  raise SystemExit(f"missing anchor: {anchor!r}")
+              text = text.replace(anchor, anchor + addition, 1)
+
+          add_before(
+              "from catering_system.domain.customer_document_eligibility import (\n",
+              "from catering_system.domain.customer_order_history import CustomerOrderHistoryEntry\n",
+          )
+          add_before(
+              "from catering_system.services.customer_gastronomic_preference_service import (\n",
+              "from catering_system.services.customer_order_history_service import (\n"
+              "    CustomerOrderHistoryCustomerNotFoundError,\n"
+              "    CustomerOrderHistoryService,\n"
+              ")\n",
+          )
+          add_before(
+              "def _gastronomic_preference_shape(\n",
+              "def _customer_order_history_shape(\n"
+              "    entry: CustomerOrderHistoryEntry,\n"
+              ") -> dict[str, object]:\n"
+              "    return {\n"
+              "        \"order_id\": entry.order_id,\n"
+              "        \"source_inquiry_id\": entry.source_inquiry_id,\n"
+              "        \"order_version_id\": entry.order_version_id,\n"
+              "        \"event_date\": entry.event_date.isoformat(),\n"
+              "        \"guest_count\": entry.guest_count,\n"
+              "        \"fulfillment_mode\": entry.fulfillment_mode,\n"
+              "        \"accepted_offer_id\": entry.accepted_offer_id,\n"
+              "        \"accepted_offer_version_id\": entry.accepted_offer_version_id,\n"
+              "        \"accepted_variant_id\": entry.accepted_variant_id,\n"
+              "        \"accepted_variant_label\": entry.accepted_variant_label,\n"
+              "        \"dishes\": [\n"
+              "            {\n"
+              "                \"position_id\": dish.position_id,\n"
+              "                \"name\": dish.name,\n"
+              "                \"kind\": dish.kind,\n"
+              "                \"catalog_item_id\": dish.catalog_item_id,\n"
+              "                \"gross_total_cents\": dish.gross_total_cents,\n"
+              "            }\n"
+              "            for dish in entry.dishes\n"
+              "        ],\n"
+              "        \"gross_total_cents\": entry.gross_total_cents,\n"
+              "        \"order_created_at\": entry.order_created_at.isoformat(),\n"
+              "        \"cancelled_at\": (\n"
+              "            entry.cancelled_at.isoformat() if entry.cancelled_at is not None else None\n"
+              "        ),\n"
+              "    }\n\n\n",
+          )
+          add_after(
+              "        self.customer_gastronomic_preference_service = (\n"
+              "            CustomerGastronomicPreferenceService(\n"
+              "                self.customer_identities, self.customer_gastronomic_preferences\n"
+              "            )\n"
+              "        )\n",
+              "        self.customer_order_history_service = CustomerOrderHistoryService(\n"
+              "            self.customer_identities, self.inquiries, self.orders, self.offers\n"
+              "        )\n",
+          )
+          add_before(
+              "    def list_customer_gastronomic_preferences(\n",
+              "    def customer_order_history(self, customer_id: str) -> dict[str, object]:\n"
+              "        try:\n"
+              "            entries = self.customer_order_history_service.list_for_customer(customer_id)\n"
+              "        except CustomerOrderHistoryCustomerNotFoundError as exc:\n"
+              "            raise ApiError(404, \"customer_not_found\") from exc\n"
+              "        return {\n"
+              "            \"customer_id\": customer_id,\n"
+              "            \"orders\": [_customer_order_history_shape(entry) for entry in entries],\n"
+              "        }\n\n",
+          )
+          route_anchor = (
+              "    (\n"
+              "        re.compile(\n"
+              "            r\"^/office/v1/customers/(?P<customer_id>[^/]+)/gastronomic-preferences$\"\n"
+              "        ),\n"
+          )
+          add_before(
+              route_anchor,
+              "    (\n"
+              "        re.compile(r\"^/office/v1/customers/(?P<customer_id>[^/]+)/order-history$\"),\n"
+              "        \"/office/v1/customers/{customer_id}/order-history\",\n"
+              "        {\"GET\": \"customer_order_history\"},\n"
+              "    ),\n",
+          )
+          add_before(
+              "            elif kind == \"list_customer_gastronomic_preferences\":\n",
+              "            elif kind == \"customer_order_history\":\n"
+              "                self._query(set())\n"
+              "                self._respond(\n"
+              "                    200, api.customer_order_history(path_ids[\"customer_id\"])\n"
+              "                )\n",
+          )
+          path.write_text(text)
+          PY
+      - name: Verify lock
+        run: uv lock --check
+      - name: Install
+        run: uv sync --dev
+      - name: Format changed Python
+        run: |
+          uv run ruff format \
+            src/catering_system/domain/customer_order_history.py \
+            src/catering_system/services/customer_order_history_service.py \
+            src/catering_system/ui/office_api.py \
+            tests/unit/test_customer_order_history_service.py \
+            tests/unit/test_issue152_customer_order_history_office_api.py
+      - name: Lint
+        run: uv run ruff check src tests infra
+      - name: Type-check production code
+        run: uv run mypy src/catering_system
+      - name: Focused tests
+        run: |
+          uv run pytest -q \
+            tests/unit/test_customer_order_history_service.py \
+            tests/unit/test_issue152_customer_order_history_office_api.py
+      - name: Full Python coverage
+        run: |
+          uv run coverage run -m pytest -q
+          uv run coverage report
+      - name: Verify PDF runtime and systemd alignment
+        run: uv run python infra/deploy/verify_pdf_runtime.py --repository-only
+      - name: Test JavaScript
+        run: |
+          node --test infra/staging-form/app.test.cjs
+          node --test infra/cloudflare_worker/sanitize.test.mjs
+      - name: Commit product changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            src/catering_system/domain/customer_order_history.py \
+            src/catering_system/services/customer_order_history_service.py \
+            src/catering_system/ui/office_api.py \
+            tests/unit/test_customer_order_history_service.py \
+            tests/unit/test_issue152_customer_order_history_office_api.py
+          if git diff --cached --quiet; then
+            echo "No product changes to commit"
+          else
+            git commit -m "Issue #152: expose factual customer order history"
+            git push origin HEAD:issue-152-customer-order-history
+          fi
