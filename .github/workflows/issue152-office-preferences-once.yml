@@ -1,0 +1,320 @@
+name: Issue 152 Office preferences once
+
+on:
+  push:
+    branches:
+      - issue-152-office-explicit-preferences
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: issue-152-office-explicit-preferences
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.11.32"
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - name: Wire explicit preferences into Office API
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("src/catering_system/ui/office_api.py")
+          text = path.read_text()
+
+          def add_after(anchor: str, addition: str) -> None:
+              global text
+              if addition.strip() in text:
+                  return
+              if anchor not in text:
+                  raise SystemExit(f"missing anchor: {anchor!r}")
+              text = text.replace(anchor, anchor + addition, 1)
+
+          def add_before(anchor: str, addition: str) -> None:
+              global text
+              if addition.strip() in text:
+                  return
+              if anchor not in text:
+                  raise SystemExit(f"missing anchor: {anchor!r}")
+              text = text.replace(anchor, addition + anchor, 1)
+
+          add_before(
+              "from catering_system.domain.customer_document_eligibility import (\n",
+              "from catering_system.domain.customer_gastronomic_preference import (\n"
+              "    CustomerGastronomicPreference,\n"
+              "    validate_preference_kind,\n"
+              "    validate_preference_source,\n"
+              ")\n",
+          )
+          add_before(
+              "from catering_system.repositories.sqlite_employee_auth_repository import (\n",
+              "from catering_system.repositories.sqlite_customer_gastronomic_preference_repository import (\n"
+              "    SQLiteCustomerGastronomicPreferenceRepository,\n"
+              ")\n"
+              "from catering_system.repositories.sqlite_customer_identity_repository import (\n"
+              "    SQLiteCustomerIdentityRepository,\n"
+              ")\n",
+          )
+          add_before(
+              "from catering_system.services.configurator_handoff_service import (\n",
+              "from catering_system.services.customer_gastronomic_preference_service import (\n"
+              "    CustomerGastronomicPreferenceNotFoundError,\n"
+              "    CustomerGastronomicPreferenceService,\n"
+              "    CustomerNotFoundError,\n"
+              ")\n",
+          )
+
+          add_before(
+              "# --- API core ----------------------------------------------------------------\n",
+              "def _gastronomic_preference_shape(\n"
+              "    preference: CustomerGastronomicPreference,\n"
+              ") -> dict[str, object]:\n"
+              "    return {\n"
+              "        \"preference_id\": preference.preference_id,\n"
+              "        \"customer_id\": preference.customer_id,\n"
+              "        \"kind\": preference.kind,\n"
+              "        \"value\": preference.value,\n"
+              "        \"source\": preference.source,\n"
+              "        \"created_at\": preference.created_at.isoformat(),\n"
+              "        \"updated_at\": preference.updated_at.isoformat(),\n"
+              "    }\n\n\n",
+          )
+
+          add_after(
+              "        bootstrap_customer_identity_schema(connection)\n",
+              "        self.customer_identities = SQLiteCustomerIdentityRepository.from_connection(\n"
+              "            connection\n"
+              "        )\n"
+              "        self.customer_gastronomic_preferences = (\n"
+              "            SQLiteCustomerGastronomicPreferenceRepository.from_connection(connection)\n"
+              "        )\n",
+          )
+          add_before(
+              "        self.order_service = OrderService(self.orders, event_sink=self.events)\n",
+              "        self.customer_gastronomic_preference_service = (\n"
+              "            CustomerGastronomicPreferenceService(\n"
+              "                self.customer_identities, self.customer_gastronomic_preferences\n"
+              "            )\n"
+              "        )\n",
+          )
+
+          add_before(
+              "    # -- reads -----------------------------------------------------------\n",
+              "    def list_customer_gastronomic_preferences(\n"
+              "        self, customer_id: str\n"
+              "    ) -> dict[str, object]:\n"
+              "        try:\n"
+              "            preferences = self.customer_gastronomic_preference_service.list_for_customer(\n"
+              "                customer_id\n"
+              "            )\n"
+              "        except CustomerNotFoundError as exc:\n"
+              "            raise ApiError(404, \"customer_not_found\") from exc\n"
+              "        return {\n"
+              "            \"customer_id\": customer_id,\n"
+              "            \"preferences\": [\n"
+              "                _gastronomic_preference_shape(preference)\n"
+              "                for preference in preferences\n"
+              "            ],\n"
+              "        }\n\n",
+          )
+
+          add_before(
+              "    def cmd_create_inquiry(\n",
+              "    def cmd_create_customer_gastronomic_preference(\n"
+              "        self, path_ids: dict[str, str], args: dict[str, object], expect: dict\n"
+              "    ) -> tuple[int, dict[str, object]]:\n"
+              "        try:\n"
+              "            preference = self.customer_gastronomic_preference_service.create(\n"
+              "                customer_id=path_ids[\"customer_id\"],\n"
+              "                kind=validate_preference_kind(_v_str(args[\"kind\"], 100)),\n"
+              "                value=_v_str(args[\"value\"], 1000),\n"
+              "                source=validate_preference_source(_v_str(args[\"source\"], 100)),\n"
+              "            )\n"
+              "        except CustomerNotFoundError as exc:\n"
+              "            raise ApiError(404, \"customer_not_found\") from exc\n"
+              "        except (TypeError, ValueError) as exc:\n"
+              "            raise ApiError(422, \"invalid_gastronomic_preference\") from exc\n"
+              "        return 201, {\"preference\": _gastronomic_preference_shape(preference)}\n\n"
+              "    def cmd_update_customer_gastronomic_preference(\n"
+              "        self, path_ids: dict[str, str], args: dict[str, object], expect: dict\n"
+              "    ) -> tuple[int, dict[str, object]]:\n"
+              "        try:\n"
+              "            preference = self.customer_gastronomic_preference_service.update(\n"
+              "                customer_id=path_ids[\"customer_id\"],\n"
+              "                preference_id=path_ids[\"preference_id\"],\n"
+              "                kind=validate_preference_kind(_v_str(args[\"kind\"], 100)),\n"
+              "                value=_v_str(args[\"value\"], 1000),\n"
+              "                source=validate_preference_source(_v_str(args[\"source\"], 100)),\n"
+              "            )\n"
+              "        except CustomerNotFoundError as exc:\n"
+              "            raise ApiError(404, \"customer_not_found\") from exc\n"
+              "        except CustomerGastronomicPreferenceNotFoundError as exc:\n"
+              "            raise ApiError(404, \"gastronomic_preference_not_found\") from exc\n"
+              "        except (TypeError, ValueError) as exc:\n"
+              "            raise ApiError(422, \"invalid_gastronomic_preference\") from exc\n"
+              "        return 200, {\"preference\": _gastronomic_preference_shape(preference)}\n\n"
+              "    def cmd_delete_customer_gastronomic_preference(\n"
+              "        self, path_ids: dict[str, str], args: dict[str, object], expect: dict\n"
+              "    ) -> tuple[int, dict[str, object]]:\n"
+              "        preference_id = path_ids[\"preference_id\"]\n"
+              "        try:\n"
+              "            self.customer_gastronomic_preference_service.delete(\n"
+              "                customer_id=path_ids[\"customer_id\"],\n"
+              "                preference_id=preference_id,\n"
+              "            )\n"
+              "        except CustomerNotFoundError as exc:\n"
+              "            raise ApiError(404, \"customer_not_found\") from exc\n"
+              "        except CustomerGastronomicPreferenceNotFoundError as exc:\n"
+              "            raise ApiError(404, \"gastronomic_preference_not_found\") from exc\n"
+              "        return 200, {\"deleted_preference_id\": preference_id}\n\n",
+          )
+
+          add_before(
+              "_COMMANDS: dict[str, _CommandSpec] = {\n",
+              "_GASTRONOMIC_PREFERENCE_ARGS = _ArgKeys(\n"
+              "    required=frozenset({\"kind\", \"value\", \"source\"})\n"
+              ")\n\n",
+          )
+          add_after(
+              "_COMMANDS: dict[str, _CommandSpec] = {\n",
+              "    \"create_customer_gastronomic_preference\": _CommandSpec(\n"
+              "        \"cmd_create_customer_gastronomic_preference\",\n"
+              "        _GASTRONOMIC_PREFERENCE_ARGS,\n"
+              "        set(),\n"
+              "    ),\n"
+              "    \"update_customer_gastronomic_preference\": _CommandSpec(\n"
+              "        \"cmd_update_customer_gastronomic_preference\",\n"
+              "        _GASTRONOMIC_PREFERENCE_ARGS,\n"
+              "        set(),\n"
+              "    ),\n"
+              "    \"delete_customer_gastronomic_preference\": _CommandSpec(\n"
+              "        \"cmd_delete_customer_gastronomic_preference\", _NO_ARGS, set()\n"
+              "    ),\n",
+          )
+
+          route_anchor = "    (\n        re.compile(r\"^/office/v1/inquiries$\"),\n"
+          add_before(
+              route_anchor,
+              "    (\n"
+              "        re.compile(\n"
+              "            r\"^/office/v1/customers/(?P<customer_id>[^/]+)/gastronomic-preferences$\"\n"
+              "        ),\n"
+              "        \"/office/v1/customers/{customer_id}/gastronomic-preferences\",\n"
+              "        {\"GET\": \"list_customer_gastronomic_preferences\"},\n"
+              "    ),\n"
+              "    (\n"
+              "        re.compile(\n"
+              "            r\"^/office/v1/customers/(?P<customer_id>[^/]+)/gastronomic-preferences/create$\"\n"
+              "        ),\n"
+              "        \"/office/v1/customers/{customer_id}/gastronomic-preferences/create\",\n"
+              "        {\"POST\": \"create_customer_gastronomic_preference\"},\n"
+              "    ),\n"
+              "    (\n"
+              "        re.compile(\n"
+              "            r\"^/office/v1/customers/(?P<customer_id>[^/]+)/gastronomic-preferences/\"\n"
+              "            r\"(?P<preference_id>[^/]+)/update$\"\n"
+              "        ),\n"
+              "        \"/office/v1/customers/{customer_id}/gastronomic-preferences/{preference_id}/update\",\n"
+              "        {\"POST\": \"update_customer_gastronomic_preference\"},\n"
+              "    ),\n"
+              "    (\n"
+              "        re.compile(\n"
+              "            r\"^/office/v1/customers/(?P<customer_id>[^/]+)/gastronomic-preferences/\"\n"
+              "            r\"(?P<preference_id>[^/]+)/delete$\"\n"
+              "        ),\n"
+              "        \"/office/v1/customers/{customer_id}/gastronomic-preferences/{preference_id}/delete\",\n"
+              "        {\"POST\": \"delete_customer_gastronomic_preference\"},\n"
+              "    ),\n",
+          )
+
+          add_before(
+              "            elif kind == \"list_inquiries\":\n",
+              "            elif kind == \"list_customer_gastronomic_preferences\":\n"
+              "                self._query(set())\n"
+              "                self._respond(\n"
+              "                    200,\n"
+              "                    api.list_customer_gastronomic_preferences(\n"
+              "                        path_ids[\"customer_id\"]\n"
+              "                    ),\n"
+              "                )\n",
+          )
+
+          path.write_text(text)
+
+          service_test = Path("tests/unit/test_customer_gastronomic_preference_service.py")
+          test_text = service_test.read_text()
+          test_text = test_text.replace(
+              "from datetime import UTC, datetime, timedelta\n",
+              "from datetime import UTC, datetime, timedelta\nfrom typing import TypeAlias\n",
+          )
+          test_text = test_text.replace(
+              "NOW = datetime(2026, 8, 25, 18, 0, tzinfo=UTC)\n",
+              "NOW = datetime(2026, 8, 25, 18, 0, tzinfo=UTC)\n\nServiceFixture: TypeAlias = tuple[\n    CustomerGastronomicPreferenceService,\n    InMemoryCustomerIdentityRepository,\n    InMemoryCustomerGastronomicPreferenceRepository,\n]\n",
+          )
+          test_text = test_text.replace("def _service():\n", "def _service() -> ServiceFixture:\n")
+          service_test.write_text(test_text)
+
+          api_test = Path("tests/unit/test_issue152_explicit_preferences_office_api.py")
+          api_text = api_test.read_text()
+          api_text = api_text.replace(
+              "from catering_system.repositories.sqlite_customer_identity_repository import (\n",
+              "from tests.helpers.offer_pdf_static_content import fake_offer_pdf_static_content\n\n"
+              "from catering_system.repositories.sqlite_customer_identity_repository import (\n",
+          )
+          api_text = api_text.replace(
+              "            0,\n        )\n",
+              "            0,\n            offer_pdf_static_content=fake_offer_pdf_static_content(),\n        )\n",
+              1,
+          )
+          api_test.write_text(api_text)
+          PY
+      - name: Verify lock
+        run: uv lock --check
+      - name: Install
+        run: uv sync --dev
+      - name: Format changed Python
+        run: |
+          uv run ruff format \
+            src/catering_system/services/customer_gastronomic_preference_service.py \
+            src/catering_system/ui/office_api.py \
+            tests/unit/test_customer_gastronomic_preference_service.py \
+            tests/unit/test_issue152_explicit_preferences_office_api.py
+      - name: Lint
+        run: uv run ruff check src tests infra
+      - name: Type-check production code
+        run: uv run mypy src/catering_system
+      - name: Focused tests
+        run: |
+          uv run pytest -q \
+            tests/unit/test_customer_gastronomic_preference_service.py \
+            tests/unit/test_issue152_explicit_preferences_office_api.py
+      - name: Full Python coverage
+        run: |
+          uv run coverage run -m pytest -q
+          uv run coverage report
+      - name: Verify PDF runtime and systemd alignment
+        run: uv run python infra/deploy/verify_pdf_runtime.py --repository-only
+      - name: Test JavaScript
+        run: |
+          node --test infra/staging-form/app.test.cjs
+          node --test infra/cloudflare_worker/sanitize.test.mjs
+      - name: Commit product changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src tests
+          if git diff --cached --quiet; then
+            echo "No product changes to commit"
+          else
+            git commit -m "Issue #152: expose explicit preferences in Office API"
+            git push origin HEAD:issue-152-office-explicit-preferences
+          fi
