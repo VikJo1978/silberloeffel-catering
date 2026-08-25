@@ -31,7 +31,9 @@ class CustomerRecommendationHintService:
             for entry in self._history.list_for_customer(customer_id)
             if entry.cancelled_at is None
         ]
-        by_item: dict[str, list[tuple[CustomerOrderHistoryEntry, str]]] = defaultdict(list)
+        by_item: dict[str, list[tuple[CustomerOrderHistoryEntry, str]]] = (
+            defaultdict(list)
+        )
         for entry in orders:
             seen_in_order: set[str] = set()
             for dish in entry.dishes:
