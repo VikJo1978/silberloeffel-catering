@@ -1,0 +1,94 @@
+name: issue182-patch-once
+on:
+  push:
+    branches: [feature-manual-task-office-ui]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feature-manual-task-office-ui
+      - name: Patch task UI wiring
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/catering_system/ui/office_panel_http.py')
+          text = path.read_text()
+
+          text = text.replace(
+              'import sqlite3\nfrom dataclasses import dataclass\n',
+              'import sqlite3\nfrom dataclasses import dataclass\nfrom datetime import UTC, datetime\n',
+          )
+          text = text.replace(
+              'from typing import TYPE_CHECKING, Literal, cast\n',
+              'from typing import TYPE_CHECKING, Literal, cast\nfrom zoneinfo import ZoneInfo\n',
+          )
+          text = text.replace(
+              'from catering_system.repositories.sqlite_configurator_handoff_repository import (\n    SQLiteConfiguratorHandoffRepository,\n)\n',
+              'from catering_system.repositories.sqlite_configurator_handoff_repository import (\n    SQLiteConfiguratorHandoffRepository,\n)\nfrom catering_system.repositories.sqlite_manual_task_repository import (\n    SQLiteManualTaskRepository,\n)\n',
+          )
+          text = text.replace(
+              'from catering_system.services.employee_auth_service import (\n',
+              'from catering_system.services.manual_task_service import ManualTaskService\nfrom catering_system.services.employee_auth_service import (\n',
+          )
+          text = text.replace(
+              'from catering_system.ui.office_panel_shell import OfficeSection\n',
+              'from catering_system.ui.office_panel_shell import OfficeSection\nfrom catering_system.ui.office_panel_tasks_list import (\n    ManualTaskViewRow,\n    render_aufgaben_list,\n)\n',
+          )
+          text = text.replace(
+              '_RUECKRUF_COUNT_UNSET = object()\n',
+              '_RUECKRUF_COUNT_UNSET = object()\n_BERLIN = ZoneInfo("Europe/Berlin")\n',
+          )
+
+          marker = '''    local_confirmation_document_repo = (\n        confirmation_document_repo or InMemoryOrderConfirmationDocumentRepository()\n    )\n'''
+          replacement = '''    local_manual_task_service: ManualTaskService | None = None\n    if validated_auth_mode in {"migration", "employee"} and auth_service is not None:\n        auth_connection = getattr(auth_service.repository, "_conn", None)\n        if isinstance(auth_connection, sqlite3.Connection):\n            local_manual_task_service = ManualTaskService(\n                SQLiteManualTaskRepository.from_connection(auth_connection),\n                employee_exists=lambda employee_id: (\n                    auth_service.repository.get_account_by_id(employee_id) is not None\n                ),\n            )\n\n    local_confirmation_document_repo = (\n        confirmation_document_repo or InMemoryOrderConfirmationDocumentRepository()\n    )\n'''
+          if marker not in text:
+              raise SystemExit('setup marker missing')
+          text = text.replace(marker, replacement, 1)
+
+          old_get = '''            elif parts == ["aufgaben"]:\n                if not self._require_business_permission_get(\n                    auth, "queue.view", active_section="tasks"\n                ):\n                    return\n                context = self._page_context()\n                self._html(panel.render_aufgaben(context=context))\n'''
+          new_get = '''            elif parts == ["aufgaben"]:\n                if not self._require_any_business_permission_get(\n                    auth, ("queue.view", "tasks.view"), active_section="tasks"\n                ):\n                    return\n                context = self._page_context()\n                permissions = context.employee_effective_permissions\n                show_system_tasks = bool(\n                    auth is not None\n                    and (\n                        auth.kind == "basic"\n                        or auth.legacy_shared_access\n                        or "queue.view" in permissions\n                    )\n                )\n                manual_tasks: list[ManualTaskViewRow] = []\n                can_view_manual = (\n                    auth is not None\n                    and auth.kind == "employee"\n                    and auth.employee is not None\n                    and not auth.legacy_shared_access\n                    and "tasks.view" in permissions\n                )\n                if can_view_manual:\n                    if remote is not None:\n                        session_token = session_token_from_headers(self.headers)\n                        if session_token is None:\n                            self._business_forbidden(active_section="tasks")\n                            return\n                        task_items = remote.list_manual_tasks(\n                            employee_session_token=session_token\n                        )\n                    elif local_manual_task_service is not None:\n                        task_items = local_manual_task_service.list_open_tasks()\n                    else:\n                        task_items = []\n                    employee_labels = {\n                        account.id: account.display_name\n                        for account in (\n                            auth_service.repository.list_accounts()\n                            if auth_service is not None\n                            else []\n                        )\n                    }\n                    manual_tasks = [\n                        ManualTaskViewRow(\n                            task_id=task.task_id,\n                            title=task.title,\n                            description=task.description,\n                            due_at=task.due_at,\n                            assigned_to_label=(\n                                employee_labels.get(\n                                    task.assigned_to_employee_id,\n                                    task.assigned_to_employee_id,\n                                )\n                                if task.assigned_to_employee_id is not None\n                                else "Nicht zugewiesen"\n                            ),\n                            subject_type=task.subject_type,\n                            subject_id=task.subject_id,\n                        )\n                        for task in task_items\n                    ]\n                assignee_options: list[tuple[str, str]] = []\n                if (\n                    auth_service is not None\n                    and "tasks.assign" in permissions\n                ):\n                    assignee_options = [\n                        (account.id, account.display_name)\n                        for account in auth_service.repository.list_accounts()\n                        if account.is_active\n                    ]\n                self._html(\n                    render_aufgaben_list(\n                        panel._task_list_rows() if show_system_tasks else [],\n                        context=context,\n                        manual_tasks=manual_tasks,\n                        can_create_manual="tasks.create" in permissions,\n                        can_complete_manual="tasks.complete" in permissions,\n                        can_assign_manual="tasks.assign" in permissions,\n                        assignee_options=assignee_options,\n                        show_system_tasks=show_system_tasks,\n                    )\n                )\n'''
+          if old_get not in text:
+              raise SystemExit('GET marker missing')
+          text = text.replace(old_get, new_get, 1)
+
+          text = text.replace(
+              '''            if parts and parts[0] == "chat":\n                return "chat"\n''',
+              '''            if parts and parts[0] == "chat":\n                return "chat"\n            if parts and parts[0] == "aufgaben":\n                return "tasks"\n''',
+              1,
+          )
+          text = text.replace(
+              '''            if parts == ["chat", "threads"]:\n                return ("chat.create",)\n''',
+              '''            if parts == ["chat", "threads"]:\n                return ("chat.create",)\n            if parts == ["aufgaben", "manual"]:\n                return ("tasks.create",)\n            if (\n                len(parts) == 4\n                and parts[0] == "aufgaben"\n                and parts[1] == "manual"\n                and parts[3] == "complete"\n            ):\n                return ("tasks.complete",)\n''',
+              1,
+          )
+          text = text.replace(
+              '''            elif parts == ["chat", "threads"]:\n                self._create_chat_thread(auth)\n''',
+              '''            elif parts == ["chat", "threads"]:\n                self._create_chat_thread(auth)\n            elif parts == ["aufgaben", "manual"]:\n                self._create_manual_task(auth)\n            elif (\n                len(parts) == 4\n                and parts[0] == "aufgaben"\n                and parts[1] == "manual"\n                and parts[3] == "complete"\n            ):\n                self._complete_manual_task(auth, unquote(parts[2]))\n''',
+              1,
+          )
+
+          helper_marker = '''        def _create_chat_thread(self, auth: OfficePanelRequestAuth | None) -> None:\n'''
+          helpers = '''        def _manual_task_actor_or_forbidden(\n            self, auth: OfficePanelRequestAuth | None, permission: str\n        ) -> AuthenticatedEmployee | None:\n            if (\n                auth is None\n                or auth.kind != "employee"\n                or auth.employee is None\n                or auth.legacy_shared_access\n                or permission not in auth.employee.effective_permissions\n            ):\n                self._business_forbidden(active_section="tasks")\n                return None\n            return auth.employee\n\n        def _manual_task_due_at(self, raw: str) -> datetime | None:\n            value = raw.strip()\n            if not value:\n                return None\n            local = datetime.fromisoformat(value)\n            if local.tzinfo is not None:\n                raise ValueError("due_at must be entered as local date and time")\n            return local.replace(tzinfo=_BERLIN).astimezone(UTC)\n\n        def _create_manual_task(\n            self, auth: OfficePanelRequestAuth | None\n        ) -> None:\n            actor = self._manual_task_actor_or_forbidden(auth, "tasks.create")\n            if actor is None:\n                return\n            form = self._form()\n            assigned_to = form.get("assigned_to_employee_id", "").strip() or None\n            if (\n                assigned_to is not None\n                and "tasks.assign" not in actor.effective_permissions\n            ):\n                self._business_forbidden(active_section="tasks")\n                return\n            subject_type = form.get("subject_type", "NONE").strip() or "NONE"\n            subject_id = form.get("subject_id", "").strip() or None\n            if subject_type == "NONE":\n                subject_id = None\n            due_at = self._manual_task_due_at(form.get("due_at", ""))\n            if remote is not None:\n                session_token = session_token_from_headers(self.headers)\n                if session_token is None:\n                    self._business_forbidden(active_section="tasks")\n                    return\n                remote.create_manual_task(\n                    employee_session_token=session_token,\n                    title=form.get("title", ""),\n                    description=form.get("description") or None,\n                    due_at=due_at,\n                    assigned_to_employee_id=assigned_to,\n                    subject_type=subject_type,\n                    subject_id=subject_id,\n                    command_id=form.get("_command_id") or None,\n                )\n            elif local_manual_task_service is not None and auth_service is not None:\n                with auth_service.repository.immediate_transaction():\n                    local_manual_task_service.create_task(\n                        title=form.get("title", ""),\n                        description=form.get("description") or None,\n                        due_at=due_at,\n                        created_by_employee_id=actor.account.id,\n                        assigned_to_employee_id=assigned_to,\n                        subject_type=subject_type,\n                        subject_id=subject_id,\n                    )\n            else:\n                raise ValueError("manual tasks are unavailable in this mode")\n            self._redirect("/aufgaben?msg=created")\n\n        def _complete_manual_task(\n            self, auth: OfficePanelRequestAuth | None, task_id: str\n        ) -> None:\n            actor = self._manual_task_actor_or_forbidden(auth, "tasks.complete")\n            if actor is None:\n                return\n            form = self._form()\n            if remote is not None:\n                session_token = session_token_from_headers(self.headers)\n                if session_token is None:\n                    self._business_forbidden(active_section="tasks")\n                    return\n                remote.complete_manual_task(\n                    task_id,\n                    employee_session_token=session_token,\n                    command_id=form.get("_command_id") or None,\n                )\n            elif local_manual_task_service is not None and auth_service is not None:\n                with auth_service.repository.immediate_transaction():\n                    local_manual_task_service.complete_task(task_id)\n            else:\n                raise ValueError("manual tasks are unavailable in this mode")\n            self._redirect("/aufgaben?msg=completed")\n\n'''
+          if helper_marker not in text:
+              raise SystemExit('helper marker missing')
+          text = text.replace(helper_marker, helpers + helper_marker, 1)
+
+          path.write_text(text)
+
+          test = Path('tests/unit/test_issue182_manual_task_office_ui.py')
+          test.write_text('''from __future__ import annotations\n\nfrom datetime import UTC, datetime\n\nfrom catering_system.ui.office_panel_tasks_list import (\n    ManualTaskViewRow,\n    render_aufgaben_list,\n)\nfrom catering_system.ui.office_panel_views import OfficePageContext\n\n\ndef _context(*permissions: str) -> OfficePageContext:\n    return OfficePageContext(\n        rueckruf_count=None,\n        csrf_token="csrf-test",\n        employee_effective_permissions=frozenset(permissions),\n    )\n\n\ndef test_manual_task_ui_renders_create_assignment_and_complete_controls() -> None:\n    html = render_aufgaben_list(\n        [],\n        context=_context("tasks.view", "tasks.create", "tasks.assign", "tasks.complete"),\n        manual_tasks=[\n            ManualTaskViewRow(\n                task_id="550e8400-e29b-41d4-a716-446655440000",\n                title="Kunden anrufen",\n                description="Termin bestätigen",\n                due_at=datetime(2026, 8, 26, 10, 30, tzinfo=UTC),\n                assigned_to_label="Manual Worker",\n                subject_type="NONE",\n                subject_id=None,\n            )\n        ],\n        can_create_manual=True,\n        can_complete_manual=True,\n        can_assign_manual=True,\n        assignee_options=[("employee-1", "Manual Worker")],\n        show_system_tasks=False,\n    )\n\n    assert 'action="/aufgaben/manual"' in html\n    assert 'name="assigned_to_employee_id"' in html\n    assert "Kunden anrufen" in html\n    assert "Manual Worker" in html\n    assert "/complete" in html\n    assert "csrf-test" in html\n    assert "Automatisch abgeleitete Aufgaben" not in html\n\n\ndef test_manual_task_ui_hides_mutations_without_permissions() -> None:\n    html = render_aufgaben_list(\n        [],\n        context=_context("tasks.view"),\n        manual_tasks=[\n            ManualTaskViewRow(\n                task_id="550e8400-e29b-41d4-a716-446655440000",\n                title="Nur ansehen",\n                description="",\n                due_at=None,\n                assigned_to_label="Nicht zugewiesen",\n                subject_type="NONE",\n                subject_id=None,\n            )\n        ],\n        show_system_tasks=False,\n    )\n\n    assert "Neue Aufgabe" not in html\n    assert "/complete" not in html\n    assert "Nur ansehen" in html\n\n\ndef test_system_task_projection_remains_read_only_and_advisory() -> None:\n    html = render_aufgaben_list(\n        [\n            {\n                "urgency": "normal",\n                "title": "Angebot prüfen",\n                "subtitle": "Anfrage 123",\n                "due_at": None,\n                "action_href": "/inquiry/123",\n                "action_label": "Öffnen",\n            }\n        ],\n        context=_context("queue.view"),\n        show_system_tasks=True,\n    )\n\n    assert "Automatisch abgeleitete Aufgaben" in html\n    assert "Sie blockieren keine Entscheidung" in html\n    assert "Angebot prüfen" in html\n''')
+          PY
+          git rm .github/workflows/issue182-patch-once.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/catering_system/ui/office_panel_http.py tests/unit/test_issue182_manual_task_office_ui.py
+          git commit -m "Issue #182: wire manual tasks into Office Aufgaben UI"
+          git push origin HEAD:feature-manual-task-office-ui
