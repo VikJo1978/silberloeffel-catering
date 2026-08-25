@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
 from typing import Literal
 
 from catering_system.domain.order import Order, OrderVersion
@@ -63,6 +62,10 @@ class RecommendationCapacityService:
 
     Capacity is advisory: this layer reports warnings and ranking penalties but never
     blocks a recommendation. The final decision remains with the employee.
+
+    Capacity is currently guest-based. One committed order contributes its guest count
+    once per production station used by that order, regardless of how many dishes from
+    that station are present in the order.
     """
 
     def __init__(
@@ -92,28 +95,35 @@ class RecommendationCapacityService:
             version = self._target_order_version(order)
             if version is None or version.event_date != event_date:
                 continue
+            guest_count = version.guest_count_estimate
+            if guest_count is None or guest_count < 0:
+                global_demand_unknown = True
+                continue
             snapshot = self._commercial_snapshots.get_by_order_id(order.order_id)
             if snapshot is None:
                 global_demand_unknown = True
                 continue
+
+            order_station_ids: set[str] = set()
             for position in snapshot.positions:
                 if position.kind != "catalog" or position.catalog_item_id is None:
                     continue
-                quantity = self._whole_quantity(position.quantity)
                 requirements = self._capacity.list_catalog_requirements(
                     position.catalog_item_id
                 )
-                if quantity is None or not requirements:
+                if not requirements:
                     global_demand_unknown = True
                     continue
                 for requirement in requirements:
                     if requirement.station_id not in stations:
                         global_demand_unknown = True
                         continue
-                    used_by_station[requirement.station_id] = (
-                        used_by_station.get(requirement.station_id, 0)
-                        + quantity * requirement.load_units_per_item
-                    )
+                    order_station_ids.add(requirement.station_id)
+
+            for station_id in order_station_ids:
+                used_by_station[station_id] = (
+                    used_by_station.get(station_id, 0) + guest_count
+                )
 
         rows: list[RecommendationCapacityRow] = []
         for dish in self._catalog.list_dishes(active=True, limit=10_000):
@@ -175,12 +185,6 @@ class RecommendationCapacityService:
                 return version
         versions = self._orders.list_order_versions(order.order_id)
         return max(versions, key=lambda item: item.version_number, default=None)
-
-    @staticmethod
-    def _whole_quantity(value: Decimal | None) -> int | None:
-        if value is None or value < 0 or value != value.to_integral_value():
-            return None
-        return int(value)
 
     @staticmethod
     def _capacity_warning_reason(penalty: int) -> CapacityReasonCode | None:
