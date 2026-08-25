@@ -94,7 +94,7 @@ def test_office_api_shapes_capacity_rows_without_full_initialization() -> None:
     api.recommendation_capacity_service = Mock()
     api.recommendation_capacity_service.list_for_date.return_value = (
         RecommendationCapacityRow("dish-a", True, 35),
-        RecommendationCapacityRow("dish-b", False, 100, "CAPACITY_UNSET"),
+        RecommendationCapacityRow("dish-b", True, 100, "CAPACITY_UNSET"),
     )
 
     assert api.recommendation_capacity(_EVENT_DATE) == {
@@ -108,7 +108,7 @@ def test_office_api_shapes_capacity_rows_without_full_initialization() -> None:
             },
             {
                 "catalog_item_id": "dish-b",
-                "feasible": False,
+                "feasible": True,
                 "overload_penalty": 100,
                 "reason_code": "CAPACITY_UNSET",
             },

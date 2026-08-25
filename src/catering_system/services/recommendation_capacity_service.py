@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
 from typing import Literal
 
 from catering_system.domain.order import Order, OrderVersion
@@ -23,9 +22,28 @@ CapacityReasonCode = Literal[
     "CAPACITY_UNSET",
     "STATION_UNAVAILABLE",
     "NO_CAPACITY",
-    "CAPACITY_EXHAUSTED",
+    "CAPACITY_ELEVATED",
+    "CAPACITY_HIGH",
+    "CAPACITY_NEAR_LIMIT",
+    "CAPACITY_EXCEEDED",
     "DEMAND_SOURCE_INCOMPLETE",
 ]
+
+CAPACITY_WARNING_TEXT: dict[CapacityReasonCode, str] = {
+    "MISSING_STATION_REQUIREMENT": "Kapazitätszuordnung fehlt",
+    "STATION_INACTIVE": "Produktionsstation ist inaktiv",
+    "CAPACITY_UNSET": "Kapazität ist nicht hinterlegt",
+    "STATION_UNAVAILABLE": "Produktionsstation ist nicht verfügbar",
+    "NO_CAPACITY": "Für die Produktionsstation ist keine Kapazität hinterlegt",
+    "CAPACITY_ELEVATED": "Erhöhte Auslastung",
+    "CAPACITY_HIGH": "Hohe Auslastung",
+    "CAPACITY_NEAR_LIMIT": "Auslastung nahe am empfohlenen Grenzwert",
+    "CAPACITY_EXCEEDED": "Empfohlener Kapazitätsgrenzwert überschritten",
+    "DEMAND_SOURCE_INCOMPLETE": (
+        "Auslastung kann wegen unvollständiger Auftragsdaten nicht vollständig "
+        "berechnet werden"
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -41,6 +59,13 @@ class RecommendationCapacityService:
 
     Sent/open offers are deliberately excluded from capacity consumption. They are a
     weak production-overlap signal, not committed kitchen load.
+
+    Capacity is advisory: this layer reports warnings and ranking penalties but never
+    blocks a recommendation. The final decision remains with the employee.
+
+    Capacity is currently guest-based. One committed order contributes its guest count
+    once per production station used by that order, regardless of how many dishes from
+    that station are present in the order.
     """
 
     def __init__(
@@ -70,75 +95,85 @@ class RecommendationCapacityService:
             version = self._target_order_version(order)
             if version is None or version.event_date != event_date:
                 continue
+            guest_count = version.guest_count_estimate
+            if guest_count is None or guest_count < 0:
+                global_demand_unknown = True
+                continue
             snapshot = self._commercial_snapshots.get_by_order_id(order.order_id)
             if snapshot is None:
                 global_demand_unknown = True
                 continue
+
+            order_station_ids: set[str] = set()
             for position in snapshot.positions:
                 if position.kind != "catalog" or position.catalog_item_id is None:
                     continue
-                quantity = self._whole_quantity(position.quantity)
                 requirements = self._capacity.list_catalog_requirements(
                     position.catalog_item_id
                 )
-                if quantity is None or not requirements:
+                if not requirements:
                     global_demand_unknown = True
                     continue
                 for requirement in requirements:
                     if requirement.station_id not in stations:
                         global_demand_unknown = True
                         continue
-                    used_by_station[requirement.station_id] = (
-                        used_by_station.get(requirement.station_id, 0)
-                        + quantity * requirement.load_units_per_item
-                    )
+                    order_station_ids.add(requirement.station_id)
+
+            for station_id in order_station_ids:
+                used_by_station[station_id] = (
+                    used_by_station.get(station_id, 0) + guest_count
+                )
 
         rows: list[RecommendationCapacityRow] = []
         for dish in self._catalog.list_dishes(active=True, limit=10_000):
             requirements = self._capacity.list_catalog_requirements(dish.dish_id)
             if not requirements:
-                rows.append(self._blocked(dish.dish_id, "MISSING_STATION_REQUIREMENT"))
+                rows.append(self._advisory(dish.dish_id, "MISSING_STATION_REQUIREMENT"))
                 continue
             if global_demand_unknown:
-                rows.append(self._blocked(dish.dish_id, "DEMAND_SOURCE_INCOMPLETE"))
+                rows.append(self._advisory(dish.dish_id, "DEMAND_SOURCE_INCOMPLETE"))
                 continue
 
             penalty = 0
-            blocked_reason: CapacityReasonCode | None = None
+            warning_reason: CapacityReasonCode | None = None
             for requirement in requirements:
                 station = stations.get(requirement.station_id)
                 if station is None or not station.active:
-                    blocked_reason = "STATION_INACTIVE"
+                    warning_reason = "STATION_INACTIVE"
+                    penalty = 100
                     break
                 capacity_day = capacity_days.get(requirement.station_id)
                 if capacity_day is None:
-                    blocked_reason = "CAPACITY_UNSET"
+                    warning_reason = "CAPACITY_UNSET"
+                    penalty = 100
                     break
                 if capacity_day.unavailable:
-                    blocked_reason = "STATION_UNAVAILABLE"
+                    warning_reason = "STATION_UNAVAILABLE"
+                    penalty = 100
                     break
                 if capacity_day.capacity_units == 0:
-                    blocked_reason = "NO_CAPACITY"
+                    warning_reason = "NO_CAPACITY"
+                    penalty = 100
                     break
-                used = used_by_station.get(requirement.station_id, 0)
-                if used >= capacity_day.capacity_units:
-                    blocked_reason = "CAPACITY_EXHAUSTED"
-                    break
-                penalty = max(
-                    penalty,
-                    min(100, (used * 100) // capacity_day.capacity_units),
-                )
 
-            if blocked_reason is not None:
-                rows.append(self._blocked(dish.dish_id, blocked_reason))
-            else:
-                rows.append(
-                    RecommendationCapacityRow(
-                        catalog_item_id=dish.dish_id,
-                        feasible=True,
-                        overload_penalty=penalty,
-                    )
+                used = used_by_station.get(requirement.station_id, 0)
+                station_penalty = min(
+                    100,
+                    (used * 100) // capacity_day.capacity_units,
                 )
+                if station_penalty > penalty:
+                    penalty = station_penalty
+                    warning_reason = self._capacity_warning_reason(station_penalty)
+
+            rows.append(
+                RecommendationCapacityRow(
+                    catalog_item_id=dish.dish_id,
+                    feasible=True,
+                    overload_penalty=penalty,
+                    reason_code=warning_reason,
+                )
+            )
 
         return tuple(sorted(rows, key=lambda row: row.catalog_item_id))
 
@@ -152,18 +187,24 @@ class RecommendationCapacityService:
         return max(versions, key=lambda item: item.version_number, default=None)
 
     @staticmethod
-    def _whole_quantity(value: Decimal | None) -> int | None:
-        if value is None or value < 0 or value != value.to_integral_value():
-            return None
-        return int(value)
+    def _capacity_warning_reason(penalty: int) -> CapacityReasonCode | None:
+        if penalty >= 100:
+            return "CAPACITY_EXCEEDED"
+        if penalty >= 90:
+            return "CAPACITY_NEAR_LIMIT"
+        if penalty >= 80:
+            return "CAPACITY_HIGH"
+        if penalty >= 70:
+            return "CAPACITY_ELEVATED"
+        return None
 
     @staticmethod
-    def _blocked(
+    def _advisory(
         catalog_item_id: str, reason_code: CapacityReasonCode
     ) -> RecommendationCapacityRow:
         return RecommendationCapacityRow(
             catalog_item_id=catalog_item_id,
-            feasible=False,
+            feasible=True,
             overload_penalty=100,
             reason_code=reason_code,
         )
