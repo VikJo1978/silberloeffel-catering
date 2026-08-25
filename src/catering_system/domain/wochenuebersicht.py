@@ -8,7 +8,7 @@ entry has a confirmed kitchen print.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, time
 
 from catering_system.domain.inquiry import PlanningMode
 from catering_system.domain.order import Order, OrderVersion
@@ -26,6 +26,9 @@ class WochenuebersichtEntry:
     location_text: str
     guest_count_estimate: int | None
     planning_mode: PlanningMode
+    delivery_date_local: date | None = None
+    delivery_window_start_local: time | None = None
+    delivery_window_end_local: time | None = None
     operational_pause_active: bool = False
     operational_pause_reason_code: str | None = None
     operational_pause_note: str | None = None
@@ -57,6 +60,9 @@ def entry_from_effective(
         location_text=effective.location_text,
         guest_count_estimate=effective.guest_count_estimate,
         planning_mode=effective.planning_mode,
+        delivery_date_local=effective.delivery_date_local,
+        delivery_window_start_local=effective.delivery_window_start_local,
+        delivery_window_end_local=effective.delivery_window_end_local,
         operational_pause_active=operational_pause_active,
         operational_pause_reason_code=operational_pause_reason_code,
         operational_pause_note=operational_pause_note,
