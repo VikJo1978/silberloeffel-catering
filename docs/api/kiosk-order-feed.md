@@ -8,6 +8,8 @@ The original route/selection contract is frozen in
 [KIOSK_ORDER_FEED_PACK_V1](../archive/packs/KIOSK_ORDER_FEED_PACK_V1.md).
 Issue #171 evolves the order payload with the explicit planning-only extension
 [KIOSK_ORDER_FEED_RETURN_LOGISTICS_V2](../proposals/KIOSK_ORDER_FEED_RETURN_LOGISTICS_V2.md).
+Issue #175 adds canonical local planning timing in
+[KIOSK_ORDER_FEED_LOGISTICS_TIMING_V3](../proposals/KIOSK_ORDER_FEED_LOGISTICS_TIMING_V3.md).
 
 ## Route
 
@@ -42,15 +44,26 @@ including missing, empty, duplicated, malformed (`2026-7-4`, `20261001`,
       "time_window_text": "mittags",
       "location_text": "Hamburg",
       "guest_count_estimate": 25,
+      "delivery_window": {
+        "date": "2026-10-01",
+        "start_local": "18:00",
+        "end_local": "19:00"
+      },
       "return_logistics": {
         "mode": "SAME_DAY",
         "return_date": "2026-10-01",
-        "pickup_window_text": "22:00-23:00"
+        "pickup_window_text": "22:00-23:00",
+        "pickup_window_start_local": "22:00",
+        "pickup_window_end_local": "23:00"
       }
     }
   ]
 }
 ```
+
+`delivery_window` is `null` when the effective order version has no complete
+canonical delivery date/start/end. `time_window_text` remains display text and
+is never parsed to manufacture canonical timing.
 
 `return_logistics` is `null` for accepted orders that predate the structured
 issue #171 return fact.
@@ -58,15 +71,22 @@ issue #171 return fact.
 For non-null values:
 
 - `SAME_DAY`: `return_date` equals the order `event_date`; the accepted pickup
-  window is present.
-- `NEXT_WORKING_DAY`: `return_date` is the next Monday-Friday date and
-  `pickup_window_text` is `null`.
+  display window is present. Canonical pickup start/end are projected only from
+  accepted canonical fields and remain `null` when those fields are absent.
+- `NEXT_WORKING_DAY`: `return_date` is the next Monday-Friday date,
+  `pickup_window_text` is `null`, and canonical pickup start/end are `null`.
+- `pickup_window_text` is never parsed to create canonical pickup times.
 - Core currently has no holiday/business-calendar source, so the deterministic
   working-day rule skips weekends only. Public holidays or company closure
   days must not be guessed.
 - `same_day_fee_cents` and all other prices stay out of this operational feed.
 - Courier assignment, vehicle, `PickupTask`, checklist, completion and overdue
   state remain Courier App owned and are not projected by Core.
+
+Canonical dates use `YYYY-MM-DD`; canonical local times use `HH:MM` without UTC
+conversion. Missing canonical timing is an explicit unknown/incomplete planning
+fact downstream, never a reason to guess from display text, order count or guest
+count.
 
 `guest_count_estimate` is `null` when unknown; `orders` is `[]` for a date
 without deliveries. Ordering remains deterministic: `(time_window_text,
@@ -84,9 +104,11 @@ effective version implies a confirmed kitchen print, so the feed can never
 show an order the kitchen has not released. The implementation delegates to
 the Wochenübersicht week read and filters by date, keeping one set of gates.
 
-The new `return_logistics` field is joined separately by `order_id` from the
-immutable accepted `OrderCommercialSnapshot`. `WochenuebersichtEntry` remains
-unchanged and continues to mirror only the effective `OrderVersion`.
+`WochenuebersichtEntry` continues to mirror only the effective `OrderVersion`;
+V3 extends that derived read model with the effective version's canonical
+outbound timing. `return_logistics` remains a separate join by `order_id` from
+the immutable accepted `OrderCommercialSnapshot` because return commercial
+facts do not belong to `OrderVersion`.
 
 An operationally paused order remains in the shared read model. The weekly
 Kiosk HTML marks it as `PAUSIERT`; pause metadata does not alter the order-feed
