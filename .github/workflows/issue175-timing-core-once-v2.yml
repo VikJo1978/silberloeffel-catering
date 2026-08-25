@@ -1,0 +1,60 @@
+name: Issue 175 timing core once v2
+
+on:
+  push:
+    branches:
+      - issue-175-logistics-timing-core
+    paths:
+      - .github/workflows/issue175-timing-core-once-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: issue-175-logistics-timing-core
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.11.32"
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - name: Verify lock
+        run: uv lock --check
+      - name: Install project and development tools
+        run: uv sync --dev
+      - name: Apply issue 175 timing patch
+        run: uv run python scripts_issue175_timing_core_patch.py
+      - name: Update exact-shape guard tests
+        run: uv run python scripts_issue175_update_guard_tests.py
+      - name: Format changed Python
+        run: uv run ruff format src tests
+      - name: Lint
+        run: |
+          uv run ruff check src tests infra
+          uv run ruff format --check src tests infra
+      - name: Type-check production code
+        run: uv run mypy src/catering_system
+      - name: Test Python and enforce coverage
+        run: |
+          uv run coverage run -m pytest -q
+          uv run coverage report
+      - name: Verify PDF runtime and systemd alignment
+        run: uv run python infra/deploy/verify_pdf_runtime.py --repository-only
+      - name: Test browser and Worker JavaScript
+        run: |
+          node --test infra/staging-form/app.test.cjs
+          node --test infra/cloudflare_worker/sanitize.test.mjs
+      - name: Commit product changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src tests
+          git commit -m "Issue #175: persist canonical logistics timing"
+          git push origin HEAD:issue-175-logistics-timing-core
