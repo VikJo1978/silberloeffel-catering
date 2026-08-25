@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal
 from typing import Literal
 
 from catering_system.domain.order import Order, OrderVersion
@@ -34,12 +33,20 @@ class RecommendationCapacityRow:
     feasible: bool
     overload_penalty: int
     reason_code: CapacityReasonCode | None = None
+    used_capacity_units: int | None = None
+    capacity_units: int | None = None
 
 
 class RecommendationCapacityService:
-    """Project explicit station facts plus accepted/confirmed demand into item rows.
+    """Project explicit capacity facts plus committed guest demand into item rows.
 
-    Sent/open offers are deliberately excluded from capacity consumption. They are a
+    Capacity units represent guests for the overall production model. Each accepted
+    or confirmed order contributes its ``guest_count_estimate`` once to every
+    production station touched by at least one catalog position. Catalog position
+    quantities are deliberately not summed: five dishes for 100 guests are 100
+    guests of kitchen load, not 500 independent capacity units.
+
+    Sent/open offers remain excluded from committed capacity consumption. They are a
     weak production-overlap signal, not committed kitchen load.
     """
 
@@ -74,24 +81,31 @@ class RecommendationCapacityService:
             if snapshot is None:
                 global_demand_unknown = True
                 continue
+            guest_count = version.guest_count_estimate
+            if guest_count is None or guest_count < 0:
+                global_demand_unknown = True
+                continue
+
+            station_ids_for_order: set[str] = set()
             for position in snapshot.positions:
                 if position.kind != "catalog" or position.catalog_item_id is None:
                     continue
-                quantity = self._whole_quantity(position.quantity)
                 requirements = self._capacity.list_catalog_requirements(
                     position.catalog_item_id
                 )
-                if quantity is None or not requirements:
+                if not requirements:
                     global_demand_unknown = True
                     continue
                 for requirement in requirements:
                     if requirement.station_id not in stations:
                         global_demand_unknown = True
                         continue
-                    used_by_station[requirement.station_id] = (
-                        used_by_station.get(requirement.station_id, 0)
-                        + quantity * requirement.load_units_per_item
-                    )
+                    station_ids_for_order.add(requirement.station_id)
+
+            for station_id in station_ids_for_order:
+                used_by_station[station_id] = (
+                    used_by_station.get(station_id, 0) + guest_count
+                )
 
         rows: list[RecommendationCapacityRow] = []
         for dish in self._catalog.list_dishes(active=True, limit=10_000):
@@ -105,38 +119,58 @@ class RecommendationCapacityService:
 
             penalty = 0
             blocked_reason: CapacityReasonCode | None = None
+            selected_used: int | None = None
+            selected_capacity: int | None = None
             for requirement in requirements:
                 station = stations.get(requirement.station_id)
                 if station is None or not station.active:
                     blocked_reason = "STATION_INACTIVE"
                     break
+
+                used = used_by_station.get(requirement.station_id, 0)
                 capacity_day = capacity_days.get(requirement.station_id)
                 if capacity_day is None:
+                    selected_used = used
                     blocked_reason = "CAPACITY_UNSET"
                     break
+
+                selected_used = used
+                selected_capacity = capacity_day.capacity_units
                 if capacity_day.unavailable:
                     blocked_reason = "STATION_UNAVAILABLE"
                     break
                 if capacity_day.capacity_units == 0:
                     blocked_reason = "NO_CAPACITY"
                     break
-                used = used_by_station.get(requirement.station_id, 0)
                 if used >= capacity_day.capacity_units:
                     blocked_reason = "CAPACITY_EXHAUSTED"
                     break
-                penalty = max(
-                    penalty,
-                    min(100, (used * 100) // capacity_day.capacity_units),
+
+                current_penalty = min(
+                    100, (used * 100) // capacity_day.capacity_units
                 )
+                if current_penalty >= penalty:
+                    penalty = current_penalty
+                    selected_used = used
+                    selected_capacity = capacity_day.capacity_units
 
             if blocked_reason is not None:
-                rows.append(self._blocked(dish.dish_id, blocked_reason))
+                rows.append(
+                    self._blocked(
+                        dish.dish_id,
+                        blocked_reason,
+                        used_capacity_units=selected_used,
+                        capacity_units=selected_capacity,
+                    )
+                )
             else:
                 rows.append(
                     RecommendationCapacityRow(
                         catalog_item_id=dish.dish_id,
                         feasible=True,
                         overload_penalty=penalty,
+                        used_capacity_units=selected_used,
+                        capacity_units=selected_capacity,
                     )
                 )
 
@@ -152,18 +186,18 @@ class RecommendationCapacityService:
         return max(versions, key=lambda item: item.version_number, default=None)
 
     @staticmethod
-    def _whole_quantity(value: Decimal | None) -> int | None:
-        if value is None or value < 0 or value != value.to_integral_value():
-            return None
-        return int(value)
-
-    @staticmethod
     def _blocked(
-        catalog_item_id: str, reason_code: CapacityReasonCode
+        catalog_item_id: str,
+        reason_code: CapacityReasonCode,
+        *,
+        used_capacity_units: int | None = None,
+        capacity_units: int | None = None,
     ) -> RecommendationCapacityRow:
         return RecommendationCapacityRow(
             catalog_item_id=catalog_item_id,
             feasible=False,
             overload_penalty=100,
             reason_code=reason_code,
+            used_capacity_units=used_capacity_units,
+            capacity_units=capacity_units,
         )
