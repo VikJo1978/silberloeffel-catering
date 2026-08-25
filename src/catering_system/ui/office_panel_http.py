@@ -11,8 +11,10 @@ import hashlib
 import hmac
 import sqlite3
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING, Literal, cast
+from zoneinfo import ZoneInfo
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from catering_system.domain.employee_auth import AuthenticatedEmployee, validate_role
@@ -62,10 +64,14 @@ from catering_system.repositories.payment_reminder_repository import (
 from catering_system.repositories.sqlite_configurator_handoff_repository import (
     SQLiteConfiguratorHandoffRepository,
 )
+from catering_system.repositories.sqlite_manual_task_repository import (
+    SQLiteManualTaskRepository,
+)
 from catering_system.services.buffet_cards_service import BuffetCardsService
 from catering_system.services.configurator_handoff_service import (
     ConfiguratorHandoffService,
 )
+from catering_system.services.manual_task_service import ManualTaskService
 from catering_system.services.employee_auth_service import (
     AccountConflictError,
     AccountNotFoundError,
@@ -137,6 +143,10 @@ from catering_system.ui.office_panel_settings_users import (
     show_users_nav_for,
 )
 from catering_system.ui.office_panel_shell import OfficeSection
+from catering_system.ui.office_panel_tasks_list import (
+    ManualTaskViewRow,
+    render_aufgaben_list,
+)
 from catering_system.ui.remote_core_client import RemoteCoreError
 
 if TYPE_CHECKING:
@@ -147,6 +157,7 @@ _CSRF_CONTEXT = b"catering-office-panel-csrf-v1"
 _MAX_FORM_BODY_BYTES = 256 * 1024
 _UNAVAILABLE_MESSAGE = "Core nicht erreichbar — nichts wurde gespeichert."
 _RUECKRUF_COUNT_UNSET = object()
+_BERLIN = ZoneInfo("Europe/Berlin")
 
 OfficePanelAuthMode = Literal["basic", "migration", "employee"]
 
@@ -427,6 +438,17 @@ def make_office_panel_handler(
             configurator_handoff_service = ConfiguratorHandoffService(
                 SQLiteConfiguratorHandoffRepository.from_connection(repository)
             )
+    local_manual_task_service: ManualTaskService | None = None
+    if validated_auth_mode in {"migration", "employee"} and auth_service is not None:
+        auth_connection = getattr(auth_service.repository, "_conn", None)
+        if isinstance(auth_connection, sqlite3.Connection):
+            local_manual_task_service = ManualTaskService(
+                SQLiteManualTaskRepository.from_connection(auth_connection),
+                employee_exists=lambda employee_id: (
+                    auth_service.repository.get_account_by_id(employee_id) is not None
+                ),
+            )
+
     local_confirmation_document_repo = (
         confirmation_document_repo or InMemoryOrderConfirmationDocumentRepository()
     )
@@ -766,6 +788,8 @@ def make_office_panel_handler(
                 return "callbacks"
             if parts and parts[0] == "chat":
                 return "chat"
+            if parts and parts[0] == "aufgaben":
+                return "tasks"
             if parts == ["gerichte", "new"] or (
                 len(parts) >= 2 and parts[0] == "gerichte"
             ):
@@ -836,6 +860,15 @@ def make_office_panel_handler(
                 return ("queue.resolve",)
             if parts == ["chat", "threads"]:
                 return ("chat.create",)
+            if parts == ["aufgaben", "manual"]:
+                return ("tasks.create",)
+            if (
+                len(parts) == 4
+                and parts[0] == "aufgaben"
+                and parts[1] == "manual"
+                and parts[3] == "complete"
+            ):
+                return ("tasks.complete",)
             if len(parts) == 3 and parts[0] == "chat" and parts[2] == "messages":
                 return ("chat.send",)
             if len(parts) == 3 and parts[0] == "chat" and parts[2] == "read":
@@ -1278,12 +1311,90 @@ def make_office_panel_handler(
                     )
                 )
             elif parts == ["aufgaben"]:
-                if not self._require_business_permission_get(
-                    auth, "queue.view", active_section="tasks"
+                if not self._require_any_business_permission_get(
+                    auth, ("queue.view", "tasks.view"), active_section="tasks"
                 ):
                     return
                 context = self._page_context()
-                self._html(panel.render_aufgaben(context=context))
+                permissions = context.employee_effective_permissions
+                show_system_tasks = bool(
+                    auth is not None
+                    and (
+                        auth.kind == "basic"
+                        or auth.legacy_shared_access
+                        or "queue.view" in permissions
+                    )
+                )
+                manual_tasks: list[ManualTaskViewRow] = []
+                can_view_manual = (
+                    auth is not None
+                    and auth.kind == "employee"
+                    and auth.employee is not None
+                    and not auth.legacy_shared_access
+                    and "tasks.view" in permissions
+                )
+                if can_view_manual:
+                    if remote is not None:
+                        session_token = session_token_from_headers(self.headers)
+                        if session_token is None:
+                            self._business_forbidden(active_section="tasks")
+                            return
+                        task_items = remote.list_manual_tasks(
+                            employee_session_token=session_token
+                        )
+                    elif local_manual_task_service is not None:
+                        task_items = local_manual_task_service.list_open_tasks()
+                    else:
+                        task_items = []
+                    employee_labels = {
+                        account.id: account.display_name
+                        for account in (
+                            auth_service.repository.list_accounts()
+                            if auth_service is not None
+                            else []
+                        )
+                    }
+                    manual_tasks = [
+                        ManualTaskViewRow(
+                            task_id=task.task_id,
+                            title=task.title,
+                            description=task.description,
+                            due_at=task.due_at,
+                            assigned_to_label=(
+                                employee_labels.get(
+                                    task.assigned_to_employee_id,
+                                    task.assigned_to_employee_id,
+                                )
+                                if task.assigned_to_employee_id is not None
+                                else "Nicht zugewiesen"
+                            ),
+                            subject_type=task.subject_type,
+                            subject_id=task.subject_id,
+                        )
+                        for task in task_items
+                    ]
+                assignee_options: list[tuple[str, str]] = []
+                if (
+                    auth_service is not None
+                    and "tasks.assign" in permissions
+                ):
+                    assignee_options = [
+                        (account.id, account.display_name)
+                        for account in auth_service.repository.list_accounts()
+                        if account.is_active
+                    ]
+                self._html(
+                    render_aufgaben_list(
+                        panel._task_list_rows() if show_system_tasks else [],
+                        context=context,
+                        manual_tasks=manual_tasks,
+                        can_create_manual="tasks.create" in permissions,
+                        can_complete_manual="tasks.complete" in permissions,
+                        can_assign_manual="tasks.assign" in permissions,
+                        assignee_options=assignee_options,
+                        show_system_tasks=show_system_tasks,
+                    )
+                )
             elif parts == ["kalender"]:
                 if not self._require_business_permission_get(
                     auth, "calendar.view", active_section="calendar"
@@ -1894,6 +2005,15 @@ def make_office_panel_handler(
                 self._redirect("/rueckruf")
             elif parts == ["chat", "threads"]:
                 self._create_chat_thread(auth)
+            elif parts == ["aufgaben", "manual"]:
+                self._create_manual_task(auth)
+            elif (
+                len(parts) == 4
+                and parts[0] == "aufgaben"
+                and parts[1] == "manual"
+                and parts[3] == "complete"
+            ):
+                self._complete_manual_task(auth, unquote(parts[2]))
             elif len(parts) == 3 and parts[0] == "chat" and parts[2] == "messages":
                 self._send_chat_message(auth, unquote(parts[1]))
             elif len(parts) == 3 and parts[0] == "chat" and parts[2] == "read":
@@ -1979,6 +2099,102 @@ def make_office_panel_handler(
                 self._settings_users_reset_password(auth, unquote(parts[2]))
             else:
                 self.send_error(404)
+
+        def _manual_task_actor_or_forbidden(
+            self, auth: OfficePanelRequestAuth | None, permission: str
+        ) -> AuthenticatedEmployee | None:
+            if (
+                auth is None
+                or auth.kind != "employee"
+                or auth.employee is None
+                or auth.legacy_shared_access
+                or permission not in auth.employee.effective_permissions
+            ):
+                self._business_forbidden(active_section="tasks")
+                return None
+            return auth.employee
+
+        def _manual_task_due_at(self, raw: str) -> datetime | None:
+            value = raw.strip()
+            if not value:
+                return None
+            local = datetime.fromisoformat(value)
+            if local.tzinfo is not None:
+                raise ValueError("due_at must be entered as local date and time")
+            return local.replace(tzinfo=_BERLIN).astimezone(UTC)
+
+        def _create_manual_task(
+            self, auth: OfficePanelRequestAuth | None
+        ) -> None:
+            actor = self._manual_task_actor_or_forbidden(auth, "tasks.create")
+            if actor is None:
+                return
+            form = self._form()
+            assigned_to = form.get("assigned_to_employee_id", "").strip() or None
+            if (
+                assigned_to is not None
+                and "tasks.assign" not in actor.effective_permissions
+            ):
+                self._business_forbidden(active_section="tasks")
+                return
+            subject_type = form.get("subject_type", "NONE").strip() or "NONE"
+            subject_id = form.get("subject_id", "").strip() or None
+            if subject_type == "NONE":
+                subject_id = None
+            due_at = self._manual_task_due_at(form.get("due_at", ""))
+            if remote is not None:
+                session_token = session_token_from_headers(self.headers)
+                if session_token is None:
+                    self._business_forbidden(active_section="tasks")
+                    return
+                remote.create_manual_task(
+                    employee_session_token=session_token,
+                    title=form.get("title", ""),
+                    description=form.get("description") or None,
+                    due_at=due_at,
+                    assigned_to_employee_id=assigned_to,
+                    subject_type=subject_type,
+                    subject_id=subject_id,
+                    command_id=form.get("_command_id") or None,
+                )
+            elif local_manual_task_service is not None and auth_service is not None:
+                with auth_service.repository.immediate_transaction():
+                    local_manual_task_service.create_task(
+                        title=form.get("title", ""),
+                        description=form.get("description") or None,
+                        due_at=due_at,
+                        created_by_employee_id=actor.account.id,
+                        assigned_to_employee_id=assigned_to,
+                        subject_type=subject_type,
+                        subject_id=subject_id,
+                    )
+            else:
+                raise ValueError("manual tasks are unavailable in this mode")
+            self._redirect("/aufgaben?msg=created")
+
+        def _complete_manual_task(
+            self, auth: OfficePanelRequestAuth | None, task_id: str
+        ) -> None:
+            actor = self._manual_task_actor_or_forbidden(auth, "tasks.complete")
+            if actor is None:
+                return
+            form = self._form()
+            if remote is not None:
+                session_token = session_token_from_headers(self.headers)
+                if session_token is None:
+                    self._business_forbidden(active_section="tasks")
+                    return
+                remote.complete_manual_task(
+                    task_id,
+                    employee_session_token=session_token,
+                    command_id=form.get("_command_id") or None,
+                )
+            elif local_manual_task_service is not None and auth_service is not None:
+                with auth_service.repository.immediate_transaction():
+                    local_manual_task_service.complete_task(task_id)
+            else:
+                raise ValueError("manual tasks are unavailable in this mode")
+            self._redirect("/aufgaben?msg=completed")
 
         def _create_chat_thread(self, auth: OfficePanelRequestAuth | None) -> None:
             session_token = self._chat_employee_session_or_forbidden(auth)
