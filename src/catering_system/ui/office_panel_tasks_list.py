@@ -77,7 +77,7 @@ def _manual_task_form(
             + "</select></label>"
         )
     return (
-        '<section><h2>Neue Aufgabe</h2>'
+        "<section><h2>Neue Aufgabe</h2>"
         '<form method="post" action="/aufgaben/manual">'
         f'<input type="hidden" name="_csrf_token" value="{_e(context.csrf_token)}">'
         '<label>Titel<input name="title" maxlength="200" required></label>'
@@ -89,10 +89,10 @@ def _manual_task_form(
         '<option value="ORDER">Auftrag</option>'
         '<option value="INQUIRY">Anfrage</option>'
         '<option value="CONTACT">Kontakt</option>'
-        '</select></label>'
+        "</select></label>"
         '<label>Bezug-ID (optional)<input name="subject_id" placeholder="UUID"></label>'
         '<button type="submit">Aufgabe anlegen</button>'
-        '</form></section>'
+        "</form></section>"
     )
 
 
@@ -142,7 +142,11 @@ def render_aufgaben_list(
                 can_assign=can_assign_manual,
             )
         )
-    if manual_tasks or can_create_manual or "tasks.view" in context.employee_effective_permissions:
+    if (
+        manual_tasks
+        or can_create_manual
+        or "tasks.view" in context.employee_effective_permissions
+    ):
         body_parts.extend(
             [
                 "<section><h2>Manuelle Aufgaben</h2>",
@@ -150,7 +154,9 @@ def render_aufgaben_list(
                 "<th>Bezug</th><th>Fällig</th><th></th></tr>",
                 "".join(
                     manual_rows
-                    or ['<tr><td colspan="6">Keine offenen manuellen Aufgaben.</td></tr>']
+                    or [
+                        '<tr><td colspan="6">Keine offenen manuellen Aufgaben.</td></tr>'
+                    ]
                 ),
                 "</table></section>",
             ]
@@ -177,7 +183,9 @@ def render_aufgaben_list(
                 "<th>Fällig</th><th></th></tr>",
                 "".join(
                     table_rows
-                    or ['<tr><td colspan="5">Keine offenen abgeleiteten Aufgaben.</td></tr>']
+                    or [
+                        '<tr><td colspan="5">Keine offenen abgeleiteten Aufgaben.</td></tr>'
+                    ]
                 ),
                 "</table></section>",
             ]

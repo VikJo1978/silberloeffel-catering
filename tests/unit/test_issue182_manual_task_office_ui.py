@@ -20,7 +20,9 @@ def _context(*permissions: str) -> OfficePageContext:
 def test_manual_task_ui_renders_create_assignment_and_complete_controls() -> None:
     html = render_aufgaben_list(
         [],
-        context=_context("tasks.view", "tasks.create", "tasks.assign", "tasks.complete"),
+        context=_context(
+            "tasks.view", "tasks.create", "tasks.assign", "tasks.complete"
+        ),
         manual_tasks=[
             ManualTaskViewRow(
                 task_id="550e8400-e29b-41d4-a716-446655440000",

@@ -1374,10 +1374,7 @@ def make_office_panel_handler(
                         for task in task_items
                     ]
                 assignee_options: list[tuple[str, str]] = []
-                if (
-                    auth_service is not None
-                    and "tasks.assign" in permissions
-                ):
+                if auth_service is not None and "tasks.assign" in permissions:
                     assignee_options = [
                         (account.id, account.display_name)
                         for account in auth_service.repository.list_accounts()
@@ -2123,9 +2120,7 @@ def make_office_panel_handler(
                 raise ValueError("due_at must be entered as local date and time")
             return local.replace(tzinfo=_BERLIN).astimezone(UTC)
 
-        def _create_manual_task(
-            self, auth: OfficePanelRequestAuth | None
-        ) -> None:
+        def _create_manual_task(self, auth: OfficePanelRequestAuth | None) -> None:
             actor = self._manual_task_actor_or_forbidden(auth, "tasks.create")
             if actor is None:
                 return
