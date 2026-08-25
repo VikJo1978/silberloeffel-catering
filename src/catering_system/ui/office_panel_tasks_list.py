@@ -27,18 +27,22 @@ def _format_due(raw: object | None) -> str:
     if raw is None:
         return "–"
     if isinstance(raw, datetime):
-        value = raw.astimezone(_BERLIN)
-        return f"{value.day:02d}.{value.month:02d}.{value.year} {value.hour:02d}:{value.minute:02d}"
+        local_value = raw.astimezone(_BERLIN)
+        return (
+            f"{local_value.day:02d}.{local_value.month:02d}.{local_value.year} "
+            f"{local_value.hour:02d}:{local_value.minute:02d}"
+        )
+    date_value: date
     if isinstance(raw, str):
         try:
-            value = date.fromisoformat(raw)
+            date_value = date.fromisoformat(raw)
         except ValueError:
             return raw
     elif isinstance(raw, date):
-        value = raw
+        date_value = raw
     else:
         return "–"
-    return f"{value.day:02d}.{value.month:02d}.{value.year}"
+    return f"{date_value.day:02d}.{date_value.month:02d}.{date_value.year}"
 
 
 def _urgency_label(raw: object) -> str:
