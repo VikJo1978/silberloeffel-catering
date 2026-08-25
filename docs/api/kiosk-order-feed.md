@@ -2,8 +2,12 @@
 
 The kitchen kiosk exposes one read-only JSON route so the separate courier
 app (Tourenplanung) can list the released orders of a given date. The courier
-app talks only to the kiosk; Core keeps exactly one reader. Frozen contract:
+app talks only to the kiosk; Core keeps exactly one reader.
+
+The original route/selection contract is frozen in
 [KIOSK_ORDER_FEED_PACK_V1](../archive/packs/KIOSK_ORDER_FEED_PACK_V1.md).
+Issue #171 evolves the order payload with the explicit planning-only extension
+[KIOSK_ORDER_FEED_RETURN_LOGISTICS_V2](../proposals/KIOSK_ORDER_FEED_RETURN_LOGISTICS_V2.md).
 
 ## Route
 
@@ -11,18 +15,18 @@ app talks only to the kiosk; Core keeps exactly one reader. Frozen contract:
 GET /api/order-feed?date=YYYY-MM-DD        (kiosk server, port 8082)
 ```
 
-Exposure is the kiosk's own private LAN/Tailscale surface — never public,
-never proxied. v1 has no application token; access relies on that trusted
-boundary. Only the courier app's chef board calls this route; courier phone
-links never do.
+Exposure is the kiosk's own private LAN/Tailscale surface, never public and
+never proxied. The endpoint has no application token; access relies on that
+trusted boundary. Only the courier app's chef board calls this route; courier
+phone links never do.
 
 ## Query contract (strict)
 
 The query must contain exactly one parameter, `date`, with exactly one value
-matching `YYYY-MM-DD` and naming a real calendar date. Everything else —
-missing, empty, duplicated, malformed (`2026-7-4`, `20261001`,
+matching `YYYY-MM-DD` and naming a real calendar date. Everything else,
+including missing, empty, duplicated, malformed (`2026-7-4`, `20261001`,
 `2026-10-01T00:00`), impossible dates, or any unknown extra parameter
-(`?date=…&foo=bar`) — returns `400`.
+(`?date=…&foo=bar`), returns `400`.
 
 ## Response
 
@@ -37,18 +41,40 @@ missing, empty, duplicated, malformed (`2026-7-4`, `20261001`,
       "event_date": "2026-10-01",
       "time_window_text": "mittags",
       "location_text": "Hamburg",
-      "guest_count_estimate": 25
+      "guest_count_estimate": 25,
+      "return_logistics": {
+        "mode": "SAME_DAY",
+        "return_date": "2026-10-01",
+        "pickup_window_text": "22:00-23:00"
+      }
     }
   ]
 }
 ```
 
-- `guest_count_estimate` is `null` when unknown; `orders` is `[]` for a date
-  without deliveries.
-- Ordering is deterministic: `(time_window_text, order_id)`.
-- No version numbers, planning mode, or direct customer identity/contact
-  fields. The payload is still sensitive operational data (event addresses,
-  dates, time windows): keep it out of logs, chats, and screenshots.
+`return_logistics` is `null` for accepted orders that predate the structured
+issue #171 return fact.
+
+For non-null values:
+
+- `SAME_DAY`: `return_date` equals the order `event_date`; the accepted pickup
+  window is present.
+- `NEXT_WORKING_DAY`: `return_date` is the next Monday-Friday date and
+  `pickup_window_text` is `null`.
+- Core currently has no holiday/business-calendar source, so the deterministic
+  working-day rule skips weekends only. Public holidays or company closure
+  days must not be guessed.
+- `same_day_fee_cents` and all other prices stay out of this operational feed.
+- Courier assignment, vehicle, `PickupTask`, checklist, completion and overdue
+  state remain Courier App owned and are not projected by Core.
+
+`guest_count_estimate` is `null` when unknown; `orders` is `[]` for a date
+without deliveries. Ordering remains deterministic: `(time_window_text,
+order_id)`.
+
+No version numbers, planning mode, or direct customer identity/contact fields
+are exposed. The payload is still sensitive operational data (event addresses,
+dates, time windows): keep it out of logs, chats, and screenshots.
 
 ## Selection semantics
 
@@ -56,24 +82,23 @@ An order appears iff it is not cancelled, has an effective version owned by
 the order, and that version's `event_date` equals the requested date. An
 effective version implies a confirmed kitchen print, so the feed can never
 show an order the kitchen has not released. The implementation delegates to
-the Wochenübersicht week read and filters by date — one set of gates.
+the Wochenübersicht week read and filters by date, keeping one set of gates.
 
-An operationally paused order remains in that shared read model. The weekly
-Kiosk HTML marks it as `PAUSIERT`, shows the human-readable pause reason, and
-shows a non-empty pause note as a kitchen hint. The effective OrderVersion
-continues to supply date, time, location and guest data; pause metadata neither
-changes nor replaces that operational version. After resume, the badge, reason
-and hint disappear while the order remains visible. The frozen courier JSON
-shape above is unchanged.
+The new `return_logistics` field is joined separately by `order_id` from the
+immutable accepted `OrderCommercialSnapshot`. `WochenuebersichtEntry` remains
+unchanged and continues to mirror only the effective `OrderVersion`.
+
+An operationally paused order remains in the shared read model. The weekly
+Kiosk HTML marks it as `PAUSIERT`; pause metadata does not alter the order-feed
+planning facts.
 
 ## Other methods and paths
 
-- `POST`/`PUT`/`DELETE`/`PATCH` → `405` (kiosk is read-only).
-- `HEAD`/`OPTIONS` → `501` (no handler in `http.server`; documented,
-  deliberately unchanged).
-- Unknown paths → `404`.
+- `POST`/`PUT`/`DELETE`/`PATCH` -> `405` (kiosk is read-only).
+- `HEAD`/`OPTIONS` -> `501` (no handler in `http.server`; deliberately unchanged).
+- Unknown paths -> `404`.
 
-## Smoke test (status codes only — never dump the JSON body)
+## Smoke test (status codes only, never dump the JSON body)
 
 ```bash
 curl -s -o /dev/null -w '%{http_code}\n' \
