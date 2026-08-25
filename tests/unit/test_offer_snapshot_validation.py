@@ -588,3 +588,51 @@ def test_domain_module_has_no_repository_or_api_imports() -> None:
         assert "sqlite" not in text.lower()
         assert "repositories" not in text
         assert "office_api" not in text
+
+
+def test_canonical_delivery_window_passes_without_parsing_legacy_text() -> None:
+    payload = _valid_snapshot()
+    event = cast(dict[str, object], payload["event"])
+    event["delivery_date_local"] = "2026-08-20"
+    event["delivery_window_start_local"] = "16:00"
+    event["delivery_window_end_local"] = "17:30"
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+
+    snapshot = validate_offer_snapshot(payload)
+    assert snapshot.event.delivery_date_local.isoformat() == "2026-08-20"
+    assert (
+        snapshot.event.delivery_window_start_local.isoformat(timespec="minutes")
+        == "16:00"
+    )
+    assert (
+        snapshot.event.delivery_window_end_local.isoformat(timespec="minutes")
+        == "17:30"
+    )
+    assert snapshot.event.time_window_text == "18:00–22:00"
+
+
+def test_legacy_event_text_is_not_parsed_into_canonical_delivery_window() -> None:
+    snapshot = validate_offer_snapshot(_valid_snapshot())
+    assert snapshot.event.delivery_date_local is None
+    assert snapshot.event.delivery_window_start_local is None
+    assert snapshot.event.delivery_window_end_local is None
+
+
+def test_partial_canonical_delivery_window_is_rejected() -> None:
+    payload = _valid_snapshot()
+    event = cast(dict[str, object], payload["event"])
+    event["delivery_date_local"] = "2026-08-20"
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+    with pytest.raises(ValueError, match="date, start and end together"):
+        validate_offer_snapshot(payload)
+
+
+def test_noncanonical_delivery_time_is_rejected() -> None:
+    payload = _valid_snapshot()
+    event = cast(dict[str, object], payload["event"])
+    event["delivery_date_local"] = "2026-08-20"
+    event["delivery_window_start_local"] = "16:00:00"
+    event["delivery_window_end_local"] = "17:00"
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+    with pytest.raises(ValueError, match="HH:MM"):
+        validate_offer_snapshot(payload)

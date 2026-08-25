@@ -10,7 +10,7 @@ import json
 import sqlite3
 from contextlib import nullcontext
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, time
 from pathlib import Path
 
 from catering_system.domain.customer_document_projection import CustomerAddress
@@ -394,6 +394,30 @@ def _migration_9_operational_context_fulfillment_mode(
         )
 
 
+def _migration_10_order_version_logistics_timing(
+    connection: sqlite3.Connection,
+) -> None:
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(order_versions)")
+    }
+    for name in (
+        "delivery_date_local",
+        "delivery_window_start_local",
+        "delivery_window_end_local",
+    ):
+        if name not in columns:
+            connection.execute(f"ALTER TABLE order_versions ADD COLUMN {name} TEXT")
+    connection.execute(
+        """CREATE TRIGGER IF NOT EXISTS trg_order_version_logistics_timing_immutable
+        BEFORE UPDATE OF delivery_date_local, delivery_window_start_local,
+                         delivery_window_end_local ON order_versions
+        WHEN NEW.delivery_date_local IS NOT OLD.delivery_date_local
+          OR NEW.delivery_window_start_local IS NOT OLD.delivery_window_start_local
+          OR NEW.delivery_window_end_local IS NOT OLD.delivery_window_end_local
+        BEGIN SELECT RAISE(ABORT, 'order version logistics timing is immutable'); END"""
+    )
+
+
 _MIGRATIONS = (
     (1, "create_order_tables", _migration_1_create_tables),
     (2, "add_cancelled_at", _migration_2_add_cancelled_at),
@@ -415,6 +439,11 @@ _MIGRATIONS = (
         9,
         "operational_context_fulfillment_mode",
         _migration_9_operational_context_fulfillment_mode,
+    ),
+    (
+        10,
+        "order_version_logistics_timing",
+        _migration_10_order_version_logistics_timing,
     ),
 )
 
@@ -497,8 +526,15 @@ class SQLiteOrderRepository:
                 self._order_values(order),
             )
             self._conn.execute(
-                "INSERT INTO order_versions VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                """
+                INSERT INTO order_versions (
+                    order_version_id, order_id, version_number, created_at,
+                    event_date, time_window_text, location_text, guest_count_estimate,
+                    planning_mode, kitchen_print_confirmed_at, parent_order_version_id,
+                    created_by, change_reason, changed_fields_json, delivery_date_local,
+                    delivery_window_start_local, delivery_window_end_local
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
                 self._version_values(version),
             )
             if operational_context is not None:
@@ -552,8 +588,15 @@ class SQLiteOrderRepository:
             raise ValueError("version must belong to the supplied order")
         with self._write_scope():
             self._conn.execute(
-                "INSERT INTO order_versions VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                """
+                INSERT INTO order_versions (
+                    order_version_id, order_id, version_number, created_at,
+                    event_date, time_window_text, location_text, guest_count_estimate,
+                    planning_mode, kitchen_print_confirmed_at, parent_order_version_id,
+                    created_by, change_reason, changed_fields_json, delivery_date_local,
+                    delivery_window_start_local, delivery_window_end_local
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
                 self._version_values(version),
             )
             if operational_context is not None:
@@ -676,6 +719,21 @@ class SQLiteOrderRepository:
             version.created_by,
             version.change_reason,
             json.dumps(version.changed_fields, separators=(",", ":")),
+            (
+                version.delivery_date_local.isoformat()
+                if version.delivery_date_local is not None
+                else None
+            ),
+            (
+                version.delivery_window_start_local.isoformat(timespec="minutes")
+                if version.delivery_window_start_local is not None
+                else None
+            ),
+            (
+                version.delivery_window_end_local.isoformat(timespec="minutes")
+                if version.delivery_window_end_local is not None
+                else None
+            ),
         )
 
     def get_order_version(self, order_version_id: str) -> OrderVersion | None:
@@ -741,4 +799,13 @@ class SQLiteOrderRepository:
             created_by=row[11],
             change_reason=row[12],
             changed_fields=tuple(json.loads(row[13])),
+            delivery_date_local=(
+                date.fromisoformat(row[14]) if row[14] is not None else None
+            ),
+            delivery_window_start_local=(
+                time.fromisoformat(row[15]) if row[15] is not None else None
+            ),
+            delivery_window_end_local=(
+                time.fromisoformat(row[16]) if row[16] is not None else None
+            ),
         )

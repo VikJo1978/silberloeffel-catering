@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Literal
 from zoneinfo import ZoneInfo
 
 from catering_system.domain.catalog import AllergenCode, validate_allergen_codes
 from catering_system.domain.inquiry import PlanningMode, validate_planning_mode
+from catering_system.domain.logistics_timing import validate_optional_service_window
 from catering_system.domain.offer_budget_definition import OfferBudgetDefinition
 from catering_system.domain.offer_charges import OfferChargesDefinition
 from catering_system.domain.order_payment_reminder import (
@@ -241,6 +242,9 @@ class OfferVersion:
     # on legacy snapshots that never sent one; their positions (historically
     # always kind="fee") are untouched and not reinterpreted.
     charges_definition: OfferChargesDefinition | None = None
+    delivery_date_local: date | None = None
+    delivery_window_start_local: time | None = None
+    delivery_window_end_local: time | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.offer_version_id, "offer_version_id")
@@ -261,6 +265,12 @@ class OfferVersion:
             raise ValueError("guest_count must be a positive integer")
         validate_planning_mode(self.planning_mode)
         validate_payment_method(self.payment_method)
+        validate_optional_service_window(
+            self.delivery_date_local,
+            self.delivery_window_start_local,
+            self.delivery_window_end_local,
+            label="delivery window",
+        )
         _require_bounded_text(
             self.payment_customer_visible_text,
             "payment_customer_visible_text",

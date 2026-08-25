@@ -12,9 +12,10 @@ immutable change provenance to OrderVersion. No stored status/selection field
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time
 
 from catering_system.domain.inquiry import PlanningMode
+from catering_system.domain.logistics_timing import validate_optional_service_window
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,17 @@ class OrderVersion:
     created_by: str | None = None
     change_reason: str | None = None
     changed_fields: tuple[str, ...] = ()
+    delivery_date_local: date | None = None
+    delivery_window_start_local: time | None = None
+    delivery_window_end_local: time | None = None
+
+    def __post_init__(self) -> None:
+        validate_optional_service_window(
+            self.delivery_date_local,
+            self.delivery_window_start_local,
+            self.delivery_window_end_local,
+            label="delivery window",
+        )
 
 
 def is_order_version_superseded(

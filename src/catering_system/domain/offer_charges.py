@@ -15,7 +15,10 @@ signals remain outside this domain.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import time
 from typing import Literal
+
+from catering_system.domain.logistics_timing import validate_optional_local_window
 
 ChargeBaseMode = Literal["NONE", "PAUSCHALE"]
 ReturnMode = Literal["NEXT_WORKING_DAY", "SAME_DAY"]
@@ -133,6 +136,8 @@ class ReturnLogisticsDefinition:
     mode: ReturnMode = "NEXT_WORKING_DAY"
     pickup_window_text: str | None = None
     same_day_fee_cents: int = 0
+    pickup_window_start_local: time | None = None
+    pickup_window_end_local: time | None = None
 
     def __post_init__(self) -> None:
         validate_return_mode(self.mode)
@@ -148,10 +153,23 @@ class ReturnLogisticsDefinition:
                 raise ValueError("return pickup window must not be empty")
         if self.mode == "SAME_DAY" and self.pickup_window_text is None:
             raise ValueError("SAME_DAY return requires pickup_window_text")
-        if self.mode == "NEXT_WORKING_DAY" and self.pickup_window_text is not None:
-            raise ValueError(
-                "NEXT_WORKING_DAY return must not specify pickup_window_text"
-            )
+        validate_optional_local_window(
+            self.pickup_window_start_local,
+            self.pickup_window_end_local,
+            label="return pickup window",
+        )
+        if self.mode == "NEXT_WORKING_DAY":
+            if self.pickup_window_text is not None:
+                raise ValueError(
+                    "NEXT_WORKING_DAY return must not specify pickup_window_text"
+                )
+            if (
+                self.pickup_window_start_local is not None
+                or self.pickup_window_end_local is not None
+            ):
+                raise ValueError(
+                    "NEXT_WORKING_DAY return must not specify canonical pickup times"
+                )
 
 
 @dataclass(frozen=True)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Literal, cast
 
@@ -91,7 +91,15 @@ _DISHWARE_CHARGE_KEYS = frozenset(
 )
 _DISHWARE_LINE_KEYS = frozenset({"description", "quantity", "unit_net_cents"})
 _BUFFET_CHARGE_KEYS = frozenset({"base_mode", "pauschale_per_person_cents"})
-_RETURN_LOGISTICS_KEYS = frozenset({"mode", "pickup_window_text", "same_day_fee_cents"})
+_RETURN_LOGISTICS_KEYS = frozenset(
+    {
+        "mode",
+        "pickup_window_text",
+        "same_day_fee_cents",
+        "pickup_window_start_local",
+        "pickup_window_end_local",
+    }
+)
 _RETURN_PICKUP_FEE_NAME = "Rückholung am Veranstaltungstag"
 _RECIPIENT_KEYS = frozenset({"company_name", "contact_name", "email", "postal_address"})
 _EVENT_KEYS = frozenset(
@@ -101,6 +109,9 @@ _EVENT_KEYS = frozenset(
         "location_text",
         "guest_count",
         "planning_mode",
+        "delivery_date_local",
+        "delivery_window_start_local",
+        "delivery_window_end_local",
     }
 )
 _CUSTOMER_TEXT_KEYS = frozenset({"title", "introduction", "notes"})
@@ -357,6 +368,26 @@ def _require_date(value: object, field: str) -> date:
         raise ValueError(f"{field} must be an ISO date") from exc
 
 
+def _optional_date(value: object, field: str) -> date | None:
+    if value is None:
+        return None
+    return _require_date(value, field)
+
+
+def _optional_local_time(value: object, field: str) -> time | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or len(value) != 5 or value[2] != ":":
+        raise ValueError(f"{field} must be HH:MM or null")
+    try:
+        parsed = time.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"{field} must be HH:MM or null") from exc
+    if parsed.isoformat(timespec="minutes") != value:
+        raise ValueError(f"{field} must be canonical HH:MM or null")
+    return parsed
+
+
 def _require_utc_datetime(value: object, field: str) -> datetime:
     if not isinstance(value, str):
         raise ValueError(f"{field} must be a timezone-aware UTC timestamp")
@@ -438,6 +469,17 @@ def _parse_event(payload: dict[str, object]) -> OfferSnapshotEvent:
         guest_count=guest_count,
         planning_mode=validate_planning_mode(
             _require_exact_str(payload.get("planning_mode"), "planning_mode")
+        ),
+        delivery_date_local=_optional_date(
+            payload.get("delivery_date_local"), "event.delivery_date_local"
+        ),
+        delivery_window_start_local=_optional_local_time(
+            payload.get("delivery_window_start_local"),
+            "event.delivery_window_start_local",
+        ),
+        delivery_window_end_local=_optional_local_time(
+            payload.get("delivery_window_end_local"),
+            "event.delivery_window_end_local",
         ),
     )
 
@@ -625,6 +667,14 @@ def _parse_return_logistics(
         same_day_fee_cents=_require_cents(
             payload.get("same_day_fee_cents"),
             "charges_definition.return_logistics.same_day_fee_cents",
+        ),
+        pickup_window_start_local=_optional_local_time(
+            payload.get("pickup_window_start_local"),
+            "charges_definition.return_logistics.pickup_window_start_local",
+        ),
+        pickup_window_end_local=_optional_local_time(
+            payload.get("pickup_window_end_local"),
+            "charges_definition.return_logistics.pickup_window_end_local",
         ),
     )
 
