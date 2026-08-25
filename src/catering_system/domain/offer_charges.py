@@ -1,27 +1,15 @@
-"""CONFIGURABLE_OFFER_CHARGES_V1 — delivery/dishware/buffet charge definitions.
+"""Commercial charge definitions embedded in Offer snapshots.
 
-Shared value objects embedded (optionally) in both the OfferSnapshot wire
-envelope (``domain/offer_snapshot.py``) and the persisted Offer aggregate
-(``domain/offer.py``). Unlike ``OfferBudgetDefinition``, these *are*
-customer-facing: they describe real offer-level charges that materialize as
-``delivery``/``dishware``/``buffet_fee`` positions, appear in totals, and
-render in the customer document/PDF exactly like any other position.
+The value objects in this module are shared by the incoming OfferSnapshot and
+the persisted Offer aggregate. They describe operator-configured,
+customer-facing charges. A missing ``charges_definition`` on an envelope still
+means a legacy snapshot and is handled by the snapshot validator.
 
-Absent (``None``) on the envelope means "legacy snapshot" — no charges
-definition was ever sent, and the snapshot's already-materialized positions
-(historically always ``kind="fee"`` Büffetpauschale/Geschirrpauschale/
-Anlieferung, added unconditionally by the pre-this-slice Configurator
-backend) are trusted as-is, never reinterpreted or synthesized from this
-module. See ``services/offer_snapshot_validation.py`` for the consistency
-check that only ever applies when a ``charges_definition`` is actually
-present on the incoming snapshot.
-
-Default posture for new Offers (binding on Stage 2B, the Configurator side
-that will build these definitions): ``dishware.base_mode`` and
-``buffet.base_mode`` both default to ``"NONE"``. Neither Geschirrpauschale
-nor Büffetpauschale is added automatically — both must be explicitly
-selected by the office user. This replaces the pre-this-slice behaviour
-where both were always-on, unconditional fee positions.
+Issue #171 extends the existing charge contract with a *commercial return
+request*. It deliberately stores no courier execution state. Core may freeze
+``NEXT_WORKING_DAY`` or ``SAME_DAY`` plus the requested pickup window and the
+configured same-day fee; assignment, checklist state, completion and overdue
+signals remain outside this domain.
 """
 
 from __future__ import annotations
@@ -30,8 +18,10 @@ from dataclasses import dataclass
 from typing import Literal
 
 ChargeBaseMode = Literal["NONE", "PAUSCHALE"]
+ReturnMode = Literal["NEXT_WORKING_DAY", "SAME_DAY"]
 
 CHARGE_BASE_MODES: tuple[ChargeBaseMode, ...] = ("NONE", "PAUSCHALE")
+RETURN_MODES: tuple[ReturnMode, ...] = ("NEXT_WORKING_DAY", "SAME_DAY")
 
 
 def validate_charge_base_mode(value: str) -> ChargeBaseMode:
@@ -40,6 +30,14 @@ def validate_charge_base_mode(value: str) -> ChargeBaseMode:
     if value == "PAUSCHALE":
         return "PAUSCHALE"
     raise ValueError("invalid charge base_mode")
+
+
+def validate_return_mode(value: str) -> ReturnMode:
+    if value == "NEXT_WORKING_DAY":
+        return "NEXT_WORKING_DAY"
+    if value == "SAME_DAY":
+        return "SAME_DAY"
+    raise ValueError("invalid return mode")
 
 
 def _require_non_negative_cents(value: object, field_name: str) -> int:
@@ -52,14 +50,7 @@ def _require_non_negative_cents(value: object, field_name: str) -> int:
 
 @dataclass(frozen=True)
 class DeliveryChargeDefinition:
-    """One operator-configured delivery amount.
-
-    ``amount_cents`` is the complete, standalone charge — 0 is explicitly
-    valid (collection / free delivery), not a sentinel for "no delivery".
-    Every ``charges_definition`` that specifies delivery at all carries this
-    object; there is no separate on/off toggle for delivery the way
-    dishware/buffet have ``base_mode``.
-    """
+    """One operator-configured outbound delivery amount."""
 
     amount_cents: int
 
@@ -71,11 +62,8 @@ class DeliveryChargeDefinition:
 class DishwareAdditionalLineDefinition:
     """One operator-entered additional dishware line.
 
-    Deliberately carries no calculated total — ``net_total_cents`` is never
-    accepted from the wire and never stored here (binding decision: the
-    server always derives ``quantity * unit_net_cents`` itself, at whatever
-    point it is needed, rather than trusting or persisting a client-supplied
-    figure that could drift from the inputs that produced it).
+    ``net_total_cents`` is derived from quantity and unit price rather than
+    accepted or persisted as an independent input.
     """
 
     description: str
@@ -97,22 +85,12 @@ class DishwareAdditionalLineDefinition:
 
     @property
     def net_total_cents(self) -> int:
-        """Derived on demand — never a stored/persisted field (see class docstring)."""
         return self.quantity * self.unit_net_cents
 
 
 @dataclass(frozen=True)
 class DishwareChargeDefinition:
-    """Dishware charge: an independent Pauschale toggle plus an independent
-    list of additional lines. The two are orthogonal — all four
-    combinations (NONE/no lines, NONE/lines, PAUSCHALE/no lines,
-    PAUSCHALE/lines) are valid and meaningful; a non-empty ``additional_lines``
-    does not imply or require ``base_mode == "PAUSCHALE"``.
-
-    ``pauschale_per_person_cents`` is always present and validated even when
-    ``base_mode == "NONE"`` — the configured rate survives being toggled
-    off, so switching back to PAUSCHALE later does not lose it.
-    """
+    """Dishware Pauschale toggle plus independent additional lines."""
 
     base_mode: ChargeBaseMode
     pauschale_per_person_cents: int
@@ -127,12 +105,7 @@ class DishwareChargeDefinition:
 
 @dataclass(frozen=True)
 class BuffetChargeDefinition:
-    """Büffetpauschale charge — same NONE/PAUSCHALE shape as dishware's base
-    mode, no additional lines. Existing canonical rate: 50 cents/person.
-
-    New Offers default to ``base_mode="NONE"`` — Büffetpauschale must be
-    explicitly selected by the office user, it is never added automatically
-    (this replaces the pre-this-slice unconditional behaviour)."""
+    """Büffetpauschale charge using the same NONE/PAUSCHALE convention."""
 
     base_mode: ChargeBaseMode
     pauschale_per_person_cents: int
@@ -145,27 +118,68 @@ class BuffetChargeDefinition:
 
 
 @dataclass(frozen=True)
+class ReturnLogisticsDefinition:
+    """Commercial request for collecting reusable dishware/equipment.
+
+    ``NEXT_WORKING_DAY`` is the default and carries no requested pickup
+    window. ``SAME_DAY`` is an explicit request and requires a non-empty,
+    trimmed pickup window. ``same_day_fee_cents`` is retained in both modes so
+    toggling the option off does not erase the operator-configured rate.
+
+    This object is intentionally not a PickupTask. It contains no driver,
+    vehicle, assignment, started/completed state or overdue state.
+    """
+
+    mode: ReturnMode = "NEXT_WORKING_DAY"
+    pickup_window_text: str | None = None
+    same_day_fee_cents: int = 0
+
+    def __post_init__(self) -> None:
+        validate_return_mode(self.mode)
+        _require_non_negative_cents(
+            self.same_day_fee_cents, "return_logistics.same_day_fee_cents"
+        )
+        if self.pickup_window_text is not None:
+            if not isinstance(self.pickup_window_text, str):
+                raise ValueError("return pickup window must be a string or null")
+            if self.pickup_window_text != self.pickup_window_text.strip():
+                raise ValueError("return pickup window must be trimmed")
+            if not self.pickup_window_text:
+                raise ValueError("return pickup window must not be empty")
+        if self.mode == "SAME_DAY" and self.pickup_window_text is None:
+            raise ValueError("SAME_DAY return requires pickup_window_text")
+        if self.mode == "NEXT_WORKING_DAY" and self.pickup_window_text is not None:
+            raise ValueError(
+                "NEXT_WORKING_DAY return must not specify pickup_window_text"
+            )
+
+
+@dataclass(frozen=True)
 class OfferChargesDefinition:
     """Complete operator-configured charges for one Offer snapshot.
 
-    All three fields are required whenever ``charges_definition`` is present
-    on the envelope at all — there is no partial shape; a snapshot either
-    carries the complete, explicit charge configuration or none of it
-    (``charges_definition`` itself is ``None`` on the envelope/version).
+    ``return_logistics`` has a backward-compatible default because structured
+    charge snapshots created before issue #171 did not contain that section.
+    New producers should send it explicitly once the wire contract is enabled.
     """
 
     delivery: DeliveryChargeDefinition
     dishware: DishwareChargeDefinition
     buffet: BuffetChargeDefinition
+    return_logistics: ReturnLogisticsDefinition = ReturnLogisticsDefinition()
 
 
 __all__ = [
     "CHARGE_BASE_MODES",
+    "RETURN_MODES",
     "BuffetChargeDefinition",
     "ChargeBaseMode",
     "DeliveryChargeDefinition",
     "DishwareAdditionalLineDefinition",
     "DishwareChargeDefinition",
     "OfferChargesDefinition",
+    "ReturnLogisticsDefinition",
+    "ReturnMode",
     "validate_charge_base_mode",
+    "validate_return_mode",
 ]
