@@ -6,10 +6,11 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Literal
 
 from catering_system.domain.inquiry import PlanningMode
+from catering_system.domain.logistics_timing import validate_optional_service_window
 from catering_system.domain.offer_budget_definition import OfferBudgetDefinition
 from catering_system.domain.offer_charges import OfferChargesDefinition
 from catering_system.domain.order_payment_reminder import PaymentMethod
@@ -61,6 +62,17 @@ class OfferSnapshotEvent:
     location_text: str
     guest_count: int | None
     planning_mode: PlanningMode
+    delivery_date_local: date | None = None
+    delivery_window_start_local: time | None = None
+    delivery_window_end_local: time | None = None
+
+    def __post_init__(self) -> None:
+        validate_optional_service_window(
+            self.delivery_date_local,
+            self.delivery_window_start_local,
+            self.delivery_window_end_local,
+            label="delivery window",
+        )
 
 
 @dataclass(frozen=True)

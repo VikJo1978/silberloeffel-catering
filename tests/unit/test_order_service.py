@@ -726,6 +726,9 @@ def test_order_domain_has_no_kitchen_or_release_surface() -> None:
         "created_by",
         "change_reason",
         "changed_fields",
+        "delivery_date_local",
+        "delivery_window_start_local",
+        "delivery_window_end_local",
     }
 
 

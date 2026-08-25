@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import nullcontext
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal
 from pathlib import Path
 
@@ -324,6 +324,21 @@ def _migration_9_offer_version_charges_definition(
         )
 
 
+def _migration_10_offer_version_logistics_timing(
+    connection: sqlite3.Connection,
+) -> None:
+    existing = {
+        row[1] for row in connection.execute("PRAGMA table_info(offer_versions)")
+    }
+    for name in (
+        "delivery_date_local",
+        "delivery_window_start_local",
+        "delivery_window_end_local",
+    ):
+        if name not in existing:
+            connection.execute(f"ALTER TABLE offer_versions ADD COLUMN {name} TEXT")
+
+
 _MIGRATIONS = (
     (1, "create_offer_tables", _migration_1_create_tables),
     (2, "unique_source_inquiry", _migration_2_unique_source_inquiry),
@@ -357,6 +372,11 @@ _MIGRATIONS = (
         9,
         "offer_version_charges_definition",
         _migration_9_offer_version_charges_definition,
+    ),
+    (
+        10,
+        "offer_version_logistics_timing",
+        _migration_10_offer_version_logistics_timing,
     ),
 )
 
@@ -449,6 +469,20 @@ def _charges_definition_storage(value: OfferChargesDefinition | None) -> str | N
                 "mode": value.return_logistics.mode,
                 "pickup_window_text": value.return_logistics.pickup_window_text,
                 "same_day_fee_cents": value.return_logistics.same_day_fee_cents,
+                "pickup_window_start_local": (
+                    value.return_logistics.pickup_window_start_local.isoformat(
+                        timespec="minutes"
+                    )
+                    if value.return_logistics.pickup_window_start_local is not None
+                    else None
+                ),
+                "pickup_window_end_local": (
+                    value.return_logistics.pickup_window_end_local.isoformat(
+                        timespec="minutes"
+                    )
+                    if value.return_logistics.pickup_window_end_local is not None
+                    else None
+                ),
             },
         },
         ensure_ascii=False,
@@ -477,6 +511,18 @@ def _stored_charges_definition(value: str | None) -> OfferChargesDefinition | No
                 mode=return_logistics_raw["mode"],
                 pickup_window_text=return_logistics_raw["pickup_window_text"],
                 same_day_fee_cents=return_logistics_raw["same_day_fee_cents"],
+                pickup_window_start_local=(
+                    time.fromisoformat(
+                        return_logistics_raw["pickup_window_start_local"]
+                    )
+                    if return_logistics_raw.get("pickup_window_start_local") is not None
+                    else None
+                ),
+                pickup_window_end_local=(
+                    time.fromisoformat(return_logistics_raw["pickup_window_end_local"])
+                    if return_logistics_raw.get("pickup_window_end_local") is not None
+                    else None
+                ),
             )
         )
         additional_lines = tuple(
@@ -785,8 +831,9 @@ class SQLiteOfferRepository:
                 location_text, guest_count, planning_mode, payment_method,
                 payment_customer_visible_text, customer_title,
                 customer_introduction, customer_notes, budget_definition_json,
-                charges_definition_json
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                charges_definition_json, delivery_date_local,
+                delivery_window_start_local, delivery_window_end_local
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 version.offer_version_id,
@@ -808,6 +855,21 @@ class SQLiteOfferRepository:
                 version.customer_notes,
                 _budget_definition_storage(version.budget_definition),
                 _charges_definition_storage(version.charges_definition),
+                (
+                    version.delivery_date_local.isoformat()
+                    if version.delivery_date_local is not None
+                    else None
+                ),
+                (
+                    version.delivery_window_start_local.isoformat(timespec="minutes")
+                    if version.delivery_window_start_local is not None
+                    else None
+                ),
+                (
+                    version.delivery_window_end_local.isoformat(timespec="minutes")
+                    if version.delivery_window_end_local is not None
+                    else None
+                ),
             ),
         )
         for sort_order, variant in enumerate(version.variants):
@@ -941,7 +1003,8 @@ class SQLiteOfferRepository:
                    location_text, guest_count, planning_mode, payment_method,
                    payment_customer_visible_text, customer_title,
                    customer_introduction, customer_notes, budget_definition_json,
-                   charges_definition_json
+                   charges_definition_json, delivery_date_local,
+                   delivery_window_start_local, delivery_window_end_local
             FROM offer_versions
             WHERE offer_id = ?
             ORDER BY version_number
@@ -990,6 +1053,15 @@ class SQLiteOfferRepository:
                     customer_notes=row[15],
                     budget_definition=_stored_budget_definition(row[16]),
                     charges_definition=_stored_charges_definition(row[17]),
+                    delivery_date_local=(
+                        date.fromisoformat(row[18]) if row[18] is not None else None
+                    ),
+                    delivery_window_start_local=(
+                        time.fromisoformat(row[19]) if row[19] is not None else None
+                    ),
+                    delivery_window_end_local=(
+                        time.fromisoformat(row[20]) if row[20] is not None else None
+                    ),
                 )
             )
         return tuple(versions)

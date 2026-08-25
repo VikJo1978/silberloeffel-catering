@@ -141,6 +141,9 @@ class OrderService:
             location_text=offer_version.location_text,
             guest_count_estimate=offer_version.guest_count,
             planning_mode=offer_version.planning_mode,
+            delivery_date_local=offer_version.delivery_date_local,
+            delivery_window_start_local=offer_version.delivery_window_start_local,
+            delivery_window_end_local=offer_version.delivery_window_end_local,
         )
         context = (
             _initial_operational_context(order, version, inquiry, created_at=now)
@@ -176,6 +179,9 @@ class OrderService:
                 f"order {order.order_id!r} is cancelled (Storno); no further versions (STORNO pack §3)"
             )
         existing = self._order_repository.list_order_versions(order.order_id)
+        latest_version = (
+            max(existing, key=lambda item: item.version_number) if existing else None
+        )
         next_num = max((v.version_number for v in existing), default=0) + 1
         now = _utc_now()
         pm = validate_planning_mode(planning_mode)
@@ -189,6 +195,21 @@ class OrderService:
             location_text=location_text,
             guest_count_estimate=guest_count_estimate,
             planning_mode=pm,
+            delivery_date_local=(
+                latest_version.delivery_date_local
+                if latest_version is not None
+                else None
+            ),
+            delivery_window_start_local=(
+                latest_version.delivery_window_start_local
+                if latest_version is not None
+                else None
+            ),
+            delivery_window_end_local=(
+                latest_version.delivery_window_end_local
+                if latest_version is not None
+                else None
+            ),
         )
         context = _operational_context_for_new_version(
             order_repository=self._order_repository,
@@ -272,6 +293,9 @@ class OrderService:
             created_by=actor_reference,
             change_reason=change_reason,
             changed_fields=changed_fields,
+            delivery_date_local=source.delivery_date_local,
+            delivery_window_start_local=source.delivery_window_start_local,
+            delivery_window_end_local=source.delivery_window_end_local,
         )
         previous_candidate_id = current.candidate_order_version_id
         updated = replace(
