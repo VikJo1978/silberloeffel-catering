@@ -31,16 +31,24 @@ def _order(order_id: str, version_id: str) -> SimpleNamespace:
     )
 
 
-def _version(order_id: str, version_id: str) -> SimpleNamespace:
+def _version(
+    order_id: str,
+    version_id: str,
+    *,
+    guest_count: int | None = 1,
+    event_date: date = EVENT_DATE,
+    version_number: int = 1,
+) -> SimpleNamespace:
     return SimpleNamespace(
         order_id=order_id,
         order_version_id=version_id,
-        version_number=1,
-        event_date=EVENT_DATE,
+        version_number=version_number,
+        event_date=event_date,
+        guest_count_estimate=guest_count,
     )
 
 
-def _position(catalog_item_id: str, quantity: str | None) -> SimpleNamespace:
+def _position(catalog_item_id: str, quantity: str | None = "1") -> SimpleNamespace:
     return SimpleNamespace(
         kind="catalog",
         catalog_item_id=catalog_item_id,
@@ -141,19 +149,46 @@ def _row_for_used_capacity(used: int):  # noqa: ANN202
         requirements={"dish-a": [requirement]},
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
         orders=[order],
-        versions={"version-1": _version("order-1", "version-1")},
-        snapshots={"order-1": _snapshot(_position("dish-a", str(used)))},
+        versions={
+            "version-1": _version("order-1", "version-1", guest_count=used)
+        },
+        snapshots={"order-1": _snapshot(_position("dish-a"))},
     )
     return service.list_for_date(EVENT_DATE)[0]
 
 
-def test_capacity_penalty_uses_committed_order_load() -> None:
+def test_capacity_penalty_uses_committed_guest_load() -> None:
     row = _row_for_used_capacity(40)
 
     assert row.catalog_item_id == "dish-a"
     assert row.feasible is True
     assert row.overload_penalty == 40
     assert row.reason_code is None
+
+
+def test_multiple_dishes_on_same_station_count_guest_load_once() -> None:
+    order = _order("order-1", "version-1")
+    requirements = {
+        "dish-a": [CatalogStationRequirement("dish-a", "cold", 1)],
+        "dish-b": [CatalogStationRequirement("dish-b", "cold", 9)],
+    }
+    service = _service(
+        dish_ids=("dish-a", "dish-b"),
+        requirements=requirements,
+        capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
+        orders=[order],
+        versions={
+            "version-1": _version("order-1", "version-1", guest_count=40)
+        },
+        snapshots={
+            "order-1": _snapshot(_position("dish-a", "40"), _position("dish-b", "40"))
+        },
+    )
+
+    rows = service.list_for_date(EVENT_DATE)
+
+    assert [row.overload_penalty for row in rows] == [40, 40]
+    assert all(row.feasible is True for row in rows)
 
 
 def test_capacity_warns_in_four_advisory_tiers() -> None:
@@ -210,7 +245,9 @@ def test_capacity_limit_is_advisory() -> None:
         requirements={"dish-a": [requirement]},
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 20)],
         orders=[order],
-        versions={"version-1": _version("order-1", "version-1")},
+        versions={
+            "version-1": _version("order-1", "version-1", guest_count=20)
+        },
         snapshots={"order-1": _snapshot(_position("dish-a", "10"))},
     )
 
@@ -229,7 +266,9 @@ def test_capacity_incomplete_demand_is_advisory() -> None:
         requirements={"candidate": [requirement]},
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
         orders=[order],
-        versions={"version-1": _version("order-1", "version-1")},
+        versions={
+            "version-1": _version("order-1", "version-1", guest_count=10)
+        },
         snapshots={"order-1": _snapshot(_position("legacy-unmapped", "10"))},
     )
 
@@ -256,7 +295,9 @@ def test_cancelled_order_does_not_consume_capacity() -> None:
         requirements={"dish-a": [requirement]},
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
         orders=[order],
-        versions={"version-1": _version("order-1", "version-1")},
+        versions={
+            "version-1": _version("order-1", "version-1", guest_count=100)
+        },
         snapshots={"order-1": _snapshot(_position("dish-a", "100"))},
     )
 
@@ -273,7 +314,9 @@ def test_capacity_missing_committed_snapshot_is_advisory() -> None:
         requirements={"dish-a": [requirement]},
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
         orders=[order],
-        versions={"version-1": _version("order-1", "version-1")},
+        versions={
+            "version-1": _version("order-1", "version-1", guest_count=10)
+        },
         snapshots={},
     )
 
@@ -283,15 +326,17 @@ def test_capacity_missing_committed_snapshot_is_advisory() -> None:
     assert row.reason_code == "DEMAND_SOURCE_INCOMPLETE"
 
 
-def test_capacity_non_whole_committed_quantity_is_advisory() -> None:
+def test_capacity_missing_guest_count_is_advisory() -> None:
     requirement = CatalogStationRequirement("dish-a", "cold", 1)
     order = _order("order-1", "version-1")
     service = _service(
         requirements={"dish-a": [requirement]},
         capacity_days=[CapacityDay(EVENT_DATE, "cold", 100)],
         orders=[order],
-        versions={"version-1": _version("order-1", "version-1")},
-        snapshots={"order-1": _snapshot(_position("dish-a", "1.5"))},
+        versions={
+            "version-1": _version("order-1", "version-1", guest_count=None)
+        },
+        snapshots={"order-1": _snapshot(_position("dish-a"))},
     )
 
     row = service.list_for_date(EVENT_DATE)[0]
@@ -348,17 +393,18 @@ def test_capacity_falls_back_to_latest_order_version() -> None:
         effective_order_version_id=None,
         candidate_order_version_id=None,
     )
-    older = SimpleNamespace(
-        order_id="order-1",
-        order_version_id="version-1",
-        version_number=1,
+    older = _version(
+        "order-1",
+        "version-1",
+        guest_count=90,
         event_date=date(2026, 8, 30),
+        version_number=1,
     )
-    latest = SimpleNamespace(
-        order_id="order-1",
-        order_version_id="version-2",
+    latest = _version(
+        "order-1",
+        "version-2",
+        guest_count=10,
         version_number=2,
-        event_date=EVENT_DATE,
     )
     service = _service(
         requirements={"dish-a": [requirement]},
