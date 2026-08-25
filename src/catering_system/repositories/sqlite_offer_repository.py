@@ -44,6 +44,7 @@ from catering_system.domain.offer_charges import (
     DishwareAdditionalLineDefinition,
     DishwareChargeDefinition,
     OfferChargesDefinition,
+    ReturnLogisticsDefinition,
 )
 from catering_system.domain.order_payment_reminder import validate_payment_method
 from catering_system.repositories.sqlite_migrations import apply_migrations
@@ -444,6 +445,11 @@ def _charges_definition_storage(value: OfferChargesDefinition | None) -> str | N
                 "base_mode": value.buffet.base_mode,
                 "pauschale_per_person_cents": value.buffet.pauschale_per_person_cents,
             },
+            "return_logistics": {
+                "mode": value.return_logistics.mode,
+                "pickup_window_text": value.return_logistics.pickup_window_text,
+                "same_day_fee_cents": value.return_logistics.same_day_fee_cents,
+            },
         },
         ensure_ascii=False,
     )
@@ -463,6 +469,16 @@ def _stored_charges_definition(value: str | None) -> OfferChargesDefinition | No
         delivery_raw = parsed["delivery"]
         dishware_raw = parsed["dishware"]
         buffet_raw = parsed["buffet"]
+        return_logistics_raw = parsed.get("return_logistics")
+        return_logistics = (
+            ReturnLogisticsDefinition()
+            if return_logistics_raw is None
+            else ReturnLogisticsDefinition(
+                mode=return_logistics_raw["mode"],
+                pickup_window_text=return_logistics_raw["pickup_window_text"],
+                same_day_fee_cents=return_logistics_raw["same_day_fee_cents"],
+            )
+        )
         additional_lines = tuple(
             DishwareAdditionalLineDefinition(
                 description=line["description"],
@@ -484,6 +500,7 @@ def _stored_charges_definition(value: str | None) -> OfferChargesDefinition | No
                 base_mode=buffet_raw["base_mode"],
                 pauschale_per_person_cents=buffet_raw["pauschale_per_person_cents"],
             ),
+            return_logistics=return_logistics,
         )
     except (KeyError, TypeError) as exc:
         raise ValueError("charges_definition_json missing required field") from exc
