@@ -8,6 +8,8 @@ from catering_system.ui.office_panel_tasks_list import (
 )
 from catering_system.ui.office_panel_views import OfficePageContext
 
+# Manual-task mutations stay permission-gated even though system task rows are advisory.
+
 
 def _context(*permissions: str) -> OfficePageContext:
     return OfficePageContext(
