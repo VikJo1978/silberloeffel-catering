@@ -11,7 +11,7 @@ import html
 import json
 import re
 from collections.abc import Mapping
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
@@ -145,6 +145,26 @@ def next_return_working_day(event_date: date) -> date:
     return candidate
 
 
+def _format_local_time(value: time | None) -> str | None:
+    return value.strftime("%H:%M") if value is not None else None
+
+
+def _delivery_window_projection(
+    entry: WochenuebersichtEntry,
+) -> dict[str, str] | None:
+    if (
+        entry.delivery_date_local is None
+        or entry.delivery_window_start_local is None
+        or entry.delivery_window_end_local is None
+    ):
+        return None
+    return {
+        "date": entry.delivery_date_local.isoformat(),
+        "start_local": entry.delivery_window_start_local.strftime("%H:%M"),
+        "end_local": entry.delivery_window_end_local.strftime("%H:%M"),
+    }
+
+
 def _return_logistics_projection(
     event_date: date, definition: ReturnLogisticsDefinition | None
 ) -> dict[str, str | None] | None:
@@ -159,6 +179,12 @@ def _return_logistics_projection(
         "mode": definition.mode,
         "return_date": return_date.isoformat(),
         "pickup_window_text": definition.pickup_window_text,
+        "pickup_window_start_local": _format_local_time(
+            definition.pickup_window_start_local
+        ),
+        "pickup_window_end_local": _format_local_time(
+            definition.pickup_window_end_local
+        ),
     }
 
 
@@ -168,12 +194,12 @@ def render_order_feed_json(
     return_logistics_by_order_id: Mapping[str, ReturnLogisticsDefinition | None]
     | None = None,
 ) -> bytes:
-    """Pure renderer: per-date entries → courier order feed document (v2).
+    """Pure renderer: per-date entries → courier order feed document (v3).
 
     Selection still comes exclusively from ``WochenuebersichtService``. The
-    additive ``return_logistics`` planning fact is joined from the immutable
-    accepted OrderCommercialSnapshot. Prices and courier execution state stay
-    out of this payload.
+    additive canonical outbound timing mirrors the effective OrderVersion; the
+    return planning fact is joined from the immutable accepted
+    OrderCommercialSnapshot. Prices and courier execution state stay out.
     """
     return_logistics = return_logistics_by_order_id or {}
     document = {
@@ -185,6 +211,7 @@ def render_order_feed_json(
                 "time_window_text": e.time_window_text,
                 "location_text": e.location_text,
                 "guest_count_estimate": e.guest_count_estimate,
+                "delivery_window": _delivery_window_projection(e),
                 "return_logistics": _return_logistics_projection(
                     e.event_date, return_logistics.get(e.order_id)
                 ),
