@@ -77,7 +77,9 @@ class CustomerOrderHistoryService:
                     accepted_variant_id=(
                         commercial[2].variant_id if commercial else None
                     ),
-                    accepted_variant_label=(commercial[2].label if commercial else None),
+                    accepted_variant_label=(
+                        commercial[2].label if commercial else None
+                    ),
                     dishes=(
                         tuple(
                             CustomerOrderHistoryDish(

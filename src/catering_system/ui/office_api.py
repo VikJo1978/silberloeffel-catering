@@ -52,6 +52,7 @@ from catering_system.domain.customer_gastronomic_preference import (
     validate_preference_kind,
     validate_preference_source,
 )
+from catering_system.domain.customer_order_history import CustomerOrderHistoryEntry
 from catering_system.domain.customer_document_eligibility import (
     CustomerDocumentCreationBlocked,
 )
@@ -187,6 +188,10 @@ from catering_system.services.chat_service import (
     ChatNotFoundError,
     ChatReferenceNotFoundError,
     ChatService,
+)
+from catering_system.services.customer_order_history_service import (
+    CustomerOrderHistoryCustomerNotFoundError,
+    CustomerOrderHistoryService,
 )
 from catering_system.services.customer_gastronomic_preference_service import (
     CustomerGastronomicPreferenceNotFoundError,
@@ -665,6 +670,38 @@ def _manual_task_shape(task: ManualTask) -> dict[str, object]:
     }
 
 
+def _customer_order_history_shape(
+    entry: CustomerOrderHistoryEntry,
+) -> dict[str, object]:
+    return {
+        "order_id": entry.order_id,
+        "source_inquiry_id": entry.source_inquiry_id,
+        "order_version_id": entry.order_version_id,
+        "event_date": entry.event_date.isoformat(),
+        "guest_count": entry.guest_count,
+        "fulfillment_mode": entry.fulfillment_mode,
+        "accepted_offer_id": entry.accepted_offer_id,
+        "accepted_offer_version_id": entry.accepted_offer_version_id,
+        "accepted_variant_id": entry.accepted_variant_id,
+        "accepted_variant_label": entry.accepted_variant_label,
+        "dishes": [
+            {
+                "position_id": dish.position_id,
+                "name": dish.name,
+                "kind": dish.kind,
+                "catalog_item_id": dish.catalog_item_id,
+                "gross_total_cents": dish.gross_total_cents,
+            }
+            for dish in entry.dishes
+        ],
+        "gross_total_cents": entry.gross_total_cents,
+        "order_created_at": entry.order_created_at.isoformat(),
+        "cancelled_at": (
+            entry.cancelled_at.isoformat() if entry.cancelled_at is not None else None
+        ),
+    }
+
+
 def _gastronomic_preference_shape(
     preference: CustomerGastronomicPreference,
 ) -> dict[str, object]:
@@ -764,6 +801,9 @@ class OfficeApi:
             CustomerGastronomicPreferenceService(
                 self.customer_identities, self.customer_gastronomic_preferences
             )
+        )
+        self.customer_order_history_service = CustomerOrderHistoryService(
+            self.customer_identities, self.inquiries, self.orders, self.offers
         )
         self.order_service = OrderService(self.orders, event_sink=self.events)
         self.offer_service = OfferService(
@@ -960,6 +1000,16 @@ class OfficeApi:
             }
 
         return self.executor.run(work)
+
+    def customer_order_history(self, customer_id: str) -> dict[str, object]:
+        try:
+            entries = self.customer_order_history_service.list_for_customer(customer_id)
+        except CustomerOrderHistoryCustomerNotFoundError as exc:
+            raise ApiError(404, "customer_not_found") from exc
+        return {
+            "customer_id": customer_id,
+            "orders": [_customer_order_history_shape(entry) for entry in entries],
+        }
 
     def list_customer_gastronomic_preferences(
         self, customer_id: str
@@ -3537,6 +3587,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         {"GET": "chat_thread_participants"},
     ),
     (
+        re.compile(r"^/office/v1/customers/(?P<customer_id>[^/]+)/order-history$"),
+        "/office/v1/customers/{customer_id}/order-history",
+        {"GET": "customer_order_history"},
+    ),
+    (
         re.compile(
             r"^/office/v1/customers/(?P<customer_id>[^/]+)/gastronomic-preferences$"
         ),
@@ -4297,6 +4352,9 @@ def make_office_api_handler(
             elif kind == "work_center":
                 self._query(set())
                 self._respond(200, api.work_center())
+            elif kind == "customer_order_history":
+                self._query(set())
+                self._respond(200, api.customer_order_history(path_ids["customer_id"]))
             elif kind == "list_customer_gastronomic_preferences":
                 self._query(set())
                 self._respond(

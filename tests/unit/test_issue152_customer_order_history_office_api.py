@@ -17,7 +17,9 @@ from catering_system.domain.order import Order, OrderVersion
 from catering_system.repositories.sqlite_customer_identity_repository import (
     SQLiteCustomerIdentityRepository,
 )
-from catering_system.repositories.sqlite_inquiry_repository import SQLiteInquiryRepository
+from catering_system.repositories.sqlite_inquiry_repository import (
+    SQLiteInquiryRepository,
+)
 from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepository
 from tests.helpers.offer_pdf_static_content import fake_offer_pdf_static_content
 
@@ -133,9 +135,7 @@ def _get(url: str) -> tuple[int, dict[str, object]]:
 def test_customer_order_history_is_exposed_as_read_only_fact_projection(
     history_api: str,
 ) -> None:
-    status, body = _get(
-        f"{history_api}/office/v1/customers/customer-1/order-history"
-    )
+    status, body = _get(f"{history_api}/office/v1/customers/customer-1/order-history")
 
     assert status == 200
     assert body["customer_id"] == "customer-1"
