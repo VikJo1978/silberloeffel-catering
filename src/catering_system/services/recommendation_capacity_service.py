@@ -33,8 +33,6 @@ class RecommendationCapacityRow:
     feasible: bool
     overload_penalty: int
     reason_code: CapacityReasonCode | None = None
-    used_capacity_units: int | None = None
-    capacity_units: int | None = None
 
 
 class RecommendationCapacityService:
@@ -119,58 +117,38 @@ class RecommendationCapacityService:
 
             penalty = 0
             blocked_reason: CapacityReasonCode | None = None
-            selected_used: int | None = None
-            selected_capacity: int | None = None
             for requirement in requirements:
                 station = stations.get(requirement.station_id)
                 if station is None or not station.active:
                     blocked_reason = "STATION_INACTIVE"
                     break
-
-                used = used_by_station.get(requirement.station_id, 0)
                 capacity_day = capacity_days.get(requirement.station_id)
                 if capacity_day is None:
-                    selected_used = used
                     blocked_reason = "CAPACITY_UNSET"
                     break
-
-                selected_used = used
-                selected_capacity = capacity_day.capacity_units
                 if capacity_day.unavailable:
                     blocked_reason = "STATION_UNAVAILABLE"
                     break
                 if capacity_day.capacity_units == 0:
                     blocked_reason = "NO_CAPACITY"
                     break
+                used = used_by_station.get(requirement.station_id, 0)
                 if used >= capacity_day.capacity_units:
                     blocked_reason = "CAPACITY_EXHAUSTED"
                     break
-
-                current_penalty = min(
-                    100, (used * 100) // capacity_day.capacity_units
+                penalty = max(
+                    penalty,
+                    min(100, (used * 100) // capacity_day.capacity_units),
                 )
-                if current_penalty >= penalty:
-                    penalty = current_penalty
-                    selected_used = used
-                    selected_capacity = capacity_day.capacity_units
 
             if blocked_reason is not None:
-                rows.append(
-                    self._blocked(
-                        dish.dish_id,
-                        blocked_reason,
-                        used_capacity_units=selected_used,
-                        capacity_units=selected_capacity,
-                    )
-                )
+                rows.append(self._blocked(dish.dish_id, blocked_reason))
             else:
                 rows.append(
                     RecommendationCapacityRow(
                         catalog_item_id=dish.dish_id,
                         feasible=True,
                         overload_penalty=penalty,
-                        used_capacity_units=selected_used,
-                        capacity_units=selected_capacity,
                     )
                 )
 
@@ -187,17 +165,11 @@ class RecommendationCapacityService:
 
     @staticmethod
     def _blocked(
-        catalog_item_id: str,
-        reason_code: CapacityReasonCode,
-        *,
-        used_capacity_units: int | None = None,
-        capacity_units: int | None = None,
+        catalog_item_id: str, reason_code: CapacityReasonCode
     ) -> RecommendationCapacityRow:
         return RecommendationCapacityRow(
             catalog_item_id=catalog_item_id,
             feasible=False,
             overload_penalty=100,
             reason_code=reason_code,
-            used_capacity_units=used_capacity_units,
-            capacity_units=capacity_units,
         )
