@@ -12,6 +12,7 @@ from catering_system.ui.office_panel_views import (
 )
 
 _BERLIN = ZoneInfo("Europe/Berlin")
+_PRIORITY_LABELS = {"HIGH": "Hoch", "NORMAL": "Normal", "LOW": "Niedrig"}
 
 
 def _format_due(raw: object | None) -> str:
@@ -31,10 +32,16 @@ def _format_due(raw: object | None) -> str:
     return f"{value.day:02d}.{value.month:02d}.{value.year}"
 
 
-def _urgency_label(raw: object) -> str:
-    if raw == "overdue":
-        return "Überfällig"
-    return "Normal"
+def _priority_label(raw: object) -> str:
+    return _PRIORITY_LABELS.get(str(raw), "Normal")
+
+
+def _subject_cell(row: dict[str, object]) -> str:
+    label = str(row.get("subject_label") or "–")
+    href = str(row.get("subject_href") or "")
+    if href:
+        return f'<a href="{_e(href)}">{_e(label)}</a>'
+    return _e(label)
 
 
 def render_aufgaben_list(
@@ -42,6 +49,7 @@ def render_aufgaben_list(
     *,
     context: OfficePageContext,
     assignee_options: list[dict[str, str]] | None = None,
+    subject_options: list[dict[str, str]] | None = None,
     can_create_manual_task: bool = False,
     can_assign_manual_task: bool = False,
     create_form_fields: str = "",
@@ -62,6 +70,18 @@ def render_aufgaben_list(
                 + "".join(options)
                 + "</select></p>"
             )
+        subject_select_options = ['<option value="">Ohne Bezug</option>']
+        for option in subject_options or []:
+            subject_select_options.append(
+                f'<option value="{_e(option["value"])}">'
+                f"{_e(option['label'])}</option>"
+            )
+        subject_field = (
+            '<p><label for="manual_task_subject">Bezug</label><br>'
+            '<select id="manual_task_subject" name="subject_reference">'
+            + "".join(subject_select_options)
+            + "</select></p>"
+        )
         create_form = (
             "<section><h2>Neue Aufgabe</h2>"
             '<form method="post" action="/aufgaben/new">'
@@ -71,8 +91,15 @@ def render_aufgaben_list(
             '<p><label for="manual_task_description">Beschreibung</label><br>'
             '<textarea id="manual_task_description" name="description" '
             'maxlength="4000"></textarea></p>'
+            '<p><label for="manual_task_priority">Wichtigkeit</label><br>'
+            '<select id="manual_task_priority" name="priority">'
+            '<option value="HIGH">Hoch</option>'
+            '<option value="NORMAL" selected>Normal</option>'
+            '<option value="LOW">Niedrig</option>'
+            "</select></p>"
             '<p><label for="manual_task_due_date">Fällig</label><br>'
             '<input id="manual_task_due_date" name="due_date" type="date"></p>'
+            f"{subject_field}"
             f"{assignee_field}"
             '<p><button type="submit">Aufgabe anlegen</button></p>'
             "</form></section>"
@@ -95,9 +122,10 @@ def render_aufgaben_list(
         table_rows.append(
             "<tr>"
             f"<td>{_e(str(row['type_label']))}</td>"
-            f"<td>{_e(_urgency_label(row['urgency']))}</td>"
+            f"<td>{_e(_priority_label(row.get('priority', 'NORMAL')))}</td>"
             f"<td>{_e(str(row['title']))}</td>"
-            f"<td>{_e(str(row['subtitle']))}</td>"
+            f"<td>{_e(str(row.get('description', '–')))}</td>"
+            f"<td>{_subject_cell(row)}</td>"
             f"<td>{_e(_format_due(row.get('due_at')))}</td>"
             f"<td>{_e(str(row.get('assigned_to', '–')))}</td>"
             f"<td>{action}</td>"
@@ -105,13 +133,14 @@ def render_aufgaben_list(
         )
     body = (
         '<p class="subtitle">Manuelle Aufgaben und abgeleitete Büro-Aufgaben '
-        "aus Anfragen, Aufträgen und Zahlungserinnerungen.</p>"
+        "aus Anfragen, Angeboten, Aufträgen und Zahlungserinnerungen.</p>"
         + create_form
         + "<h2>Offene Aufgaben</h2>"
-        + "<table><tr><th>Typ</th><th>Dringlichkeit</th><th>Aufgabe</th>"
-        "<th>Beschreibung/Bezug</th><th>Fällig</th><th>Zugewiesen</th><th>Aktion</th></tr>"
+        + "<table><tr><th>Typ</th><th>Wichtigkeit</th><th>Aufgabe</th>"
+        "<th>Beschreibung</th><th>Bezug</th><th>Fällig</th><th>Zugewiesen</th>"
+        "<th>Aktion</th></tr>"
         + "".join(
-            table_rows or ['<tr><td colspan="7">Keine offenen Aufgaben.</td></tr>']
+            table_rows or ['<tr><td colspan="8">Keine offenen Aufgaben.</td></tr>']
         )
         + "</table>"
         + '<p><a href="/">← Zurück zur Arbeitszentrale</a></p>'
