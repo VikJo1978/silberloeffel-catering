@@ -81,7 +81,9 @@ class _Panel:
 
 def _start_panel(tmp_path: Path) -> _Panel:
     db = tmp_path / "core.db"
-    ready: queue.Queue[tuple[object, ManagedEmployeeAuthRuntime, str, str]] = queue.Queue()
+    ready: queue.Queue[
+        tuple[object, ManagedEmployeeAuthRuntime, str, str]
+    ] = queue.Queue()
 
     def run() -> None:
         runtime = open_managed_employee_auth_runtime(db, now=lambda: _NOW)
@@ -180,7 +182,9 @@ def _login(panel: _Panel, username: str, password: str) -> http.cookiejar.Cookie
     return jar
 
 
-def test_manual_task_office_http_create_assign_list_and_complete(issue182_panel: _Panel) -> None:
+def test_manual_task_office_http_create_assign_list_and_complete(
+    issue182_panel: _Panel,
+) -> None:
     jar = _login(issue182_panel, "issue182.worker", "WorkerPassw0rd!")
     csrf = _cookie_value(jar, "sl_employee_csrf")
 
@@ -243,7 +247,9 @@ def test_manual_task_office_http_create_assign_list_and_complete(issue182_panel:
     assert completed[1] is not None
 
 
-def test_manual_task_office_http_viewer_stays_read_only(issue182_panel: _Panel) -> None:
+def test_manual_task_office_http_viewer_stays_read_only(
+    issue182_panel: _Panel,
+) -> None:
     worker_jar = _login(issue182_panel, "issue182.worker", "WorkerPassw0rd!")
     worker_csrf = _cookie_value(worker_jar, "sl_employee_csrf")
     status, _body, _headers = _request(
