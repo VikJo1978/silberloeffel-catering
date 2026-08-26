@@ -7,14 +7,19 @@ from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 from typing import Literal, cast
 
-ManualTaskSubjectType = Literal["NONE", "ORDER", "INQUIRY", "CONTACT"]
+ManualTaskSubjectType = Literal["NONE", "ORDER", "INQUIRY", "OFFER", "CONTACT"]
 MANUAL_TASK_SUBJECT_TYPES: tuple[ManualTaskSubjectType, ...] = (
     "NONE",
     "ORDER",
     "INQUIRY",
+    "OFFER",
     "CONTACT",
 )
 MANUAL_TASK_SUBJECT_TYPE_SET: frozenset[str] = frozenset(MANUAL_TASK_SUBJECT_TYPES)
+
+ManualTaskPriority = Literal["HIGH", "NORMAL", "LOW"]
+MANUAL_TASK_PRIORITIES: tuple[ManualTaskPriority, ...] = ("HIGH", "NORMAL", "LOW")
+MANUAL_TASK_PRIORITY_SET: frozenset[str] = frozenset(MANUAL_TASK_PRIORITIES)
 
 ManualTaskStatus = Literal["OPEN", "DONE"]
 
@@ -34,6 +39,7 @@ class ManualTask:
     assigned_to_employee_id: str | None
     subject_type: ManualTaskSubjectType
     subject_id: str | None
+    priority: ManualTaskPriority = "NORMAL"
 
     @property
     def status(self) -> ManualTaskStatus:
@@ -47,6 +53,15 @@ def validate_manual_task_subject_type(value: str) -> ManualTaskSubjectType:
             f"{sorted(MANUAL_TASK_SUBJECT_TYPE_SET)}, got {value!r}"
         )
     return cast(ManualTaskSubjectType, value)
+
+
+def validate_manual_task_priority(value: str) -> ManualTaskPriority:
+    if value not in MANUAL_TASK_PRIORITY_SET:
+        raise ValueError(
+            "priority must be one of "
+            f"{sorted(MANUAL_TASK_PRIORITY_SET)}, got {value!r}"
+        )
+    return cast(ManualTaskPriority, value)
 
 
 def normalize_manual_task_title(value: object) -> str:
@@ -92,6 +107,7 @@ def validate_manual_task(task: ManualTask) -> ManualTask:
     )
     subject_type = validate_manual_task_subject_type(task.subject_type)
     subject_id = _validate_subject_id(subject_type, task.subject_id)
+    priority = validate_manual_task_priority(task.priority)
     _require_utc_datetime(task.created_at, "created_at")
     if task.due_at is not None:
         _require_utc_datetime(task.due_at, "due_at")
@@ -108,6 +124,7 @@ def validate_manual_task(task: ManualTask) -> ManualTask:
         assigned_to_employee_id=assigned_to,
         subject_type=subject_type,
         subject_id=subject_id,
+        priority=priority,
     )
 
 
