@@ -6,8 +6,9 @@ from tests.unit.test_issue182_manual_task_office_http import (
     _cookie_value,
     _login,
     _request,
-    issue182_panel,
 )
+
+pytest_plugins = ("tests.unit.test_issue182_manual_task_office_http",)
 
 
 def test_superadmin_sees_manual_and_existing_system_tasks(issue182_panel) -> None:
