@@ -133,9 +133,11 @@ subject_method = '''    def manual_task_subjects(
                 )
         if "offers.view" in permissions:
             for offer in self.offers.list_all():
-                inquiry = inquiries_by_id.get(offer.source_inquiry_id)
+                offer_inquiry = inquiries_by_id.get(offer.source_inquiry_id)
                 suffix = (
-                    inquiry_label(inquiry) if inquiry is not None else offer.offer_id[:8]
+                    inquiry_label(offer_inquiry)
+                    if offer_inquiry is not None
+                    else offer.offer_id[:8]
                 )
                 rows.append(
                     {
@@ -148,9 +150,11 @@ subject_method = '''    def manual_task_subjects(
                 )
         if "orders.view" in permissions:
             for order in self.orders.list_orders():
-                inquiry = inquiries_by_id.get(order.source_inquiry_id)
+                order_inquiry = inquiries_by_id.get(order.source_inquiry_id)
                 suffix = (
-                    inquiry_label(inquiry) if inquiry is not None else order.order_id[:8]
+                    inquiry_label(order_inquiry)
+                    if order_inquiry is not None
+                    else order.order_id[:8]
                 )
                 rows.append(
                     {
