@@ -900,7 +900,20 @@ replace_once(
 )
 replace_once(
     panel,
-    '        kalender_view: str = "woche",\n    ) -> str:\n',
+    "    def render_queue(\n"
+    "        self,\n"
+    "        rueckruf_items: list[dict] | None,\n"
+    "        *,\n"
+    "        rueckruf_error: str | None = None,\n"
+    "        context: OfficePageContext = _EMPTY_PAGE_CONTEXT,\n"
+    '        kalender_view: str = "woche",\n'
+    "    ) -> str:\n",
+    "    def render_queue(\n"
+    "        self,\n"
+    "        rueckruf_items: list[dict] | None,\n"
+    "        *,\n"
+    "        rueckruf_error: str | None = None,\n"
+    "        context: OfficePageContext = _EMPTY_PAGE_CONTEXT,\n"
     '        kalender_view: str = "woche",\n'
     "        employee_session_token: str | None = None,\n"
     "    ) -> str:\n",
