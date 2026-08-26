@@ -152,7 +152,10 @@ def test_sqlite_migration_is_idempotent(tmp_path: Path) -> None:
             WHERE component = 'manual_tasks'
             """
         ).fetchall()
-        assert rows == [(1, "create_manual_tasks")]
+        assert rows == [
+            (1, "create_manual_tasks"),
+            (2, "add_priority_and_offer_subject"),
+        ]
     finally:
         reopened.close()
 
