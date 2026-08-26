@@ -112,6 +112,10 @@ from catering_system.ui.office_panel import (
     render_print_sheet,
     render_rueckruf,
 )
+from catering_system.ui.manual_task_presentation import (
+    parse_subject_reference,
+    subject_permission,
+)
 from catering_system.ui.office_panel_authz import (
     DYNAMIC_CATALOG_UPDATE_AUTH,
     BusinessAccessDenied,
@@ -1223,6 +1227,7 @@ def make_office_panel_handler(
                         rueckruf_error=error,
                         context=context,
                         kalender_view=kalender_view,
+                        employee_session_token=self._employee_session_token(),
                     )
                 )
                 return
@@ -2122,6 +2127,14 @@ def make_office_panel_handler(
             assigned_to = form.get("assigned_to_employee_id", "").strip()
             if assigned_to and not self._require_business_permission_post(
                 auth, "tasks.assign", active_section="tasks"
+            ):
+                return
+            subject_type, _subject_key = parse_subject_reference(
+                form.get("subject_reference", "")
+            )
+            permission = subject_permission(subject_type)
+            if permission and not self._require_business_permission_post(
+                auth, permission, active_section="tasks"
             ):
                 return
             panel.create_manual_task(

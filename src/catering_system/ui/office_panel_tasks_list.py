@@ -73,8 +73,7 @@ def render_aufgaben_list(
         subject_select_options = ['<option value="">Ohne Bezug</option>']
         for option in subject_options or []:
             subject_select_options.append(
-                f'<option value="{_e(option["value"])}">'
-                f"{_e(option['label'])}</option>"
+                f'<option value="{_e(option["value"])}">{_e(option["label"])}</option>'
             )
         subject_field = (
             '<p><label for="manual_task_subject">Bezug</label><br>'

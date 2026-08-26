@@ -98,10 +98,7 @@ def test_system_task_importance_mapping() -> None:
         system_task_priority({"category": "prepare_offer", "urgency": "normal"})
         == "LOW"
     )
-    assert (
-        system_task_priority({"category": "payment", "urgency": "overdue"})
-        == "HIGH"
-    )
+    assert system_task_priority({"category": "payment", "urgency": "overdue"}) == "HIGH"
 
 
 def test_subject_reference_supports_offer_and_opaque_contact_keys() -> None:
@@ -170,7 +167,8 @@ def test_sqlite_v1_migration_preserves_task_and_defaults_normal(tmp_path: Path) 
         assert migrated is not None
         assert migrated.priority == "NORMAL"
         columns = {
-            row[1] for row in repo._conn.execute("PRAGMA table_info(manual_tasks)").fetchall()
+            row[1]
+            for row in repo._conn.execute("PRAGMA table_info(manual_tasks)").fetchall()
         }
         assert "priority" in columns
         version = repo._conn.execute(
@@ -379,7 +377,9 @@ def test_sqlite_offer_subject_errors_are_explicit(tmp_path: Path) -> None:
 
     missing_table_repo = SQLiteManualTaskRepository(tmp_path / "missing-table.db")
     try:
-        with pytest.raises(sqlite3.IntegrityError, match="subject table does not exist"):
+        with pytest.raises(
+            sqlite3.IntegrityError, match="subject table does not exist"
+        ):
             missing_table_repo.save(task)
     finally:
         missing_table_repo.close()

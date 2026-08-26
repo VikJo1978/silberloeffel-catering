@@ -82,7 +82,11 @@ def subject_permission(subject_type: str) -> str | None:
 
 def _as_datetime(value: object | None, *, maximum: bool) -> datetime:
     if value is None or value == "":
-        return datetime.max.replace(tzinfo=UTC) if maximum else datetime.min.replace(tzinfo=UTC)
+        return (
+            datetime.max.replace(tzinfo=UTC)
+            if maximum
+            else datetime.min.replace(tzinfo=UTC)
+        )
     if isinstance(value, datetime):
         if value.tzinfo is None:
             return value.replace(tzinfo=UTC)
@@ -96,8 +100,16 @@ def _as_datetime(value: object | None, *, maximum: bool) -> datetime:
             try:
                 return datetime.combine(date.fromisoformat(value), time.min, tzinfo=UTC)
             except ValueError:
-                return datetime.max.replace(tzinfo=UTC) if maximum else datetime.min.replace(tzinfo=UTC)
+                return (
+                    datetime.max.replace(tzinfo=UTC)
+                    if maximum
+                    else datetime.min.replace(tzinfo=UTC)
+                )
         if parsed.tzinfo is None:
             parsed = parsed.replace(tzinfo=UTC)
         return parsed.astimezone(UTC)
-    return datetime.max.replace(tzinfo=UTC) if maximum else datetime.min.replace(tzinfo=UTC)
+    return (
+        datetime.max.replace(tzinfo=UTC)
+        if maximum
+        else datetime.min.replace(tzinfo=UTC)
+    )

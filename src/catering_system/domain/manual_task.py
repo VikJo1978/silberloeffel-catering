@@ -58,8 +58,7 @@ def validate_manual_task_subject_type(value: str) -> ManualTaskSubjectType:
 def validate_manual_task_priority(value: str) -> ManualTaskPriority:
     if value not in MANUAL_TASK_PRIORITY_SET:
         raise ValueError(
-            "priority must be one of "
-            f"{sorted(MANUAL_TASK_PRIORITY_SET)}, got {value!r}"
+            f"priority must be one of {sorted(MANUAL_TASK_PRIORITY_SET)}, got {value!r}"
         )
     return cast(ManualTaskPriority, value)
 

@@ -192,6 +192,13 @@ from catering_system.ui import office_api_views as api_views
 from catering_system.ui.callback_contact_resolution import (
     enrich_missed_board_with_core_contacts,
 )
+from catering_system.ui.manual_task_presentation import (
+    make_subject_reference,
+    parse_subject_reference,
+    priority_label,
+    sort_task_rows,
+    system_task_priority,
+)
 from catering_system.ui.office_panel_calendar_list import render_kalender_list
 from catering_system.ui.office_panel_catalog_detail import render_gericht_detail
 from catering_system.ui.office_panel_catalog_edit import render_gericht_edit
@@ -923,11 +930,17 @@ class OfficePanel:
         return [self._system_task_row(row) for row in rows]
 
     def _system_task_row(self, row: dict[str, object]) -> dict[str, object]:
+        priority = system_task_priority(row)
         return {
             **row,
             "kind": "system",
             "type_label": "System",
             "assigned_to": "–",
+            "priority": priority,
+            "priority_label": priority_label(priority),
+            "description": "–",
+            "subject_label": str(row.get("subtitle") or "–"),
+            "subject_href": str(row.get("action_href") or ""),
         }
 
     def _manual_tasks(self, *, employee_session_token: str | None) -> list[ManualTask]:
@@ -941,14 +954,131 @@ class OfficePanel:
             return []
         return self._manual_task_service.list_open_tasks()
 
+    @staticmethod
+    def _manual_subject_label(
+        prefix: str, inquiry: Inquiry | None, fallback: str
+    ) -> str:
+        if inquiry is None:
+            return f"{prefix} · {fallback[:8]}"
+        snapshot = inquiry.customer_snapshot
+        customer = None
+        if snapshot is not None:
+            customer = snapshot.company_name or snapshot.contact_name
+        primary = (
+            customer or inquiry.intake_subject or inquiry.location_text or fallback[:8]
+        )
+        return f"{prefix} · {primary} · {inquiry.event_date.isoformat()}"
+
+    def _manual_task_subject_options(
+        self,
+        *,
+        context: OfficePageContext,
+        employee_session_token: str | None,
+    ) -> list[dict[str, object]]:
+        if self._remote is not None:
+            if not employee_session_token:
+                return []
+            rows = self._remote.list_manual_task_subjects(
+                employee_session_token=employee_session_token
+            )
+            for row in rows:
+                subject_type = str(row["subject_type"])
+                key = (
+                    row.get("contact_key")
+                    if subject_type == "CONTACT"
+                    else row.get("subject_id")
+                )
+                if key is None:
+                    continue
+                row["value"] = make_subject_reference(subject_type, str(key))
+            return [row for row in rows if row.get("value")]
+
+        options: list[dict[str, object]] = []
+        inquiries = self._inquiries.list_all()
+        inquiries_by_id = {inquiry.inquiry_id: inquiry for inquiry in inquiries}
+        if context.can("customers.view"):
+            for row in self._contact_list_rows():
+                contact_key = str(row["contact_key"])
+                options.append(
+                    {
+                        "value": make_subject_reference("CONTACT", contact_key),
+                        "subject_type": "CONTACT",
+                        "subject_id": self.contact_profile_service.find_by_alias(
+                            "contact_key", contact_key
+                        ),
+                        "contact_key": contact_key,
+                        "label": f"Kontakt · {row['display_name']}",
+                        "href": f"/kontakt/{quote(contact_key, safe='')}",
+                    }
+                )
+        if context.can("inquiries.view"):
+            for inquiry in inquiries:
+                options.append(
+                    {
+                        "value": make_subject_reference("INQUIRY", inquiry.inquiry_id),
+                        "subject_type": "INQUIRY",
+                        "subject_id": inquiry.inquiry_id,
+                        "contact_key": None,
+                        "label": self._manual_subject_label(
+                            "Anfrage", inquiry, inquiry.inquiry_id
+                        ),
+                        "href": f"/inquiry/{inquiry.inquiry_id}",
+                    }
+                )
+        if context.can("offers.view"):
+            for offer in self._offers.list_all():
+                options.append(
+                    {
+                        "value": make_subject_reference("OFFER", offer.offer_id),
+                        "subject_type": "OFFER",
+                        "subject_id": offer.offer_id,
+                        "contact_key": None,
+                        "label": self._manual_subject_label(
+                            "Angebot",
+                            inquiries_by_id.get(offer.source_inquiry_id),
+                            offer.offer_id,
+                        ),
+                        "href": f"/offer/{offer.offer_id}",
+                    }
+                )
+        if context.can("orders.view"):
+            for order in self._orders.list_orders():
+                options.append(
+                    {
+                        "value": make_subject_reference("ORDER", order.order_id),
+                        "subject_type": "ORDER",
+                        "subject_id": order.order_id,
+                        "contact_key": None,
+                        "label": self._manual_subject_label(
+                            "Auftrag",
+                            inquiries_by_id.get(order.source_inquiry_id),
+                            order.order_id,
+                        ),
+                        "href": f"/order/{order.order_id}",
+                    }
+                )
+        options.sort(
+            key=lambda option: (
+                str(option["subject_type"]),
+                str(option["label"]).casefold(),
+            )
+        )
+        return options
+
     def _manual_task_rows(
         self,
         *,
         context: OfficePageContext,
         employee_session_token: str | None,
         assignee_names: dict[str, str],
+        subject_options: list[dict[str, object]],
         can_complete: bool,
     ) -> list[dict[str, object]]:
+        subjects = {
+            (str(option["subject_type"]), str(option["subject_id"])): option
+            for option in subject_options
+            if option.get("subject_id") is not None
+        }
         rows: list[dict[str, object]] = []
         for task in self._manual_tasks(employee_session_token=employee_session_token):
             assigned_to = "–"
@@ -956,16 +1086,57 @@ class OfficePanel:
                 assigned_to = assignee_names.get(
                     task.assigned_to_employee_id, task.assigned_to_employee_id
                 )
+            subject = subjects.get((task.subject_type, str(task.subject_id)))
+            if task.subject_type == "NONE":
+                subject_label = "–"
+                subject_href = ""
+            elif subject is not None:
+                subject_label = str(subject["label"])
+                subject_href = str(subject["href"])
+            else:
+                subject_label = {
+                    "CONTACT": "Kontakt",
+                    "INQUIRY": "Anfrage",
+                    "OFFER": "Angebot",
+                    "ORDER": "Auftrag",
+                }.get(task.subject_type, "Bezug")
+                subject_href = ""
+            subtitle_parts = [
+                part
+                for part in (
+                    task.description.strip(),
+                    subject_label if subject_label != "–" else "",
+                )
+                if part
+            ]
             rows.append(
                 {
                     "kind": "manual",
                     "type_label": "Manuell",
+                    "category": "manual",
                     "urgency": "normal",
+                    "priority": task.priority,
+                    "priority_label": priority_label(task.priority),
                     "title": task.title,
-                    "subtitle": task.description or "–",
+                    "description": task.description or "–",
+                    "subtitle": " · ".join(subtitle_parts) or "Manuelle Aufgabe",
+                    "subject_label": subject_label,
+                    "subject_href": subject_href,
                     "due_at": task.due_at,
+                    "opened_at": task.created_at,
+                    "created_at": task.created_at,
                     "assigned_to": assigned_to,
                     "task_id": task.task_id,
+                    "entity_type": (
+                        task.subject_type.lower()
+                        if task.subject_type in {"ORDER", "INQUIRY", "OFFER"}
+                        else "manual"
+                    ),
+                    "entity_id": task.subject_id or task.task_id,
+                    "action_href": subject_href or "/aufgaben",
+                    "action_label": (
+                        "Bezug öffnen" if subject_href else "Aufgaben öffnen"
+                    ),
                     "can_complete": can_complete,
                     "complete_form_fields": _csrf_input(context)
                     + self._command_fields(),
@@ -973,31 +1144,67 @@ class OfficePanel:
             )
         return rows
 
+    def _combined_task_rows(
+        self,
+        *,
+        context: OfficePageContext,
+        employee_session_token: str | None,
+        assignee_names: dict[str, str] | None = None,
+        subject_options: list[dict[str, object]] | None = None,
+        can_complete: bool = False,
+    ) -> list[dict[str, object]]:
+        rows = self._task_list_rows()
+        if context.can("tasks.view") and context.employee_account_id:
+            options = subject_options
+            if options is None:
+                options = self._manual_task_subject_options(
+                    context=context,
+                    employee_session_token=employee_session_token,
+                )
+            rows.extend(
+                self._manual_task_rows(
+                    context=context,
+                    employee_session_token=employee_session_token,
+                    assignee_names=assignee_names or {},
+                    subject_options=options,
+                    can_complete=can_complete,
+                )
+            )
+        return sort_task_rows(rows)
+
     def render_aufgaben(
         self,
         *,
         context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
         employee_session_token: str | None = None,
         assignee_options: list[dict[str, str]] | None = None,
+        subject_options: list[dict[str, object]] | None = None,
     ) -> str:
         assignee_options = assignee_options or []
         assignee_names = {
             option["id"]: option["display_name"] for option in assignee_options
         }
-        rows = [
-            *self._manual_task_rows(
+        if subject_options is None:
+            subject_options = self._manual_task_subject_options(
                 context=context,
                 employee_session_token=employee_session_token,
-                assignee_names=assignee_names,
-                can_complete=context.can("tasks.complete")
-                and bool(context.employee_account_id),
-            ),
-            *self._task_list_rows(),
-        ]
+            )
+        rows = self._combined_task_rows(
+            context=context,
+            employee_session_token=employee_session_token,
+            assignee_names=assignee_names,
+            subject_options=subject_options,
+            can_complete=context.can("tasks.complete")
+            and bool(context.employee_account_id),
+        )
         return render_aufgaben_list(
             rows,
             context=context,
             assignee_options=assignee_options,
+            subject_options=[
+                {"value": str(option["value"]), "label": str(option["label"])}
+                for option in subject_options
+            ],
             can_create_manual_task=context.can("tasks.create")
             and bool(context.employee_account_id),
             can_assign_manual_task=context.can("tasks.assign"),
@@ -1026,6 +1233,30 @@ class OfficePanel:
         if not assigned_to_employee_id:
             assigned_to_employee_id = None
         due_at = self._manual_task_due_at_from_form(form)
+        subject_type, subject_key = parse_subject_reference(
+            form.get("subject_reference", "")
+        )
+        subject_id: str | None = None
+        subject_contact_key: str | None = None
+        if subject_type == "CONTACT":
+            assert subject_key is not None
+            if self._remote is not None:
+                subject_contact_key = subject_key
+            else:
+                contact_row = next(
+                    (
+                        row
+                        for row in self._contact_list_rows()
+                        if str(row["contact_key"]) == subject_key
+                    ),
+                    None,
+                )
+                if contact_row is None:
+                    raise ValueError("manual task contact subject not found")
+                subject_id = self._ensure_profile_for_contact_row(contact_row)
+        elif subject_type != "NONE":
+            subject_id = subject_key
+        priority = form.get("priority", "NORMAL").strip() or "NORMAL"
         if self._remote is not None:
             if not employee_session_token:
                 raise ValueError("employee session is required")
@@ -1035,6 +1266,10 @@ class OfficePanel:
                 description=form.get("description", ""),
                 due_at=due_at,
                 assigned_to_employee_id=assigned_to_employee_id,
+                subject_type=subject_type,
+                subject_id=subject_id,
+                subject_contact_key=subject_contact_key,
+                priority=priority,
                 command_id=form.get("_command_id") or None,
             )
         if self._manual_task_service is None:
@@ -1045,6 +1280,9 @@ class OfficePanel:
             due_at=due_at,
             created_by_employee_id=created_by_employee_id,
             assigned_to_employee_id=assigned_to_employee_id,
+            subject_type=subject_type,
+            subject_id=subject_id,
+            priority=priority,
         )
 
     def complete_manual_task(
@@ -1113,6 +1351,7 @@ class OfficePanel:
         missed_calls_open: int,
         context: OfficePageContext,
         kalender_view: str = "woche",
+        employee_session_token: str | None = None,
     ) -> str:
         operating_today = api_views.berlin_today()
         snapshot = self.build_work_center_snapshot(missed_calls_open)
@@ -1124,7 +1363,10 @@ class OfficePanel:
                 context=context,
                 today=operating_today,
                 snapshot=snapshot,
-                tasks=self._task_list_rows(),
+                tasks=self._combined_task_rows(
+                    context=context,
+                    employee_session_token=employee_session_token,
+                ),
                 calendar_entries=calendar_entries,
                 contact_check_open=self._contact_check_open_count(),
                 open_inquiries_open=self._open_inquiries_count(),
@@ -2264,6 +2506,7 @@ class OfficePanel:
         rueckruf_error: str | None = None,
         context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
         kalender_view: str = "woche",
+        employee_session_token: str | None = None,
     ) -> str:
         missed_calls_open = self._missed_calls_open(rueckruf_items, rueckruf_error)
         if self._ui_version == "v2":
@@ -2271,6 +2514,7 @@ class OfficePanel:
                 missed_calls_open=missed_calls_open,
                 context=context,
                 kalender_view=kalender_view,
+                employee_session_token=employee_session_token,
             )
         if self._remote is not None:
             return self._render_remote_queue(

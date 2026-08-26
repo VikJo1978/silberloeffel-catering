@@ -46,6 +46,7 @@ _TASK_ICONS = {
     "order_print": "printer",
     "order_effective": "check",
     "payment": "briefcase",
+    "manual": "briefcase",
 }
 
 _MAX_NEXT_TASKS = 6
@@ -160,12 +161,15 @@ def _task_rows(tasks: list[dict[str, object]]) -> str:
     for task in tasks[:_MAX_NEXT_TASKS]:
         icon = _TASK_ICONS.get(str(task.get("category", "")), "doc")
         href = str(task.get("action_href", ""))
+        priority = str(task.get("priority_label", ""))
+        subtitle = str(task.get("subtitle", ""))
+        meta = " · ".join(part for part in (priority, subtitle) if part)
         rows.append(
             '<div class="dashboard-work-row">'
             f'<span class="dashboard-work-kind">{_icon(icon)}</span>'
             '<div class="dashboard-work-copy">'
             f'<h3><a href="{_e(href)}">{_e(str(task.get("title", "")))}</a></h3>'
-            f"<p>{_e(str(task.get('subtitle', '')))}</p></div>"
+            f"<p>{_e(meta)}</p></div>"
             f'<a class="dashboard-button secondary" href="{_e(href)}">'
             f"{_e(str(task.get('action_label', 'Öffnen')))}</a>"
             "</div>"
@@ -370,7 +374,7 @@ def render_arbeitszentrale(data: ArbeitszentraleData) -> str:
         "<p>Die wichtigsten offenen Schritte.</p></div>"
         + (
             '<a class="dashboard-text-link" href="/aufgaben">Alle Aufgaben</a>'
-            if data.context.can("queue.view")
+            if data.context.can("tasks.view")
             else ""
         )
         + "</div>"

@@ -75,6 +75,7 @@ from catering_system.domain.inquiry_offer_preparation import (
 from catering_system.domain.manual_task import (
     ManualTask,
     validate_manual_task,
+    validate_manual_task_priority,
     validate_manual_task_subject_type,
 )
 from catering_system.domain.order import Order, OrderVersion
@@ -1106,6 +1107,7 @@ def _manual_task(value: object) -> ManualTask:
             "assigned_to_employee_id",
             "subject_type",
             "subject_id",
+            "priority",
         },
     )
     try:
@@ -1125,6 +1127,7 @@ def _manual_task(value: object) -> ManualTask:
                     _str(data["subject_type"])
                 ),
                 subject_id=_optional_uuid4(data["subject_id"]),
+                priority=validate_manual_task_priority(_str(data["priority"])),
             )
         )
     except (TypeError, ValueError):
@@ -2736,6 +2739,44 @@ class RemoteCoreClient:
         _exact(body, {"manual_tasks"})
         return [_manual_task(raw) for raw in _list(body["manual_tasks"])]
 
+    def list_manual_task_subjects(
+        self, *, employee_session_token: str
+    ) -> list[dict[str, object]]:
+        body = self.get(
+            "/office/v1/manual-task-subjects",
+            employee_session_token=employee_session_token,
+        )
+        _exact(body, {"subjects"})
+        results: list[dict[str, object]] = []
+        for raw in _list(body["subjects"]):
+            row = _dict(raw)
+            _exact(
+                row,
+                {"subject_type", "subject_id", "contact_key", "label", "href"},
+            )
+            subject_type = _str(row["subject_type"])
+            if subject_type not in {"CONTACT", "INQUIRY", "OFFER", "ORDER"}:
+                _bad_response()
+            subject_id = _optional_uuid4(row["subject_id"])
+            contact_key = _optional_str(row["contact_key"])
+            label = _str(row["label"])
+            href = _str(row["href"])
+            if subject_type == "CONTACT":
+                if contact_key is None:
+                    _bad_response()
+            elif subject_id is None or contact_key is not None:
+                _bad_response()
+            results.append(
+                {
+                    "subject_type": subject_type,
+                    "subject_id": subject_id,
+                    "contact_key": contact_key,
+                    "label": label,
+                    "href": href,
+                }
+            )
+        return results
+
     def create_manual_task(
         self,
         *,
@@ -2746,6 +2787,8 @@ class RemoteCoreClient:
         assigned_to_employee_id: str | None = None,
         subject_type: str = "NONE",
         subject_id: str | None = None,
+        subject_contact_key: str | None = None,
+        priority: str = "NORMAL",
         command_id: str | None = None,
     ) -> ManualTask:
         result = self.command(
@@ -2757,6 +2800,8 @@ class RemoteCoreClient:
                 "assigned_to_employee_id": assigned_to_employee_id,
                 "subject_type": subject_type,
                 "subject_id": subject_id,
+                "subject_contact_key": subject_contact_key,
+                "priority": priority,
             },
             expect={},
             expected={201},
