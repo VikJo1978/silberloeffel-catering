@@ -879,14 +879,14 @@ replace_once(
     "        *,\n"
     "        missed_calls_open: int,\n"
     "        context: OfficePageContext,\n"
-    "        kalender_view: str,\n"
+    "        kalender_view: str = \"woche\",\n"
     "    ) -> str:\n",
     "    def _render_v2_arbeitszentrale(\n"
     "        self,\n"
     "        *,\n"
     "        missed_calls_open: int,\n"
     "        context: OfficePageContext,\n"
-    "        kalender_view: str,\n"
+    "        kalender_view: str = \"woche\",\n"
     "        employee_session_token: str | None = None,\n"
     "    ) -> str:\n",
 )
