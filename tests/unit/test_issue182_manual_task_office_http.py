@@ -85,7 +85,7 @@ def _start_panel(tmp_path: Path) -> _Panel:
 
     def run() -> None:
         runtime = open_managed_employee_auth_runtime(db, now=lambda: _NOW)
-        admin = runtime.service.bootstrap_superadmin(
+        runtime.service.bootstrap_superadmin(
             username="issue182.admin",
             display_name="Issue 182 Admin",
             password="TempPassw0rd!",
