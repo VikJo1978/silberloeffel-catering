@@ -213,7 +213,7 @@ def _page(
                 badge=context.chat_unread_count,
             )
         )
-    if _nav_visible(context, "queue.view"):
+    if _nav_visible(context, "tasks.view"):
         vertrieb.append(
             _nav_link("/aufgaben", "Aufgaben", "doc", "tasks", active_section)
         )

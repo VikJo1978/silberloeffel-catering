@@ -13,11 +13,12 @@ import os
 import re
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TYPE_CHECKING, Any, Literal, cast
 from urllib.parse import quote, urlencode
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 from catering_system.domain.catalog import (
     ALLERGEN_CODES,
@@ -51,6 +52,7 @@ from catering_system.domain.inquiry_contact_completeness import (
     derive_inquiry_contact_completeness,
     missing_contact_fields,
 )
+from catering_system.domain.manual_task import ManualTask
 from catering_system.domain.offer import (
     ACCEPTANCE_CHANNELS,
     SENT_CHANNELS,
@@ -159,6 +161,7 @@ from catering_system.services.email_intake_projection_service import (
 )
 from catering_system.services.inquiry_service import InquiryService
 from catering_system.services.kitchen_print_service import KitchenPrintService
+from catering_system.services.manual_task_service import ManualTaskService
 from catering_system.services.offer_document_snapshot_service import (
     OfferDocumentSnapshotService,
 )
@@ -269,6 +272,7 @@ _KITCHEN_PRINT_REJECTION_MESSAGES = {
     "invalid_printer_configuration": "Drucker ist nicht korrekt eingerichtet.",
     "order_cancelled": "Der Auftrag wurde storniert.",
 }
+_BERLIN = ZoneInfo("Europe/Berlin")
 
 __all__ = [
     "CALL_VERIFICATION_STATUS_LABELS",
@@ -477,6 +481,7 @@ class OfficePanel:
         offer_document_repo: OfferDocumentSnapshotRepository | None = None,
         offer_pdf_static_content: OfferPdfStaticContent | None = None,
         kitchen_print_job_repo: KitchenPrintJobRepository | None = None,
+        manual_task_service: ManualTaskService | None = None,
         ui_version: str = "legacy",
     ) -> None:
         if ui_version not in {"legacy", "v2"}:
@@ -587,6 +592,7 @@ class OfficePanel:
             self.kitchen_print_service = None
             self._pause_repository = None
         self._remote = remote
+        self._manual_task_service = manual_task_service
         self._command_executor = command_executor
         self._ui_version = ui_version
         # Pure-read derivations: safe to run over the remote client's repo-
@@ -909,13 +915,155 @@ class OfficePanel:
     def _task_list_rows(self) -> list[dict[str, object]]:
         if self._remote is not None:
             body = self._remote.list_tasks()
-            return cast(list[dict[str, object]], body["tasks"])
-        return api_views.task_list_view(self._task_projection_service().list_tasks())
+            rows = cast(list[dict[str, object]], body["tasks"])
+        else:
+            rows = api_views.task_list_view(
+                self._task_projection_service().list_tasks()
+            )
+        return [self._system_task_row(row) for row in rows]
+
+    def _system_task_row(self, row: dict[str, object]) -> dict[str, object]:
+        return {
+            **row,
+            "kind": "system",
+            "type_label": "System",
+            "assigned_to": "–",
+        }
+
+    def _manual_tasks(self, *, employee_session_token: str | None) -> list[ManualTask]:
+        if self._remote is not None:
+            if not employee_session_token:
+                return []
+            return self._remote.list_manual_tasks(
+                employee_session_token=employee_session_token
+            )
+        if self._manual_task_service is None:
+            return []
+        return self._manual_task_service.list_open_tasks()
+
+    def _manual_task_rows(
+        self,
+        *,
+        context: OfficePageContext,
+        employee_session_token: str | None,
+        assignee_names: dict[str, str],
+        can_complete: bool,
+    ) -> list[dict[str, object]]:
+        rows: list[dict[str, object]] = []
+        for task in self._manual_tasks(employee_session_token=employee_session_token):
+            assigned_to = "–"
+            if task.assigned_to_employee_id is not None:
+                assigned_to = assignee_names.get(
+                    task.assigned_to_employee_id, task.assigned_to_employee_id
+                )
+            rows.append(
+                {
+                    "kind": "manual",
+                    "type_label": "Manuell",
+                    "urgency": "normal",
+                    "title": task.title,
+                    "subtitle": task.description or "–",
+                    "due_at": task.due_at,
+                    "assigned_to": assigned_to,
+                    "task_id": task.task_id,
+                    "can_complete": can_complete,
+                    "complete_form_fields": _csrf_input(context)
+                    + self._command_fields(),
+                }
+            )
+        return rows
 
     def render_aufgaben(
-        self, *, context: OfficePageContext = _EMPTY_PAGE_CONTEXT
+        self,
+        *,
+        context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
+        employee_session_token: str | None = None,
+        assignee_options: list[dict[str, str]] | None = None,
     ) -> str:
-        return render_aufgaben_list(self._task_list_rows(), context=context)
+        assignee_options = assignee_options or []
+        assignee_names = {
+            option["id"]: option["display_name"] for option in assignee_options
+        }
+        rows = [
+            *self._manual_task_rows(
+                context=context,
+                employee_session_token=employee_session_token,
+                assignee_names=assignee_names,
+                can_complete=context.can("tasks.complete")
+                and bool(context.employee_account_id),
+            ),
+            *self._task_list_rows(),
+        ]
+        return render_aufgaben_list(
+            rows,
+            context=context,
+            assignee_options=assignee_options,
+            can_create_manual_task=context.can("tasks.create")
+            and bool(context.employee_account_id),
+            can_assign_manual_task=context.can("tasks.assign"),
+            create_form_fields=_csrf_input(context) + self._command_fields(),
+        )
+
+    @staticmethod
+    def _manual_task_due_at_from_form(form: dict[str, str]) -> datetime | None:
+        raw = form.get("due_date", "").strip()
+        if not raw:
+            return None
+        selected = date.fromisoformat(raw)
+        berlin_start = datetime.combine(selected, time.min, tzinfo=_BERLIN)
+        return berlin_start.astimezone(UTC)
+
+    def create_manual_task(
+        self,
+        form: dict[str, str],
+        *,
+        created_by_employee_id: str,
+        employee_session_token: str | None = None,
+    ) -> ManualTask:
+        assigned_to_employee_id: str | None = form.get(
+            "assigned_to_employee_id", ""
+        ).strip()
+        if not assigned_to_employee_id:
+            assigned_to_employee_id = None
+        due_at = self._manual_task_due_at_from_form(form)
+        if self._remote is not None:
+            if not employee_session_token:
+                raise ValueError("employee session is required")
+            return self._remote.create_manual_task(
+                employee_session_token=employee_session_token,
+                title=form.get("title", ""),
+                description=form.get("description", ""),
+                due_at=due_at,
+                assigned_to_employee_id=assigned_to_employee_id,
+                command_id=form.get("_command_id") or None,
+            )
+        if self._manual_task_service is None:
+            raise ValueError("manual tasks are not available")
+        return self._manual_task_service.create_task(
+            title=form.get("title", ""),
+            description=form.get("description", ""),
+            due_at=due_at,
+            created_by_employee_id=created_by_employee_id,
+            assigned_to_employee_id=assigned_to_employee_id,
+        )
+
+    def complete_manual_task(
+        self,
+        task_id: str,
+        *,
+        employee_session_token: str | None = None,
+    ) -> ManualTask:
+        if self._remote is not None:
+            if not employee_session_token:
+                raise ValueError("employee session is required")
+            return self._remote.complete_manual_task(
+                task_id,
+                employee_session_token=employee_session_token,
+                command_id=self._remote.form_value("_command_id"),
+            )
+        if self._manual_task_service is None:
+            raise ValueError("manual tasks are not available")
+        return self._manual_task_service.complete_task(task_id)
 
     def _calendar_list_rows(self) -> list[dict[str, object]]:
         operating_today = api_views.berlin_today()

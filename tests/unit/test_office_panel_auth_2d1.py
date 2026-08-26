@@ -676,7 +676,7 @@ def test_allowed_anfragen_still_fetches_rueckruf_count_for_badge(
     count_mock.assert_called_once()
 
 
-def test_aufgaben_hidden_without_queue_view(employee_panel: PanelHarness) -> None:
+def test_aufgaben_hidden_without_tasks_view(employee_panel: PanelHarness) -> None:
     super_jar = _ready_superadmin(employee_panel)
     _create_employee(
         employee_panel,
@@ -692,7 +692,7 @@ def test_aufgaben_hidden_without_queue_view(employee_panel: PanelHarness) -> Non
     assert 'href="/aufgaben"' not in body
 
 
-def test_aufgaben_visible_with_queue_view_without_inquiries_view(
+def test_aufgaben_visible_with_tasks_view_without_inquiries_view(
     employee_panel: PanelHarness,
 ) -> None:
     super_jar = _ready_superadmin(employee_panel)
@@ -702,16 +702,16 @@ def test_aufgaben_visible_with_queue_view_without_inquiries_view(
         username="queue.only.tasks",
         password="ReaderTemp1!",
         role="USER",
-        permissions=frozenset({"queue.view"}),
+        permissions=frozenset({"tasks.view"}),
     )
     jar = _login(employee_panel, username="queue.only.tasks", password="ReaderTemp1!")
-    status, _url, body, _headers = _request(employee_panel.base, "/", jar=jar)
+    status, _url, body, _headers = _request(employee_panel.base, "/aufgaben", jar=jar)
     assert status == 200
     assert 'href="/aufgaben"' in body
     assert 'href="/anfragen"' not in body
 
 
-def test_aufgaben_direct_url_requires_queue_view(
+def test_aufgaben_direct_url_requires_tasks_view(
     employee_panel: PanelHarness,
 ) -> None:
     super_jar = _ready_superadmin(employee_panel)
