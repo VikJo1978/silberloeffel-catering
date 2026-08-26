@@ -268,9 +268,7 @@ def test_manual_task_office_http_viewer_stays_read_only(
     )
     assert status == 303
 
-    viewer_jar = _login(
-        issue182_panel, "issue182.assignee", "AssigneePassw0rd!"
-    )
+    viewer_jar = _login(issue182_panel, "issue182.assignee", "AssigneePassw0rd!")
     status, body, _headers = _request(issue182_panel.base, "/aufgaben", jar=viewer_jar)
     assert status == 200
     assert "Nur ansehen" in body
