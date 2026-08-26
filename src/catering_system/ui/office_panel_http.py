@@ -62,6 +62,9 @@ from catering_system.repositories.payment_reminder_repository import (
 from catering_system.repositories.sqlite_configurator_handoff_repository import (
     SQLiteConfiguratorHandoffRepository,
 )
+from catering_system.repositories.sqlite_manual_task_repository import (
+    SQLiteManualTaskRepository,
+)
 from catering_system.services.buffet_cards_service import BuffetCardsService
 from catering_system.services.configurator_handoff_service import (
     ConfiguratorHandoffService,
@@ -75,6 +78,7 @@ from catering_system.services.employee_auth_service import (
     EmployeeAuthService,
     LastActiveSuperadminError,
 )
+from catering_system.services.manual_task_service import ManualTaskService
 from catering_system.services.order_confirmation_document_preview import (
     build_preview,
     render_preview_html,
@@ -113,6 +117,7 @@ from catering_system.ui.office_panel_authz import (
     BusinessAccessDenied,
     DynamicCatalogUpdateAuth,
     authorize_catalog_update,
+    can_access,
     require_all_business_permissions,
     require_all_business_permissions_post,
     require_any_business_permissions,
@@ -430,6 +435,26 @@ def make_office_panel_handler(
     local_confirmation_document_repo = (
         confirmation_document_repo or InMemoryOrderConfirmationDocumentRepository()
     )
+    manual_task_service: ManualTaskService | None = None
+    if (
+        remote is None
+        and validated_auth_mode in {"migration", "employee"}
+        and auth_service is not None
+    ):
+        repository = getattr(auth_service.repository, "_conn", None)
+        if isinstance(repository, sqlite3.Connection):
+            manual_task_repository = SQLiteManualTaskRepository.from_connection(
+                repository
+            )
+
+            def _employee_exists(employee_id: str) -> bool:
+                account = auth_service.repository.get_account_by_id(employee_id)
+                return account is not None and account.is_active
+
+            manual_task_service = ManualTaskService(
+                manual_task_repository,
+                employee_exists=_employee_exists,
+            )
     panel = OfficePanel(
         inquiry_repo,
         order_repo,
@@ -450,6 +475,7 @@ def make_office_panel_handler(
         offer_document_repo=offer_document_repo,
         offer_pdf_static_content=offer_pdf_static_content,
         kitchen_print_job_repo=kitchen_print_job_repo,
+        manual_task_service=manual_task_service,
         ui_version=ui_version,
     )
     expected = "Basic " + base64.b64encode(f"office:{password}".encode()).decode()
@@ -684,6 +710,40 @@ def make_office_panel_handler(
                 raise SettingsUsersAccessDenied()
             return auth.employee
 
+        def _employee_session_token(self) -> str | None:
+            return session_token_from_headers(self.headers)
+
+        def _manual_task_employee_or_forbidden(
+            self, auth: OfficePanelRequestAuth | None
+        ) -> AuthenticatedEmployee | None:
+            if (
+                auth is None
+                or auth.kind != "employee"
+                or auth.employee is None
+                or auth.legacy_shared_access
+                or not auth.employee.application_access_allowed
+            ):
+                self._business_forbidden(active_section="tasks")
+                return None
+            return auth.employee
+
+        def _manual_task_assignee_options(
+            self, auth: OfficePanelRequestAuth | None
+        ) -> list[dict[str, str]]:
+            if (
+                auth_service is None
+                or auth is None
+                or auth.kind != "employee"
+                or auth.employee is None
+                or not can_access(auth, "tasks.assign")
+            ):
+                return []
+            return [
+                {"id": account.id, "display_name": account.display_name}
+                for account in auth_service.repository.list_accounts()
+                if account.is_active
+            ]
+
         def _forbidden_page_context(
             self, auth: OfficePanelRequestAuth | None = None
         ) -> OfficePageContext:
@@ -840,6 +900,10 @@ def make_office_panel_handler(
                 return ("chat.send",)
             if len(parts) == 3 and parts[0] == "chat" and parts[2] == "read":
                 return ("chat.view",)
+            if parts == ["aufgaben", "new"]:
+                return ("tasks.create",)
+            if len(parts) == 3 and parts[0] == "aufgaben" and parts[2] == "complete":
+                return ("tasks.complete",)
             if parts == ["gerichte", "new"]:
                 return ("catalog.edit", "prices.edit")
             if len(parts) == 3 and parts[0] == "gerichte":
@@ -1279,11 +1343,17 @@ def make_office_panel_handler(
                 )
             elif parts == ["aufgaben"]:
                 if not self._require_business_permission_get(
-                    auth, "queue.view", active_section="tasks"
+                    auth, "tasks.view", active_section="tasks"
                 ):
                     return
                 context = self._page_context()
-                self._html(panel.render_aufgaben(context=context))
+                self._html(
+                    panel.render_aufgaben(
+                        context=context,
+                        employee_session_token=self._employee_session_token(),
+                        assignee_options=self._manual_task_assignee_options(auth),
+                    )
+                )
             elif parts == ["kalender"]:
                 if not self._require_business_permission_get(
                     auth, "calendar.view", active_section="calendar"
@@ -1898,6 +1968,10 @@ def make_office_panel_handler(
                 self._send_chat_message(auth, unquote(parts[1]))
             elif len(parts) == 3 and parts[0] == "chat" and parts[2] == "read":
                 self._mark_chat_read(auth, unquote(parts[1]))
+            elif parts == ["aufgaben", "new"]:
+                self._aufgaben_create(auth)
+            elif len(parts) == 3 and parts[0] == "aufgaben" and parts[2] == "complete":
+                self._aufgaben_complete(auth, unquote(parts[1]))
             elif parts == ["gerichte", "new"]:
                 self._create_catalog_dish()
             elif len(parts) == 3 and parts[0] == "gerichte" and parts[2] == "update":
@@ -2039,6 +2113,35 @@ def make_office_panel_handler(
                 command_id=form.get("_command_id") or None,
             )
             self._redirect(f"/chat/{quote(thread_id, safe='')}")
+
+        def _aufgaben_create(self, auth: OfficePanelRequestAuth | None) -> None:
+            employee = self._manual_task_employee_or_forbidden(auth)
+            if employee is None:
+                return
+            form = self._form()
+            assigned_to = form.get("assigned_to_employee_id", "").strip()
+            if assigned_to and not self._require_business_permission_post(
+                auth, "tasks.assign", active_section="tasks"
+            ):
+                return
+            panel.create_manual_task(
+                form,
+                created_by_employee_id=employee.account.id,
+                employee_session_token=self._employee_session_token(),
+            )
+            self._redirect("/aufgaben")
+
+        def _aufgaben_complete(
+            self, auth: OfficePanelRequestAuth | None, task_id: str
+        ) -> None:
+            employee = self._manual_task_employee_or_forbidden(auth)
+            if employee is None:
+                return
+            panel.complete_manual_task(
+                task_id,
+                employee_session_token=self._employee_session_token(),
+            )
+            self._redirect("/aufgaben")
 
         def _settings_users_create(self, auth: OfficePanelRequestAuth | None) -> None:
             actor = self._settings_users_actor_or_forbidden(auth)

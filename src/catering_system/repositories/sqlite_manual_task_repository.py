@@ -72,6 +72,41 @@ def _migration_1_create_manual_tasks(connection: sqlite3.Connection) -> None:
 _MIGRATIONS = ((1, "create_manual_tasks", _migration_1_create_manual_tasks),)
 
 
+def _apply_migrations_in_current_transaction(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            component TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            applied_at TEXT NOT NULL,
+            PRIMARY KEY (component, version)
+        )
+        """
+    )
+    existing = {
+        row[0]: row[1]
+        for row in connection.execute(
+            "SELECT version, name FROM schema_migrations WHERE component = ?",
+            ("manual_tasks",),
+        ).fetchall()
+    }
+    for version, name, apply in _MIGRATIONS:
+        if version in existing:
+            if existing[version] != name:
+                raise RuntimeError(
+                    "manual_tasks migration "
+                    f"{version} name mismatch: database={existing[version]!r}, code={name!r}"
+                )
+            continue
+        apply(connection)
+        connection.execute(
+            "INSERT INTO schema_migrations (component, version, name, applied_at) "
+            "VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+            ("manual_tasks", version, name),
+        )
+
+
 class SQLiteManualTaskRepository:
     def __init__(self, db_path: str | Path) -> None:
         self._conn = sqlite3.connect(str(db_path))
@@ -89,7 +124,10 @@ class SQLiteManualTaskRepository:
         repo = cls.__new__(cls)
         repo._conn = connection
         repo._manage_transactions = False
-        apply_migrations(connection, "manual_tasks", _MIGRATIONS)
+        if connection.in_transaction:
+            _apply_migrations_in_current_transaction(connection)
+        else:
+            apply_migrations(connection, "manual_tasks", _MIGRATIONS)
         return repo
 
     def _write_scope(self):
