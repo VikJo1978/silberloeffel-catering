@@ -17,7 +17,10 @@ from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
 )
 from catering_system.ui.office_panel import OfficePanel
-from catering_system.ui.office_panel_tasks_list import _subject_picker
+from catering_system.ui.office_panel_tasks_list import (
+    _subject_picker,
+    render_aufgabe_detail,
+)
 from catering_system.ui.office_panel_views import OfficePageContext
 from tests.unit.test_office_panel_auth_2d1 import (
     PanelHarness,
@@ -157,6 +160,82 @@ def test_manual_tasks_render_created_data_escaped(
     assert "Rechnung vorbereiten" in body
     assert "27.08.2026" in body
     assert 'action="/aufgaben/inquiry:' not in body
+
+
+def test_manual_task_detail_route_shows_full_task_before_subject_navigation(
+    employee_panel: PanelHarness,
+) -> None:
+    super_jar = _ready_superadmin(employee_panel)
+    jar = _login_employee(
+        employee_panel,
+        super_jar,
+        username="task.detail",
+        permissions=frozenset({"tasks.view", "tasks.create", "tasks.complete"}),
+    )
+
+    status, _url, _body, _headers = _request(
+        employee_panel.base,
+        "/aufgaben/new",
+        method="POST",
+        data={
+            "_csrf_token": _csrf(jar),
+            "title": "Kunde dringend anrufen",
+            "description": "Erste Zeile\nZweite Zeile <prüfen>",
+            "priority": "HIGH",
+            "due_date": "2026-08-29",
+        },
+        jar=jar,
+    )
+    assert status == 303
+
+    status, _url, body, _headers = _request(employee_panel.base, "/aufgaben", jar=jar)
+    assert status == 200
+    task_match = re.search(
+        r'href="/aufgaben/([0-9a-f-]{36})">Kunde dringend anrufen</a>',
+        body,
+    )
+    assert task_match is not None
+    task_id = task_match.group(1)
+
+    status, _url, detail, _headers = _request(
+        employee_panel.base, f"/aufgaben/{task_id}", jar=jar
+    )
+    assert status == 200
+    assert "<h2>Kunde dringend anrufen</h2>" in detail
+    assert "Erste Zeile<br>Zweite Zeile &lt;prüfen&gt;" in detail
+    assert "<dt>Wichtigkeit</dt><dd>Hoch</dd>" in detail
+    assert "<dt>Fällig</dt><dd>29.08.2026</dd>" in detail
+    assert "<dt>Status</dt><dd>Offen</dd>" in detail
+    assert f'action="/aufgaben/{task_id}/complete"' in detail
+    assert "← Zurück zu Aufgaben" in detail
+
+
+def test_manual_task_detail_keeps_subject_as_separate_link() -> None:
+    context = OfficePageContext(csrf_token="csrf")
+    html = render_aufgabe_detail(
+        {
+            "kind": "manual",
+            "task_id": "11111111-1111-4111-8111-111111111111",
+            "title": "Kunde anrufen",
+            "description": "Rückfrage zum Menü",
+            "priority": "NORMAL",
+            "due_at": "2026-08-30",
+            "assigned_to": "Viktor",
+            "subject_label": "Anfrage · Musterfirma",
+            "subject_href": "/inquiry/22222222-2222-4222-8222-222222222222",
+            "can_complete": False,
+        },
+        context=context,
+    )
+
+    assert "Kunde anrufen" in html
+    assert "Rückfrage zum Menü" in html
+    assert "Anfrage · Musterfirma" in html
+    assert (
+        'href="/inquiry/22222222-2222-4222-8222-222222222222">Bezug öffnen</a>'
+        in html
+    )
+    assert "Als erledigt markieren" not in html
 
 
 def test_create_permission_controls_form_and_post(
