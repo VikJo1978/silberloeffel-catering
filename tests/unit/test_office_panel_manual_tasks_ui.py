@@ -15,6 +15,7 @@ from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
 )
 from catering_system.ui.office_panel import OfficePanel
+from catering_system.ui.office_panel_tasks_list import _subject_picker
 from catering_system.ui.office_panel_views import OfficePageContext
 from tests.unit.test_office_panel_auth_2d1 import (
     PanelHarness,
@@ -307,6 +308,50 @@ def test_create_requires_valid_csrf_and_does_not_mutate_on_failure(
     status, _url, body, _headers = _request(employee_panel.base, "/aufgaben", jar=jar)
     assert status == 200
     assert "No CSRF" not in body
+
+
+def test_subject_picker_is_searchable_category_first_and_escaped() -> None:
+    html = _subject_picker(
+        [
+            {
+                "value": "CONTACT:intake%3Aemail%3Afoo%40example.test",
+                "label": "Kontakt · Musterfirma <Hamburg>",
+            },
+            {
+                "value": "OFFER:11111111-1111-4111-8111-111111111111",
+                "label": 'Angebot · "Sommerfest" · 2026-08-27',
+            },
+            {
+                "value": "INVALID:anything",
+                "label": "Should not render",
+            },
+        ]
+    )
+
+    assert '<details class="task-subject-picker"' in html
+    assert (
+        '<details class="task-subject-picker" id="manual_task_subject_picker" open'
+        not in html
+    )
+    assert 'id="manual_task_subject_search"' in html
+    assert 'name="subject_reference"' in html
+    assert 'type="hidden"' in html
+    assert '<select id="manual_task_subject"' not in html
+
+    search_pos = html.index('id="manual_task_subject_search"')
+    for category in ("Ohne Bezug", "Kontakt", "Anfrage", "Angebot", "Auftrag"):
+        assert category in html
+        assert html.index(category, search_pos) > search_pos
+
+    assert 'data-subject-category="CONTACT"' in html
+    assert 'data-subject-category="OFFER"' in html
+    assert "Should not render" not in html
+    assert "Musterfirma &lt;Hamburg&gt;" in html
+    assert "&quot;Sommerfest&quot;" in html
+    assert "<Hamburg>" not in html
+    assert "data-subject-result" in html
+    assert 'search.addEventListener("input", updateResults)' in html
+    assert 'button.addEventListener("click"' in html
 
 
 class _RemoteStub:

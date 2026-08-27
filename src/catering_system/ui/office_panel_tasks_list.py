@@ -13,6 +13,112 @@ from catering_system.ui.office_panel_views import (
 
 _BERLIN = ZoneInfo("Europe/Berlin")
 _PRIORITY_LABELS = {"HIGH": "Hoch", "NORMAL": "Normal", "LOW": "Niedrig"}
+_SUBJECT_CATEGORY_LABELS = {
+    "CONTACT": "Kontakt",
+    "INQUIRY": "Anfrage",
+    "OFFER": "Angebot",
+    "ORDER": "Auftrag",
+}
+
+_SUBJECT_PICKER_SCRIPT = r"""
+<script>
+(() => {
+  const picker = document.getElementById("manual_task_subject_picker");
+  if (!picker) return;
+
+  const search = document.getElementById("manual_task_subject_search");
+  const hidden = document.getElementById("manual_task_subject");
+  const selection = document.getElementById("manual_task_subject_selection");
+  const summarySelection = document.getElementById(
+    "manual_task_subject_summary_selection"
+  );
+  const results = document.getElementById("manual_task_subject_results");
+  const empty = document.getElementById("manual_task_subject_empty");
+  const categoryButtons = Array.from(
+    picker.querySelectorAll("[data-subject-category-filter]")
+  );
+  const resultButtons = Array.from(
+    picker.querySelectorAll("[data-subject-result]")
+  );
+
+  let activeCategory = "";
+
+  const normalized = (value) => value.trim().toLocaleLowerCase("de");
+
+  const setCategoryPressed = () => {
+    categoryButtons.forEach((button) => {
+      const category = button.dataset.subjectCategoryFilter || "";
+      button.setAttribute(
+        "aria-pressed",
+        category !== "NONE" && category === activeCategory ? "true" : "false"
+      );
+    });
+  };
+
+  const updateResults = () => {
+    const query = normalized(search.value);
+    const shouldShow = Boolean(query || activeCategory);
+    let visibleCount = 0;
+
+    resultButtons.forEach((button) => {
+      const category = button.dataset.subjectCategory || "";
+      const searchable = normalized(button.dataset.subjectSearch || "");
+      const categoryMatches = !activeCategory || category === activeCategory;
+      const queryMatches = !query || searchable.includes(query);
+      const visible = shouldShow && categoryMatches && queryMatches;
+      button.hidden = !visible;
+      if (visible) visibleCount += 1;
+    });
+
+    results.hidden = !shouldShow;
+    empty.hidden = !shouldShow || visibleCount !== 0;
+  };
+
+  const chooseNone = () => {
+    hidden.value = "";
+    selection.textContent = "Ohne Bezug";
+    summarySelection.textContent = "Ohne Bezug";
+    search.value = "";
+    activeCategory = "";
+    setCategoryPressed();
+    updateResults();
+    picker.open = false;
+  };
+
+  categoryButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      const category = button.dataset.subjectCategoryFilter || "";
+      if (category === "NONE") {
+        chooseNone();
+        return;
+      }
+      activeCategory = activeCategory === category ? "" : category;
+      setCategoryPressed();
+      updateResults();
+      search.focus();
+    });
+  });
+
+  resultButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      hidden.value = button.dataset.subjectValue || "";
+      const label = button.dataset.subjectLabel || "Ohne Bezug";
+      selection.textContent = label;
+      summarySelection.textContent = label;
+      picker.open = false;
+    });
+  });
+
+  search.addEventListener("input", updateResults);
+  picker.addEventListener("toggle", () => {
+    if (picker.open) search.focus();
+  });
+
+  setCategoryPressed();
+  updateResults();
+})();
+</script>
+"""
 
 
 def _format_due(raw: object | None) -> str:
@@ -44,6 +150,63 @@ def _subject_cell(row: dict[str, object]) -> str:
     return _e(label)
 
 
+def _subject_picker(subject_options: list[dict[str, str]] | None) -> str:
+    result_buttons: list[str] = []
+    for option in subject_options or []:
+        value = str(option.get("value", ""))
+        category, separator, _subject_key = value.partition(":")
+        if not separator or category not in _SUBJECT_CATEGORY_LABELS:
+            continue
+        label = str(option.get("label", ""))
+        result_buttons.append(
+            '<button type="button" class="task-subject-result" '
+            "data-subject-result "
+            f'data-subject-category="{_e(category)}" '
+            f'data-subject-value="{_e(value)}" '
+            f'data-subject-label="{_e(label)}" '
+            f'data-subject-search="{_e(label)}" hidden>'
+            f'<span class="task-subject-result-kind">'
+            f"{_e(_SUBJECT_CATEGORY_LABELS[category])}</span>"
+            f"<span>{_e(label)}</span></button>"
+        )
+
+    categories = (
+        '<button type="button" data-subject-category-filter="NONE" '
+        'aria-pressed="false">Ohne Bezug</button>'
+        '<button type="button" data-subject-category-filter="CONTACT" '
+        'aria-pressed="false">Kontakt</button>'
+        '<button type="button" data-subject-category-filter="INQUIRY" '
+        'aria-pressed="false">Anfrage</button>'
+        '<button type="button" data-subject-category-filter="OFFER" '
+        'aria-pressed="false">Angebot</button>'
+        '<button type="button" data-subject-category-filter="ORDER" '
+        'aria-pressed="false">Auftrag</button>'
+    )
+    return (
+        '<details class="task-subject-picker" id="manual_task_subject_picker">'
+        '<summary>Bezug <span id="manual_task_subject_summary_selection">'
+        "Ohne Bezug</span></summary>"
+        '<div class="task-subject-picker-body">'
+        '<div class="task-subject-picker-controls">'
+        '<label for="manual_task_subject_search">Bezug</label>'
+        '<input id="manual_task_subject_search" type="search" '
+        'placeholder="Kontakt, Anfrage, Angebot oder Auftrag suchen" '
+        'autocomplete="off">'
+        f'<div class="task-subject-categories" role="group" '
+        f'aria-label="Bezug filtern">{categories}</div>'
+        "</div>"
+        '<input id="manual_task_subject" type="hidden" '
+        'name="subject_reference" value="">'
+        '<div class="task-subject-selection" id="manual_task_subject_selection">'
+        "Ohne Bezug</div>"
+        '<div class="task-subject-results" id="manual_task_subject_results" '
+        'aria-live="polite" hidden>' + "".join(result_buttons) + "</div>"
+        '<p class="task-subject-empty" id="manual_task_subject_empty" hidden>'
+        "Keine Treffer.</p>"
+        "</div></details>" + _SUBJECT_PICKER_SCRIPT
+    )
+
+
 def render_aufgaben_list(
     rows: list[dict[str, object]],
     *,
@@ -70,17 +233,7 @@ def render_aufgaben_list(
                 + "".join(options)
                 + "</select></p>"
             )
-        subject_select_options = ['<option value="">Ohne Bezug</option>']
-        for option in subject_options or []:
-            subject_select_options.append(
-                f'<option value="{_e(option["value"])}">{_e(option["label"])}</option>'
-            )
-        subject_field = (
-            '<p><label for="manual_task_subject">Bezug</label><br>'
-            '<select id="manual_task_subject" name="subject_reference">'
-            + "".join(subject_select_options)
-            + "</select></p>"
-        )
+        subject_field = _subject_picker(subject_options)
         create_form = (
             "<section><h2>Neue Aufgabe</h2>"
             '<form method="post" action="/aufgaben/new">'
