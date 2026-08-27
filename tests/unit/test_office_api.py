@@ -3893,6 +3893,49 @@ def test_convert_accepted_happy_path_and_replay(api) -> None:
     orders.close()
 
 
+def test_convert_accepted_reports_unresolved_delivery_context(api) -> None:
+    base, _ids, db = api
+    offer_id, version_id, acceptance_id, variant_id = _prepare_send_accept(api)
+
+    conn = sqlite3.connect(db)
+    inquiry_id = conn.execute(
+        "SELECT source_inquiry_id FROM offers WHERE offer_id = ?",
+        (offer_id,),
+    ).fetchone()[0]
+    conn.execute(
+        """
+        UPDATE inquiries
+        SET fulfillment_mode = 'DELIVERY',
+            snapshot_delivery_address_mode = 'SEPARATE',
+            snapshot_delivery_address_json = ?
+        WHERE inquiry_id = ?
+        """,
+        (
+            json.dumps(
+                {
+                    "street": "Auf dem Königslande 4",
+                    "postal_code": "22041",
+                    "city": "Hamburg",
+                    "country": None,
+                }
+            ),
+            inquiry_id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+    status, body, _h = _post(
+        _convert_accepted_url(base, offer_id, version_id),
+        args={
+            "accepted_variant_id": variant_id,
+            "acceptance_id": acceptance_id,
+        },
+    )
+
+    assert (status, body["error"]) == (422, "delivery_context_unresolved")
+
+
 def test_convert_accepted_rejects_prepared(api) -> None:
     base, _ids, _db = api
     offer_id, version_id = _prepare_offer(api)
