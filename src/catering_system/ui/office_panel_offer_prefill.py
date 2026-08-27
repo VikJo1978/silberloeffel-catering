@@ -122,7 +122,9 @@ def offer_prefill_payload(inquiry: Inquiry) -> dict[str, object]:
             "fulfillmentPrefill": {
                 "fulfillmentMode": inquiry.fulfillment_mode,
                 "deliveryAddressMode": (
-                    customer.delivery_address_mode if customer is not None else "UNKNOWN"
+                    customer.delivery_address_mode
+                    if customer is not None
+                    else "UNKNOWN"
                 ),
                 "invoiceAddress": _address_prefill(
                     customer.invoice_address if customer is not None else None
