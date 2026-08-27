@@ -159,6 +159,16 @@ def _subject_cell(row: dict[str, object]) -> str:
     return _e(label)
 
 
+def _task_title_cell(row: dict[str, object]) -> str:
+    title = _e(str(row["title"]))
+    if row.get("kind") != "manual":
+        return title
+    task_id = str(row.get("task_id") or "")
+    if not task_id:
+        return title
+    return f'<a href="/aufgaben/{_e(task_id)}">{title}</a>'
+
+
 def _subject_picker(subject_options: list[dict[str, str]] | None) -> str:
     result_buttons: list[str] = []
     for option in subject_options or []:
@@ -214,6 +224,51 @@ def _subject_picker(subject_options: list[dict[str, str]] | None) -> str:
         "Keine Treffer.</p>"
         "</div></details>" + _SUBJECT_PICKER_SCRIPT
     )
+
+
+def render_aufgabe_detail(
+    row: dict[str, object],
+    *,
+    context: OfficePageContext,
+) -> str:
+    description = str(row.get("description") or "").strip()
+    description_html = (
+        _e(description).replace("\n", "<br>") if description else "Keine Beschreibung."
+    )
+    subject_label = str(row.get("subject_label") or "–")
+    subject_href = str(row.get("subject_href") or "")
+    subject_html = _e(subject_label)
+    if subject_href:
+        subject_html = (
+            f'{_e(subject_label)} '
+            f'<a href="{_e(subject_href)}">Bezug öffnen</a>'
+        )
+
+    complete_action = ""
+    if row.get("can_complete"):
+        complete_action = (
+            f'<form method="post" action="/aufgaben/{_e(str(row["task_id"]))}/complete">'
+            f"{row.get('complete_form_fields', '')}"
+            '<button type="submit">Als erledigt markieren</button></form>'
+        )
+
+    body = (
+        '<p class="subtitle">Manuelle Aufgabe</p>'
+        f'<section class="task-detail-card"><h2>{_e(str(row["title"]))}</h2>'
+        '<dl class="task-detail-meta">'
+        f'<dt>Status</dt><dd>Offen</dd>'
+        f'<dt>Wichtigkeit</dt><dd>{_e(_priority_label(row.get("priority", "NORMAL")))}</dd>'
+        f'<dt>Fällig</dt><dd>{_e(_format_due(row.get("due_at")))}</dd>'
+        f'<dt>Zugewiesen</dt><dd>{_e(str(row.get("assigned_to") or "–"))}</dd>'
+        f'<dt>Bezug</dt><dd>{subject_html}</dd>'
+        '</dl>'
+        '<h3>Beschreibung</h3>'
+        f'<div class="task-detail-description">{description_html}</div>'
+        f'{complete_action}</section>'
+        '<p><a href="/aufgaben">← Zurück zu Aufgaben</a></p>'
+        '<p><a href="/">← Zurück zur Arbeitszentrale</a></p>'
+    )
+    return _page("Aufgabe", body, active_section="tasks", context=context)
 
 
 def render_aufgaben_list(
@@ -284,7 +339,7 @@ def render_aufgaben_list(
             "<tr>"
             f"<td>{_e(str(row['type_label']))}</td>"
             f"<td>{_e(_priority_label(row.get('priority', 'NORMAL')))}</td>"
-            f"<td>{_e(str(row['title']))}</td>"
+            f"<td>{_task_title_cell(row)}</td>"
             f"<td>{_e(str(row.get('description', '–')))}</td>"
             f"<td>{_subject_cell(row)}</td>"
             f"<td>{_e(_format_due(row.get('due_at')))}</td>"
