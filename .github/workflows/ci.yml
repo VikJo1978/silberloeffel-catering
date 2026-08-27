@@ -46,3 +46,4 @@ jobs:
         run: |
           node --test infra/staging-form/app.test.cjs
           node --test infra/cloudflare_worker/sanitize.test.mjs
+          node --test infra/office-panel/manual_task_subject_picker.test.mjs
