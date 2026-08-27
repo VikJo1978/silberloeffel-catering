@@ -11,6 +11,14 @@ const source = readFileSync(
   "utf8",
 );
 
+const shellSource = readFileSync(
+  new URL(
+    "../../src/catering_system/ui/office_panel_shell.py",
+    import.meta.url,
+  ),
+  "utf8",
+);
+
 const marker = '_SUBJECT_PICKER_SCRIPT = r"""';
 const start = source.indexOf(marker);
 assert.notEqual(start, -1, "subject picker script marker must exist");
@@ -224,4 +232,11 @@ test("Ohne Bezug clears selection and collapses the picker", () => {
   assert.equal(fixture.summarySelection.textContent, "Ohne Bezug");
   assert.equal(fixture.results.hidden, true);
   assert.equal(fixture.picker.open, false);
+});
+
+test("hidden picker rows remain hidden under author display rules", () => {
+  assert.match(
+    shellSource,
+    /\.task-subject-result\[hidden\][\s\S]*display:\s*none\s*!important;/,
+  );
 });
