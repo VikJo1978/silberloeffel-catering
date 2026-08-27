@@ -471,6 +471,36 @@ button.office-account-link:hover {
   color: var(--muted);
   font-size: 12px;
 }
+.task-detail-card {
+  max-width: 820px;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.task-detail-card h2 { margin-top: 0; }
+.task-detail-card h3 { margin: 22px 0 8px; }
+.task-detail-meta {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  gap: 8px 16px;
+  margin: 18px 0 0;
+}
+.task-detail-meta dt {
+  color: var(--muted);
+  font-weight: 700;
+}
+.task-detail-meta dd { margin: 0; }
+.task-detail-description {
+  min-height: 48px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  line-height: 1.55;
+}
+.task-detail-card form { margin-top: 20px; }
 @media (max-width: 760px) {
   .task-subject-picker-controls {
     align-items: stretch;

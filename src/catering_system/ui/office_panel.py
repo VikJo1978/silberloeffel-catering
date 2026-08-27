@@ -241,7 +241,10 @@ from catering_system.ui.office_panel_order_detail import (
     render_order_detail,
     version_change_prefill,
 )
-from catering_system.ui.office_panel_tasks_list import render_aufgaben_list
+from catering_system.ui.office_panel_tasks_list import (
+    render_aufgabe_detail,
+    render_aufgaben_list,
+)
 from catering_system.ui.office_panel_views import (
     _EMPTY_PAGE_CONTEXT,
     CALL_VERIFICATION_STATUS_LABELS,
@@ -1133,10 +1136,8 @@ class OfficePanel:
                         else "manual"
                     ),
                     "entity_id": task.subject_id or task.task_id,
-                    "action_href": subject_href or "/aufgaben",
-                    "action_label": (
-                        "Bezug öffnen" if subject_href else "Aufgaben öffnen"
-                    ),
+                    "action_href": f"/aufgaben/{quote(task.task_id, safe='')}",
+                    "action_label": "Aufgabe öffnen",
                     "can_complete": can_complete,
                     "complete_form_fields": _csrf_input(context)
                     + self._command_fields(),
@@ -1171,6 +1172,40 @@ class OfficePanel:
                 )
             )
         return sort_task_rows(rows)
+
+    def render_manual_task(
+        self,
+        task_id: str,
+        *,
+        context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
+        employee_session_token: str | None = None,
+        assignee_options: list[dict[str, str]] | None = None,
+        subject_options: list[dict[str, object]] | None = None,
+    ) -> str | None:
+        assignee_options = assignee_options or []
+        assignee_names = {
+            option["id"]: option["display_name"] for option in assignee_options
+        }
+        if subject_options is None:
+            subject_options = self._manual_task_subject_options(
+                context=context,
+                employee_session_token=employee_session_token,
+            )
+        rows = self._manual_task_rows(
+            context=context,
+            employee_session_token=employee_session_token,
+            assignee_names=assignee_names,
+            subject_options=subject_options,
+            can_complete=context.can("tasks.complete")
+            and bool(context.employee_account_id),
+        )
+        row = next(
+            (candidate for candidate in rows if str(candidate["task_id"]) == task_id),
+            None,
+        )
+        if row is None:
+            return None
+        return render_aufgabe_detail(row, context=context)
 
     def render_aufgaben(
         self,
