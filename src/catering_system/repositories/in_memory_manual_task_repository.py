@@ -11,6 +11,8 @@ from catering_system.domain.manual_task import (
     validate_manual_task,
 )
 
+_PRIORITY_RANK = {"HIGH": 0, "NORMAL": 1, "LOW": 2}
+
 
 class InMemoryManualTaskRepository:
     def __init__(self) -> None:
@@ -57,8 +59,9 @@ class InMemoryManualTaskRepository:
         return completed
 
 
-def _sort_key(task: ManualTask) -> tuple[datetime, datetime, str]:
+def _sort_key(task: ManualTask) -> tuple[int, datetime, datetime, str]:
     return (
+        _PRIORITY_RANK[task.priority],
         task.due_at or datetime.max.replace(tzinfo=task.created_at.tzinfo),
         task.created_at,
         task.task_id,

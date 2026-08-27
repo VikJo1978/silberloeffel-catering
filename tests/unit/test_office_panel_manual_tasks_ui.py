@@ -368,6 +368,9 @@ class _RemoteStub:
             )
         ]
 
+    def list_manual_task_subjects(self, *, employee_session_token: str):
+        return []
+
     def create_manual_task(self, *, employee_session_token: str, **_kwargs):
         self.created_token = employee_session_token
         return self.list_manual_tasks(employee_session_token=employee_session_token)[0]

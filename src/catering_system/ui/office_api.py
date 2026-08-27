@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TypeVar
-from urllib.parse import parse_qsl, unquote, urlparse
+from urllib.parse import parse_qsl, quote, unquote, urlparse
 
 from catering_system.domain.catalog import (
     AllergenCode,
@@ -77,6 +77,7 @@ from catering_system.domain.inquiry_customer_snapshot import (
 from catering_system.domain.manual_task import (
     ManualTask,
     ManualTaskSubjectType,
+    validate_manual_task_priority,
     validate_manual_task_subject_type,
 )
 from catering_system.domain.offer import (
@@ -202,6 +203,7 @@ from catering_system.services.configurator_handoff_service import (
     HANDOFF_OPERATION_PREPARE_FIRST_OFFER,
     ConfiguratorHandoffService,
 )
+from catering_system.services.contact_profile_service import ContactProfileService
 from catering_system.services.contact_projection_service import ContactProjectionService
 from catering_system.services.customer_document_preview import (
     CustomerDocumentPreviewNotFoundError,
@@ -667,6 +669,7 @@ def _manual_task_shape(task: ManualTask) -> dict[str, object]:
         "assigned_to_employee_id": task.assigned_to_employee_id,
         "subject_type": task.subject_type,
         "subject_id": task.subject_id,
+        "priority": task.priority,
     }
 
 
@@ -831,6 +834,7 @@ class OfficeApi:
             inquiries=self.inquiries,
             contacts=self.contact_profiles,
         )
+        self.contact_profile_service = ContactProfileService(self.contact_profiles)
         self.manual_task_service = ManualTaskService(
             self.manual_tasks,
             employee_exists=self._employee_account_exists,
@@ -938,6 +942,8 @@ class OfficeApi:
             return self.orders.get_order(subject_id) is not None
         if subject_type == "INQUIRY":
             return self.inquiries.get_by_id(subject_id) is not None
+        if subject_type == "OFFER":
+            return self.offers.get(subject_id) is not None
         if subject_type == "CONTACT":
             return self.contact_profiles.get_profile(subject_id) is not None
         return False
@@ -1361,6 +1367,102 @@ class OfficeApi:
             )
         return {"manual_tasks": [_manual_task_shape(task) for task in tasks]}
 
+    def manual_task_subjects(
+        self, employee: AuthenticatedEmployee
+    ) -> dict[str, object]:
+        permissions = employee.effective_permissions
+        inquiries = self.inquiries.list_all()
+        inquiries_by_id = {inquiry.inquiry_id: inquiry for inquiry in inquiries}
+        rows: list[dict[str, object]] = []
+
+        def inquiry_label(inquiry) -> str:
+            snapshot = inquiry.customer_snapshot
+            customer = None
+            if snapshot is not None:
+                customer = snapshot.company_name or snapshot.contact_name
+            primary = (
+                customer
+                or inquiry.intake_subject
+                or inquiry.location_text
+                or f"Anfrage {inquiry.inquiry_id[:8]}"
+            )
+            return f"{primary} · {inquiry.event_date.isoformat()}"
+
+        if "customers.view" in permissions:
+            contacts = sorted(
+                self.contact_projection_service.list_contacts(),
+                key=lambda contact: (
+                    contact.display_name.casefold(),
+                    contact.contact_key,
+                ),
+            )
+            for contact in contacts:
+                rows.append(
+                    {
+                        "subject_type": "CONTACT",
+                        "subject_id": self.contact_profile_service.find_by_alias(
+                            "contact_key", contact.contact_key
+                        ),
+                        "contact_key": contact.contact_key,
+                        "label": f"Kontakt · {contact.display_name}",
+                        "href": f"/kontakt/{quote(contact.contact_key, safe='')}",
+                    }
+                )
+        if "inquiries.view" in permissions:
+            for inquiry in sorted(
+                inquiries, key=lambda item: (item.event_date, item.inquiry_id)
+            ):
+                rows.append(
+                    {
+                        "subject_type": "INQUIRY",
+                        "subject_id": inquiry.inquiry_id,
+                        "contact_key": None,
+                        "label": f"Anfrage · {inquiry_label(inquiry)}",
+                        "href": f"/inquiry/{inquiry.inquiry_id}",
+                    }
+                )
+        if "offers.view" in permissions:
+            for offer in self.offers.list_all():
+                offer_inquiry = inquiries_by_id.get(offer.source_inquiry_id)
+                suffix = (
+                    inquiry_label(offer_inquiry)
+                    if offer_inquiry is not None
+                    else offer.offer_id[:8]
+                )
+                rows.append(
+                    {
+                        "subject_type": "OFFER",
+                        "subject_id": offer.offer_id,
+                        "contact_key": None,
+                        "label": f"Angebot · {suffix}",
+                        "href": f"/offer/{offer.offer_id}",
+                    }
+                )
+        if "orders.view" in permissions:
+            for order in self.orders.list_orders():
+                order_inquiry = inquiries_by_id.get(order.source_inquiry_id)
+                suffix = (
+                    inquiry_label(order_inquiry)
+                    if order_inquiry is not None
+                    else order.order_id[:8]
+                )
+                rows.append(
+                    {
+                        "subject_type": "ORDER",
+                        "subject_id": order.order_id,
+                        "contact_key": None,
+                        "label": f"Auftrag · {suffix}",
+                        "href": f"/order/{order.order_id}",
+                    }
+                )
+        rows.sort(
+            key=lambda row: (
+                str(row["subject_type"]),
+                str(row["label"]).casefold(),
+            )
+        )
+        return {"subjects": rows}
+
     def list_calendar(self, from_date: date, to_date: date) -> dict[str, object]:
         return {
             "entries": views.calendar_list_view(
@@ -1599,6 +1701,21 @@ class OfficeApi:
             args.get("subject_type", "NONE"), validate_manual_task_subject_type
         )
         assigned_to_employee_id = _v_optional_uuid4(args.get("assigned_to_employee_id"))
+        subject_id = _v_optional_uuid4(args.get("subject_id"))
+        subject_contact_key = _v_optional_str(args.get("subject_contact_key"), 1000)
+        if subject_type == "CONTACT" and subject_contact_key is not None:
+            if subject_id is not None:
+                raise _invalid()
+            projection = self.contact_projection_service.contact_detail(
+                subject_contact_key
+            )
+            if projection is None:
+                raise _invalid()
+            subject_id = self.contact_profile_service.ensure_for_projection(
+                projection.contact
+            )
+        elif subject_contact_key is not None:
+            raise _invalid()
         try:
             task = self.manual_task_service.create_task(
                 title=_v_str(args["title"], 200),
@@ -1607,7 +1724,10 @@ class OfficeApi:
                 created_by_employee_id=employee.account.id,
                 assigned_to_employee_id=assigned_to_employee_id,
                 subject_type=subject_type,
-                subject_id=_v_optional_uuid4(args.get("subject_id")),
+                subject_id=subject_id,
+                priority=_v_enum(
+                    args.get("priority", "NORMAL"), validate_manual_task_priority
+                ),
             )
         except sqlite3.IntegrityError as exc:
             raise ApiError(422, "invalid_request") from exc
@@ -3363,6 +3483,8 @@ _MANUAL_TASK_CREATE_ARGS = _ArgKeys(
             "assigned_to_employee_id",
             "subject_type",
             "subject_id",
+            "subject_contact_key",
+            "priority",
         }
     ),
 )
@@ -3685,6 +3807,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/tasks$"),
         "/office/v1/tasks",
         {"GET": "list_tasks"},
+    ),
+    (
+        re.compile(r"^/office/v1/manual-task-subjects$"),
+        "/office/v1/manual-task-subjects",
+        {"GET": "list_manual_task_subjects"},
     ),
     (
         re.compile(r"^/office/v1/manual-tasks$"),
@@ -4157,7 +4284,7 @@ def make_office_api_handler(
         def _manual_task_employee(
             self, kind: str, args: dict[str, object] | None = None
         ) -> AuthenticatedEmployee:
-            if kind == "list_manual_tasks":
+            if kind in {"list_manual_tasks", "list_manual_task_subjects"}:
                 return self._employee_with_permission("tasks.view")
             if kind == "create_manual_task":
                 employee = self._employee_with_permission("tasks.create")
@@ -4165,6 +4292,17 @@ def make_office_api_handler(
                     args is not None
                     and args.get("assigned_to_employee_id") is not None
                     and "tasks.assign" not in employee.effective_permissions
+                ):
+                    raise ApiError(403, "forbidden")
+                subject_permission = {
+                    "CONTACT": "customers.view",
+                    "INQUIRY": "inquiries.view",
+                    "OFFER": "offers.view",
+                    "ORDER": "orders.view",
+                }.get(str((args or {}).get("subject_type", "NONE")))
+                if (
+                    subject_permission is not None
+                    and subject_permission not in employee.effective_permissions
                 ):
                     raise ApiError(403, "forbidden")
                 return employee
@@ -4431,6 +4569,10 @@ def make_office_api_handler(
             elif kind == "list_tasks":
                 self._query(set())
                 self._respond(200, api.list_tasks())
+            elif kind == "list_manual_task_subjects":
+                self._query(set())
+                employee = self._manual_task_employee(kind)
+                self._respond(200, api.manual_task_subjects(employee))
             elif kind == "list_manual_tasks":
                 params = self._query({"subject_type", "subject_id"})
                 self._manual_task_employee(kind)

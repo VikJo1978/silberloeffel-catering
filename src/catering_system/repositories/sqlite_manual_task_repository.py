@@ -11,11 +11,12 @@ from catering_system.domain.manual_task import (
     ManualTask,
     ManualTaskSubjectType,
     validate_manual_task,
+    validate_manual_task_priority,
     validate_manual_task_subject_type,
 )
 from catering_system.repositories.sqlite_migrations import apply_migrations
 
-_CREATE_TABLE = """
+_CREATE_TABLE_V1 = """
 CREATE TABLE IF NOT EXISTS manual_tasks (
     task_id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -35,10 +36,32 @@ CREATE TABLE IF NOT EXISTS manual_tasks (
 )
 """
 
+_CREATE_TABLE = """
+CREATE TABLE IF NOT EXISTS manual_tasks (
+    task_id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    due_at TEXT,
+    created_at TEXT NOT NULL,
+    completed_at TEXT,
+    created_by_employee_id TEXT NOT NULL,
+    assigned_to_employee_id TEXT,
+    subject_type TEXT NOT NULL,
+    subject_id TEXT,
+    priority TEXT NOT NULL DEFAULT 'NORMAL',
+    CHECK (subject_type IN ('NONE', 'ORDER', 'INQUIRY', 'OFFER', 'CONTACT')),
+    CHECK (priority IN ('HIGH', 'NORMAL', 'LOW')),
+    CHECK (
+        (subject_type = 'NONE' AND subject_id IS NULL)
+        OR (subject_type <> 'NONE' AND subject_id IS NOT NULL)
+    )
+)
+"""
+
 _INDEXES = (
     """
     CREATE INDEX IF NOT EXISTS idx_manual_tasks_open
-    ON manual_tasks (completed_at, due_at, created_at)
+    ON manual_tasks (completed_at, priority, due_at, created_at)
     """,
     """
     CREATE INDEX IF NOT EXISTS idx_manual_tasks_subject
@@ -61,15 +84,54 @@ _COMPLETION_TRIGGERS = (
 )
 
 
-def _migration_1_create_manual_tasks(connection: sqlite3.Connection) -> None:
-    connection.execute(_CREATE_TABLE)
+def _create_indexes_and_triggers(connection: sqlite3.Connection) -> None:
     for statement in _INDEXES:
         connection.execute(statement)
     for trigger in _COMPLETION_TRIGGERS:
         connection.execute(trigger)
 
 
-_MIGRATIONS = ((1, "create_manual_tasks", _migration_1_create_manual_tasks),)
+def _migration_1_create_manual_tasks(connection: sqlite3.Connection) -> None:
+    connection.execute(_CREATE_TABLE_V1)
+    for statement in (
+        """
+        CREATE INDEX IF NOT EXISTS idx_manual_tasks_open
+        ON manual_tasks (completed_at, due_at, created_at)
+        """,
+        _INDEXES[1],
+        _INDEXES[2],
+    ):
+        connection.execute(statement)
+    for trigger in _COMPLETION_TRIGGERS:
+        connection.execute(trigger)
+
+
+def _migration_2_add_priority_and_offer_subject(
+    connection: sqlite3.Connection,
+) -> None:
+    connection.execute("ALTER TABLE manual_tasks RENAME TO manual_tasks_v1")
+    connection.execute(_CREATE_TABLE)
+    connection.execute(
+        """
+        INSERT INTO manual_tasks (
+            task_id, title, description, due_at, created_at, completed_at,
+            created_by_employee_id, assigned_to_employee_id,
+            subject_type, subject_id, priority
+        )
+        SELECT task_id, title, description, due_at, created_at, completed_at,
+               created_by_employee_id, assigned_to_employee_id,
+               subject_type, subject_id, 'NORMAL'
+        FROM manual_tasks_v1
+        """
+    )
+    connection.execute("DROP TABLE manual_tasks_v1")
+    _create_indexes_and_triggers(connection)
+
+
+_MIGRATIONS = (
+    (1, "create_manual_tasks", _migration_1_create_manual_tasks),
+    (2, "add_priority_and_offer_subject", _migration_2_add_priority_and_offer_subject),
+)
 
 
 def _apply_migrations_in_current_transaction(connection: sqlite3.Connection) -> None:
@@ -141,7 +203,7 @@ class SQLiteManualTaskRepository:
             """
             SELECT task_id, title, description, due_at, created_at, completed_at,
                    created_by_employee_id, assigned_to_employee_id,
-                   subject_type, subject_id
+                   subject_type, subject_id, priority
             FROM manual_tasks
             WHERE task_id = ?
             """,
@@ -158,8 +220,8 @@ class SQLiteManualTaskRepository:
                 INSERT INTO manual_tasks (
                     task_id, title, description, due_at, created_at, completed_at,
                     created_by_employee_id, assigned_to_employee_id,
-                    subject_type, subject_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    subject_type, subject_id, priority
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(task_id) DO UPDATE SET
                     title = excluded.title,
                     description = excluded.description,
@@ -169,7 +231,8 @@ class SQLiteManualTaskRepository:
                     created_by_employee_id = excluded.created_by_employee_id,
                     assigned_to_employee_id = excluded.assigned_to_employee_id,
                     subject_type = excluded.subject_type,
-                    subject_id = excluded.subject_id
+                    subject_id = excluded.subject_id,
+                    priority = excluded.priority
                 """,
                 _values(validated),
             )
@@ -179,10 +242,15 @@ class SQLiteManualTaskRepository:
             """
             SELECT task_id, title, description, due_at, created_at, completed_at,
                    created_by_employee_id, assigned_to_employee_id,
-                   subject_type, subject_id
+                   subject_type, subject_id, priority
             FROM manual_tasks
             WHERE completed_at IS NULL
-            ORDER BY due_at IS NULL, due_at, created_at, task_id
+            ORDER BY CASE priority
+                         WHEN 'HIGH' THEN 0
+                         WHEN 'NORMAL' THEN 1
+                         ELSE 2
+                     END,
+                     due_at IS NULL, due_at, created_at, task_id
             """
         ).fetchall()
         return [_row_to_task(row) for row in rows]
@@ -195,10 +263,15 @@ class SQLiteManualTaskRepository:
             """
             SELECT task_id, title, description, due_at, created_at, completed_at,
                    created_by_employee_id, assigned_to_employee_id,
-                   subject_type, subject_id
+                   subject_type, subject_id, priority
             FROM manual_tasks
             WHERE subject_type = ? AND subject_id = ?
-            ORDER BY due_at IS NULL, due_at, created_at, task_id
+            ORDER BY CASE priority
+                         WHEN 'HIGH' THEN 0
+                         WHEN 'NORMAL' THEN 1
+                         ELSE 2
+                     END,
+                     due_at IS NULL, due_at, created_at, task_id
             """,
             (typed_subject, subject_id),
         ).fetchall()
@@ -222,6 +295,7 @@ class SQLiteManualTaskRepository:
                 assigned_to_employee_id=current.assigned_to_employee_id,
                 subject_type=current.subject_type,
                 subject_id=current.subject_id,
+                priority=current.priority,
             )
         )
         completed_timestamp = completed.completed_at
@@ -278,12 +352,14 @@ def _values(task: ManualTask) -> tuple[object, ...]:
         task.assigned_to_employee_id,
         task.subject_type,
         task.subject_id,
+        task.priority,
     )
 
 
 _SUBJECT_TABLES = {
     "ORDER": ("orders", "order_id"),
     "INQUIRY": ("inquiries", "inquiry_id"),
+    "OFFER": ("offers", "offer_id"),
     "CONTACT": ("contact_profiles", "contact_profile_id"),
 }
 
@@ -303,5 +379,6 @@ def _row_to_task(row: tuple[object, ...]) -> ManualTask:
             assigned_to_employee_id=str(row[7]) if row[7] is not None else None,
             subject_type=validate_manual_task_subject_type(str(row[8])),
             subject_id=str(row[9]) if row[9] is not None else None,
+            priority=validate_manual_task_priority(str(row[10])),
         )
     )

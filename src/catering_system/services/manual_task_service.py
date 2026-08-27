@@ -13,6 +13,7 @@ from catering_system.domain.manual_task import (
     normalize_manual_task_description,
     normalize_manual_task_title,
     validate_manual_task,
+    validate_manual_task_priority,
     validate_manual_task_subject_type,
 )
 from catering_system.repositories.manual_task_repository import ManualTaskRepository
@@ -49,6 +50,7 @@ class ManualTaskService:
         assigned_to_employee_id: str | None = None,
         subject_type: str = "NONE",
         subject_id: str | None = None,
+        priority: str = "NORMAL",
     ) -> ManualTask:
         task = validate_manual_task(
             ManualTask(
@@ -62,6 +64,7 @@ class ManualTaskService:
                 assigned_to_employee_id=assigned_to_employee_id,
                 subject_type=validate_manual_task_subject_type(subject_type),
                 subject_id=subject_id,
+                priority=validate_manual_task_priority(priority),
             )
         )
         self._validate_employee(task.created_by_employee_id, "created_by_employee_id")
