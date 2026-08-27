@@ -232,8 +232,7 @@ def test_manual_task_detail_keeps_subject_as_separate_link() -> None:
     assert "Rückfrage zum Menü" in html
     assert "Anfrage · Musterfirma" in html
     assert (
-        'href="/inquiry/22222222-2222-4222-8222-222222222222">Bezug öffnen</a>'
-        in html
+        'href="/inquiry/22222222-2222-4222-8222-222222222222">Bezug öffnen</a>' in html
     )
     assert "Als erledigt markieren" not in html
 
@@ -581,9 +580,7 @@ def test_remote_manual_tasks_use_employee_session_token() -> None:
         employee_session_token="employee-session-token",
     )
     manual = next(row for row in combined if row.get("kind") == "manual")
-    assert manual["action_href"] == (
-        "/aufgaben/11111111-1111-4111-8111-111111111111"
-    )
+    assert manual["action_href"] == ("/aufgaben/11111111-1111-4111-8111-111111111111")
     assert manual["action_label"] == "Aufgabe öffnen"
     assert remote.seen_tokens == [
         "employee-session-token",

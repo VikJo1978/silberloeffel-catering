@@ -240,8 +240,7 @@ def render_aufgabe_detail(
     subject_html = _e(subject_label)
     if subject_href:
         subject_html = (
-            f'{_e(subject_label)} '
-            f'<a href="{_e(subject_href)}">Bezug öffnen</a>'
+            f'{_e(subject_label)} <a href="{_e(subject_href)}">Bezug öffnen</a>'
         )
 
     complete_action = ""
@@ -256,15 +255,15 @@ def render_aufgabe_detail(
         '<p class="subtitle">Manuelle Aufgabe</p>'
         f'<section class="task-detail-card"><h2>{_e(str(row["title"]))}</h2>'
         '<dl class="task-detail-meta">'
-        f'<dt>Status</dt><dd>Offen</dd>'
-        f'<dt>Wichtigkeit</dt><dd>{_e(_priority_label(row.get("priority", "NORMAL")))}</dd>'
-        f'<dt>Fällig</dt><dd>{_e(_format_due(row.get("due_at")))}</dd>'
-        f'<dt>Zugewiesen</dt><dd>{_e(str(row.get("assigned_to") or "–"))}</dd>'
-        f'<dt>Bezug</dt><dd>{subject_html}</dd>'
-        '</dl>'
-        '<h3>Beschreibung</h3>'
+        f"<dt>Status</dt><dd>Offen</dd>"
+        f"<dt>Wichtigkeit</dt><dd>{_e(_priority_label(row.get('priority', 'NORMAL')))}</dd>"
+        f"<dt>Fällig</dt><dd>{_e(_format_due(row.get('due_at')))}</dd>"
+        f"<dt>Zugewiesen</dt><dd>{_e(str(row.get('assigned_to') or '–'))}</dd>"
+        f"<dt>Bezug</dt><dd>{subject_html}</dd>"
+        "</dl>"
+        "<h3>Beschreibung</h3>"
         f'<div class="task-detail-description">{description_html}</div>'
-        f'{complete_action}</section>'
+        f"{complete_action}</section>"
         '<p><a href="/aufgaben">← Zurück zu Aufgaben</a></p>'
         '<p><a href="/">← Zurück zur Arbeitszentrale</a></p>'
     )
