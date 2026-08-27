@@ -369,6 +369,113 @@ button.office-account-link:hover {
 .office-content .attention strong { color: var(--accent-deep); }
 .office-content .searchbox { margin-bottom: 16px; }
 .office-content .searchbox input { min-width: min(100%, 18rem); }
+.task-subject-picker {
+  margin: 0 0 18px;
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.task-subject-picker > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 42px;
+  padding: 9px 12px;
+  cursor: pointer;
+  font-weight: 700;
+  list-style: none;
+}
+.task-subject-picker > summary::-webkit-details-marker { display: none; }
+.task-subject-picker > summary span {
+  color: var(--muted);
+  font-weight: 500;
+}
+.task-subject-picker[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+.task-subject-picker-body { padding: 12px; }
+.task-subject-picker-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.office-content .task-subject-picker-controls label {
+  min-width: auto;
+  margin-right: 2px;
+}
+.office-content .task-subject-picker-controls input[type="search"] {
+  flex: 1 1 260px;
+  min-width: 220px;
+}
+.task-subject-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.office-content .task-subject-categories button {
+  min-height: 34px;
+  padding: 6px 10px;
+  color: var(--accent-deep);
+  border-color: var(--line);
+  background: var(--surface);
+  font-size: 12px;
+}
+.office-content .task-subject-categories button:hover,
+.office-content .task-subject-categories button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.task-subject-selection {
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.task-subject-results {
+  display: grid;
+  gap: 6px;
+  max-height: 320px;
+  margin-top: 10px;
+  overflow: auto;
+}
+.office-content .task-subject-result {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 10px;
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 10px;
+  color: var(--ink);
+  border-color: var(--line);
+  background: var(--surface);
+  text-align: left;
+  font-weight: 500;
+}
+.office-content .task-subject-result:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.task-subject-result-kind {
+  color: var(--accent-deep);
+  font-size: 11px;
+  font-weight: 800;
+}
+.task-subject-empty {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+@media (max-width: 760px) {
+  .task-subject-picker-controls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .office-content .task-subject-picker-controls input[type="search"] {
+    width: 100%;
+    min-width: 0;
+  }
+}
 .office-content .subtitle {
   margin: -12px 0 20px;
   color: var(--muted);
