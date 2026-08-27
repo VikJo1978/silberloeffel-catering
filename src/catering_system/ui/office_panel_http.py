@@ -1350,6 +1350,19 @@ def make_office_panel_handler(
                         command_fields=panel._command_fields(),
                     )
                 )
+            elif len(parts) == 2 and parts[0] == "aufgaben":
+                if not self._require_business_permission_get(
+                    auth, "tasks.view", active_section="tasks"
+                ):
+                    return
+                context = self._page_context()
+                page = panel.render_manual_task(
+                    unquote(parts[1]),
+                    context=context,
+                    employee_session_token=self._employee_session_token(),
+                    assignee_options=self._manual_task_assignee_options(auth),
+                )
+                self._html(page) if page else self.send_error(404)
             elif parts == ["aufgaben"]:
                 if not self._require_business_permission_get(
                     auth, "tasks.view", active_section="tasks"
