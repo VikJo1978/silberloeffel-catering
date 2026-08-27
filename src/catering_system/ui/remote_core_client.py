@@ -1303,7 +1303,11 @@ def _validate_offer_prefill(value: object) -> None:
         _bad_response()
     _uuid4(payload["inquiry_id"])
     transfer = _dict(payload["transfer"])
-    _exact(transfer, {"planning", "orderContextPrefill"})
+    transfer_keys = set(transfer)
+    required_transfer_keys = {"planning", "orderContextPrefill"}
+    allowed_transfer_keys = required_transfer_keys | {"fulfillmentPrefill"}
+    if not required_transfer_keys <= transfer_keys <= allowed_transfer_keys:
+        _bad_response()
     planning = _dict(transfer["planning"])
     _exact(
         planning,
@@ -1343,6 +1347,30 @@ def _validate_offer_prefill(value: object) -> None:
     for item in context.values():
         _str(item)
     _date(context["eventDate"])
+
+    if "fulfillmentPrefill" in transfer:
+        fulfillment = _dict(transfer["fulfillmentPrefill"])
+        _exact(
+            fulfillment,
+            {
+                "fulfillmentMode",
+                "deliveryAddressMode",
+                "invoiceAddress",
+                "deliveryAddress",
+            },
+        )
+        validate_fulfillment_mode(_str(fulfillment["fulfillmentMode"]))
+        if _str(fulfillment["deliveryAddressMode"]) not in {
+            "UNKNOWN",
+            "SAME_AS_INVOICE",
+            "SEPARATE",
+        }:
+            _bad_response()
+        for address_key in ("invoiceAddress", "deliveryAddress"):
+            address = _dict(fulfillment[address_key])
+            _exact(address, {"street", "postalCode", "city", "country"})
+            for item in address.values():
+                _str(item)
 
 
 class RemoteCoreClient:

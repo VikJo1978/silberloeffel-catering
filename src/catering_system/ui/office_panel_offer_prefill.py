@@ -43,6 +43,28 @@ def _contact_prefill_value(
     return _clip(structured_value) or _clip(labelled_fallback)
 
 
+def _address_prefill(address: object | None) -> dict[str, str]:
+    if address is None:
+        return {"street": "", "postalCode": "", "city": "", "country": ""}
+    return {
+        "street": _clip(getattr(address, "street", None)),
+        "postalCode": _clip(getattr(address, "postal_code", None)),
+        "city": _clip(getattr(address, "city", None)),
+        "country": _clip(getattr(address, "country", None)),
+    }
+
+
+def _formatted_address(address: object | None) -> str:
+    if address is None:
+        return ""
+    street = _clip(getattr(address, "street", None))
+    postal_code = _clip(getattr(address, "postal_code", None))
+    city = _clip(getattr(address, "city", None))
+    country = _clip(getattr(address, "country", None))
+    locality = " ".join(part for part in (postal_code, city) if part)
+    return ", ".join(part for part in (street, locality, country) if part)
+
+
 def offer_prefill_payload(inquiry: Inquiry) -> dict[str, object]:
     """Build proposal-phase copy only; this performs no Core write."""
     labelled, remaining = labelled_intake_context(inquiry.intake_message)
@@ -92,8 +114,24 @@ def offer_prefill_payload(inquiry: Inquiry) -> dict[str, object]:
                 "eventDate": inquiry.event_date.isoformat(),
                 "eventTime": _clip(inquiry.time_window_text),
                 "location": _clip(inquiry.location_text),
-                "billingAddress": "",
+                "billingAddress": _formatted_address(
+                    customer.invoice_address if customer is not None else None
+                ),
                 "remarks": remarks,
+            },
+            "fulfillmentPrefill": {
+                "fulfillmentMode": inquiry.fulfillment_mode,
+                "deliveryAddressMode": (
+                    customer.delivery_address_mode
+                    if customer is not None
+                    else "UNKNOWN"
+                ),
+                "invoiceAddress": _address_prefill(
+                    customer.invoice_address if customer is not None else None
+                ),
+                "deliveryAddress": _address_prefill(
+                    customer.delivery_address if customer is not None else None
+                ),
             },
         },
     }

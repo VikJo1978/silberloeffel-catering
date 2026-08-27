@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from catering_system.domain.configurator_handoff import ConfiguratorHandoffRecord
+from catering_system.domain.customer_document_projection import CustomerAddress
 from catering_system.domain.inquiry import (
     Inquiry,
     InquiryOfferProjection,
@@ -190,6 +191,75 @@ def test_fragment_maps_structured_customer_snapshot_and_all_event_fields() -> No
             "Zusätzlicher Anfragekontext\n\n"
             "Zusammenfassung: Website-Anfrage — 42 Personen, 2026-10-03"
         ),
+    }
+
+
+def test_fulfillment_and_structured_addresses_are_carried_into_handoff() -> None:
+    inquiry = replace(
+        _inquiry(),
+        fulfillment_mode="DELIVERY",
+        customer_snapshot=InquiryCustomerSnapshot(
+            company_name="Muster GmbH",
+            contact_name="Max Muster",
+            email="max@example.test",
+            phone="+49 40 12345",
+            invoice_address=CustomerAddress(
+                street="Rechnungsweg 7",
+                postal_code="22549",
+                city="Hamburg",
+                country="DE",
+            ),
+            delivery_address=CustomerAddress(
+                street="Festplatz 3",
+                postal_code="22765",
+                city="Hamburg",
+                country="DE",
+            ),
+            delivery_address_mode="SEPARATE",
+        ),
+    )
+
+    transfer = offer_prefill_payload(inquiry)["transfer"]
+
+    assert transfer["orderContextPrefill"]["billingAddress"] == (
+        "Rechnungsweg 7, 22549 Hamburg, DE"
+    )
+    assert transfer["fulfillmentPrefill"] == {
+        "fulfillmentMode": "DELIVERY",
+        "deliveryAddressMode": "SEPARATE",
+        "invoiceAddress": {
+            "street": "Rechnungsweg 7",
+            "postalCode": "22549",
+            "city": "Hamburg",
+            "country": "DE",
+        },
+        "deliveryAddress": {
+            "street": "Festplatz 3",
+            "postalCode": "22765",
+            "city": "Hamburg",
+            "country": "DE",
+        },
+    }
+
+
+def test_unknown_fulfillment_is_explicit_without_inventing_addresses() -> None:
+    transfer = offer_prefill_payload(_inquiry())["transfer"]
+
+    assert transfer["fulfillmentPrefill"] == {
+        "fulfillmentMode": "UNKNOWN",
+        "deliveryAddressMode": "UNKNOWN",
+        "invoiceAddress": {
+            "street": "",
+            "postalCode": "",
+            "city": "",
+            "country": "",
+        },
+        "deliveryAddress": {
+            "street": "",
+            "postalCode": "",
+            "city": "",
+            "country": "",
+        },
     }
 
 
