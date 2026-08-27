@@ -53,7 +53,10 @@ from catering_system.ui.office_panel import (
     OfficePanel,
     create_office_panel_server,
 )
-from catering_system.ui.office_panel_http import csrf_token_for_password
+from catering_system.ui.office_panel_http import (
+    csrf_token_for_password,
+    office_command_error_message,
+)
 from catering_system.ui.office_panel_order_detail import (
     ConfirmationLivePreviewView,
     OrderDetailFormFields,
@@ -65,6 +68,13 @@ from catering_system.ui.office_panel_views import OfficePageContext, _page
 from tests.helpers.commercial_snapshot_seed import seed_commercial_snapshot
 from tests.helpers.office_panel_context import legacy_office_context
 from tests.helpers.order_seed import seed_order
+
+
+def test_delivery_context_conversion_error_is_actionable() -> None:
+    message = office_command_error_message("delivery_context_unresolved")
+    assert "Lieferdaten sind unvollständig" in message
+    assert "Land" in message
+
 
 _PASSWORD = "test-pw"
 _AUTH = "Basic " + base64.b64encode(f"office:{_PASSWORD}".encode()).decode()

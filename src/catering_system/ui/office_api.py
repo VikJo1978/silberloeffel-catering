@@ -2774,12 +2774,14 @@ class OfficeApi:
                 raise ApiError(422, "version_not_owned") from exc
             if "accepted variant does not belong" in message:
                 raise ApiError(422, "invalid_variant") from exc
-            if "conversion blocked" in message:
-                raise ApiError(422, "conversion_blocked") from exc
+            if "inquiry delivery context unresolved" in message:
+                raise ApiError(422, "delivery_context_unresolved") from exc
             if "inquiry conversion blocked" in message:
                 raise ApiError(422, "verification_gate_blocked") from exc
             if "contact information incomplete" in message:
                 raise ApiError(422, "contact_information_incomplete") from exc
+            if "conversion blocked" in message:
+                raise ApiError(422, "conversion_blocked") from exc
             raise ApiError(422, "conversion_blocked") from exc
         except sqlite3.IntegrityError:
             offer_check = self.offers.get(offer_id)
