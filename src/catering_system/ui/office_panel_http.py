@@ -178,6 +178,10 @@ _INQUIRY_COMMAND_ERROR_LABELS: dict[str, str] = {
     "conversion_blocked": (
         "Das angenommene Angebot kann derzeit nicht in einen Auftrag umgewandelt werden."
     ),
+    "delivery_context_unresolved": (
+        "Die Lieferdaten sind unvollständig. Bitte Lieferart und die vollständige "
+        "wirksame Lieferadresse einschließlich Land in der Anfrage ergänzen."
+    ),
     "already_converted": "Für diese Anfrage existiert bereits ein Auftrag.",
     "accepted_offer_required": (
         "Auftrag nur aus angenommenem Angebot — "
