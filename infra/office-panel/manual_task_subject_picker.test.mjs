@@ -19,18 +19,14 @@ const shellSource = readFileSync(
   "utf8",
 );
 
-const marker = '_SUBJECT_PICKER_SCRIPT = r"""';
+const marker = '_SUBJECT_PICKER_SCRIPT_BODY = r"""';
 const start = source.indexOf(marker);
 assert.notEqual(start, -1, "subject picker script marker must exist");
 const scriptStart = start + marker.length;
 const scriptEnd = source.indexOf('\n"""', scriptStart);
 assert.notEqual(scriptEnd, -1, "subject picker script terminator must exist");
 
-const embeddedScript = source
-  .slice(scriptStart, scriptEnd)
-  .trim()
-  .replace(/^<script>\s*/, "")
-  .replace(/\s*<\/script>$/, "");
+const embeddedScript = source.slice(scriptStart, scriptEnd);
 
 class FakeElement {
   constructor({ dataset = {}, hidden = false } = {}) {
