@@ -569,8 +569,26 @@ def test_remote_manual_tasks_use_employee_session_token() -> None:
     assert "Manuell" in html
     assert "System" in html
     assert 'href="/inquiry/abc"' in html
+    assert (
+        'href="/aufgaben/11111111-1111-4111-8111-111111111111">Remote Aufgabe</a>'
+        in html
+    )
     assert 'action="/aufgaben/inquiry:abc:verify/complete"' not in html
     assert remote.seen_tokens == ["employee-session-token"]
+
+    combined = panel._combined_task_rows(
+        context=context,
+        employee_session_token="employee-session-token",
+    )
+    manual = next(row for row in combined if row.get("kind") == "manual")
+    assert manual["action_href"] == (
+        "/aufgaben/11111111-1111-4111-8111-111111111111"
+    )
+    assert manual["action_label"] == "Aufgabe öffnen"
+    assert remote.seen_tokens == [
+        "employee-session-token",
+        "employee-session-token",
+    ]
 
     panel.begin_request({"_command_id": "cmd-1"})
     panel.create_manual_task(
