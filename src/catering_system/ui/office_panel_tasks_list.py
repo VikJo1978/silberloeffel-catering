@@ -160,13 +160,13 @@ def _subject_picker(subject_options: list[dict[str, str]] | None) -> str:
         label = str(option.get("label", ""))
         result_buttons.append(
             '<button type="button" class="task-subject-result" '
-            'data-subject-result '
+            "data-subject-result "
             f'data-subject-category="{_e(category)}" '
             f'data-subject-value="{_e(value)}" '
             f'data-subject-label="{_e(label)}" '
             f'data-subject-search="{_e(label)}" hidden>'
             f'<span class="task-subject-result-kind">'
-            f'{_e(_SUBJECT_CATEGORY_LABELS[category])}</span>'
+            f"{_e(_SUBJECT_CATEGORY_LABELS[category])}</span>"
             f"<span>{_e(label)}</span></button>"
         )
 
@@ -200,13 +200,10 @@ def _subject_picker(subject_options: list[dict[str, str]] | None) -> str:
         '<div class="task-subject-selection" id="manual_task_subject_selection">'
         "Ohne Bezug</div>"
         '<div class="task-subject-results" id="manual_task_subject_results" '
-        'aria-live="polite" hidden>'
-        + "".join(result_buttons)
-        + "</div>"
+        'aria-live="polite" hidden>' + "".join(result_buttons) + "</div>"
         '<p class="task-subject-empty" id="manual_task_subject_empty" hidden>'
         "Keine Treffer.</p>"
-        "</div></details>"
-        + _SUBJECT_PICKER_SCRIPT
+        "</div></details>" + _SUBJECT_PICKER_SCRIPT
     )
 
 

@@ -310,7 +310,6 @@ def test_create_requires_valid_csrf_and_does_not_mutate_on_failure(
     assert "No CSRF" not in body
 
 
-
 def test_subject_picker_is_searchable_category_first_and_escaped() -> None:
     html = _subject_picker(
         [
@@ -330,7 +329,10 @@ def test_subject_picker_is_searchable_category_first_and_escaped() -> None:
     )
 
     assert '<details class="task-subject-picker"' in html
-    assert '<details class="task-subject-picker" id="manual_task_subject_picker" open' not in html
+    assert (
+        '<details class="task-subject-picker" id="manual_task_subject_picker" open'
+        not in html
+    )
     assert 'id="manual_task_subject_search"' in html
     assert 'name="subject_reference"' in html
     assert 'type="hidden"' in html
@@ -350,6 +352,7 @@ def test_subject_picker_is_searchable_category_first_and_escaped() -> None:
     assert "data-subject-result" in html
     assert 'search.addEventListener("input", updateResults)' in html
     assert 'button.addEventListener("click"' in html
+
 
 class _RemoteStub:
     def __init__(self) -> None:
