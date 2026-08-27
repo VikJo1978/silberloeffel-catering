@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -20,8 +22,7 @@ _SUBJECT_CATEGORY_LABELS = {
     "ORDER": "Auftrag",
 }
 
-_SUBJECT_PICKER_SCRIPT = r"""
-<script>
+_SUBJECT_PICKER_SCRIPT_BODY = r"""
 (() => {
   const picker = document.getElementById("manual_task_subject_picker");
   if (!picker) return;
@@ -117,8 +118,16 @@ _SUBJECT_PICKER_SCRIPT = r"""
   setCategoryPressed();
   updateResults();
 })();
-</script>
 """
+
+_SUBJECT_PICKER_SCRIPT = f"<script>{_SUBJECT_PICKER_SCRIPT_BODY}</script>"
+SUBJECT_PICKER_SCRIPT_CSP_SOURCE = (
+    "'sha256-"
+    + base64.b64encode(
+        hashlib.sha256(_SUBJECT_PICKER_SCRIPT_BODY.encode("utf-8")).digest()
+    ).decode("ascii")
+    + "'"
+)
 
 
 def _format_due(raw: object | None) -> str:

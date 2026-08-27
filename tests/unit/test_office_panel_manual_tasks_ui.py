@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import http.cookiejar
 import re
 from datetime import UTC, datetime
@@ -82,6 +84,44 @@ def test_aufgaben_requires_tasks_view_not_queue_view(
     )
     assert status == 403
     assert "Ihre Berechtigung reicht" in body
+
+
+def test_task_picker_script_is_authorized_by_exact_csp_hash(
+    employee_panel: PanelHarness,
+) -> None:
+    super_jar = _ready_superadmin(employee_panel)
+    jar = _login_employee(
+        employee_panel,
+        super_jar,
+        username="task.csp",
+        permissions=frozenset({"tasks.view", "tasks.create"}),
+    )
+
+    status, _url, body, headers = _request(employee_panel.base, "/aufgaben", jar=jar)
+    assert status == 200
+
+    csp = headers.get("Content-Security-Policy")
+    assert csp is not None
+    script_match = re.search(r"<script>(.*?)</script>", body, re.DOTALL)
+    assert script_match is not None
+    script_body = script_match.group(1)
+    script_source = (
+        "'sha256-"
+        + base64.b64encode(hashlib.sha256(script_body.encode("utf-8")).digest()).decode(
+            "ascii"
+        )
+        + "'"
+    )
+
+    assert f"script-src {script_source};" in csp
+    assert "script-src 'unsafe-inline'" not in csp
+
+    arbitrary_source = (
+        "'sha256-"
+        + base64.b64encode(hashlib.sha256(b"alert(1)").digest()).decode("ascii")
+        + "'"
+    )
+    assert arbitrary_source not in csp
 
 
 def test_manual_tasks_render_created_data_escaped(

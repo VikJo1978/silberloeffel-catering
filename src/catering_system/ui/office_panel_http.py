@@ -116,6 +116,9 @@ from catering_system.ui.manual_task_presentation import (
     parse_subject_reference,
     subject_permission,
 )
+from catering_system.ui.office_panel_tasks_list import (
+    SUBJECT_PICKER_SCRIPT_CSP_SOURCE,
+)
 from catering_system.ui.office_panel_authz import (
     DYNAMIC_CATALOG_UPDATE_AUTH,
     BusinessAccessDenied,
@@ -986,6 +989,7 @@ def make_office_panel_handler(
             self.send_header(
                 "Content-Security-Policy",
                 "default-src 'none'; style-src 'unsafe-inline'; img-src data:; "
+                f"script-src {SUBJECT_PICKER_SCRIPT_CSP_SOURCE}; "
                 "form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
             )
             self.send_header("Referrer-Policy", "no-referrer")

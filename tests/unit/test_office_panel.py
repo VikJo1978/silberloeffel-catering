@@ -60,6 +60,7 @@ from catering_system.ui.office_panel_order_detail import (
     render_order_detail,
 )
 from catering_system.ui.office_panel_shell import OFFICE_PANEL_STYLE
+from catering_system.ui.office_panel_tasks_list import SUBJECT_PICKER_SCRIPT_CSP_SOURCE
 from catering_system.ui.office_panel_views import OfficePageContext, _page
 from tests.helpers.commercial_snapshot_seed import seed_commercial_snapshot
 from tests.helpers.office_panel_context import legacy_office_context
@@ -464,7 +465,8 @@ def test_office_panel_sets_security_headers(panel: str) -> None:
         assert "fonts.googleapis.com" not in csp
         assert "fonts.gstatic.com" not in csp
         assert "font-src" not in csp
-        assert "script-src" not in csp
+        assert f"script-src {SUBJECT_PICKER_SCRIPT_CSP_SOURCE};" in csp
+        assert "script-src 'unsafe-inline'" not in csp
         assert response.headers["Referrer-Policy"] == "no-referrer"
         assert response.headers["X-Content-Type-Options"] == "nosniff"
         assert response.headers["X-Frame-Options"] == "DENY"
