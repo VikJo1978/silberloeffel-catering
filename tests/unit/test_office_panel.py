@@ -66,16 +66,14 @@ from catering_system.ui.office_panel_shell import OFFICE_PANEL_STYLE
 from catering_system.ui.office_panel_tasks_list import SUBJECT_PICKER_SCRIPT_CSP_SOURCE
 from catering_system.ui.office_panel_views import OfficePageContext, _page
 from tests.helpers.commercial_snapshot_seed import seed_commercial_snapshot
-
+from tests.helpers.office_panel_context import legacy_office_context
+from tests.helpers.order_seed import seed_order
 
 
 def test_delivery_context_conversion_error_is_actionable() -> None:
     message = office_command_error_message("delivery_context_unresolved")
     assert "Lieferdaten sind unvollständig" in message
     assert "Land" in message
-
-from tests.helpers.office_panel_context import legacy_office_context
-from tests.helpers.order_seed import seed_order
 
 _PASSWORD = "test-pw"
 _AUTH = "Basic " + base64.b64encode(f"office:{_PASSWORD}".encode()).decode()
