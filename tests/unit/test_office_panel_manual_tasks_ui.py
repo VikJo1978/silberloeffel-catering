@@ -86,7 +86,6 @@ def test_aufgaben_requires_tasks_view_not_queue_view(
     assert "Ihre Berechtigung reicht" in body
 
 
-
 def test_task_picker_script_is_authorized_by_exact_csp_hash(
     employee_panel: PanelHarness,
 ) -> None:
@@ -98,9 +97,7 @@ def test_task_picker_script_is_authorized_by_exact_csp_hash(
         permissions=frozenset({"tasks.view", "tasks.create"}),
     )
 
-    status, _url, body, headers = _request(
-        employee_panel.base, "/aufgaben", jar=jar
-    )
+    status, _url, body, headers = _request(employee_panel.base, "/aufgaben", jar=jar)
     assert status == 200
 
     csp = headers.get("Content-Security-Policy")
@@ -110,9 +107,9 @@ def test_task_picker_script_is_authorized_by_exact_csp_hash(
     script_body = script_match.group(1)
     script_source = (
         "'sha256-"
-        + base64.b64encode(
-            hashlib.sha256(script_body.encode("utf-8")).digest()
-        ).decode("ascii")
+        + base64.b64encode(hashlib.sha256(script_body.encode("utf-8")).digest()).decode(
+            "ascii"
+        )
         + "'"
     )
 
