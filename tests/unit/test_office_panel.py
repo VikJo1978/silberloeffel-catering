@@ -75,6 +75,7 @@ def test_delivery_context_conversion_error_is_actionable() -> None:
     assert "Lieferdaten sind unvollständig" in message
     assert "Land" in message
 
+
 _PASSWORD = "test-pw"
 _AUTH = "Basic " + base64.b64encode(f"office:{_PASSWORD}".encode()).decode()
 _CSRF_TOKEN = csrf_token_for_password(_PASSWORD)
