@@ -439,6 +439,11 @@ button.office-account-link:hover {
   margin-top: 10px;
   overflow: auto;
 }
+.task-subject-results[hidden],
+.task-subject-result[hidden],
+.task-subject-empty[hidden] {
+  display: none !important;
+}
 .office-content .task-subject-result {
   display: grid;
   grid-template-columns: 76px minmax(0, 1fr);
