@@ -836,6 +836,9 @@ def customer_document_preview_shape(preview: object) -> dict[str, object]:
 
 
 def payment_reminder_shape(view: PaymentReminderView) -> dict[str, object]:
+    def dt(value: datetime | None) -> str | None:
+        return value.isoformat() if value is not None else None
+
     return {
         "order_id": view.order_id,
         "payment_method": view.payment_method,
@@ -850,7 +853,22 @@ def payment_reminder_shape(view: PaymentReminderView) -> dict[str, object]:
         "invoice_state_label": view.invoice_state_label,
         "payment_state_label": view.payment_state_label,
         "next_step": view.next_step,
-        "updated_at": view.updated_at.isoformat() if view.updated_at else None,
+        "next_step_due_on": (
+            view.next_step_due_on.isoformat() if view.next_step_due_on else None
+        ),
+        "invoice_created_at": dt(view.invoice_created_at),
+        "invoice_created_by": view.invoice_created_by,
+        "invoice_sent_recorded_at": dt(view.invoice_sent_recorded_at),
+        "invoice_sent_recorded_by": view.invoice_sent_recorded_by,
+        "payment_reminder_sent_at": dt(view.payment_reminder_sent_at),
+        "payment_reminder_sent_by": view.payment_reminder_sent_by,
+        "mahnung_sent_at": dt(view.mahnung_sent_at),
+        "mahnung_sent_by": view.mahnung_sent_by,
+        "quittung_printed_at": dt(view.quittung_printed_at),
+        "quittung_printed_by": view.quittung_printed_by,
+        "paid_recorded_at": dt(view.paid_recorded_at),
+        "paid_recorded_by": view.paid_recorded_by,
+        "updated_at": dt(view.updated_at),
     }
 
 
