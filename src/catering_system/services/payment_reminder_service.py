@@ -21,22 +21,6 @@ from catering_system.repositories.payment_reminder_repository import (
 )
 
 _BERLIN = ZoneInfo("Europe/Berlin")
-_AUDIT_FIELDS = (
-    "invoice_created_at",
-    "invoice_created_by",
-    "invoice_sent_recorded_at",
-    "invoice_sent_recorded_by",
-    "payment_reminder_sent_at",
-    "payment_reminder_sent_by",
-    "mahnung_sent_at",
-    "mahnung_sent_by",
-    "quittung_printed_at",
-    "quittung_printed_by",
-    "paid_recorded_at",
-    "paid_recorded_by",
-)
-
-
 class PaymentReminderService:
     def __init__(
         self,
@@ -128,7 +112,18 @@ class PaymentReminderService:
         reminder = replace(
             reminder,
             due_on=None,
-            **{field: None for field in _AUDIT_FIELDS},
+            invoice_created_at=None,
+            invoice_created_by=None,
+            invoice_sent_recorded_at=None,
+            invoice_sent_recorded_by=None,
+            payment_reminder_sent_at=None,
+            payment_reminder_sent_by=None,
+            mahnung_sent_at=None,
+            mahnung_sent_by=None,
+            quittung_printed_at=None,
+            quittung_printed_by=None,
+            paid_recorded_at=None,
+            paid_recorded_by=None,
         )
         current = self._reminders.get(reminder.order_id)
         if current is not None:
@@ -140,7 +135,18 @@ class PaymentReminderService:
             self._reject_silent_fact_rewrite(current, reminder)
             reminder = replace(
                 reminder,
-                **{field: getattr(current, field) for field in _AUDIT_FIELDS},
+                invoice_created_at=current.invoice_created_at,
+                invoice_created_by=current.invoice_created_by,
+                invoice_sent_recorded_at=current.invoice_sent_recorded_at,
+                invoice_sent_recorded_by=current.invoice_sent_recorded_by,
+                payment_reminder_sent_at=current.payment_reminder_sent_at,
+                payment_reminder_sent_by=current.payment_reminder_sent_by,
+                mahnung_sent_at=current.mahnung_sent_at,
+                mahnung_sent_by=current.mahnung_sent_by,
+                quittung_printed_at=current.quittung_printed_at,
+                quittung_printed_by=current.quittung_printed_by,
+                paid_recorded_at=current.paid_recorded_at,
+                paid_recorded_by=current.paid_recorded_by,
             )
 
         actor = self._actor(actor_reference)
