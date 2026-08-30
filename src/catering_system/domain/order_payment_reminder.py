@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Literal
 
 PaymentMethod = Literal["VORKASSE", "RECHNUNG", "BAR_VOR_ORT"]
@@ -41,6 +41,7 @@ class OrderPaymentReminder:
     due_on: date | None = None
     paid_on: date | None = None
     cash_received: bool = False
+    quittung_printed: bool = False
     updated_at: datetime | None = None
 
 
@@ -55,6 +56,7 @@ class PaymentReminderView:
     due_on: date | None
     paid_on: date | None
     cash_received: bool
+    quittung_printed: bool
     invoice_state_label: str | None
     payment_state_label: str
     next_step: str | None
@@ -82,6 +84,8 @@ def validate_payment_reminder(reminder: OrderPaymentReminder) -> None:
             raise ValueError("cash receipt and paid date must be recorded together")
         return
 
+    if reminder.quittung_printed:
+        raise ValueError("invoice payment cannot carry quittung readiness facts")
     if reminder.cash_received:
         raise ValueError("invoice payment cannot be marked as cash received")
     invoice_facts = (
@@ -104,6 +108,7 @@ def has_downstream_payment_facts(reminder: OrderPaymentReminder) -> bool:
         or reminder.due_on
         or reminder.paid_on
         or reminder.cash_received
+        or reminder.quittung_printed
     )
 
 
@@ -125,6 +130,7 @@ def derive_payment_reminder(
             due_on=None,
             paid_on=None,
             cash_received=False,
+            quittung_printed=False,
             invoice_state_label=None,
             payment_state_label="Offen",
             next_step="Zahlungsart auswählen",
@@ -134,10 +140,12 @@ def derive_payment_reminder(
     validate_payment_reminder(reminder)
     method = reminder.payment_method
     if method == "BAR_VOR_ORT":
-        if reminder.cash_received:
+        if not reminder.quittung_printed:
+            state, next_step = "Offen", "Quittung vorbereiten/drucken"
+        elif reminder.cash_received:
             state, next_step = "Bezahlt", None
         elif today > event_date:
-            state, next_step = "Offen", "Barzahlung bestätigen"
+            state, next_step = "Offen", "Barzahlung klären"
         else:
             state, next_step = "Offen", "Barzahlung vor Ort abwarten"
         return PaymentReminderView(
@@ -150,28 +158,46 @@ def derive_payment_reminder(
             due_on=None,
             paid_on=reminder.paid_on,
             cash_received=reminder.cash_received,
+            quittung_printed=reminder.quittung_printed,
             invoice_state_label=None,
             payment_state_label=state,
             next_step=next_step,
             updated_at=reminder.updated_at,
         )
 
+    canonical_due = (
+        event_date - timedelta(days=7)
+        if method == "VORKASSE"
+        else (
+            reminder.sent_on + timedelta(days=14)
+            if reminder.sent_on is not None
+            else None
+        )
+    )
     invoice_label = "Erstellt" if reminder.invoice_created else "Noch nicht erstellt"
     if not reminder.invoice_created:
         state = "Offen"
         next_step = (
-            "Vorauszahlungsrechnung in der Buchhaltung erstellen"
+            "Rechnung erstellen/senden"
             if method == "VORKASSE"
             else "Rechnung in der Buchhaltung erstellen"
         )
     elif reminder.paid_on is not None:
         state, next_step = "Bezahlt", None
-    elif reminder.sent_on is None or reminder.due_on is None:
+    elif reminder.sent_on is None or canonical_due is None:
         state, next_step = "Offen", "Rechnungsdaten vervollständigen"
-    elif reminder.due_on < today:
-        days = (today - reminder.due_on).days
-        duration = "1 Tag" if days == 1 else f"{days} Tagen"
-        state, next_step = f"Überfällig seit {duration}", "Zahlung überfällig"
+    elif canonical_due < today:
+        if method == "VORKASSE" and today <= event_date:
+            state, next_step = "Sofort fällig", "Zahlungseingang dringend prüfen"
+        else:
+            days = (today - canonical_due).days
+            duration = "1 Tag" if days == 1 else f"{days} Tagen"
+            state, next_step = f"Überfällig seit {duration}", "Zahlung überfällig"
+    elif canonical_due == today:
+        state, next_step = "Heute fällig", "Zahlungseingang prüfen"
+    elif method == "RECHNUNG" and (canonical_due - today).days in {7, 3}:
+        days = (canonical_due - today).days
+        state, next_step = f"Fällig in {days} Tagen", "Zahlungseingang prüfen"
     else:
         state, next_step = "Offen", "Zahlungseingang prüfen"
     return PaymentReminderView(
@@ -181,9 +207,10 @@ def derive_payment_reminder(
         invoice_created=reminder.invoice_created,
         invoice_number=reminder.invoice_number,
         sent_on=reminder.sent_on,
-        due_on=reminder.due_on,
+        due_on=canonical_due,
         paid_on=reminder.paid_on,
         cash_received=False,
+        quittung_printed=False,
         invoice_state_label=invoice_label,
         payment_state_label=state,
         next_step=next_step,

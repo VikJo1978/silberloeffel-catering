@@ -1052,6 +1052,7 @@ _PAYMENT_REMINDER_KEYS = frozenset(
         "due_on",
         "paid_on",
         "cash_received",
+        "quittung_printed",
         "invoice_state_label",
         "payment_state_label",
         "next_step",
@@ -1082,6 +1083,7 @@ def _payment_reminder(value: object, order_id: str) -> PaymentReminderView:
         due_on=None if data["due_on"] is None else _date(data["due_on"]),
         paid_on=None if data["paid_on"] is None else _date(data["paid_on"]),
         cash_received=_bool(data["cash_received"]),
+        quittung_printed=_bool(data["quittung_printed"]),
         invoice_state_label=_optional_str(data["invoice_state_label"]),
         payment_state_label=_str(data["payment_state_label"]),
         next_step=_optional_str(data["next_step"]),
@@ -3905,9 +3907,10 @@ class _RemotePaymentReminderService:
                 "invoice_created": reminder.invoice_created,
                 "invoice_number": reminder.invoice_number,
                 "sent_on": reminder.sent_on.isoformat() if reminder.sent_on else None,
-                "due_on": reminder.due_on.isoformat() if reminder.due_on else None,
+                "due_on": None,
                 "paid_on": reminder.paid_on.isoformat() if reminder.paid_on else None,
                 "cash_received": reminder.cash_received,
+                "quittung_printed": reminder.quittung_printed,
             },
             {
                 "updated_at": (

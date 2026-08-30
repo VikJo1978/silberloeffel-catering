@@ -4108,6 +4108,12 @@ class OfficePanel:
             payment_rows.append(
                 f"<p><strong>Rechnung:</strong> {_e(payment.invoice_state_label)}</p>"
             )
+        if payment.payment_method == "BAR_VOR_ORT":
+            payment_rows.append(
+                "<p><strong>Quittung:</strong> "
+                + ("Gedruckt" if payment.quittung_printed else "Noch nicht gedruckt")
+                + "</p>"
+            )
         if payment.invoice_number:
             payment_rows.append(
                 f"<p><strong>Rechnungsnummer:</strong> {_e(payment.invoice_number)}</p>"
@@ -4148,8 +4154,9 @@ class OfficePanel:
 <p><label><input type="checkbox" name="invoice_created" value="1"{" checked" if payment.invoice_created else ""}> Rechnung in der Buchhaltung erstellt</label></p>
 <p><label>Rechnungsnummer</label><input name="invoice_number" maxlength="200" value="{_e(payment.invoice_number or "")}"></p>
 <p><label>Versendet am</label><input type="date" name="sent_on" value="{payment.sent_on.isoformat() if payment.sent_on else ""}"></p>
-<p><label>Fällig am</label><input type="date" name="due_on" value="{payment.due_on.isoformat() if payment.due_on else ""}"></p>
+<p>Fälligkeit wird automatisch berechnet.</p>
 <p><label>Bezahlt am</label><input type="date" name="paid_on" value="{payment.paid_on.isoformat() if payment.paid_on else ""}"></p>
+<p><label><input type="checkbox" name="quittung_printed" value="1"{" checked" if payment.quittung_printed else ""}> Quittung gedruckt</label></p>
 <p><label><input type="checkbox" name="cash_received" value="1"{" checked" if payment.cash_received else ""}> Barzahlung erhalten</label></p>
 <p><button type="submit">Zahlungshinweis speichern</button></p>
 </fieldset></form>"""
@@ -4352,9 +4359,10 @@ class OfficePanel:
             invoice_created=form.get("invoice_created") == "1",
             invoice_number=form.get("invoice_number", "").strip() or None,
             sent_on=optional_date("sent_on"),
-            due_on=optional_date("due_on"),
+            due_on=None,
             paid_on=optional_date("paid_on"),
             cash_received=form.get("cash_received") == "1",
+            quittung_printed=form.get("quittung_printed") == "1",
         )
 
         def work() -> None:

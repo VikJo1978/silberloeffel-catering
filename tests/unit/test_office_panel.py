@@ -2069,7 +2069,7 @@ def test_v2_order_detail_keeps_payment_separate_and_cancelled_read_only(
 
     assert "order-payment-card" in body
     assert "<h2>Zahlung</h2>" in body
-    assert "Zahlungseingang prüfen" in body
+    assert "Zahlung überfällig" in body
     assert "Reminder-Status" in body
     assert "RE-UI4-1" in body
     assert f'action="/order/{order_id}/payment-reminder"' in body

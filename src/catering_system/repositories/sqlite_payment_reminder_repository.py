@@ -44,7 +44,22 @@ def _migration_1_create_table(connection: sqlite3.Connection) -> None:
     )
 
 
-_MIGRATIONS = ((1, "create_order_payment_reminders", _migration_1_create_table),)
+def _migration_2_add_quittung_printed(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1]
+        for row in connection.execute("PRAGMA table_info(order_payment_reminders)")
+    }
+    if "quittung_printed" not in columns:
+        connection.execute(
+            "ALTER TABLE order_payment_reminders "
+            "ADD COLUMN quittung_printed INTEGER NOT NULL DEFAULT 0"
+        )
+
+
+_MIGRATIONS = (
+    (1, "create_order_payment_reminders", _migration_1_create_table),
+    (2, "add_quittung_printed", _migration_2_add_quittung_printed),
+)
 
 
 class SQLitePaymentReminderRepository:
@@ -88,6 +103,7 @@ class SQLitePaymentReminderRepository:
             due_on=date.fromisoformat(row[5]) if row[5] is not None else None,
             paid_on=date.fromisoformat(row[6]) if row[6] is not None else None,
             cash_received=bool(row[7]),
+            quittung_printed=bool(row[9]),
             updated_at=datetime.fromisoformat(row[8]),
         )
 
@@ -101,12 +117,24 @@ class SQLitePaymentReminderRepository:
             reminder.due_on.isoformat() if reminder.due_on else None,
             reminder.paid_on.isoformat() if reminder.paid_on else None,
             int(reminder.cash_received),
+            int(reminder.quittung_printed),
             reminder.updated_at.isoformat() if reminder.updated_at else None,
         )
         with self._write_scope():
             self._conn.execute(
                 """
-                INSERT INTO order_payment_reminders VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO order_payment_reminders (
+                    order_id,
+                    payment_method,
+                    invoice_created,
+                    invoice_number,
+                    sent_on,
+                    due_on,
+                    paid_on,
+                    cash_received,
+                    quittung_printed,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(order_id) DO UPDATE SET
                     payment_method = excluded.payment_method,
                     invoice_created = excluded.invoice_created,
@@ -115,6 +143,7 @@ class SQLitePaymentReminderRepository:
                     due_on = excluded.due_on,
                     paid_on = excluded.paid_on,
                     cash_received = excluded.cash_received,
+                    quittung_printed = excluded.quittung_printed,
                     updated_at = excluded.updated_at
                 """,
                 values,

@@ -62,6 +62,9 @@ class PaymentReminderService:
             raise KeyError(reminder.order_id)
         if order.cancelled_at is not None:
             raise ValueError("cancelled order cannot update payment reminders")
+        # Payment deadlines are system-derived; never trust or persist an
+        # operator-entered due date from an older client.
+        reminder = replace(reminder, due_on=None)
         validate_payment_reminder(reminder)
         current = self._reminders.get(reminder.order_id)
         if (
