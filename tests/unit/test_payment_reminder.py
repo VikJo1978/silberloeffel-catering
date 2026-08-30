@@ -72,36 +72,40 @@ def test_vorkasse_progression_and_overdue_are_purely_derived() -> None:
     view = derive_payment_reminder(
         reminder, event_date=date(2026, 8, 1), today=date(2026, 7, 15)
     )
-    assert view.next_step == "Vorauszahlungsrechnung in der Buchhaltung erstellen"
+    assert view.next_step == "Rechnung erstellen/senden"
+    assert view.due_on == date(2026, 7, 25)
 
     complete = replace(
         reminder,
         invoice_created=True,
         invoice_number="RE-2026-0048",
-        sent_on=date(2026, 7, 10),
+        sent_on=date(2026, 7, 20),
+        # Legacy/manual values are deliberately ignored by the projection.
         due_on=date(2026, 7, 12),
     )
-    overdue = derive_payment_reminder(
-        complete, event_date=date(2026, 8, 1), today=date(2026, 7, 15)
+    urgent = derive_payment_reminder(
+        complete, event_date=date(2026, 8, 1), today=date(2026, 7, 26)
     )
-    assert overdue.payment_state_label == "Überfällig seit 3 Tagen"
+    assert urgent.due_on == date(2026, 7, 25)
+    assert urgent.payment_state_label == "Sofort fällig"
+    assert urgent.next_step == "Zahlungseingang dringend prüfen"
+
+    overdue = derive_payment_reminder(
+        complete, event_date=date(2026, 8, 1), today=date(2026, 8, 2)
+    )
+    assert overdue.payment_state_label == "Überfällig seit 8 Tagen"
     assert overdue.next_step == "Zahlung überfällig"
 
-    one_day = derive_payment_reminder(
-        complete, event_date=date(2026, 8, 1), today=date(2026, 7, 13)
-    )
-    assert one_day.payment_state_label == "Überfällig seit 1 Tag"
-
     paid = derive_payment_reminder(
-        replace(complete, paid_on=date(2026, 7, 14)),
+        replace(complete, paid_on=date(2026, 7, 27)),
         event_date=date(2026, 8, 1),
-        today=date(2026, 7, 15),
+        today=date(2026, 7, 28),
     )
     assert paid.payment_state_label == "Bezahlt"
     assert paid.next_step is None
 
 
-def test_rechnung_requires_external_invoice_data_before_payment_check() -> None:
+def test_rechnung_due_date_and_stages_are_system_derived() -> None:
     reminder = OrderPaymentReminder(
         order_id="order",
         payment_method="RECHNUNG",
@@ -112,41 +116,76 @@ def test_rechnung_requires_external_invoice_data_before_payment_check() -> None:
         reminder, event_date=date(2026, 8, 1), today=date(2026, 7, 15)
     )
     assert incomplete.next_step == "Rechnungsdaten vervollständigen"
+    assert incomplete.due_on is None
 
-    open_view = derive_payment_reminder(
-        replace(
-            reminder,
-            sent_on=date(2026, 7, 15),
-            due_on=date(2026, 7, 22),
-        ),
-        event_date=date(2026, 8, 1),
-        today=date(2026, 7, 15),
+    sent = replace(
+        reminder,
+        sent_on=date(2026, 7, 15),
+        due_on=date(2026, 12, 31),
     )
-    assert open_view.payment_state_label == "Offen"
-    assert open_view.next_step == "Zahlungseingang prüfen"
+    seven_days = derive_payment_reminder(
+        sent, event_date=date(2026, 8, 1), today=date(2026, 7, 22)
+    )
+    assert seven_days.due_on == date(2026, 7, 29)
+    assert seven_days.payment_state_label == "Fällig in 7 Tagen"
+
+    three_days = derive_payment_reminder(
+        sent, event_date=date(2026, 8, 1), today=date(2026, 7, 26)
+    )
+    assert three_days.payment_state_label == "Fällig in 3 Tagen"
+
+    due_today = derive_payment_reminder(
+        sent, event_date=date(2026, 8, 1), today=date(2026, 7, 29)
+    )
+    assert due_today.payment_state_label == "Heute fällig"
+
+    overdue = derive_payment_reminder(
+        sent, event_date=date(2026, 8, 1), today=date(2026, 7, 30)
+    )
+    assert overdue.payment_state_label == "Überfällig seit 1 Tag"
 
 
-def test_cash_reminder_changes_after_event_and_requires_paid_date() -> None:
+def test_cash_quittung_is_required_before_collection_wait_state() -> None:
     reminder = OrderPaymentReminder(order_id="order", payment_method="BAR_VOR_ORT")
-    before = derive_payment_reminder(
+    before_print = derive_payment_reminder(
         reminder, event_date=date(2026, 7, 20), today=date(2026, 7, 15)
     )
-    assert before.next_step == "Barzahlung vor Ort abwarten"
+    assert before_print.next_step == "Quittung vorbereiten/drucken"
+
+    printed = replace(reminder, quittung_printed=True)
+    before_event = derive_payment_reminder(
+        printed, event_date=date(2026, 7, 20), today=date(2026, 7, 15)
+    )
+    assert before_event.next_step == "Barzahlung vor Ort abwarten"
 
     after = derive_payment_reminder(
-        reminder, event_date=date(2026, 7, 20), today=date(2026, 7, 21)
+        printed, event_date=date(2026, 7, 20), today=date(2026, 7, 21)
     )
-    assert after.next_step == "Barzahlung bestätigen"
+    assert after.next_step == "Barzahlung klären"
 
     with pytest.raises(ValueError, match="recorded together"):
-        validate_payment_reminder(replace(reminder, cash_received=True))
+        validate_payment_reminder(replace(printed, cash_received=True))
     paid = derive_payment_reminder(
-        replace(reminder, cash_received=True, paid_on=date(2026, 7, 20)),
+        replace(
+            printed,
+            cash_received=True,
+            paid_on=date(2026, 7, 20),
+        ),
         event_date=date(2026, 7, 20),
         today=date(2026, 7, 21),
     )
     assert paid.payment_state_label == "Bezahlt"
 
+
+def test_quittung_readiness_is_cash_only() -> None:
+    with pytest.raises(ValueError, match="quittung readiness"):
+        validate_payment_reminder(
+            OrderPaymentReminder(
+                order_id="order",
+                payment_method="RECHNUNG",
+                quittung_printed=True,
+            )
+        )
 
 def test_save_is_idempotent_and_does_not_modify_operational_order() -> None:
     orders, reminders, service = _world()
@@ -178,6 +217,26 @@ def test_conversion_seed_is_idempotent_and_rejects_a_different_choice() -> None:
     with pytest.raises(ValueError, match="conflicts with existing"):
         service.seed_from_conversion(order_id, "RECHNUNG")
     assert reminders.get(order_id) == stored
+
+
+def test_service_discards_legacy_manual_due_date() -> None:
+    _orders, reminders, service = _world()
+    order_id = "11111111-1111-4111-8111-111111111111"
+    service.save(
+        OrderPaymentReminder(
+            order_id=order_id,
+            payment_method="RECHNUNG",
+            invoice_created=True,
+            invoice_number="RE-1",
+            sent_on=date(2026, 7, 15),
+            due_on=date(2030, 1, 1),
+        )
+    )
+
+    stored = reminders.get(order_id)
+    assert stored is not None
+    assert stored.due_on is None
+    assert service.view(order_id).due_on == date(2026, 7, 29)
 
 
 def test_payment_method_cannot_change_after_downstream_facts() -> None:
