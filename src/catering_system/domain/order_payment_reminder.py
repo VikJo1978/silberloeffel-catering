@@ -394,7 +394,11 @@ def derive_payment_reminder(
         next_due = reminder_due if today > canonical_due else canonical_due
     elif reminder.mahnung_sent_at is None:
         mahnung_due = _local_date(reminder.payment_reminder_sent_at) + timedelta(days=7)
-        next_step = "Mahnung senden" if today >= mahnung_due else "Zahlungseingang prüfen"
+        next_step = (
+            "Mahnung senden"
+            if today >= mahnung_due
+            else "Zahlungseingang prüfen"
+        )
         next_due = mahnung_due
     else:
         manual_due = _local_date(reminder.mahnung_sent_at) + timedelta(days=7)
