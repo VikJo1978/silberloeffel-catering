@@ -4138,7 +4138,11 @@ class OfficePanel:
                 f"<p><strong>Nächster Schritt:</strong> {_e(next_step_text)}</p>"
             )
         for label, timestamp, actor in (
-            ("Rechnung erstellt", payment.invoice_created_at, payment.invoice_created_by),
+            (
+                "Rechnung erstellt",
+                payment.invoice_created_at,
+                payment.invoice_created_by,
+            ),
             (
                 "Rechnungsversand erfasst",
                 payment.invoice_sent_recorded_at,
@@ -4415,7 +4419,6 @@ class OfficePanel:
             self._command_executor.run(work)
         else:
             work()
-
 
     def send_confirmation_test(self, order_id: str, form: dict[str, str]) -> None:
         order = self._orders.get_order(order_id)
