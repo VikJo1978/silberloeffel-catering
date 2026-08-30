@@ -846,6 +846,7 @@ def payment_reminder_shape(view: PaymentReminderView) -> dict[str, object]:
         "due_on": view.due_on.isoformat() if view.due_on else None,
         "paid_on": view.paid_on.isoformat() if view.paid_on else None,
         "cash_received": view.cash_received,
+        "quittung_printed": view.quittung_printed,
         "invoice_state_label": view.invoice_state_label,
         "payment_state_label": view.payment_state_label,
         "next_step": view.next_step,
