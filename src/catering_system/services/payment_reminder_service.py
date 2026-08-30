@@ -95,7 +95,10 @@ class PaymentReminderService:
     ) -> None:
         if current.invoice_created and not incoming.invoice_created:
             raise ValueError("invoice creation cannot be cleared silently")
-        if current.invoice_number is not None and incoming.invoice_number != current.invoice_number:
+        if (
+            current.invoice_number is not None
+            and incoming.invoice_number != current.invoice_number
+        ):
             raise ValueError("invoice number cannot be changed silently")
         if current.sent_on is not None and incoming.sent_on != current.sent_on:
             raise ValueError("invoice sent date cannot be changed silently")
