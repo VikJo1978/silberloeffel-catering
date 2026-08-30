@@ -88,13 +88,15 @@ def test_vorkasse_progression_and_overdue_are_purely_derived() -> None:
     )
     assert urgent.due_on == date(2026, 7, 25)
     assert urgent.payment_state_label == "Sofort fällig"
-    assert urgent.next_step == "Zahlungseingang dringend prüfen"
+    assert urgent.next_step == "Zahlungserinnerung senden"
+    assert urgent.next_step_due_on == date(2026, 7, 26)
 
     overdue = derive_payment_reminder(
         complete, event_date=date(2026, 8, 1), today=date(2026, 8, 2)
     )
     assert overdue.payment_state_label == "Überfällig seit 8 Tagen"
-    assert overdue.next_step == "Zahlung überfällig"
+    assert overdue.next_step == "Dringende manuelle Entscheidung erforderlich"
+    assert overdue.next_step_due_on == date(2026, 7, 29)
 
     paid = derive_payment_reminder(
         replace(complete, paid_on=date(2026, 7, 27)),
@@ -143,6 +145,136 @@ def test_rechnung_due_date_and_stages_are_system_derived() -> None:
         sent, event_date=date(2026, 8, 1), today=date(2026, 7, 30)
     )
     assert overdue.payment_state_label == "Überfällig seit 1 Tag"
+    assert overdue.next_step == "Zahlungserinnerung senden"
+    assert overdue.next_step_due_on == date(2026, 7, 30)
+
+
+
+def test_vorkasse_recorded_reminder_advances_to_manual_decision_boundary() -> None:
+    reminder = OrderPaymentReminder(
+        order_id="order",
+        payment_method="VORKASSE",
+        invoice_created=True,
+        invoice_number="RE-V-1",
+        sent_on=date(2026, 7, 20),
+        payment_reminder_sent_at=datetime(2026, 7, 26, 8, 0, tzinfo=UTC),
+        payment_reminder_sent_by="Alice",
+    )
+
+    waiting = derive_payment_reminder(
+        reminder,
+        event_date=date(2026, 8, 1),
+        today=date(2026, 7, 27),
+    )
+    assert waiting.next_step == "Zahlungseingang prüfen"
+    assert waiting.next_step_due_on == date(2026, 7, 29)
+
+    urgent = derive_payment_reminder(
+        reminder,
+        event_date=date(2026, 8, 1),
+        today=date(2026, 7, 29),
+    )
+    assert urgent.next_step == "Dringende manuelle Entscheidung erforderlich"
+    assert urgent.next_step_due_on == date(2026, 7, 29)
+
+
+def test_rechnung_escalation_audit_is_idempotent_and_drives_mahnung() -> None:
+    orders, reminders, _service = _world()
+    order_id = "11111111-1111-4111-8111-111111111111"
+    invoice = OrderPaymentReminder(
+        order_id=order_id,
+        payment_method="RECHNUNG",
+        invoice_created=True,
+        invoice_number="RE-AUDIT-1",
+        sent_on=date(2026, 7, 15),
+    )
+    reminder_now = datetime(2026, 7, 30, 8, 0, tzinfo=UTC)
+    reminder_service = PaymentReminderService(
+        reminders,
+        orders,
+        now=lambda: reminder_now,
+        today=lambda: date(2026, 7, 30),
+    )
+
+    reminder_service.save(
+        invoice,
+        actor_reference="Alice",
+        mark_payment_reminder_sent=True,
+    )
+    stored = reminders.get(order_id)
+    assert stored is not None
+    assert stored.invoice_created_at == reminder_now
+    assert stored.invoice_created_by == "Alice"
+    assert stored.invoice_sent_recorded_at == reminder_now
+    assert stored.invoice_sent_recorded_by == "Alice"
+    assert stored.payment_reminder_sent_at == reminder_now
+    assert stored.payment_reminder_sent_by == "Alice"
+
+    reminder_service.save(
+        invoice,
+        actor_reference="Bob",
+        mark_payment_reminder_sent=True,
+    )
+    replayed = reminders.get(order_id)
+    assert replayed == stored
+
+    mahnung_now = datetime(2026, 8, 6, 9, 0, tzinfo=UTC)
+    mahnung_service = PaymentReminderService(
+        reminders,
+        orders,
+        now=lambda: mahnung_now,
+        today=lambda: date(2026, 8, 6),
+    )
+    before_mahnung = mahnung_service.view(order_id)
+    assert before_mahnung.next_step == "Mahnung senden"
+    assert before_mahnung.next_step_due_on == date(2026, 8, 6)
+
+    mahnung_service.save(
+        invoice,
+        actor_reference="Bob",
+        mark_mahnung_sent=True,
+    )
+    after = reminders.get(order_id)
+    assert after is not None
+    assert after.mahnung_sent_at == mahnung_now
+    assert after.mahnung_sent_by == "Bob"
+
+    manual_service = PaymentReminderService(
+        reminders,
+        orders,
+        now=lambda: datetime(2026, 8, 13, 9, 0, tzinfo=UTC),
+        today=lambda: date(2026, 8, 13),
+    )
+    manual = manual_service.view(order_id)
+    assert manual.next_step == "Manuelle Entscheidung erforderlich"
+    assert manual.next_step_due_on == date(2026, 8, 13)
+
+
+def test_quittung_print_audit_is_stamped_once() -> None:
+    orders, reminders, _service = _world()
+    order_id = "11111111-1111-4111-8111-111111111111"
+    printed_at = datetime(2026, 7, 15, 10, 0, tzinfo=UTC)
+    service = PaymentReminderService(
+        reminders,
+        orders,
+        now=lambda: printed_at,
+        today=lambda: date(2026, 7, 15),
+    )
+    row = OrderPaymentReminder(
+        order_id=order_id,
+        payment_method="BAR_VOR_ORT",
+        quittung_printed=True,
+    )
+
+    service.save(row, actor_reference="Alice")
+    first = reminders.get(order_id)
+    assert first is not None
+    assert first.quittung_printed_at == printed_at
+    assert first.quittung_printed_by == "Alice"
+
+    service.save(row, actor_reference="Bob")
+    assert reminders.get(order_id) == first
+
 
 
 def test_cash_quittung_is_required_before_collection_wait_state() -> None:
