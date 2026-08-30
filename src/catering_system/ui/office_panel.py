@@ -4131,9 +4131,37 @@ class OfficePanel:
             f"<p><strong>Zahlungsstatus:</strong> {_e(payment.payment_state_label)}</p>"
         )
         if payment.next_step:
+            next_step_text = payment.next_step
+            if payment.next_step_due_on is not None:
+                next_step_text += f" · {payment.next_step_due_on.isoformat()}"
             payment_rows.append(
-                f"<p><strong>Nächster Schritt:</strong> {_e(payment.next_step)}</p>"
+                f"<p><strong>Nächster Schritt:</strong> {_e(next_step_text)}</p>"
             )
+        for label, timestamp, actor in (
+            ("Rechnung erstellt", payment.invoice_created_at, payment.invoice_created_by),
+            (
+                "Rechnungsversand erfasst",
+                payment.invoice_sent_recorded_at,
+                payment.invoice_sent_recorded_by,
+            ),
+            (
+                "Zahlungserinnerung",
+                payment.payment_reminder_sent_at,
+                payment.payment_reminder_sent_by,
+            ),
+            ("Mahnung", payment.mahnung_sent_at, payment.mahnung_sent_by),
+            (
+                "Quittung gedruckt",
+                payment.quittung_printed_at,
+                payment.quittung_printed_by,
+            ),
+            ("Zahlung erfasst", payment.paid_recorded_at, payment.paid_recorded_by),
+        ):
+            if timestamp is not None:
+                payment_rows.append(
+                    f"<p><strong>{_e(label)}:</strong> "
+                    f"{_e(timestamp.isoformat())} · {_e(actor or 'unbekannt')}</p>"
+                )
         payment_form = ""
         if not cancelled and context.can("orders.payment.reminder"):
             options = ['<option value="">Bitte wählen</option>']
@@ -4158,6 +4186,8 @@ class OfficePanel:
 <p><label>Bezahlt am</label><input type="date" name="paid_on" value="{payment.paid_on.isoformat() if payment.paid_on else ""}"></p>
 <p><label><input type="checkbox" name="quittung_printed" value="1"{" checked" if payment.quittung_printed else ""}> Quittung gedruckt</label></p>
 <p><label><input type="checkbox" name="cash_received" value="1"{" checked" if payment.cash_received else ""}> Barzahlung erhalten</label></p>
+<p><label><input type="checkbox" name="payment_reminder_sent" value="1"{" checked" if payment.payment_reminder_sent_at else ""}> Zahlungserinnerung gesendet</label></p>
+<p><label><input type="checkbox" name="mahnung_sent" value="1"{" checked" if payment.mahnung_sent_at else ""}> Mahnung gesendet</label></p>
 <p><button type="submit">Zahlungshinweis speichern</button></p>
 </fieldset></form>"""
         header = '<p class="cancelled">STORNIERT</p>' if cancelled else ""
@@ -4348,7 +4378,13 @@ class OfficePanel:
             context=context,
         )
 
-    def save_payment_reminder(self, order_id: str, form: dict[str, str]) -> None:
+    def save_payment_reminder(
+        self,
+        order_id: str,
+        form: dict[str, str],
+        *,
+        actor_reference: str = "office-panel",
+    ) -> None:
         def optional_date(name: str) -> date | None:
             raw = form.get(name, "").strip()
             return date.fromisoformat(raw) if raw else None
@@ -4366,7 +4402,12 @@ class OfficePanel:
         )
 
         def work() -> None:
-            self.payment_reminder_service.save(reminder)
+            self.payment_reminder_service.save(
+                reminder,
+                actor_reference=actor_reference,
+                mark_payment_reminder_sent=form.get("payment_reminder_sent") == "1",
+                mark_mahnung_sent=form.get("mahnung_sent") == "1",
+            )
 
         if self._remote is not None:
             work()
@@ -4374,6 +4415,7 @@ class OfficePanel:
             self._command_executor.run(work)
         else:
             work()
+
 
     def send_confirmation_test(self, order_id: str, form: dict[str, str]) -> None:
         order = self._orders.get_order(order_id)
