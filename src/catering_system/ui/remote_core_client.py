@@ -1110,13 +1110,9 @@ def _payment_reminder(value: object, order_id: str) -> PaymentReminderView:
         ),
         invoice_created_at=_optional_datetime(data["invoice_created_at"]),
         invoice_created_by=_optional_str(data["invoice_created_by"]),
-        invoice_sent_recorded_at=_optional_datetime(
-            data["invoice_sent_recorded_at"]
-        ),
+        invoice_sent_recorded_at=_optional_datetime(data["invoice_sent_recorded_at"]),
         invoice_sent_recorded_by=_optional_str(data["invoice_sent_recorded_by"]),
-        payment_reminder_sent_at=_optional_datetime(
-            data["payment_reminder_sent_at"]
-        ),
+        payment_reminder_sent_at=_optional_datetime(data["payment_reminder_sent_at"]),
         payment_reminder_sent_by=_optional_str(data["payment_reminder_sent_by"]),
         mahnung_sent_at=_optional_datetime(data["mahnung_sent_at"]),
         mahnung_sent_by=_optional_str(data["mahnung_sent_by"]),
