@@ -618,6 +618,8 @@ def test_accepted_shows_convert_form_only(direct_world) -> None:
     _status, html = _get(f"{panel_url}/offer/{offer_id}")
     assert "In Auftrag umwandeln" in html
     assert "/offer/" in html and "/convert" in html
+    assert 'name="payment_method" required' in html
+    assert '<option value="" selected disabled>Bitte wählen</option>' in html
     assert "Als gesendet markieren" not in html
     assert "Annahme erfassen" not in html
 
@@ -635,6 +637,7 @@ def test_converted_shows_order_link_without_actions(direct_world) -> None:
         args={
             "accepted_variant_id": offer.acceptance_evidence.accepted_variant_id,
             "acceptance_id": offer.acceptance_evidence.acceptance_id,
+            "payment_method": "RECHNUNG",
         },
     )
     offers.close()
@@ -823,6 +826,7 @@ def test_convert_redirects_to_created_order(direct_world) -> None:
     fields = _offer_form_fields(html, "/convert")
     fields["accepted_variant_id"] = _extract_hidden(html, "accepted_variant_id")
     fields["acceptance_id"] = _extract_hidden(html, "acceptance_id")
+    fields["payment_method"] = "VORKASSE"
     status, final_url, _body = _post(f"{panel_url}/offer/{offer_id}/convert", fields)
     assert status == 200
     assert "/order/" in final_url
@@ -849,6 +853,7 @@ def test_inquiry_convert_accepted_still_works(direct_world) -> None:
     _status, detail = _get(f"{panel_url}/inquiry/{inquiry_id}")
     assert "Angenommenes Angebot in Auftrag überführen" in detail
     fields = _offer_form_fields(detail, "convert-accepted")
+    fields["payment_method"] = "RECHNUNG"
     status, final_url, _body = _post(
         f"{panel_url}/inquiry/{inquiry_id}/convert-accepted",
         fields,

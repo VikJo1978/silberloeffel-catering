@@ -19,6 +19,10 @@ from catering_system.domain.inquiry_contact_completeness import (
     missing_contact_fields,
 )
 from catering_system.domain.order import Order
+from catering_system.domain.order_payment_reminder import (
+    PAYMENT_METHOD_LABELS,
+    PAYMENT_METHODS,
+)
 from catering_system.ui.office_panel_views import OfficePageContext
 
 _SOURCE_LABELS = {
@@ -192,6 +196,10 @@ def _primary_action(
     elif inquiry_shows_convert_accepted_button(state):
         if not (context.can("offers.view") and context.can("orders.version.create")):
             return ""
+        payment_options = "".join(
+            f'<option value="{_e(method)}">{_e(PAYMENT_METHOD_LABELS[method])}</option>'
+            for method in PAYMENT_METHODS
+        )
         return (
             '<section class="inquiry-next-step">'
             '<div class="inquiry-eyebrow">Nächster Schritt</div>'
@@ -202,6 +210,9 @@ def _primary_action(
             "'Dieses angenommene Angebot wird jetzt in einen Auftrag umgewandelt.'"
             ');">'
             f"{forms.csrf_input}{forms.primary_command_fields}"
+            '<label>Zahlungsart* <select name="payment_method" required>'
+            '<option value="" selected disabled>Bitte wählen</option>'
+            f"{payment_options}</select></label>"
             '<button class="inquiry-button" type="submit">'
             "Angenommenes Angebot in Auftrag überführen"
             "</button></form></section>"

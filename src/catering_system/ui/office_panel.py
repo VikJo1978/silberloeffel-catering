@@ -1758,6 +1758,7 @@ class OfficePanel:
         offer_version_id = str(detail["offer_version_id"])
         accepted_variant_id = form.get("accepted_variant_id", "").strip()
         acceptance_id = form.get("acceptance_id", "").strip()
+        payment_method = validate_payment_method(form.get("payment_method", ""))
         if not accepted_variant_id or not acceptance_id:
             raise ValueError("conversion blocked")
 
@@ -1769,20 +1770,15 @@ class OfficePanel:
                 self._commercial_snapshots,
                 today=api_views.berlin_today,
             )
-            converted, order, order_version = offer_service.convert_accepted_offer(
+            _converted, order, order_version = offer_service.convert_accepted_offer(
                 offer_id,
                 offer_version_id,
                 accepted_variant_id,
                 acceptance_id,
             )
-            commercial_version = next(
-                item
-                for item in converted.versions
-                if item.offer_version_id == offer_version_id
-            )
             self.payment_reminder_service.seed_from_conversion(
                 order.order_id,
-                commercial_version.payment_method,
+                payment_method,
             )
             self.inquiry_service.update_inquiry(
                 str(detail["inquiry_id"]),
@@ -1796,6 +1792,7 @@ class OfficePanel:
                 offer_version_id,
                 accepted_variant_id=accepted_variant_id,
                 acceptance_id=acceptance_id,
+                payment_method=payment_method,
             )
             order = self._orders.get_order(order_id)
             order_version = self._orders.get_order_version(order_version_id)
@@ -3525,6 +3522,11 @@ class OfficePanel:
                 and context.can("offers.view")
                 and context.can("orders.version.create")
             ):
+                payment_options = "".join(
+                    f'<option value="{_e(method)}">'
+                    f"{_e(PAYMENT_METHOD_LABELS[method])}</option>"
+                    for method in PAYMENT_METHODS
+                )
                 convert += (
                     f'<form class="inline" method="post" '
                     f'action="/inquiry/{_e(inquiry_id)}/convert-accepted" '
@@ -3532,6 +3534,9 @@ class OfficePanel:
                     "'Dieses angenommene Angebot wird jetzt in einen Auftrag umgewandelt.'"
                     ');">'
                     f"{_csrf_input(context)}{self._command_fields()}"
+                    '<label>Zahlungsart* <select name="payment_method" required>'
+                    '<option value="" selected disabled>Bitte wählen</option>'
+                    f"{payment_options}</select></label> "
                     "<button>Angenommenes Angebot in Auftrag überführen</button>"
                     "</form>"
                 )
@@ -3671,9 +3676,10 @@ class OfficePanel:
         return work()
 
     def convert_accepted_offer_for_inquiry(
-        self, inquiry_id: str
+        self, inquiry_id: str, form: dict[str, str]
     ) -> tuple[Order, OrderVersion]:
         """Run the accepted-offer conversion through the existing Core command path."""
+        payment_method = validate_payment_method(form.get("payment_method", ""))
 
         def work() -> tuple[Order, OrderVersion]:
             inquiry = self._inquiries.get_by_id(inquiry_id)
@@ -3700,6 +3706,10 @@ class OfficePanel:
                         None,
                     )
                     if order is not None and order_version is not None:
+                        self.payment_reminder_service.seed_from_conversion(
+                            order.order_id,
+                            payment_method,
+                        )
                         return order, order_version
                 raise ValueError("accepted offer conversion gate is not satisfied")
             assert state.offer is not None
@@ -3716,20 +3726,15 @@ class OfficePanel:
                 self._commercial_snapshots,
                 today=api_views.berlin_today,
             )
-            converted, order, order_version = offer_service.convert_accepted_offer(
+            _converted, order, order_version = offer_service.convert_accepted_offer(
                 projection.offer_id,
                 projection.offer_version_id,
                 projection.accepted_variant_id,
                 projection.acceptance_id,
             )
-            commercial_version = next(
-                item
-                for item in converted.versions
-                if item.offer_version_id == projection.offer_version_id
-            )
             self.payment_reminder_service.seed_from_conversion(
                 order.order_id,
-                commercial_version.payment_method,
+                payment_method,
             )
             self.inquiry_service.update_inquiry(
                 inquiry_id,
@@ -3776,6 +3781,7 @@ class OfficePanel:
                 projection.offer_version_id,
                 accepted_variant_id=projection.accepted_variant_id,
                 acceptance_id=projection.acceptance_id,
+                payment_method=payment_method,
             )
             order = self._orders.get_order(order_id)
             order_version = self._orders.get_order_version(order_version_id)

@@ -2557,7 +2557,7 @@ def make_office_panel_handler(
                 self._redirect(f"/order/{order.order_id}")
             elif action == "convert-accepted":
                 order, _initial_version = panel.convert_accepted_offer_for_inquiry(
-                    inquiry_id
+                    inquiry_id, self._form()
                 )
                 self._redirect(f"/order/{order.order_id}")
             else:

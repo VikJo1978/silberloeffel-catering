@@ -2751,6 +2751,7 @@ class OfficeApi:
         offer_version_id = path_ids["version_id"]
         accepted_variant_id = _v_uuid(args["accepted_variant_id"])
         acceptance_id = _v_uuid(args["acceptance_id"])
+        payment_method = _v_enum(args["payment_method"], validate_payment_method)
         existing = self.offers.get(offer_id)
         if existing is None:
             raise ApiError(404, "not_found")
@@ -2814,13 +2815,15 @@ class OfficeApi:
                 raise ApiError(409, "already_converted") from None
             else:
                 raise
-        offer_version = next(
-            item for item in offer.versions if item.offer_version_id == offer_version_id
-        )
-        self.payment_reminder_service.seed_from_conversion(
-            order.order_id,
-            offer_version.payment_method,
-        )
+        try:
+            self.payment_reminder_service.seed_from_conversion(
+                order.order_id,
+                payment_method,
+            )
+        except ValueError as exc:
+            if "conflicts with existing conversion selection" in str(exc):
+                raise ApiError(409, "payment_method_conflict") from exc
+            raise
         self.inquiry_service.update_inquiry(
             offer.source_inquiry_id,
             crm_stage=ACTIVE_ORDER_CRM_STAGE,
@@ -3455,7 +3458,7 @@ _RECORD_WITHDRAWAL_ARGS = _ArgKeys(
     optional=frozenset({"reason"}),
 )
 _CONVERT_ACCEPTED_ARGS = _ArgKeys(
-    required=frozenset({"accepted_variant_id", "acceptance_id"})
+    required=frozenset({"accepted_variant_id", "acceptance_id", "payment_method"})
 )
 _VERSION_ID_ARGS = _ArgKeys(required=frozenset({"order_version_id"}))
 _ORDER_DELETE_ARGS = _ArgKeys(required=frozenset({"confirmation_name"}))
