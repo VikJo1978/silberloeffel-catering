@@ -3856,7 +3856,11 @@ def test_convert_accepted_happy_path_and_replay(api) -> None:
     base, _ids, db = api
     offer_id, version_id, acceptance_id, variant_id = _prepare_send_accept(api)
     url = _convert_accepted_url(base, offer_id, version_id)
-    args = {"accepted_variant_id": variant_id, "acceptance_id": acceptance_id}
+    args = {
+        "accepted_variant_id": variant_id,
+        "acceptance_id": acceptance_id,
+        "payment_method": "VORKASSE",
+    }
     command_id = str(uuid.uuid4())
 
     status, body, _h = _post(url, args=args, command_id=command_id)
@@ -3872,6 +3876,17 @@ def test_convert_accepted_happy_path_and_replay(api) -> None:
     }
     assert body["offer_id"] == offer_id
     assert body["offer_version_id"] == version_id
+    conn = sqlite3.connect(db)
+    try:
+        stored_method = conn.execute(
+            "SELECT payment_method FROM order_payment_reminders WHERE order_id = ?",
+            (body["order_id"],),
+        ).fetchone()[0]
+    finally:
+        conn.close()
+    # The operator's explicit conversion choice is operational truth; the
+    # accepted offer in this fixture carries RECHNUNG as immutable evidence.
+    assert stored_method == "VORKASSE"
 
     status2, body2, _h = _post(url, args=args, command_id=command_id)
     assert (status2, body2) == (status, body)
@@ -3879,6 +3894,12 @@ def test_convert_accepted_happy_path_and_replay(api) -> None:
     status3, body3, _h = _post(url, args=args)
     assert status3 == 200
     assert body3["order_id"] == body["order_id"]
+
+    status4, body4, _h = _post(
+        url,
+        args={**args, "payment_method": "RECHNUNG"},
+    )
+    assert (status4, body4["error"]) == (409, "payment_method_conflict")
 
     offers = SQLiteOfferRepository(db)
     orders = SQLiteOrderRepository(db)
@@ -3891,6 +3912,35 @@ def test_convert_accepted_happy_path_and_replay(api) -> None:
     assert versions[0].location_text == "Hamburg"
     offers.close()
     orders.close()
+
+
+def test_convert_accepted_requires_explicit_payment_method(api) -> None:
+    base, _ids, db = api
+    offer_id, version_id, acceptance_id, variant_id = _prepare_send_accept(api)
+
+    status, body, _h = _post(
+        _convert_accepted_url(base, offer_id, version_id),
+        args={
+            "accepted_variant_id": variant_id,
+            "acceptance_id": acceptance_id,
+        },
+    )
+
+    assert (status, body["error"]) == (400, "invalid_request")
+    conn = sqlite3.connect(db)
+    try:
+        inquiry_id = conn.execute(
+            "SELECT source_inquiry_id FROM offers WHERE offer_id = ?", (offer_id,)
+        ).fetchone()[0]
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM orders WHERE source_inquiry_id = ?",
+                (inquiry_id,),
+            ).fetchone()[0]
+            == 0
+        )
+    finally:
+        conn.close()
 
 
 def test_convert_accepted_reports_unresolved_delivery_context(api) -> None:
@@ -3930,6 +3980,7 @@ def test_convert_accepted_reports_unresolved_delivery_context(api) -> None:
         args={
             "accepted_variant_id": variant_id,
             "acceptance_id": acceptance_id,
+            "payment_method": "RECHNUNG",
         },
     )
 
@@ -3944,6 +3995,7 @@ def test_convert_accepted_rejects_prepared(api) -> None:
         args={
             "accepted_variant_id": _VARIANT_ID,
             "acceptance_id": str(uuid.uuid4()),
+            "payment_method": "RECHNUNG",
         },
     )
     assert (status, body["error"]) == (422, "conversion_blocked")
@@ -3958,6 +4010,7 @@ def test_convert_accepted_rejects_wrong_variant_or_acceptance(api) -> None:
         args={
             "accepted_variant_id": "55555555-5555-4555-8555-555555555551",
             "acceptance_id": acceptance_id,
+            "payment_method": "RECHNUNG",
         },
     )
     assert (status, body["error"]) == (422, "invalid_variant")
@@ -3966,6 +4019,7 @@ def test_convert_accepted_rejects_wrong_variant_or_acceptance(api) -> None:
         args={
             "accepted_variant_id": variant_id,
             "acceptance_id": "66666666-6666-4666-8666-666666666666",
+            "payment_method": "RECHNUNG",
         },
     )
     assert (status, body["error"]) == (422, "conversion_blocked")
@@ -3997,6 +4051,7 @@ def test_convert_accepted_linked_order_without_link_blocks(api) -> None:
         args={
             "accepted_variant_id": accepted["accepted_variant_id"],
             "acceptance_id": accepted["acceptance_id"],
+            "payment_method": "RECHNUNG",
         },
     )
     assert (status, body["error"]) == (409, "already_converted")
@@ -4018,7 +4073,11 @@ def test_convert_accepted_storno_replay_same_order(api) -> None:
     base, _ids, db = api
     offer_id, version_id, acceptance_id, variant_id = _prepare_send_accept(api)
     url = _convert_accepted_url(base, offer_id, version_id)
-    args = {"accepted_variant_id": variant_id, "acceptance_id": acceptance_id}
+    args = {
+        "accepted_variant_id": variant_id,
+        "acceptance_id": acceptance_id,
+        "payment_method": "BAR_VOR_ORT",
+    }
     status, body, _h = _post(url, args=args)
     assert status == 201
     order_id = body["order_id"]
@@ -4054,6 +4113,7 @@ def test_convert_accepted_failure_leaves_no_conversion_or_ledger(api) -> None:
         args={
             "accepted_variant_id": variant_id,
             "acceptance_id": "00000000-0000-4000-8000-000000000099",
+            "payment_method": "RECHNUNG",
         },
         command_id=command_id,
     )
@@ -4857,6 +4917,7 @@ def _make_effective_offer_order(
         args={
             "accepted_variant_id": accept_body["accepted_variant_id"],
             "acceptance_id": accept_body["acceptance_id"],
+            "payment_method": "RECHNUNG",
         },
     )
     assert convert_status in (200, 201)

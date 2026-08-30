@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from typing import cast
 from zoneinfo import ZoneInfo
 
 from catering_system.domain.offer import ACCEPTANCE_CHANNELS, SENT_CHANNELS
+from catering_system.domain.order_payment_reminder import (
+    PAYMENT_METHOD_LABELS,
+    PAYMENT_METHODS,
+)
 from catering_system.ui.office_api_views import offer_state_label
 from catering_system.ui.office_panel_views import (
     OfficePageContext,
@@ -509,7 +514,7 @@ def _budget_block(surface: dict[str, object]) -> str:
 
 def _select_options(
     values: tuple[str, ...],
-    labels: dict[str, str],
+    labels: Mapping[str, str],
     *,
     selected: str | None = None,
 ) -> str:
@@ -698,6 +703,7 @@ def _convert_form(
 ) -> str:
     if not (context.can("offers.view") and context.can("orders.version.create")):
         return ""
+    payment_options = _select_options(PAYMENT_METHODS, PAYMENT_METHOD_LABELS)
     return (
         '<section class="offer-action-section">'
         "<p>Das angenommene Angebot wird in einen Auftrag überführt.</p>"
@@ -710,6 +716,9 @@ def _convert_form(
         f'<input type="hidden" name="accepted_variant_id" '
         f'value="{_e(accepted_variant_id)}">'
         f'<input type="hidden" name="acceptance_id" value="{_e(acceptance_id)}">'
+        '<label>Zahlungsart*<select name="payment_method" required>'
+        '<option value="" selected disabled>Bitte wählen</option>'
+        f"{payment_options}</select></label>"
         '<button class="offer-primary-button" type="submit">'
         "In Auftrag umwandeln</button>"
         "</form></section>"

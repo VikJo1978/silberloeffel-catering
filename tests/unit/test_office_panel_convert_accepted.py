@@ -339,6 +339,7 @@ def _post_convert_accepted(panel_url: str, inquiry_id: str) -> tuple[int, str, s
         block = form.group(0)
         if "_command_id" in block:
             fields["_command_id"] = _extract_hidden(block, "_command_id")
+        fields["payment_method"] = "BAR_VOR_ORT"
     return _post(f"{panel_url}/inquiry/{inquiry_id}/convert-accepted", fields)
 
 
@@ -389,6 +390,10 @@ def test_accepted_offer_button_creates_order_and_disappears(direct_world) -> Non
     assert (
         "Dieses angenommene Angebot wird jetzt in einen Auftrag umgewandelt." in detail
     )
+    assert 'name="payment_method" required' in detail
+    assert "Vorkasse" in detail
+    assert "Rechnung" in detail
+    assert "Bar vor Ort" in detail
 
     status, final_url, _body = _post_convert_accepted(panel_url, inquiry_id)
     assert status == 200
@@ -417,7 +422,11 @@ def test_converted_storno_shows_open_link_not_create_button(direct_world) -> Non
 
     status, body = _api_post(
         f"{api_url}/office/v1/offers/{offer.offer_id}/versions/{version_id}/convert-accepted",
-        args={"accepted_variant_id": variant_id, "acceptance_id": acceptance_id},
+        args={
+            "accepted_variant_id": variant_id,
+            "acceptance_id": acceptance_id,
+            "payment_method": "RECHNUNG",
+        },
     )
     assert status == 201
     order_id = body["order_id"]
@@ -448,7 +457,7 @@ def test_convert_accepted_replay_does_not_create_second_order(direct_world) -> N
 
     status, final_url, _body = _post(
         f"{panel_url}/inquiry/{inquiry_id}/convert-accepted",
-        {},
+        {"payment_method": "BAR_VOR_ORT"},
     )
     assert status == 200
     assert "/order/" in final_url

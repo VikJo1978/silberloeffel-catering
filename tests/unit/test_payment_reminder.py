@@ -164,6 +164,22 @@ def test_save_is_idempotent_and_does_not_modify_operational_order() -> None:
     assert orders.get_order(reminder.order_id) == order_before
 
 
+def test_conversion_seed_is_idempotent_and_rejects_a_different_choice() -> None:
+    _orders, reminders, service = _world()
+    order_id = "11111111-1111-4111-8111-111111111111"
+
+    service.seed_from_conversion(order_id, "VORKASSE")
+    service.seed_from_conversion(order_id, "VORKASSE")
+
+    stored = reminders.get(order_id)
+    assert stored is not None
+    assert stored.payment_method == "VORKASSE"
+    assert stored.updated_at == _NOW
+    with pytest.raises(ValueError, match="conflicts with existing"):
+        service.seed_from_conversion(order_id, "RECHNUNG")
+    assert reminders.get(order_id) == stored
+
+
 def test_payment_method_cannot_change_after_downstream_facts() -> None:
     _orders, _reminders, service = _world()
     order_id = "11111111-1111-4111-8111-111111111111"

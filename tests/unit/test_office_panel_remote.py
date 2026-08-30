@@ -1251,6 +1251,7 @@ def test_full_write_flow_through_remote_panel(remote_world) -> None:
             "_command_id": _extract_hidden(
                 convert_accepted_form.group(0), "_command_id"
             ),
+            "payment_method": "BAR_VOR_ORT",
         },
     )
     assert status == 200
@@ -1726,6 +1727,7 @@ def test_idempotent_retry_same_command_id_and_preconditions(remote_world) -> Non
         {
             "_csrf_token": _CSRF_TOKEN,
             "_command_id": _extract_hidden(convert_accepted_form, "_command_id"),
+            "payment_method": "RECHNUNG",
         },
     )
     assert status == 200

@@ -1635,6 +1635,7 @@ class RemoteCoreClient:
         *,
         accepted_variant_id: str,
         acceptance_id: str,
+        payment_method: str,
     ) -> tuple[str, str]:
         result = self.command(
             f"/office/v1/offers/{quote(offer_id, safe='')}/versions/"
@@ -1642,6 +1643,7 @@ class RemoteCoreClient:
             {
                 "accepted_variant_id": accepted_variant_id,
                 "acceptance_id": acceptance_id,
+                "payment_method": payment_method,
             },
             {},
             expected={201, 200},

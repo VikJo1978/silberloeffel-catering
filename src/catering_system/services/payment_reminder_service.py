@@ -79,10 +79,15 @@ class PaymentReminderService:
         return self.view(reminder.order_id)
 
     def seed_from_conversion(self, order_id: str, payment_method: str) -> None:
-        """Insert a minimal payment reminder when absent after offer conversion."""
-        if self._reminders.get(order_id) is not None:
-            return
+        """Persist the explicit conversion choice, with conflict-safe replay."""
         method = validate_payment_method(payment_method)
+        current = self._reminders.get(order_id)
+        if current is not None:
+            if current.payment_method != method:
+                raise ValueError(
+                    "payment method conflicts with existing conversion selection"
+                )
+            return
         reminder = OrderPaymentReminder(order_id=order_id, payment_method=method)
         validate_payment_reminder(reminder)
         self._reminders.save(replace(reminder, updated_at=self._now()))
