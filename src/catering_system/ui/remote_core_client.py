@@ -1056,6 +1056,19 @@ _PAYMENT_REMINDER_KEYS = frozenset(
         "invoice_state_label",
         "payment_state_label",
         "next_step",
+        "next_step_due_on",
+        "invoice_created_at",
+        "invoice_created_by",
+        "invoice_sent_recorded_at",
+        "invoice_sent_recorded_by",
+        "payment_reminder_sent_at",
+        "payment_reminder_sent_by",
+        "mahnung_sent_at",
+        "mahnung_sent_by",
+        "quittung_printed_at",
+        "quittung_printed_by",
+        "paid_recorded_at",
+        "paid_recorded_by",
         "updated_at",
     }
 )
@@ -1090,6 +1103,27 @@ def _payment_reminder(value: object, order_id: str) -> PaymentReminderView:
         updated_at=(
             None if data["updated_at"] is None else _datetime(data["updated_at"])
         ),
+        next_step_due_on=(
+            None
+            if data["next_step_due_on"] is None
+            else _date(data["next_step_due_on"])
+        ),
+        invoice_created_at=_optional_datetime(data["invoice_created_at"]),
+        invoice_created_by=_optional_str(data["invoice_created_by"]),
+        invoice_sent_recorded_at=_optional_datetime(
+            data["invoice_sent_recorded_at"]
+        ),
+        invoice_sent_recorded_by=_optional_str(data["invoice_sent_recorded_by"]),
+        payment_reminder_sent_at=_optional_datetime(
+            data["payment_reminder_sent_at"]
+        ),
+        payment_reminder_sent_by=_optional_str(data["payment_reminder_sent_by"]),
+        mahnung_sent_at=_optional_datetime(data["mahnung_sent_at"]),
+        mahnung_sent_by=_optional_str(data["mahnung_sent_by"]),
+        quittung_printed_at=_optional_datetime(data["quittung_printed_at"]),
+        quittung_printed_by=_optional_str(data["quittung_printed_by"]),
+        paid_recorded_at=_optional_datetime(data["paid_recorded_at"]),
+        paid_recorded_by=_optional_str(data["paid_recorded_by"]),
     )
 
 
@@ -3897,7 +3931,14 @@ class _RemotePaymentReminderService:
     def view(self, order_id: str) -> PaymentReminderView:
         return self._client.payment_reminder_view(order_id)
 
-    def save(self, reminder: OrderPaymentReminder) -> PaymentReminderView:
+    def save(
+        self,
+        reminder: OrderPaymentReminder,
+        *,
+        actor_reference: str = "office-panel",
+        mark_payment_reminder_sent: bool = False,
+        mark_mahnung_sent: bool = False,
+    ) -> PaymentReminderView:
         expected_at = self._client.form_value("_expect_payment_reminder_updated_at")
         current = self.view(reminder.order_id)
         result = self._client.command(
@@ -3911,6 +3952,9 @@ class _RemotePaymentReminderService:
                 "paid_on": reminder.paid_on.isoformat() if reminder.paid_on else None,
                 "cash_received": reminder.cash_received,
                 "quittung_printed": reminder.quittung_printed,
+                "payment_reminder_sent": mark_payment_reminder_sent,
+                "mahnung_sent": mark_mahnung_sent,
+                "actor_reference": actor_reference,
             },
             {
                 "updated_at": (
