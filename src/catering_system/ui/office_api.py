@@ -3199,9 +3199,10 @@ class OfficeApi:
                     invoice_created=_v_bool(args["invoice_created"]),
                     invoice_number=_v_optional_str(args["invoice_number"], 200),
                     sent_on=_v_optional_date(args["sent_on"]),
-                    due_on=_v_optional_date(args["due_on"]),
+                    due_on=None,
                     paid_on=_v_optional_date(args["paid_on"]),
                     cash_received=_v_bool(args["cash_received"]),
+                    quittung_printed=_v_bool(args.get("quittung_printed", False)),
                 )
             )
         except ValueError as exc:
@@ -3473,7 +3474,8 @@ _PAYMENT_REMINDER_ARGS = _ArgKeys(
             "paid_on",
             "cash_received",
         }
-    )
+    ),
+    optional=frozenset({"quittung_printed"}),
 )
 _CONFIRMATION_DOCUMENT_ARGS = _ArgKeys(required=frozenset({"created_by"}))
 _CONFIRMATION_DOCUMENT_SEND_ARGS = _ArgKeys(
