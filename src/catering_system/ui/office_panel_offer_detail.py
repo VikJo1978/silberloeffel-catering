@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import cast
+from typing import TypeVar, cast
 from zoneinfo import ZoneInfo
 
 from catering_system.domain.offer import ACCEPTANCE_CHANNELS, SENT_CHANNELS
@@ -39,6 +39,7 @@ _ACCEPTANCE_CHANNEL_LABELS = {
     "in_person": "Persönlich",
     "other": "Sonstiges",
 }
+_OptionValue = TypeVar("_OptionValue", bound=str)
 
 _OFFER_DETAIL_STYLE = """
 <style>
@@ -513,8 +514,8 @@ def _budget_block(surface: dict[str, object]) -> str:
 
 
 def _select_options(
-    values: tuple[str, ...],
-    labels: Mapping[str, str],
+    values: tuple[_OptionValue, ...],
+    labels: Mapping[_OptionValue, str],
     *,
     selected: str | None = None,
 ) -> str:
