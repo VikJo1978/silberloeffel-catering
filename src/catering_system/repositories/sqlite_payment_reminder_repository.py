@@ -46,7 +46,8 @@ def _migration_1_create_table(connection: sqlite3.Connection) -> None:
 
 def _migration_2_add_quittung_printed(connection: sqlite3.Connection) -> None:
     columns = {
-        row[1] for row in connection.execute("PRAGMA table_info(order_payment_reminders)")
+        row[1]
+        for row in connection.execute("PRAGMA table_info(order_payment_reminders)")
     }
     if "quittung_printed" not in columns:
         connection.execute(
