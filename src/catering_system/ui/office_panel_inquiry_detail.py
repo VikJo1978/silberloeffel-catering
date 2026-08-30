@@ -197,8 +197,7 @@ def _primary_action(
         if not (context.can("offers.view") and context.can("orders.version.create")):
             return ""
         payment_options = "".join(
-            f'<option value="{_e(method)}">'
-            f"{_e(PAYMENT_METHOD_LABELS[method])}</option>"
+            f'<option value="{_e(method)}">{_e(PAYMENT_METHOD_LABELS[method])}</option>'
             for method in PAYMENT_METHODS
         )
         return (
