@@ -899,7 +899,10 @@ def _payment_card(
         facts.append(("Rechnung", payment.invoice_state_label))
     if payment.payment_method == "BAR_VOR_ORT":
         facts.append(
-            ("Quittung", "Gedruckt" if payment.quittung_printed else "Noch nicht gedruckt")
+            (
+                "Quittung",
+                "Gedruckt" if payment.quittung_printed else "Noch nicht gedruckt",
+            )
         )
     if payment.invoice_number:
         facts.append(("Rechnungsnummer", payment.invoice_number))
