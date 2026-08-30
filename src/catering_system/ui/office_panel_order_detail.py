@@ -838,6 +838,26 @@ def _payment_form(
             f'<option value="{method}"{selected}>'
             f"{_e(PAYMENT_METHOD_LABELS[method])}</option>"
         )
+    quittung = ""
+    if payment.payment_method == "BAR_VOR_ORT":
+        quittung = (
+            f'<p><label><input type="checkbox" name="quittung_printed" value="1"'
+            f"{' checked' if payment.quittung_printed else ''}> "
+            "Quittung gedruckt</label></p>"
+        )
+    escalation = ""
+    if payment.payment_method != "BAR_VOR_ORT":
+        escalation += (
+            f'<p><label><input type="checkbox" name="payment_reminder_sent" value="1"'
+            f"{' checked' if payment.payment_reminder_sent_at else ''}> "
+            "Zahlungserinnerung gesendet</label></p>"
+        )
+    if payment.payment_method == "RECHNUNG":
+        escalation += (
+            f'<p><label><input type="checkbox" name="mahnung_sent" value="1"'
+            f"{' checked' if payment.mahnung_sent_at else ''}> "
+            "Mahnung gesendet</label></p>"
+        )
     return (
         '<details class="order-payment-edit"><summary>Zahlungsdaten bearbeiten</summary>'
         f'<form method="post" action="/order/{_e(order.order_id)}/payment-reminder">'
@@ -851,14 +871,15 @@ def _payment_form(
         f'maxlength="200" value="{_e(payment.invoice_number or "")}"></p>'
         f'<p><label>Versendet am</label><input type="date" name="sent_on" '
         f'value="{_e(payment.sent_on.isoformat() if payment.sent_on else "")}"></p>'
-        f'<p><label>Fällig am</label><input type="date" name="due_on" '
-        f'value="{_e(payment.due_on.isoformat() if payment.due_on else "")}"></p>'
+        "<p>Fälligkeit wird automatisch berechnet.</p>"
         f'<p><label>Bezahlt am</label><input type="date" name="paid_on" '
         f'value="{_e(payment.paid_on.isoformat() if payment.paid_on else "")}"></p>'
-        f'<p><label><input type="checkbox" name="cash_received" value="1"'
+        + quittung
+        + f'<p><label><input type="checkbox" name="cash_received" value="1"'
         f"{' checked' if payment.cash_received else ''}> "
         "Barzahlung erhalten</label></p>"
-        '<p><button type="submit">Zahlungshinweis speichern</button></p>'
+        + escalation
+        + '<p><button type="submit">Zahlungshinweis speichern</button></p>'
         "</fieldset></form></details>"
     )
 
@@ -876,11 +897,50 @@ def _payment_card(
     ]
     if payment.invoice_state_label is not None:
         facts.append(("Rechnung", payment.invoice_state_label))
+    if payment.payment_method == "BAR_VOR_ORT":
+        facts.append(
+            ("Quittung", "Gedruckt" if payment.quittung_printed else "Noch nicht gedruckt")
+        )
     if payment.invoice_number:
         facts.append(("Rechnungsnummer", payment.invoice_number))
+    if payment.sent_on is not None:
+        facts.append(("Versendet am", payment.sent_on.strftime("%d.%m.%Y")))
     if payment.due_on is not None:
         facts.append(("Fällig am", payment.due_on.strftime("%d.%m.%Y")))
+    if payment.paid_on is not None:
+        facts.append(("Bezahlt am", payment.paid_on.strftime("%d.%m.%Y")))
+
+    for label, timestamp, actor in (
+        ("Rechnung erstellt", payment.invoice_created_at, payment.invoice_created_by),
+        (
+            "Rechnungsversand erfasst",
+            payment.invoice_sent_recorded_at,
+            payment.invoice_sent_recorded_by,
+        ),
+        (
+            "Zahlungserinnerung",
+            payment.payment_reminder_sent_at,
+            payment.payment_reminder_sent_by,
+        ),
+        ("Mahnung", payment.mahnung_sent_at, payment.mahnung_sent_by),
+        (
+            "Quittung gedruckt",
+            payment.quittung_printed_at,
+            payment.quittung_printed_by,
+        ),
+        ("Zahlung erfasst", payment.paid_recorded_at, payment.paid_recorded_by),
+    ):
+        if timestamp is not None:
+            facts.append(
+                (
+                    label,
+                    f"{timestamp.strftime('%d.%m.%Y · %H:%M')} · {actor or 'unbekannt'}",
+                )
+            )
+
     next_step = payment.next_step or "Keine offene Zahlungsaufgabe."
+    if payment.next_step_due_on is not None and payment.next_step is not None:
+        next_step += f" · {payment.next_step_due_on.strftime('%d.%m.%Y')}"
     return (
         '<section class="order-card order-content-card order-payment-card">'
         '<div class="order-section-kicker">Separater Bereich</div>'
