@@ -275,7 +275,6 @@ def test_quittung_print_audit_is_stamped_once() -> None:
     assert reminders.get(order_id) == first
 
 
-
 def test_cash_quittung_is_required_before_collection_wait_state() -> None:
     reminder = OrderPaymentReminder(order_id="order", payment_method="BAR_VOR_ORT")
     before_print = derive_payment_reminder(
