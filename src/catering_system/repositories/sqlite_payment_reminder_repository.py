@@ -56,10 +56,69 @@ def _migration_2_add_quittung_printed(connection: sqlite3.Connection) -> None:
         )
 
 
+def _migration_3_add_audit_facts(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1]
+        for row in connection.execute("PRAGMA table_info(order_payment_reminders)")
+    }
+    for column in (
+        "invoice_created_at",
+        "invoice_created_by",
+        "invoice_sent_recorded_at",
+        "invoice_sent_recorded_by",
+        "payment_reminder_sent_at",
+        "payment_reminder_sent_by",
+        "mahnung_sent_at",
+        "mahnung_sent_by",
+        "quittung_printed_at",
+        "quittung_printed_by",
+        "paid_recorded_at",
+        "paid_recorded_by",
+    ):
+        if column not in columns:
+            connection.execute(
+                f"ALTER TABLE order_payment_reminders ADD COLUMN {column} TEXT"
+            )
+
+
 _MIGRATIONS = (
     (1, "create_order_payment_reminders", _migration_1_create_table),
     (2, "add_quittung_printed", _migration_2_add_quittung_printed),
+    (3, "add_payment_audit_facts", _migration_3_add_audit_facts),
 )
+
+_SELECT_COLUMNS = """
+    order_id,
+    payment_method,
+    invoice_created,
+    invoice_number,
+    sent_on,
+    due_on,
+    paid_on,
+    cash_received,
+    updated_at,
+    quittung_printed,
+    invoice_created_at,
+    invoice_created_by,
+    invoice_sent_recorded_at,
+    invoice_sent_recorded_by,
+    payment_reminder_sent_at,
+    payment_reminder_sent_by,
+    mahnung_sent_at,
+    mahnung_sent_by,
+    quittung_printed_at,
+    quittung_printed_by,
+    paid_recorded_at,
+    paid_recorded_by
+"""
+
+
+def _date(value: str | None) -> date | None:
+    return date.fromisoformat(value) if value is not None else None
+
+
+def _datetime(value: str | None) -> datetime | None:
+    return datetime.fromisoformat(value) if value is not None else None
 
 
 class SQLitePaymentReminderRepository:
@@ -90,7 +149,8 @@ class SQLitePaymentReminderRepository:
 
     def get(self, order_id: str) -> OrderPaymentReminder | None:
         row = self._conn.execute(
-            "SELECT * FROM order_payment_reminders WHERE order_id = ?", (order_id,)
+            f"SELECT {_SELECT_COLUMNS} FROM order_payment_reminders WHERE order_id = ?",
+            (order_id,),
         ).fetchone()
         if row is None:
             return None
@@ -99,12 +159,24 @@ class SQLitePaymentReminderRepository:
             payment_method=validate_payment_method(row[1]),
             invoice_created=bool(row[2]),
             invoice_number=row[3],
-            sent_on=date.fromisoformat(row[4]) if row[4] is not None else None,
-            due_on=date.fromisoformat(row[5]) if row[5] is not None else None,
-            paid_on=date.fromisoformat(row[6]) if row[6] is not None else None,
+            sent_on=_date(row[4]),
+            due_on=_date(row[5]),
+            paid_on=_date(row[6]),
             cash_received=bool(row[7]),
+            updated_at=_datetime(row[8]),
             quittung_printed=bool(row[9]),
-            updated_at=datetime.fromisoformat(row[8]),
+            invoice_created_at=_datetime(row[10]),
+            invoice_created_by=row[11],
+            invoice_sent_recorded_at=_datetime(row[12]),
+            invoice_sent_recorded_by=row[13],
+            payment_reminder_sent_at=_datetime(row[14]),
+            payment_reminder_sent_by=row[15],
+            mahnung_sent_at=_datetime(row[16]),
+            mahnung_sent_by=row[17],
+            quittung_printed_at=_datetime(row[18]),
+            quittung_printed_by=row[19],
+            paid_recorded_at=_datetime(row[20]),
+            paid_recorded_by=row[21],
         )
 
     def save(self, reminder: OrderPaymentReminder) -> None:
@@ -117,8 +189,30 @@ class SQLitePaymentReminderRepository:
             reminder.due_on.isoformat() if reminder.due_on else None,
             reminder.paid_on.isoformat() if reminder.paid_on else None,
             int(reminder.cash_received),
-            int(reminder.quittung_printed),
             reminder.updated_at.isoformat() if reminder.updated_at else None,
+            int(reminder.quittung_printed),
+            reminder.invoice_created_at.isoformat()
+            if reminder.invoice_created_at
+            else None,
+            reminder.invoice_created_by,
+            reminder.invoice_sent_recorded_at.isoformat()
+            if reminder.invoice_sent_recorded_at
+            else None,
+            reminder.invoice_sent_recorded_by,
+            reminder.payment_reminder_sent_at.isoformat()
+            if reminder.payment_reminder_sent_at
+            else None,
+            reminder.payment_reminder_sent_by,
+            reminder.mahnung_sent_at.isoformat() if reminder.mahnung_sent_at else None,
+            reminder.mahnung_sent_by,
+            reminder.quittung_printed_at.isoformat()
+            if reminder.quittung_printed_at
+            else None,
+            reminder.quittung_printed_by,
+            reminder.paid_recorded_at.isoformat()
+            if reminder.paid_recorded_at
+            else None,
+            reminder.paid_recorded_by,
         )
         with self._write_scope():
             self._conn.execute(
@@ -132,9 +226,24 @@ class SQLitePaymentReminderRepository:
                     due_on,
                     paid_on,
                     cash_received,
+                    updated_at,
                     quittung_printed,
-                    updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    invoice_created_at,
+                    invoice_created_by,
+                    invoice_sent_recorded_at,
+                    invoice_sent_recorded_by,
+                    payment_reminder_sent_at,
+                    payment_reminder_sent_by,
+                    mahnung_sent_at,
+                    mahnung_sent_by,
+                    quittung_printed_at,
+                    quittung_printed_by,
+                    paid_recorded_at,
+                    paid_recorded_by
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
                 ON CONFLICT(order_id) DO UPDATE SET
                     payment_method = excluded.payment_method,
                     invoice_created = excluded.invoice_created,
@@ -143,8 +252,20 @@ class SQLitePaymentReminderRepository:
                     due_on = excluded.due_on,
                     paid_on = excluded.paid_on,
                     cash_received = excluded.cash_received,
+                    updated_at = excluded.updated_at,
                     quittung_printed = excluded.quittung_printed,
-                    updated_at = excluded.updated_at
+                    invoice_created_at = excluded.invoice_created_at,
+                    invoice_created_by = excluded.invoice_created_by,
+                    invoice_sent_recorded_at = excluded.invoice_sent_recorded_at,
+                    invoice_sent_recorded_by = excluded.invoice_sent_recorded_by,
+                    payment_reminder_sent_at = excluded.payment_reminder_sent_at,
+                    payment_reminder_sent_by = excluded.payment_reminder_sent_by,
+                    mahnung_sent_at = excluded.mahnung_sent_at,
+                    mahnung_sent_by = excluded.mahnung_sent_by,
+                    quittung_printed_at = excluded.quittung_printed_at,
+                    quittung_printed_by = excluded.quittung_printed_by,
+                    paid_recorded_at = excluded.paid_recorded_at,
+                    paid_recorded_by = excluded.paid_recorded_by
                 """,
                 values,
             )
