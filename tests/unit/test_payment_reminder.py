@@ -187,6 +187,7 @@ def test_quittung_readiness_is_cash_only() -> None:
             )
         )
 
+
 def test_save_is_idempotent_and_does_not_modify_operational_order() -> None:
     orders, reminders, service = _world()
     order_before = orders.get_order("11111111-1111-4111-8111-111111111111")
