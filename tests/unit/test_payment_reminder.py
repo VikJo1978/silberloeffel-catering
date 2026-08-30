@@ -149,7 +149,6 @@ def test_rechnung_due_date_and_stages_are_system_derived() -> None:
     assert overdue.next_step_due_on == date(2026, 7, 30)
 
 
-
 def test_vorkasse_recorded_reminder_advances_to_manual_decision_boundary() -> None:
     reminder = OrderPaymentReminder(
         order_id="order",
