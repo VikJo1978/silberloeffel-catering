@@ -330,7 +330,8 @@ def test_payment_task_emitted_with_overdue_urgency() -> None:
     payment_row = next(row for row in rows if row.category == "payment")
     assert payment_row.task_id == f"order:{order.order_id}:payment"
     assert payment_row.urgency == "overdue"
-    assert payment_row.due_at == date(2026, 6, 15)
+    assert payment_row.title == "Zahlungserinnerung senden"
+    assert payment_row.due_at == date(2026, 6, 16)
 
 
 def test_sort_overdue_payment_before_verify() -> None:
