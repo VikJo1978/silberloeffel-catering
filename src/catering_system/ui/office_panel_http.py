@@ -2671,7 +2671,11 @@ def make_office_panel_handler(
             elif action == "payment-reminder":
                 auth = self._request_auth
                 actor_reference = "office-panel"
-                if auth is not None and auth.kind == "employee" and auth.employee is not None:
+                if (
+                    auth is not None
+                    and auth.kind == "employee"
+                    and auth.employee is not None
+                ):
                     account = auth.employee.account
                     actor_reference = f"{account.display_name} [{account.id}]"
                 panel.save_payment_reminder(
