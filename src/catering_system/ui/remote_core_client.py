@@ -133,9 +133,10 @@ _INQUIRY_SUMMARY_KEYS = frozenset(
         "call_verification_required",
         "call_verification_status",
         "fulfillment_mode",
-        "event_start_local",
-        "delivery_time_local",
     }
+)
+_INQUIRY_TIMING_OPTIONAL_KEYS = frozenset(
+    {"event_start_local", "delivery_time_local"}
 )
 _INQUIRY_LIST_KEYS = _INQUIRY_SUMMARY_KEYS | {
     "intake_subject",
@@ -144,7 +145,9 @@ _INQUIRY_LIST_KEYS = _INQUIRY_SUMMARY_KEYS | {
 }
 # Optional typed list-row field (INQUIRY_CONTACT_COMPLETENESS_V1 §10) — the
 # pre-completeness API contract has no snapshot on list rows.
-_INQUIRY_LIST_OPTIONAL_KEYS = frozenset({"customer_snapshot"})
+_INQUIRY_LIST_OPTIONAL_KEYS = (
+    frozenset({"customer_snapshot"}) | _INQUIRY_TIMING_OPTIONAL_KEYS
+)
 _INQUIRY_DETAIL_KEYS = _INQUIRY_LIST_KEYS | {
     "customer_linkage",
     "intake_message",
@@ -168,7 +171,7 @@ _INQUIRY_DETAIL_OPTIONAL_KEYS = frozenset(
         "contact_completion_allowed",
         "offer_preparation_blockers",
     }
-)
+) | _INQUIRY_TIMING_OPTIONAL_KEYS
 _CONTACT_COMPLETENESS_VALUES = frozenset(
     {"complete", "missing_email", "missing_phone", "missing_email_and_phone"}
 )
@@ -722,7 +725,10 @@ def _inquiry(
         if not _INQUIRY_LIST_KEYS <= keys <= allowed:
             _bad_response()
     else:
-        _exact(data, _INQUIRY_SUMMARY_KEYS)
+        keys = set(data)
+        allowed = _INQUIRY_SUMMARY_KEYS | _INQUIRY_TIMING_OPTIONAL_KEYS
+        if not _INQUIRY_SUMMARY_KEYS <= keys <= allowed:
+            _bad_response()
     linkage_raw = data.get("customer_linkage", {})
     try:
         linkage = validate_customer_linkage(_dict(linkage_raw))
