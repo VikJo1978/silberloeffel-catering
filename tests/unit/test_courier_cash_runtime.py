@@ -573,7 +573,6 @@ def test_command_parser_is_exact_and_role_safe() -> None:
         )
 
 
-
 def test_command_parser_covers_strict_validation_edges() -> None:
     base = {
         "contract_version": CONTRACT_VERSION,
