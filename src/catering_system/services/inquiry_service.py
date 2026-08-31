@@ -276,9 +276,7 @@ class InquiryService:
 
         updated = replace(
             current,
-            event_date=event_date
-            if event_date is not _UNSET
-            else current.event_date,  # type: ignore[arg-type]
+            event_date=event_date if event_date is not _UNSET else current.event_date,  # type: ignore[arg-type]
             updated_at=_utc_now(),
             inquiry_source=next_source,
             crm_stage=next_crm,
