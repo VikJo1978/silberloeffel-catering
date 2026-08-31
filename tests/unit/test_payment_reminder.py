@@ -503,6 +503,128 @@ def test_payment_method_change_after_payment_is_forbidden() -> None:
         )
 
 
+def test_payment_completion_correction_preserves_invoice_payment_audit() -> None:
+    _orders, reminders, service = _world()
+    order_id = "11111111-1111-4111-8111-111111111111"
+    service.save(
+        OrderPaymentReminder(
+            order_id=order_id,
+            payment_method="RECHNUNG",
+            invoice_created=True,
+            invoice_number="RE-CORRECT-1",
+            sent_on=date(2026, 7, 1),
+            paid_on=date(2026, 7, 15),
+        ),
+        actor_reference="Alice",
+    )
+    before = reminders.get(order_id)
+    assert before is not None
+    assert before.paid_recorded_at == _NOW
+    assert before.paid_recorded_by == "Alice"
+
+    corrected = service.correct_payment_completion(
+        order_id,
+        correction_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        reason="Zahlung versehentlich als eingegangen markiert",
+        actor_reference="Bob",
+    )
+
+    assert corrected.paid_on is None
+    assert corrected.cash_received is False
+    assert corrected.paid_recorded_at is None
+    assert corrected.payment_state_label != "Bezahlt"
+    assert len(corrected.payment_corrections) == 1
+    event = corrected.payment_corrections[0]
+    assert event.reason == "Zahlung versehentlich als eingegangen markiert"
+    assert event.actor_reference == "Bob"
+    assert event.corrected_at == _NOW
+    assert event.previous_reminder.paid_on == date(2026, 7, 15)
+    assert event.previous_reminder.paid_recorded_at == _NOW
+    assert event.previous_reminder.paid_recorded_by == "Alice"
+
+
+def test_payment_completion_correction_is_idempotent_by_correction_id() -> None:
+    _orders, _reminders, service = _world()
+    order_id = "11111111-1111-4111-8111-111111111111"
+    service.save(
+        OrderPaymentReminder(
+            order_id=order_id,
+            payment_method="RECHNUNG",
+            invoice_created=True,
+            invoice_number="RE-CORRECT-2",
+            sent_on=date(2026, 7, 1),
+            paid_on=date(2026, 7, 15),
+        ),
+        actor_reference="Alice",
+    )
+    correction_id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+    first = service.correct_payment_completion(
+        order_id,
+        correction_id=correction_id,
+        reason="Fehleingabe",
+        actor_reference="Bob",
+    )
+    replay = service.correct_payment_completion(
+        order_id,
+        correction_id=correction_id,
+        reason="Fehleingabe",
+        actor_reference="Bob",
+    )
+
+    assert replay == first
+    assert len(replay.payment_corrections) == 1
+
+    with pytest.raises(ValueError, match="id conflict"):
+        service.correct_payment_completion(
+            order_id,
+            correction_id=correction_id,
+            reason="Anderer Grund",
+            actor_reference="Bob",
+        )
+
+
+def test_payment_completion_correction_requires_recorded_payment() -> None:
+    _orders, _reminders, service = _world()
+    order_id = "11111111-1111-4111-8111-111111111111"
+    service.save(OrderPaymentReminder(order_id=order_id, payment_method="RECHNUNG"))
+
+    with pytest.raises(ValueError, match="not recorded"):
+        service.correct_payment_completion(
+            order_id,
+            correction_id="cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+            reason="Fehleingabe",
+            actor_reference="Alice",
+        )
+
+
+def test_cash_payment_completion_correction_restores_open_cash_state() -> None:
+    _orders, _reminders, service = _world()
+    order_id = "11111111-1111-4111-8111-111111111111"
+    service.save(
+        OrderPaymentReminder(
+            order_id=order_id,
+            payment_method="BAR_VOR_ORT",
+            quittung_printed=True,
+            paid_on=date(2026, 7, 15),
+            cash_received=True,
+        ),
+        actor_reference="Alice",
+    )
+
+    corrected = service.correct_payment_completion(
+        order_id,
+        correction_id="dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        reason="Barzahlung doch nicht erhalten",
+        actor_reference="Bob",
+    )
+
+    assert corrected.paid_on is None
+    assert corrected.cash_received is False
+    assert corrected.quittung_printed is True
+    assert corrected.payment_corrections[0].previous_reminder.cash_received is True
+
+
 def test_invoice_recorded_before_order_revision_requires_correction() -> None:
     orders, reminders, _service = _world()
     order_id = "11111111-1111-4111-8111-111111111111"
