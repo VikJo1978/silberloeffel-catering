@@ -390,7 +390,6 @@ def test_optional_long_text_length_limit_is_enforced() -> None:
         validate_offer_snapshot(payload)
 
 
-
 def test_exact_event_times_are_accepted_without_delivery_window() -> None:
     payload = _valid_snapshot()
     event = cast(dict[str, object], payload["event"])
