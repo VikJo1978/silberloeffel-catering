@@ -60,6 +60,21 @@ class OrderPaymentReminder:
 
 
 @dataclass(frozen=True)
+class PaymentMethodChange:
+    """Append-only audit event for an explicit payment-method switch."""
+
+    change_id: str
+    order_id: str
+    from_method: PaymentMethod
+    to_method: PaymentMethod
+    reason: str
+    actor_reference: str
+    changed_at: datetime
+    retired_task_title: str | None
+    previous_reminder: OrderPaymentReminder
+
+
+@dataclass(frozen=True)
 class PaymentReminderView:
     order_id: str
     payment_method: PaymentMethod | None
@@ -88,6 +103,7 @@ class PaymentReminderView:
     quittung_printed_by: str | None = None
     paid_recorded_at: datetime | None = None
     paid_recorded_by: str | None = None
+    method_changes: tuple[PaymentMethodChange, ...] = ()
 
 
 def _validate_audit_pair(
