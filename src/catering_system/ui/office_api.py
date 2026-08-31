@@ -2279,9 +2279,7 @@ class OfficeApi:
                 contact_phone=_v_optional_str(args.get("contact_phone"), 100),
                 contact_name=_v_optional_str(args.get("contact_name"), 200),
                 company_name=_v_optional_str(args.get("company_name"), 200),
-                event_start_local=_v_optional_local_time(
-                    args.get("event_start_local")
-                ),
+                event_start_local=_v_optional_local_time(args.get("event_start_local")),
                 delivery_time_local=_v_optional_local_time(
                     args.get("delivery_time_local")
                 ),
@@ -3562,8 +3560,7 @@ _UPDATE_ARGS = _ArgKeys(
             "planning_mode",
         }
     ),
-    optional=_INTAKE_OPTIONAL
-    | frozenset({"event_start_local", "delivery_time_local"}),
+    optional=_INTAKE_OPTIONAL | frozenset({"event_start_local", "delivery_time_local"}),
 )
 _VERSION_ARGS = _ArgKeys(
     required=frozenset(),

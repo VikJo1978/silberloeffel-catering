@@ -3702,9 +3702,7 @@ class _RemoteInquiryService:
             current,
             event_date=values["event_date"],
             crm_stage=validate_crm_stage(values["crm_stage"]),
-            time_window_text=values.get(
-                "time_window_text", current.time_window_text
-            ),
+            time_window_text=values.get("time_window_text", current.time_window_text),
             location_text=values["location_text"],
             guest_count_estimate=values["guest_count_estimate"],
             planning_mode=validate_planning_mode(values["planning_mode"]),
