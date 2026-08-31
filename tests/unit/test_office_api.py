@@ -1387,6 +1387,79 @@ def test_payment_reminder_read_write_replay_and_stale_gate(api) -> None:
     assert (status, body["error"]) == (409, "stale_state")
 
 
+def test_payment_method_change_requires_reason_and_preserves_history(api) -> None:
+    base, ids, _db = api
+    order_id = ids["order_unprinted"]
+    detail_url = f"{base}/office/v1/orders/{order_id}"
+    reminder_url = f"{detail_url}/payment-reminder"
+    change_url = f"{detail_url}/payment-method"
+
+    status, created, _h = _post(
+        reminder_url,
+        args={
+            "payment_method": "RECHNUNG",
+            "invoice_created": True,
+            "invoice_number": "RE-METHOD-1",
+            "sent_on": "2026-07-15",
+            "due_on": None,
+            "paid_on": None,
+            "cash_received": False,
+            "actor_reference": "Alice",
+        },
+        expect={"updated_at": None},
+    )
+    assert status == 200
+
+    status, invalid, _h = _post(
+        change_url,
+        args={
+            "new_payment_method": "BAR_VOR_ORT",
+            "reason": "",
+            "actor_reference": "Bob",
+        },
+        expect={"updated_at": created["updated_at"]},
+    )
+    assert (status, invalid["error"]) == (422, "invalid_payment_method_change")
+
+    status, changed, _h = _post(
+        change_url,
+        args={
+            "new_payment_method": "BAR_VOR_ORT",
+            "reason": "Kunde zahlt bei Abholung bar",
+            "actor_reference": "Bob",
+        },
+        expect={"updated_at": created["updated_at"]},
+    )
+    assert status == 200
+
+    status, detail, _h = _get(detail_url)
+    assert status == 200
+    payment = detail["payment_reminder"]
+    assert payment["payment_method"] == "BAR_VOR_ORT"
+    assert payment["invoice_created"] is False
+    assert payment["invoice_number"] is None
+    assert payment["next_step"] == "Quittung vorbereiten/drucken"
+    assert len(payment["method_changes"]) == 1
+    history = payment["method_changes"][0]
+    assert history["from_method"] == "RECHNUNG"
+    assert history["to_method"] == "BAR_VOR_ORT"
+    assert history["reason"] == "Kunde zahlt bei Abholung bar"
+    assert history["actor_reference"] == "Bob"
+    assert history["previous_reminder"]["invoice_number"] == "RE-METHOD-1"
+    assert history["retired_task_title"] is not None
+
+    status, conflict, _h = _post(
+        change_url,
+        args={
+            "new_payment_method": "BAR_VOR_ORT",
+            "reason": "Replay without original command id",
+            "actor_reference": "Bob",
+        },
+        expect={"updated_at": changed["updated_at"]},
+    )
+    assert (status, conflict["error"]) == (409, "payment_method_change_conflict")
+
+
 def test_payment_reminder_rejects_cancelled_order_and_contradictory_facts(api) -> None:
     base, ids, _db = api
     base_args = {
