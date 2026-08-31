@@ -80,6 +80,8 @@ def _offer_version() -> OfferVersion:
         delivery_date_local=DAY,
         delivery_window_start_local=time(16, 0),
         delivery_window_end_local=time(17, 0),
+        event_start_local=time(18, 0),
+        delivery_time_local=time(16, 0),
     )
 
 
@@ -102,6 +104,8 @@ def test_offer_sqlite_roundtrip_preserves_canonical_logistics_timing(
     assert actual.delivery_date_local == DAY
     assert actual.delivery_window_start_local == time(16, 0)
     assert actual.delivery_window_end_local == time(17, 0)
+    assert actual.event_start_local == time(18, 0)
+    assert actual.delivery_time_local == time(16, 0)
     assert actual.charges_definition is not None
     return_plan = actual.charges_definition.return_logistics
     assert return_plan.pickup_window_start_local == time(22, 0)
@@ -126,6 +130,8 @@ def test_order_sqlite_roundtrip_preserves_canonical_delivery_window(
         delivery_date_local=DAY,
         delivery_window_start_local=time(16, 0),
         delivery_window_end_local=time(17, 0),
+        event_start_local=time(18, 0),
+        delivery_time_local=time(16, 0),
     )
     repo.save_order_with_initial_version(order, version)
     assert repo.get_order_version("order-version-1") == version
