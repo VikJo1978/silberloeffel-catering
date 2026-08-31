@@ -1460,7 +1460,9 @@ def test_payment_method_change_requires_reason_and_preserves_history(api) -> Non
     assert (status, conflict["error"]) == (409, "payment_method_change_conflict")
 
 
-def test_payment_completion_correction_requires_reason_and_preserves_history(api) -> None:
+def test_payment_completion_correction_requires_reason_and_preserves_history(
+    api,
+) -> None:
     base, ids, _db = api
     order_id = ids["order_unprinted"]
     detail_url = f"{base}/office/v1/orders/{order_id}"
