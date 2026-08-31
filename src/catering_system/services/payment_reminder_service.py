@@ -21,6 +21,8 @@ from catering_system.repositories.payment_reminder_repository import (
 )
 
 _BERLIN = ZoneInfo("Europe/Berlin")
+
+
 class PaymentReminderService:
     def __init__(
         self,
