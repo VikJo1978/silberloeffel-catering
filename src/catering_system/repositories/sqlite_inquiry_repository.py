@@ -365,6 +365,12 @@ class SQLiteInquiryRepository:
                 None,
                 None,
                 inquiry.fulfillment_mode,
+                inquiry.event_start_local.isoformat(timespec="minutes")
+                if inquiry.event_start_local is not None
+                else None,
+                inquiry.delivery_time_local.isoformat(timespec="minutes")
+                if inquiry.delivery_time_local is not None
+                else None,
             )
         invoice_json = None
         delivery_json = None
@@ -401,6 +407,12 @@ class SQLiteInquiryRepository:
             invoice_json,
             delivery_json,
             inquiry.fulfillment_mode,
+            inquiry.event_start_local.isoformat(timespec="minutes")
+            if inquiry.event_start_local is not None
+            else None,
+            inquiry.delivery_time_local.isoformat(timespec="minutes")
+            if inquiry.delivery_time_local is not None
+            else None,
         )
 
     def find_by_source_and_external_ref(
