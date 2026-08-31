@@ -16,6 +16,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from catering_system.domain.offer_charges import ReturnLogisticsDefinition
+from catering_system.domain.courier_cash_handoff import CourierCashProjection
 from catering_system.domain.wochenuebersicht import (
     Wochenuebersicht,
     WochenuebersichtEntry,
@@ -27,6 +28,7 @@ from catering_system.repositories.order_repository import OrderRepository
 from catering_system.repositories.order_operational_pause_repository import (
     OrderOperationalPauseRepository,
 )
+from catering_system.services.courier_cash_context_service import CourierCashContextService
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
 from catering_system.ui.operational_pause_labels import pause_reason_label
 from catering_system.ui.pickup_signal import (
@@ -193,6 +195,9 @@ def _return_logistics_projection(
 def _order_feed_entry_projection(
     entry: WochenuebersichtEntry,
     return_logistics: ReturnLogisticsDefinition | None,
+    cash_handoff: CourierCashProjection | None = None,
+    *,
+    include_cash_handoff: bool = False,
 ) -> dict[str, object]:
     projection: dict[str, object] = {
         "order_id": entry.order_id,
@@ -207,6 +212,10 @@ def _order_feed_entry_projection(
     delivery_window = _delivery_window_projection(entry)
     if delivery_window is not None:
         projection["delivery_window"] = delivery_window
+    if include_cash_handoff:
+        projection["cash_handoff"] = (
+            cash_handoff.to_json() if cash_handoff is not None else None
+        )
     return projection
 
 
@@ -215,6 +224,7 @@ def render_order_feed_json(
     entries: tuple[WochenuebersichtEntry, ...],
     return_logistics_by_order_id: Mapping[str, ReturnLogisticsDefinition | None]
     | None = None,
+    cash_handoff_by_order_id: Mapping[str, CourierCashProjection | None] | None = None,
 ) -> bytes:
     """Pure renderer: per-date entries → courier order feed document (v3).
 
@@ -224,10 +234,17 @@ def render_order_feed_json(
     OrderCommercialSnapshot. Prices and courier execution state stay out.
     """
     return_logistics = return_logistics_by_order_id or {}
+    include_cash_handoff = cash_handoff_by_order_id is not None
+    cash_handoff = cash_handoff_by_order_id or {}
     document = {
         "date": feed_date.isoformat(),
         "orders": [
-            _order_feed_entry_projection(e, return_logistics.get(e.order_id))
+            _order_feed_entry_projection(
+                e,
+                return_logistics.get(e.order_id),
+                cash_handoff.get(e.order_id),
+                include_cash_handoff=include_cash_handoff,
+            )
             for e in entries
         ],
     }
@@ -251,6 +268,7 @@ def make_kiosk_handler(
     *,
     pause_repository: OrderOperationalPauseRepository | None = None,
     commercial_snapshot_repository: OrderCommercialSnapshotRepository | None = None,
+    courier_cash_context_service: CourierCashContextService | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     service = WochenuebersichtService(
         order_repository, pause_repository=pause_repository
@@ -290,8 +308,21 @@ def make_kiosk_handler(
                         return_logistics_by_order_id[entry.order_id] = (
                             snapshot.return_logistics if snapshot is not None else None
                         )
+                cash_handoff_by_order_id: dict[
+                    str, CourierCashProjection | None
+                ] | None = None
+                if courier_cash_context_service is not None:
+                    cash_handoff_by_order_id = {
+                        entry.order_id: courier_cash_context_service.projection(
+                            entry.order_id
+                        )
+                        for entry in entries
+                    }
                 payload = render_order_feed_json(
-                    feed_date, entries, return_logistics_by_order_id
+                    feed_date,
+                    entries,
+                    return_logistics_by_order_id,
+                    cash_handoff_by_order_id,
                 )
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -340,6 +371,7 @@ def create_kiosk_server(
     *,
     pause_repository: OrderOperationalPauseRepository | None = None,
     commercial_snapshot_repository: OrderCommercialSnapshotRepository | None = None,
+    courier_cash_context_service: CourierCashContextService | None = None,
 ) -> HTTPServer:
     # Single-threaded on purpose: the shared sqlite3 connection must stay on the
     # thread that serves requests (bring-up bug, WORKLOG Entry 048). A read-only
@@ -352,6 +384,7 @@ def create_kiosk_server(
             pickup_signal,
             pause_repository=pause_repository,
             commercial_snapshot_repository=commercial_snapshot_repository,
+            courier_cash_context_service=courier_cash_context_service,
         ),
     )
 
@@ -390,13 +423,26 @@ def main() -> None:
     from catering_system.repositories.sqlite_order_commercial_snapshot_repository import (
         SQLiteOrderCommercialSnapshotRepository,
     )
+    from catering_system.repositories.sqlite_courier_cash_repository import (
+        SQLiteCourierCashRepository,
+    )
     from catering_system.repositories.sqlite_order_repository import (
         SQLiteOrderRepository,
+    )
+    from catering_system.repositories.sqlite_payment_reminder_repository import (
+        SQLitePaymentReminderRepository,
     )
 
     order_repo = SQLiteOrderRepository(args.db)
     pause_repo = SQLiteOrderOperationalPauseRepository(args.db)
     commercial_snapshot_repo = SQLiteOrderCommercialSnapshotRepository(args.db)
+    payment_repo = SQLitePaymentReminderRepository(args.db)
+    courier_cash_repo = SQLiteCourierCashRepository(args.db)
+    courier_cash_context_service = CourierCashContextService(
+        order_repo,
+        payment_repo,
+        courier_cash_repo,
+    )
     server = create_kiosk_server(
         order_repo,
         args.host,
@@ -404,6 +450,7 @@ def main() -> None:
         pickup_signal,
         pause_repository=pause_repo,
         commercial_snapshot_repository=commercial_snapshot_repo,
+        courier_cash_context_service=courier_cash_context_service,
     )
     if pickup_signal is not None:
         pickup_signal.start()
