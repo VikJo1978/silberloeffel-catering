@@ -534,6 +534,18 @@ def test_invoice_recorded_before_order_revision_requires_correction() -> None:
     assert view.next_step_due_on == revision.created_at.date()
     assert view.invoice_number == "RE-CORR-1"
 
+    current = orders.get_order(order_id)
+    assert current is not None
+    orders.update_order(
+        replace(
+            current,
+            effective_order_version_id=revision.order_version_id,
+            candidate_order_version_id=None,
+            updated_at=revision.created_at,
+        )
+    )
+    assert service.view(order_id).next_step == "Rechnungskorrektur erforderlich"
+
 
 def test_quittung_recorded_before_order_revision_requires_reprint() -> None:
     orders, reminders, _service = _world()
