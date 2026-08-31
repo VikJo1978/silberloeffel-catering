@@ -28,7 +28,9 @@ from catering_system.repositories.order_repository import OrderRepository
 from catering_system.repositories.order_operational_pause_repository import (
     OrderOperationalPauseRepository,
 )
-from catering_system.services.courier_cash_context_service import CourierCashContextService
+from catering_system.services.courier_cash_context_service import (
+    CourierCashContextService,
+)
 from catering_system.services.wochenuebersicht_service import WochenuebersichtService
 from catering_system.ui.operational_pause_labels import pause_reason_label
 from catering_system.ui.pickup_signal import (
@@ -308,9 +310,9 @@ def make_kiosk_handler(
                         return_logistics_by_order_id[entry.order_id] = (
                             snapshot.return_logistics if snapshot is not None else None
                         )
-                cash_handoff_by_order_id: dict[
-                    str, CourierCashProjection | None
-                ] | None = None
+                cash_handoff_by_order_id: (
+                    dict[str, CourierCashProjection | None] | None
+                ) = None
                 if courier_cash_context_service is not None:
                     cash_handoff_by_order_id = {
                         entry.order_id: courier_cash_context_service.projection(
