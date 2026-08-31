@@ -90,9 +90,7 @@ _EVENT_ROLES = {
     "BAR_NOT_RECEIVED": frozenset({"DRIVER", "CHEF"}),
     "BAR_HANDED_TO_CHEF": frozenset({"DRIVER"}),
     "BAR_RECEIVED_FROM_DRIVER_BY_CHEF": frozenset({"CHEF"}),
-    "BAR_RECEIVED_DIRECT_BY_CHEF_AND_QUITTUNG_HANDED_TO_CUSTOMER": frozenset(
-        {"CHEF"}
-    ),
+    "BAR_RECEIVED_DIRECT_BY_CHEF_AND_QUITTUNG_HANDED_TO_CUSTOMER": frozenset({"CHEF"}),
     "BAR_HANDOFF_CORRECTION": frozenset({"CHEF", "OFFICE"}),
 }
 
