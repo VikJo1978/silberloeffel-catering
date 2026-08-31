@@ -29,6 +29,8 @@ class WochenuebersichtEntry:
     delivery_date_local: date | None = None
     delivery_window_start_local: time | None = None
     delivery_window_end_local: time | None = None
+    delivery_time_local: time | None = None
+    event_start_local: time | None = None
     operational_pause_active: bool = False
     operational_pause_reason_code: str | None = None
     operational_pause_note: str | None = None
@@ -63,6 +65,8 @@ def entry_from_effective(
         delivery_date_local=effective.delivery_date_local,
         delivery_window_start_local=effective.delivery_window_start_local,
         delivery_window_end_local=effective.delivery_window_end_local,
+        delivery_time_local=effective.delivery_time_local,
+        event_start_local=effective.event_start_local,
         operational_pause_active=operational_pause_active,
         operational_pause_reason_code=operational_pause_reason_code,
         operational_pause_note=operational_pause_note,
