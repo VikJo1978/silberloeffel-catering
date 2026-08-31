@@ -201,7 +201,8 @@ def test_payment_reminder_parser_accepts_method_change_history() -> None:
     assert correction.correction_id == correction_id
     assert correction.reason == "Fehleingabe"
     assert correction.actor_reference == "Clara"
-    assert correction.previous_reminder.paid_on == date(2026, 7, 16)
+    assert correction.previous_reminder.paid_on is not None
+    assert correction.previous_reminder.paid_on.isoformat() == "2026-07-16"
     assert correction.previous_reminder.paid_recorded_by == "Alice"
 
 
@@ -828,8 +829,7 @@ def test_list_tasks_accepts_valid_payload() -> None:
 
 
 def test_list_calendar_accepts_valid_payload() -> None:
-    from datetime import date
-
+    
     entity_id = str(uuid.uuid4())
     inquiry_id = str(uuid.uuid4())
     payload = {
