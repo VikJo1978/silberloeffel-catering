@@ -104,7 +104,9 @@ class SQLiteCourierCashRepository:
             raise
 
     @classmethod
-    def from_connection(cls, connection: sqlite3.Connection) -> SQLiteCourierCashRepository:
+    def from_connection(
+        cls, connection: sqlite3.Connection
+    ) -> SQLiteCourierCashRepository:
         repo = cls.__new__(cls)
         repo._conn = connection
         repo._conn.row_factory = sqlite3.Row
