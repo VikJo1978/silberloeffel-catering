@@ -11,7 +11,10 @@ from zoneinfo import ZoneInfo
 
 from catering_system.domain.catalog import AllergenCode, validate_allergen_codes
 from catering_system.domain.inquiry import PlanningMode, validate_planning_mode
-from catering_system.domain.logistics_timing import validate_optional_service_window
+from catering_system.domain.logistics_timing import (
+    validate_optional_local_time,
+    validate_optional_service_window,
+)
 from catering_system.domain.offer_budget_definition import OfferBudgetDefinition
 from catering_system.domain.offer_charges import OfferChargesDefinition
 from catering_system.domain.order_payment_reminder import (
@@ -245,6 +248,8 @@ class OfferVersion:
     delivery_date_local: date | None = None
     delivery_window_start_local: time | None = None
     delivery_window_end_local: time | None = None
+    delivery_time_local: time | None = None
+    event_start_local: time | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.offer_version_id, "offer_version_id")
@@ -271,6 +276,21 @@ class OfferVersion:
             self.delivery_window_end_local,
             label="delivery window",
         )
+        validate_optional_local_time(
+            self.delivery_time_local, label="delivery exact time"
+        )
+        validate_optional_local_time(self.event_start_local, label="event start")
+        if self.delivery_time_local is not None and any(
+            value is not None
+            for value in (
+                self.delivery_date_local,
+                self.delivery_window_start_local,
+                self.delivery_window_end_local,
+            )
+        ):
+            raise ValueError(
+                "delivery exact time and delivery window are mutually exclusive"
+            )
         _require_bounded_text(
             self.payment_customer_visible_text,
             "payment_customer_visible_text",
