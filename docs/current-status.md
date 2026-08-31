@@ -1,6 +1,6 @@
 # Current status
 
-Operational truth last updated: **2026-08-27**.
+Operational truth last updated: **2026-08-31**.
 
 This file is a **current operational snapshot**, not a deployment diary. Historical
 details remain available in Git history, merged pull requests, issue history and the
@@ -14,9 +14,9 @@ deployment has been checked.
 
 | Item | Value |
 |---|---|
-| `origin/main` HEAD before this docs update | `12cae6c8c3f1f8c7a59dfd42617f3f9d5b95854f` (`12cae6c`) |
-| Commit | `Add readable manual task detail from Arbeitszentrale (#195)` |
-| CI on that exact application SHA | **green** — run `33054612576` |
+| `origin/main` HEAD before this docs update | `ed78e8211a4edf293e695aa770aa8a3752b20bd7` (`ed78e82`) |
+| Commit | `Implement Courier cash handoff runtime V1 (#213)` |
+| CI immediately before #213 merge | **green** — PR head `79d2316`, run `33395580432` |
 | Open issues after backlog cleanup | **0** |
 | Open pull requests after backlog cleanup | **0** |
 | Working release flow | branch → PR → green CI → merge → production fast-forward |
@@ -34,12 +34,12 @@ Production host: `debiancatering`.
 |---|---|
 | Application repository | `/home/viktor/projects/silberloeffel-catering` |
 | Core DB | `/home/viktor/catering-runtime/core.db` |
-| Deployed application commit | `12cae6c8c3f1f8c7a59dfd42617f3f9d5b95854f` (`12cae6c`) |
+| Deployed application commit | `ed78e8211a4edf293e695aa770aa8a3752b20bd7` (`ed78e82`) |
 | Relationship to application `main` before this docs-only update | **matches** |
-| Latest functional deployment scope | Office Panel only |
-| Latest functional verification | manual task detail opened successfully in production |
+| Latest functional deployment scope | Courier cash handoff rollout across Core Office API, Kiosk, Office Panel and Courier app |
+| Latest functional verification | machine-route auth gates, shared bearer, Kiosk order-feed, Courier service and service health verified; no real BAR order exists yet for E2E |
 | Office Panel unauthenticated health behavior | HTTP `303` redirect, expected |
-| Office API during the preceding panel deploy smoke | `active`; API was not restarted by the latest panel-only slices |
+| Office API after cash rollout | `active` on `100.109.6.74:8084`, restarted with the cash service bearer configured |
 
 The latest application change (#195) was deployed after its post-merge CI passed.
 The operator then verified the manual-task detail flow interactively in production.
@@ -47,6 +47,34 @@ No database migration was part of #188, #190, #192 or #194/#195.
 
 This documentation commit must **not** be treated as a reason to restart production
 services. It changes operational documentation only.
+
+
+## Courier cash handoff production rollout
+
+The frozen Courier cash-handoff contract is now activated on the Lenovo production
+host.
+
+- Core is deployed at `ed78e8211a4edf293e695aa770aa8a3752b20bd7`
+  (`ed78e82`, PR #213).
+- Courier is deployed at `f3419a40cabd53bd9badc900ddf40a9426e0a863`
+  (`f3419a4`, courier-app PR #16).
+- `catering-office-api` is active on `100.109.6.74:8084`.
+- `catering-courier-app` is active on `0.0.0.0:8090`.
+- `catering-kiosk` is active on `0.0.0.0:8082` and loaded the new
+  `cash_handoff` projection code.
+- Core and Courier use the same dedicated `COURIER_CASH_SERVICE_TOKEN`; its
+  value remains only in the production environment files.
+- An unauthenticated POST to the cash machine route returns `401`.
+- The same route with the configured bearer and an intentionally empty payload
+  reaches request validation and returns `400`, proving authentication and
+  connectivity without creating a cash event.
+- Kiosk root and order-feed checks return `200`; the kiosk journal records
+  `pickup signal refresh succeeded`.
+- Production currently contains zero `BAR_VOR_ORT` payment reminders, so a
+  truthful end-to-end cash handoff cannot yet be exercised.
+
+No synthetic BAR order was created in production merely to force the last E2E
+step. The first real BAR order is the production E2E candidate.
 
 ## Current Office task workflow
 
@@ -154,22 +182,18 @@ history, not in this living status page.
 
 ## Next action
 
-**Run the artificial end-to-end pre-launch validation.**
+**Exercise the Courier cash handoff on the first real `BAR_VOR_ORT` order.**
 
-The next validation should exercise one coherent catering flow through the live
-application boundaries, including at least:
+Do not create synthetic production customer/order data solely for this check.
+When the first real BAR order exists, verify the coherent path:
 
-1. inquiry creation and customer/contact handling;
-2. offer preparation and the relevant document flow;
-3. offer acceptance / conversion to order;
-4. order operational state and READY_TO_SEND path;
-5. kitchen/print projection and cash-payment warning where applicable;
-6. kiosk/logistics projection for a suitable order;
-7. manual task creation, priority, Bezug search, Arbeitszentrale display, task detail
-   and completion;
-8. permission boundaries for the actions used;
-9. post-flow DB integrity and service/journal checks.
+1. current Quittung is printed;
+2. driver records receipt from the customer and Quittung handoff;
+3. driver records handoff to the chef;
+4. chef confirms receipt from the driver;
+5. Core reaches `FINAL_PAID`;
+6. journals, idempotency state and both SQLite databases remain healthy.
 
-Any defects found by that E2E become concrete issues. Only after that validation should
-the remaining infrastructure hardening be promoted to the front of the queue, especially
-branch protection and backup-health alerting.
+Until such an order exists, the cash rollout is operationally complete at the
+infrastructure/contract level. General application E2E validation may continue
+independently.
