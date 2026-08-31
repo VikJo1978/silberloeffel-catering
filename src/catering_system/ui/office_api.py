@@ -53,6 +53,10 @@ from catering_system.domain.customer_gastronomic_preference import (
     validate_preference_source,
 )
 from catering_system.domain.customer_order_history import CustomerOrderHistoryEntry
+from catering_system.domain.courier_cash_handoff import (
+    CourierCashCommand,
+    UnsupportedCourierCashContractVersion,
+)
 from catering_system.domain.customer_document_eligibility import (
     CustomerDocumentCreationBlocked,
 )
@@ -126,6 +130,9 @@ from catering_system.repositories.sqlite_catalog_repository import (
     SQLiteCatalogRepository,
 )
 from catering_system.repositories.sqlite_chat_repository import SQLiteChatRepository
+from catering_system.repositories.sqlite_courier_cash_repository import (
+    SQLiteCourierCashRepository,
+)
 from catering_system.repositories.sqlite_configurator_handoff_repository import (
     SQLiteConfiguratorHandoffRepository,
 )
@@ -189,6 +196,11 @@ from catering_system.services.chat_service import (
     ChatNotFoundError,
     ChatReferenceNotFoundError,
     ChatService,
+)
+from catering_system.services.courier_cash_context_service import CourierCashContextService
+from catering_system.services.courier_cash_service import (
+    CourierCashCommandError,
+    CourierCashService,
 )
 from catering_system.services.customer_order_history_service import (
     CustomerOrderHistoryCustomerNotFoundError,
@@ -293,6 +305,8 @@ _log = logging.getLogger(__name__)
 CLIENT_ID = "office-panel"  # per-client token identity (pack §6.1)
 CONFIGURATOR_HANDOFF_SERVICE_ID = "configurator-handoff"
 _MAX_BODY_BYTES = 64 * 1024
+_MAX_COURIER_CASH_BODY_BYTES = 16 * 1024
+_COURIER_CASH_PATH = "/machine/v1/courier/cash-events"
 _MAX_PREPARE_OFFER_BODY_BYTES = 256 * 1024
 _MAX_RESPONSE_BYTES = 512 * 1024  # pack §4.0 hard response cap
 _MAX_Q_CHARS = 200
@@ -774,6 +788,7 @@ class OfficeApi:
         self.payment_reminders = SQLitePaymentReminderRepository.from_connection(
             connection
         )
+        self.courier_cash = SQLiteCourierCashRepository.from_connection(connection)
         self.chat = SQLiteChatRepository.from_connection(connection)
         self.manual_tasks = SQLiteManualTaskRepository.from_connection(connection)
         self.confirmation_documents = (
@@ -826,6 +841,18 @@ class OfficeApi:
             self.payment_reminders,
             self.orders,
             today=views.berlin_today,
+        )
+        self.courier_cash_context_service = CourierCashContextService(
+            self.orders,
+            self.payment_reminders,
+            self.courier_cash,
+        )
+        self.courier_cash_service = CourierCashService(
+            self.orders,
+            self.payment_reminders,
+            self.courier_cash,
+            self.payment_reminder_service,
+            self.courier_cash_context_service,
         )
         self.chat_service = ChatService(
             self.chat,
@@ -887,6 +914,7 @@ class OfficeApi:
             self.orders,
             self.payment_reminder_service,
             today=views.berlin_today,
+            courier_cash_repository=self.courier_cash,
         )
         self.calendar_projection_service = CalendarProjectionService(
             self.inquiries,
