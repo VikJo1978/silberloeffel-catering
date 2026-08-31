@@ -832,13 +832,25 @@ def _payment_form(
         return ""
     if not context.can("orders.payment.reminder"):
         return ""
-    options = ['<option value="">Bitte wählen</option>']
-    for method in PAYMENT_METHODS:
-        selected = " selected" if payment.payment_method == method else ""
-        options.append(
-            f'<option value="{method}"{selected}>'
-            f"{_e(PAYMENT_METHOD_LABELS[method])}</option>"
+
+    if payment.payment_method is None:
+        options = ['<option value="">Bitte wählen</option>']
+        for method in PAYMENT_METHODS:
+            options.append(
+                f'<option value="{method}">{_e(PAYMENT_METHOD_LABELS[method])}</option>'
+            )
+        method_field = (
+            '<p><label>Zahlungsart*</label>'
+            '<select name="payment_method" required>'
+            f"{''.join(options)}</select></p>"
         )
+    else:
+        method_field = (
+            f"<p><strong>Zahlungsart:</strong> {_e(payment.payment_method_label)}</p>"
+            f'<input type="hidden" name="payment_method" '
+            f'value="{_e(payment.payment_method)}">'
+        )
+
     quittung = ""
     if payment.payment_method == "BAR_VOR_ORT":
         quittung = (
@@ -863,9 +875,8 @@ def _payment_form(
         '<details class="order-payment-edit"><summary>Zahlungsdaten bearbeiten</summary>'
         f'<form method="post" action="/order/{_e(order.order_id)}/payment-reminder">'
         f"{forms.csrf_input}{forms.payment_command_fields}<fieldset>"
-        '<p><label>Zahlungsart*</label><select name="payment_method" required>'
-        f"{''.join(options)}</select></p>"
-        f'<p><label><input type="checkbox" name="invoice_created" value="1"'
+        + method_field
+        + f'<p><label><input type="checkbox" name="invoice_created" value="1"'
         f"{' checked' if payment.invoice_created else ''}> "
         "Rechnung in der Buchhaltung erstellt</label></p>"
         f'<p><label>Rechnungsnummer</label><input name="invoice_number" '
@@ -882,6 +893,79 @@ def _payment_form(
         + escalation
         + '<p><button type="submit">Zahlungshinweis speichern</button></p>'
         "</fieldset></form></details>"
+    )
+
+
+def _payment_method_change_form(
+    order: Order,
+    payment: PaymentReminderView,
+    forms: OrderDetailFormFields,
+    *,
+    context: OfficePageContext,
+) -> str:
+    if (
+        order.cancelled_at is not None
+        or not context.can("orders.payment.reminder")
+        or payment.payment_method is None
+        or payment.paid_on is not None
+        or payment.cash_received
+    ):
+        return ""
+    options = ['<option value="">Neue Zahlungsart wählen</option>']
+    for method in PAYMENT_METHODS:
+        if method == payment.payment_method:
+            continue
+        options.append(
+            f'<option value="{method}">{_e(PAYMENT_METHOD_LABELS[method])}</option>'
+        )
+    return (
+        '<details class="order-payment-method-change">'
+        "<summary>Zahlungsart ändern</summary>"
+        f'<form method="post" action="/order/{_e(order.order_id)}/payment-method">'
+        f"{forms.csrf_input}{forms.payment_method_command_fields}<fieldset>"
+        '<p><label>Neue Zahlungsart*</label>'
+        '<select name="new_payment_method" required>'
+        f"{''.join(options)}</select></p>"
+        '<p><label>Grund*</label>'
+        '<textarea name="reason" maxlength="500" required></textarea></p>'
+        '<p class="order-context-note">'
+        "Die bisherige Zahlungsart und ihre Dokument-/Reminder-Fakten "
+        "bleiben in der Historie erhalten.</p>"
+        '<p><button type="submit">Zahlungsart ändern</button></p>'
+        "</fieldset></form></details>"
+    )
+
+
+def _payment_method_history(payment: PaymentReminderView) -> str:
+    if not payment.method_changes:
+        return ""
+    rows: list[str] = []
+    for change in payment.method_changes:
+        previous = change.previous_reminder
+        old_facts: list[str] = []
+        if previous.invoice_number:
+            old_facts.append(f"Rechnung {previous.invoice_number}")
+        if previous.sent_on is not None:
+            old_facts.append(f"versendet {previous.sent_on.strftime('%d.%m.%Y')}")
+        if previous.quittung_printed:
+            old_facts.append("Quittung gedruckt")
+        if change.retired_task_title:
+            old_facts.append(f"Aufgabe beendet: {change.retired_task_title}")
+        details = " · ".join(old_facts) if old_facts else "Keine Dokumentfakten"
+        rows.append(
+            "<li>"
+            f"<strong>{_e(PAYMENT_METHOD_LABELS[change.from_method])} → "
+            f"{_e(PAYMENT_METHOD_LABELS[change.to_method])}</strong>"
+            f" · {_e(change.changed_at.strftime('%d.%m.%Y · %H:%M'))}"
+            f" · {_e(change.actor_reference)}"
+            f"<br>Grund: {_e(change.reason)}"
+            f"<br>{_e(details)}"
+            "</li>"
+        )
+    return (
+        '<details class="order-payment-method-history">'
+        f"<summary>Zahlungsarten-Historie ({len(rows)})</summary>"
+        f"<ul>{''.join(rows)}</ul></details>"
     )
 
 
@@ -958,6 +1042,8 @@ def _payment_card(
         '<div class="order-payment-next"><span>Nächste Zahlungsaufgabe</span>'
         f"<strong>{_e(next_step)}</strong></div>"
         + _payment_form(order, payment, forms, context=context)
+        + _payment_method_change_form(order, payment, forms, context=context)
+        + _payment_method_history(payment)
         + "</section>"
     )
 
