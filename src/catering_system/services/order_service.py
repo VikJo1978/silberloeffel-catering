@@ -218,9 +218,7 @@ class OrderService:
                 else None
             ),
             event_start_local=(
-                latest_version.event_start_local
-                if latest_version is not None
-                else None
+                latest_version.event_start_local if latest_version is not None else None
             ),
         )
         context = _operational_context_for_new_version(
