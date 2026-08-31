@@ -33,9 +33,7 @@ jobs:
       - name: Lint
         run: |
           uv run ruff check src tests infra
-          uv run ruff format --diff \
-            tests/helpers/courier_cash_handoff_contract.py \
-            tests/unit/test_issue202_courier_cash_handoff_contract.py
+          uv run ruff format --check src tests infra
       - name: Type-check production code
         run: uv run mypy src/catering_system
       - name: Test Python and enforce coverage
