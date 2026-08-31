@@ -48,7 +48,9 @@ from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepo
 from catering_system.repositories.sqlite_payment_reminder_repository import (
     SQLitePaymentReminderRepository,
 )
-from catering_system.services.courier_cash_context_service import CourierCashContextService
+from catering_system.services.courier_cash_context_service import (
+    CourierCashContextService,
+)
 from catering_system.services.courier_cash_service import (
     CourierCashCommandError,
     CourierCashService,
@@ -181,9 +183,7 @@ def test_context_projection_distinguishes_current_and_not_ready_quittung(
     tmp_path: Path,
 ) -> None:
     db = tmp_path / "core.db"
-    connection, _orders, _payments, _cash, _payment, context, _service = _seed_world(
-        db
-    )
+    connection, _orders, _payments, _cash, _payment, context, _service = _seed_world(db)
     ready = context.projection(_ORDER_ID)
     assert ready is not None
     assert ready.quittung_status == QUITTUNG_PRINTED_CURRENT
@@ -368,7 +368,10 @@ def test_stale_revision_and_context_fail_before_mutation(tmp_path: Path) -> None
     with pytest.raises(CourierCashCommandError) as exc_context:
         service.process(stale_context)
     assert exc_context.value.code == "stale_cash_context"
-    assert connection.execute("SELECT COUNT(*) FROM courier_cash_events").fetchone()[0] == 0
+    assert (
+        connection.execute("SELECT COUNT(*) FROM courier_cash_events").fetchone()[0]
+        == 0
+    )
     connection.close()
 
 
@@ -425,7 +428,10 @@ def test_privileged_correction_preserves_history_and_forces_manual_review(
 
     after_context = context.projection(_ORDER_ID)
     assert after_context is not None
-    assert after_context.cash_execution_context_id != before_context.cash_execution_context_id
+    assert (
+        after_context.cash_execution_context_id
+        != before_context.cash_execution_context_id
+    )
     latest = cash.get_latest_for_order(_ORDER_ID)
     assert latest is not None and latest.to_state == STATE_MANUAL_REVIEW
 
