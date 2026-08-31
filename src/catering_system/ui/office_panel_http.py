@@ -2669,7 +2669,20 @@ def make_office_panel_handler(
                 self._delete_order(order_id)
                 return
             elif action == "payment-reminder":
-                panel.save_payment_reminder(order_id, self._form())
+                auth = self._request_auth
+                actor_reference = "office-panel"
+                if (
+                    auth is not None
+                    and auth.kind == "employee"
+                    and auth.employee is not None
+                ):
+                    account = auth.employee.account
+                    actor_reference = f"{account.display_name} [{account.id}]"
+                panel.save_payment_reminder(
+                    order_id,
+                    self._form(),
+                    actor_reference=actor_reference,
+                )
             elif action == "confirmation-document":
                 panel.prepare_confirmation_document(order_id, self._form())
             elif action == "pause":

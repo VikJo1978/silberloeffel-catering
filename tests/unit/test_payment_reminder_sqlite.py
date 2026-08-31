@@ -65,10 +65,21 @@ def test_sqlite_round_trip_and_owner_constraint(tmp_path: Path) -> None:
         sent_on=date(2026, 7, 15),
         due_on=date(2026, 7, 22),
         updated_at=datetime(2026, 7, 15, tzinfo=UTC),
+        invoice_created_at=datetime(2026, 7, 15, 8, 0, tzinfo=UTC),
+        invoice_created_by="Alice",
+        invoice_sent_recorded_at=datetime(2026, 7, 15, 8, 5, tzinfo=UTC),
+        invoice_sent_recorded_by="Alice",
+        payment_reminder_sent_at=datetime(2026, 7, 30, 9, 0, tzinfo=UTC),
+        payment_reminder_sent_by="Bob",
+        mahnung_sent_at=datetime(2026, 8, 6, 9, 0, tzinfo=UTC),
+        mahnung_sent_by="Bob",
     )
 
     reminders.save(row)
 
+    assert reminders.get(order.order_id) == row
+    reminders.close()
+    reminders = SQLitePaymentReminderRepository(db)
     assert reminders.get(order.order_id) == row
     orphan = OrderPaymentReminder(
         order_id="99999999-9999-4999-8999-999999999999",

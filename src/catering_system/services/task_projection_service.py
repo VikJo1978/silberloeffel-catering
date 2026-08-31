@@ -169,7 +169,7 @@ class TaskProjectionService:
                 continue
             if payment.next_step is None:
                 continue
-            due_at = payment.due_on
+            due_at = payment.next_step_due_on
             overdue = due_at is not None and due_at < operating_today
             tasks.append(
                 (

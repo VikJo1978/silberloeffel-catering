@@ -3190,6 +3190,9 @@ class OfficeApi:
         if expected_at != actual_at:
             raise ApiError(409, "stale_state")
         try:
+            actor_reference = (
+                _v_optional_str(args.get("actor_reference"), 200) or CLIENT_ID
+            )
             view = self.payment_reminder_service.save(
                 OrderPaymentReminder(
                     order_id=order.order_id,
@@ -3203,7 +3206,12 @@ class OfficeApi:
                     paid_on=_v_optional_date(args["paid_on"]),
                     cash_received=_v_bool(args["cash_received"]),
                     quittung_printed=_v_bool(args.get("quittung_printed", False)),
-                )
+                ),
+                actor_reference=actor_reference,
+                mark_payment_reminder_sent=_v_bool(
+                    args.get("payment_reminder_sent", False)
+                ),
+                mark_mahnung_sent=_v_bool(args.get("mahnung_sent", False)),
             )
         except ValueError as exc:
             raise ApiError(422, "invalid_payment_reminder") from exc
@@ -3475,7 +3483,14 @@ _PAYMENT_REMINDER_ARGS = _ArgKeys(
             "cash_received",
         }
     ),
-    optional=frozenset({"quittung_printed"}),
+    optional=frozenset(
+        {
+            "quittung_printed",
+            "payment_reminder_sent",
+            "mahnung_sent",
+            "actor_reference",
+        }
+    ),
 )
 _CONFIRMATION_DOCUMENT_ARGS = _ArgKeys(required=frozenset({"created_by"}))
 _CONFIRMATION_DOCUMENT_SEND_ARGS = _ArgKeys(
