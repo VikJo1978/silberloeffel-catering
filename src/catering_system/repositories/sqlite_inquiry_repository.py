@@ -252,6 +252,16 @@ class SQLiteInquiryRepository:
             fulfillment_mode=validate_fulfillment_mode(
                 row[25] if len(row) > 25 and row[25] is not None else "UNKNOWN"
             ),
+            event_start_local=(
+                time.fromisoformat(row[26])
+                if len(row) > 26 and row[26] is not None
+                else None
+            ),
+            delivery_time_local=(
+                time.fromisoformat(row[27])
+                if len(row) > 27 and row[27] is not None
+                else None
+            ),
         )
 
     @staticmethod
