@@ -3337,7 +3337,13 @@ class OfficePanel:
             inquiry_source="phone_by_office",
             crm_stage=CRM_PIPELINE[0],
             customer_linkage={},
-            time_window_text="",
+            # No editable legacy timing field in the UI. Keep a compatibility
+            # text for older internal projections/clients, using the exact event
+            # start when available and otherwise accepting an older submitted value.
+            time_window_text=(
+                form.get("event_start_local", "").strip()
+                or form.get("time_window_text", "").strip()
+            ),
             location_text=form.get("location_text", ""),
             delivery_time_local=_opt_local_time(form.get("delivery_time_local", "")),
             event_start_local=_opt_local_time(form.get("event_start_local", "")),
