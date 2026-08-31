@@ -334,6 +334,55 @@ def test_payment_task_emitted_with_overdue_urgency() -> None:
     assert payment_row.due_at == date(2026, 6, 16)
 
 
+def test_payment_method_change_retires_old_task_and_projects_new_one() -> None:
+    inquiries = InMemoryInquiryRepository()
+    orders = InMemoryOrderRepository()
+    reminders = InMemoryPaymentReminderRepository()
+    inquiry = _save_inquiry(inquiries, event_date=date(2026, 8, 1))
+    order, _version = seed_order(orders, inquiry)
+    reminders.save(
+        OrderPaymentReminder(
+            order_id=order.order_id,
+            payment_method="RECHNUNG",
+            updated_at=_NOW,
+        )
+    )
+    payment = PaymentReminderService(
+        reminders,
+        orders,
+        now=lambda: _NOW,
+        today=lambda: _TODAY,
+    )
+    before = _service(
+        inquiries=inquiries,
+        orders=orders,
+        payment_reminders=reminders,
+    ).list_tasks()
+    assert any(
+        row.title == "Rechnung in der Buchhaltung erstellen" for row in before
+    )
+
+    payment.change_payment_method(
+        order.order_id,
+        new_payment_method="BAR_VOR_ORT",
+        reason="Barzahlung vereinbart",
+        actor_reference="Alice",
+    )
+
+    after = _service(
+        inquiries=inquiries,
+        orders=orders,
+        payment_reminders=reminders,
+    ).list_tasks()
+    payment_row = next(row for row in after if row.category == "payment")
+    assert payment_row.title == "Quittung vorbereiten/drucken"
+    assert not any(
+        row.title == "Rechnung in der Buchhaltung erstellen" for row in after
+    )
+    history = payment.view(order.order_id).method_changes
+    assert history[0].retired_task_title == "Rechnung in der Buchhaltung erstellen"
+
+
 def test_sort_overdue_payment_before_verify() -> None:
     inquiries = InMemoryInquiryRepository()
     orders = InMemoryOrderRepository()
