@@ -81,9 +81,7 @@ class OfferSnapshotEvent:
         validate_optional_local_time(
             self.delivery_time_local, label="delivery exact time"
         )
-        validate_optional_local_time(
-            self.event_start_local, label="event start"
-        )
+        validate_optional_local_time(self.event_start_local, label="event start")
         if self.delivery_time_local is not None and any(
             value is not None
             for value in (
