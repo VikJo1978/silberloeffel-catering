@@ -2,6 +2,7 @@
 
 from catering_system.domain.order_payment_reminder import (
     OrderPaymentReminder,
+    PaymentCompletionCorrection,
     PaymentMethodChange,
 )
 
