@@ -6,6 +6,7 @@ from typing import Protocol
 
 from catering_system.domain.order_payment_reminder import (
     OrderPaymentReminder,
+    PaymentCompletionCorrection,
     PaymentMethodChange,
 )
 
@@ -21,4 +22,14 @@ class PaymentReminderRepository(Protocol):
         self,
         reminder: OrderPaymentReminder,
         change: PaymentMethodChange,
+    ) -> None: ...
+
+    def list_payment_corrections(
+        self, order_id: str
+    ) -> tuple[PaymentCompletionCorrection, ...]: ...
+
+    def save_payment_correction(
+        self,
+        reminder: OrderPaymentReminder,
+        correction: PaymentCompletionCorrection,
     ) -> None: ...
