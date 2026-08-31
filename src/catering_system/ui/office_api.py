@@ -53,6 +53,10 @@ from catering_system.domain.customer_gastronomic_preference import (
     validate_preference_source,
 )
 from catering_system.domain.customer_order_history import CustomerOrderHistoryEntry
+from catering_system.domain.courier_cash_handoff import (
+    CourierCashCommand,
+    UnsupportedCourierCashContractVersion,
+)
 from catering_system.domain.customer_document_eligibility import (
     CustomerDocumentCreationBlocked,
 )
@@ -126,6 +130,9 @@ from catering_system.repositories.sqlite_catalog_repository import (
     SQLiteCatalogRepository,
 )
 from catering_system.repositories.sqlite_chat_repository import SQLiteChatRepository
+from catering_system.repositories.sqlite_courier_cash_repository import (
+    SQLiteCourierCashRepository,
+)
 from catering_system.repositories.sqlite_configurator_handoff_repository import (
     SQLiteConfiguratorHandoffRepository,
 )
@@ -189,6 +196,13 @@ from catering_system.services.chat_service import (
     ChatNotFoundError,
     ChatReferenceNotFoundError,
     ChatService,
+)
+from catering_system.services.courier_cash_context_service import (
+    CourierCashContextService,
+)
+from catering_system.services.courier_cash_service import (
+    CourierCashCommandError,
+    CourierCashService,
 )
 from catering_system.services.customer_order_history_service import (
     CustomerOrderHistoryCustomerNotFoundError,
@@ -293,6 +307,8 @@ _log = logging.getLogger(__name__)
 CLIENT_ID = "office-panel"  # per-client token identity (pack §6.1)
 CONFIGURATOR_HANDOFF_SERVICE_ID = "configurator-handoff"
 _MAX_BODY_BYTES = 64 * 1024
+_MAX_COURIER_CASH_BODY_BYTES = 16 * 1024
+_COURIER_CASH_PATH = "/machine/v1/courier/cash-events"
 _MAX_PREPARE_OFFER_BODY_BYTES = 256 * 1024
 _MAX_RESPONSE_BYTES = 512 * 1024  # pack §4.0 hard response cap
 _MAX_Q_CHARS = 200
@@ -774,6 +790,7 @@ class OfficeApi:
         self.payment_reminders = SQLitePaymentReminderRepository.from_connection(
             connection
         )
+        self.courier_cash = SQLiteCourierCashRepository.from_connection(connection)
         self.chat = SQLiteChatRepository.from_connection(connection)
         self.manual_tasks = SQLiteManualTaskRepository.from_connection(connection)
         self.confirmation_documents = (
@@ -826,6 +843,19 @@ class OfficeApi:
             self.payment_reminders,
             self.orders,
             today=views.berlin_today,
+        )
+        self.courier_cash_context_service = CourierCashContextService(
+            self.orders,
+            self.payment_reminders,
+            self.courier_cash,
+        )
+        self.courier_cash_service = CourierCashService(
+            self.orders,
+            self.inquiries,
+            self.payment_reminders,
+            self.courier_cash,
+            self.payment_reminder_service,
+            self.courier_cash_context_service,
         )
         self.chat_service = ChatService(
             self.chat,
@@ -887,6 +917,7 @@ class OfficeApi:
             self.orders,
             self.payment_reminder_service,
             today=views.berlin_today,
+            courier_cash_repository=self.courier_cash,
         )
         self.calendar_projection_service = CalendarProjectionService(
             self.inquiries,
@@ -4189,8 +4220,12 @@ def make_office_api_handler(
     token: str,
     *,
     introspection_service_tokens: dict[str, str] | None = None,
+    courier_cash_service_token: str | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     expected_auth = f"Bearer {token}"
+    expected_courier_cash_auth = (
+        f"Bearer {courier_cash_service_token}" if courier_cash_service_token else None
+    )
     service_auth = OfficeApiServiceAuth(
         office_panel_token=token,
         introspection_clients=introspection_service_tokens or {},
@@ -4307,6 +4342,16 @@ def make_office_api_handler(
                 return True
             self._error(401, "unauthorized")
             return False
+
+        def _courier_cash_auth_or_respond(self) -> bool:
+            if expected_courier_cash_auth is None:
+                self._error(404, "not_found")
+                return False
+            presented = self.headers.get("Authorization", "")
+            if not hmac.compare_digest(presented, expected_courier_cash_auth):
+                self._error(401, "unauthorized")
+                return False
+            return True
 
         def _is_introspect_path(self, path: str) -> bool:
             return path == EMPLOYEE_INTROSPECT_PATH
@@ -4472,6 +4517,16 @@ def make_office_api_handler(
             # Explicit handler (pack §4.0): auth first, then 405/404 with
             # full headers; body suppressed but Content-Length preserved.
             path = urlparse(self.path).path
+            if path == _COURIER_CASH_PATH:
+                if expected_courier_cash_auth is None:
+                    self._respond(404, {"error": "not_found"}, suppress_body=True)
+                    return
+                presented = self.headers.get("Authorization", "")
+                if not hmac.compare_digest(presented, expected_courier_cash_auth):
+                    self._respond(401, {"error": "unauthorized"}, suppress_body=True)
+                    return
+                self._respond(405, {"error": "method_not_allowed"}, suppress_body=True)
+                return
             if self._is_introspect_path(path):
                 if not self._introspect_service_auth_or_respond():
                     return
@@ -4505,6 +4560,11 @@ def make_office_api_handler(
 
         def do_OPTIONS(self) -> None:
             path = urlparse(self.path).path
+            if path == _COURIER_CASH_PATH:
+                if not self._courier_cash_auth_or_respond():
+                    return
+                self._error(405, "method_not_allowed")
+                return
             if self._is_introspect_path(path):
                 if not self._introspect_service_auth_or_respond():
                     return
@@ -4519,9 +4579,14 @@ def make_office_api_handler(
                 self._error(404, "not_found")
 
         def _method_not_allowed_or_404(self) -> None:
+            path = urlparse(self.path).path
+            if path == _COURIER_CASH_PATH:
+                if not self._courier_cash_auth_or_respond():
+                    return
+                self._error(405, "method_not_allowed")
+                return
             if not self._auth_or_401():
                 return
-            path = urlparse(self.path).path
             if _resolve_route(path) is not None:
                 self._error(405, "method_not_allowed")
             else:
@@ -4529,6 +4594,9 @@ def make_office_api_handler(
 
         def _handle(self, method: str) -> None:
             path = urlparse(self.path).path
+            if path == _COURIER_CASH_PATH:
+                self._handle_courier_cash(method)
+                return
             if path == "/office/v1/auth/configurator-handoff/exchange":
                 self._handle_configurator_handoff_exchange(method)
             if self._is_introspect_path(path):
@@ -4566,6 +4634,41 @@ def make_office_api_handler(
             except Exception:  # noqa: BLE001
                 _log.exception("internal error route=%s", template)
                 self._error(500, "internal")
+
+        def _handle_courier_cash(self, method: str) -> None:
+            if not self._courier_cash_auth_or_respond():
+                return
+            if method != "POST":
+                self._error(405, "method_not_allowed")
+                return
+            try:
+                if urlparse(self.path).query:
+                    raise ValueError("query not allowed")
+                raw = self._read_command_body(_MAX_COURIER_CASH_BODY_BYTES)
+                body = strict_json_loads(raw)
+                command = CourierCashCommand.from_json(body)
+            except UnsupportedCourierCashContractVersion:
+                self._error(400, "unsupported_contract_version")
+                return
+            except (ApiError, ValueError, TypeError):
+                self._error(400, "invalid_request")
+                return
+
+            try:
+                result = api.executor.run(
+                    lambda: api.courier_cash_service.process(command)
+                )
+            except CourierCashCommandError as exc:
+                self._error(exc.status, exc.code)
+                return
+            except CoreBusyError:
+                self._error(503, "core_unavailable")
+                return
+            except Exception:  # noqa: BLE001
+                _log.exception("courier cash Core write failed")
+                self._error(503, "core_unavailable")
+                return
+            self._respond(200, result.to_json())
 
         def _handle_configurator_handoff_exchange(self, method: str) -> None:
             service_authenticated, correct_service = self._configurator_service_auth()
@@ -4965,6 +5068,7 @@ def create_office_api_server(
     introspection_service_tokens: dict[str, str] | None = None,
     employee_auth_service_tokens: dict[str, str] | None = None,
     employee_auth_now: Callable[[], datetime] | None = None,
+    courier_cash_service_token: str | None = None,
 ) -> HTTPServer:
     """Build connection, repositories and server in the calling thread —
     single-threaded on purpose (sqlite3 thread affinity, Entry 048)."""
@@ -4985,6 +5089,7 @@ def create_office_api_server(
             api,
             token,
             introspection_service_tokens=effective_introspection_tokens,
+            courier_cash_service_token=courier_cash_service_token,
         ),
     )
 
@@ -5016,6 +5121,7 @@ def main() -> None:
     introspection_tokens = read_introspection_service_tokens_from_env(
         office_panel_token=token,
     )
+    courier_cash_token = os.environ.get("COURIER_CASH_SERVICE_TOKEN", "") or None
 
     server = create_office_api_server(
         args.db,
@@ -5024,6 +5130,7 @@ def main() -> None:
         args.port,
         offer_pdf_static_content=offer_pdf_static_content,
         introspection_service_tokens=introspection_tokens,
+        courier_cash_service_token=courier_cash_token,
     )
     print(f"Core Office API on http://{args.host}:{args.port}/office/v1/")
     server.serve_forever()

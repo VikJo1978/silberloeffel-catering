@@ -5,14 +5,20 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import date
 
+from catering_system.domain.courier_cash_handoff import (
+    STATE_MANUAL_REVIEW,
+    STATE_NOT_RECEIVED,
+)
 from catering_system.domain.inquiry import Inquiry, derive_inquiry_office_state
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.task_projection import (
     TaskCategory,
     TaskProjection,
+    TaskUrgency,
     inquiry_subtitle,
     task_sort_key,
 )
+from catering_system.repositories.courier_cash_repository import CourierCashRepository
 from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.repositories.offer_repository import OfferRepository
 from catering_system.repositories.order_repository import OrderRepository
@@ -29,12 +35,14 @@ class TaskProjectionService:
         payment_reminder_service: PaymentReminderService,
         *,
         today: Callable[[], date] | None = None,
+        courier_cash_repository: CourierCashRepository | None = None,
     ) -> None:
         self._inquiries = inquiry_repository
         self._offers = offer_repository
         self._orders = order_repository
         self._payment_reminders = payment_reminder_service
         self._today = today or berlin_today
+        self._courier_cash = courier_cash_repository
 
     def list_tasks(self) -> list[TaskProjection]:
         operating_today = self._today()
@@ -168,23 +176,42 @@ class TaskProjectionService:
                 payment = self._payment_reminders.view(order.order_id)
             except (KeyError, ValueError):
                 continue
-            if payment.next_step is None:
-                continue
-            due_at = payment.next_step_due_on
-            overdue = due_at is not None and due_at < operating_today
+            cash_event = (
+                self._courier_cash.get_latest_for_order(order.order_id)
+                if self._courier_cash is not None
+                else None
+            )
+            cash_needs_office = (
+                payment.payment_method == "BAR_VOR_ORT"
+                and cash_event is not None
+                and cash_event.to_state in {STATE_NOT_RECEIVED, STATE_MANUAL_REVIEW}
+            )
+            due_at: date | None
+            urgency: TaskUrgency
+            if cash_needs_office:
+                title = "Barzahlung klären"
+                due_at = operating_today
+                urgency = "urgent"
+            else:
+                if payment.next_step is None:
+                    continue
+                title = payment.next_step
+                due_at = payment.next_step_due_on
+                overdue = due_at is not None and due_at < operating_today
+                urgency = "overdue" if overdue else "normal"
             tasks.append(
                 (
                     TaskProjection(
                         task_id=f"order:{order.order_id}:payment",
                         category="payment",
-                        title=payment.next_step,
+                        title=title,
                         subtitle=subtitle,
                         entity_type="order",
                         entity_id=order.order_id,
                         action_label="Auftrag öffnen",
                         action_href=f"/order/{order.order_id}",
                         due_at=due_at,
-                        urgency="overdue" if overdue else "normal",
+                        urgency=urgency,
                         opened_at=order.created_at,
                     ),
                     event_date,

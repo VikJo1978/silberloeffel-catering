@@ -30,7 +30,7 @@ def priority_label(priority: str) -> str:
 
 
 def system_task_priority(row: dict[str, object]) -> str:
-    if str(row.get("urgency", "")) == "overdue":
+    if str(row.get("urgency", "")) in {"overdue", "urgent"}:
         return "HIGH"
     category = str(row.get("category", ""))
     if category in {"verify", "order_print"}:
