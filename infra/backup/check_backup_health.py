@@ -137,9 +137,7 @@ def check_health(
         f"OK offsite_encrypted age={encrypted_age:.1f}h",
     ]
     if compare_live_counts:
-        messages.append(
-            "OK live_count_comparison tables=" + ",".join(count_tables)
-        )
+        messages.append("OK live_count_comparison tables=" + ",".join(count_tables))
     return messages
 
 
