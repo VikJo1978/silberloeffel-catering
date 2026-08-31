@@ -3949,6 +3949,19 @@ class OfficePanel:
                         if not cancelled and context.can("orders.payment.reminder")
                         else ""
                     ),
+                    payment_method_command_fields=(
+                        self._command_fields(
+                            {
+                                "payment_reminder_updated_at": (
+                                    payment.updated_at.isoformat()
+                                    if payment.updated_at
+                                    else ""
+                                )
+                            }
+                        )
+                        if not cancelled and context.can("orders.payment.reminder")
+                        else ""
+                    ),
                     confirmation_command_fields=(
                         self._command_fields(
                             {
@@ -4411,6 +4424,35 @@ class OfficePanel:
                 actor_reference=actor_reference,
                 mark_payment_reminder_sent=form.get("payment_reminder_sent") == "1",
                 mark_mahnung_sent=form.get("mahnung_sent") == "1",
+            )
+
+        if self._remote is not None:
+            work()
+        elif self._command_executor is not None:
+            self._command_executor.run(work)
+        else:
+            work()
+
+    def change_payment_method(
+        self,
+        order_id: str,
+        form: dict[str, str],
+        *,
+        actor_reference: str = "office-panel",
+    ) -> None:
+        new_payment_method = validate_payment_method(
+            form.get("new_payment_method", "")
+        )
+        reason = form.get("reason", "").strip()
+        if not reason:
+            raise ValueError("Grund für die Änderung ist erforderlich.")
+
+        def work() -> None:
+            self.payment_reminder_service.change_payment_method(
+                order_id,
+                new_payment_method=new_payment_method,
+                reason=reason,
+                actor_reference=actor_reference,
             )
 
         if self._remote is not None:
