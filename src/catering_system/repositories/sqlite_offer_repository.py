@@ -339,6 +339,24 @@ def _migration_10_offer_version_logistics_timing(
             connection.execute(f"ALTER TABLE offer_versions ADD COLUMN {name} TEXT")
 
 
+def _migration_11_offer_version_exact_timing(
+    connection: sqlite3.Connection,
+) -> None:
+    existing = {
+        row[1] for row in connection.execute("PRAGMA table_info(offer_versions)")
+    }
+    for name in ("delivery_time_local", "event_start_local"):
+        if name not in existing:
+            connection.execute(f"ALTER TABLE offer_versions ADD COLUMN {name} TEXT")
+    connection.execute(
+        """CREATE TRIGGER IF NOT EXISTS trg_offer_version_exact_timing_immutable
+        BEFORE UPDATE OF delivery_time_local, event_start_local ON offer_versions
+        WHEN NEW.delivery_time_local IS NOT OLD.delivery_time_local
+          OR NEW.event_start_local IS NOT OLD.event_start_local
+        BEGIN SELECT RAISE(ABORT, 'offer version exact timing is immutable'); END"""
+    )
+
+
 _MIGRATIONS = (
     (1, "create_offer_tables", _migration_1_create_tables),
     (2, "unique_source_inquiry", _migration_2_unique_source_inquiry),
@@ -377,6 +395,11 @@ _MIGRATIONS = (
         10,
         "offer_version_logistics_timing",
         _migration_10_offer_version_logistics_timing,
+    ),
+    (
+        11,
+        "offer_version_exact_timing",
+        _migration_11_offer_version_exact_timing,
     ),
 )
 
@@ -832,8 +855,9 @@ class SQLiteOfferRepository:
                 payment_customer_visible_text, customer_title,
                 customer_introduction, customer_notes, budget_definition_json,
                 charges_definition_json, delivery_date_local,
-                delivery_window_start_local, delivery_window_end_local
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                delivery_window_start_local, delivery_window_end_local,
+                delivery_time_local, event_start_local
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 version.offer_version_id,
@@ -868,6 +892,16 @@ class SQLiteOfferRepository:
                 (
                     version.delivery_window_end_local.isoformat(timespec="minutes")
                     if version.delivery_window_end_local is not None
+                    else None
+                ),
+                (
+                    version.delivery_time_local.isoformat(timespec="minutes")
+                    if version.delivery_time_local is not None
+                    else None
+                ),
+                (
+                    version.event_start_local.isoformat(timespec="minutes")
+                    if version.event_start_local is not None
                     else None
                 ),
             ),
@@ -1004,7 +1038,8 @@ class SQLiteOfferRepository:
                    payment_customer_visible_text, customer_title,
                    customer_introduction, customer_notes, budget_definition_json,
                    charges_definition_json, delivery_date_local,
-                   delivery_window_start_local, delivery_window_end_local
+                   delivery_window_start_local, delivery_window_end_local,
+                   delivery_time_local, event_start_local
             FROM offer_versions
             WHERE offer_id = ?
             ORDER BY version_number
@@ -1061,6 +1096,12 @@ class SQLiteOfferRepository:
                     ),
                     delivery_window_end_local=(
                         time.fromisoformat(row[20]) if row[20] is not None else None
+                    ),
+                    delivery_time_local=(
+                        time.fromisoformat(row[21]) if row[21] is not None else None
+                    ),
+                    event_start_local=(
+                        time.fromisoformat(row[22]) if row[22] is not None else None
                     ),
                 )
             )
