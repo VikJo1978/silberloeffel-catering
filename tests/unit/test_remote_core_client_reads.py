@@ -10,6 +10,7 @@ from typing import cast
 
 import pytest
 
+import catering_system.ui.remote_core_client as remote_core_client
 from catering_system.ui.remote_core_client import RemoteCoreClient, RemoteCoreError
 
 _TOKEN = "test-remote-token"
@@ -99,6 +100,87 @@ def _valid_queue_body() -> dict[str, object]:
             }
         ],
     }
+
+
+def test_payment_reminder_parser_accepts_method_change_history() -> None:
+    order_id = str(uuid.uuid4())
+    change_id = str(uuid.uuid4())
+    previous = {
+        "payment_method": "RECHNUNG",
+        "invoice_created": True,
+        "invoice_number": "RE-HIST-1",
+        "sent_on": "2026-07-15",
+        "paid_on": None,
+        "cash_received": False,
+        "quittung_printed": False,
+        "updated_at": "2026-07-15T08:00:00+00:00",
+        "invoice_created_at": "2026-07-15T08:00:00+00:00",
+        "invoice_created_by": "Alice",
+        "invoice_sent_recorded_at": "2026-07-15T08:05:00+00:00",
+        "invoice_sent_recorded_by": "Alice",
+        "payment_reminder_sent_at": None,
+        "payment_reminder_sent_by": None,
+        "mahnung_sent_at": None,
+        "mahnung_sent_by": None,
+        "quittung_printed_at": None,
+        "quittung_printed_by": None,
+        "paid_recorded_at": None,
+        "paid_recorded_by": None,
+    }
+    payload = {
+        "order_id": order_id,
+        "payment_method": "BAR_VOR_ORT",
+        "payment_method_label": "Bar vor Ort",
+        "invoice_created": False,
+        "invoice_number": None,
+        "sent_on": None,
+        "due_on": None,
+        "paid_on": None,
+        "cash_received": False,
+        "quittung_printed": False,
+        "invoice_state_label": None,
+        "payment_state_label": "Offen",
+        "next_step": "Quittung vorbereiten/drucken",
+        "next_step_due_on": None,
+        "invoice_created_at": None,
+        "invoice_created_by": None,
+        "invoice_sent_recorded_at": None,
+        "invoice_sent_recorded_by": None,
+        "payment_reminder_sent_at": None,
+        "payment_reminder_sent_by": None,
+        "mahnung_sent_at": None,
+        "mahnung_sent_by": None,
+        "quittung_printed_at": None,
+        "quittung_printed_by": None,
+        "paid_recorded_at": None,
+        "paid_recorded_by": None,
+        "updated_at": "2026-07-16T09:00:00+00:00",
+        "method_changes": [
+            {
+                "change_id": change_id,
+                "from_method": "RECHNUNG",
+                "to_method": "BAR_VOR_ORT",
+                "reason": "Kunde zahlt bar",
+                "actor_reference": "Bob",
+                "changed_at": "2026-07-16T09:00:00+00:00",
+                "retired_task_title": "Zahlungseingang prüfen",
+                "previous_reminder": previous,
+            }
+        ],
+    }
+
+    parsed = remote_core_client._payment_reminder(payload, order_id)
+
+    assert parsed.payment_method == "BAR_VOR_ORT"
+    assert parsed.next_step == "Quittung vorbereiten/drucken"
+    assert len(parsed.method_changes) == 1
+    change = parsed.method_changes[0]
+    assert change.change_id == change_id
+    assert change.from_method == "RECHNUNG"
+    assert change.to_method == "BAR_VOR_ORT"
+    assert change.reason == "Kunde zahlt bar"
+    assert change.previous_reminder.invoice_number == "RE-HIST-1"
+    assert change.previous_reminder.invoice_created_by == "Alice"
 
 
 def test_queue_view_accepts_valid_payload() -> None:
