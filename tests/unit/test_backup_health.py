@@ -92,6 +92,16 @@ def test_backup_health_accepts_fresh_valid_artifacts(tmp_path: Path) -> None:
     assert result.stderr == ""
 
 
+def test_backup_health_rejects_missing_local_backup(tmp_path: Path) -> None:
+    database, local_dir, encrypted_dir, backup, _ = _fixture(tmp_path)
+    backup.unlink()
+
+    result = _run(database, local_dir, encrypted_dir)
+
+    assert result.returncode == 1
+    assert "FAIL local backup: no matching artifact" in result.stderr
+
+
 def test_backup_health_rejects_stale_local_backup(tmp_path: Path) -> None:
     database, local_dir, encrypted_dir, backup, _ = _fixture(tmp_path)
     stale = time.time() - 27 * 3600
