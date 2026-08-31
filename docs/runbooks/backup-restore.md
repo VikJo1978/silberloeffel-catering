@@ -164,6 +164,71 @@ Minimum weekly check:
 - a periodic decrypt-and-`quick_check` drill;
 - restore procedure still understood by two people or documented access.
 
+
+## Automated backup health checker
+
+Issue #215 adds the repository-owned, secret-free checker:
+
+```text
+infra/backup/check_backup_health.py
+```
+
+It has two deliberately different uses.
+
+### Ongoing freshness/integrity health
+
+This mode is safe at any time of day. It verifies:
+
+- newest local `core-YYYY-MM-DD.db` exists and is non-empty;
+- local artifact age is at most 26 hours by default;
+- local SQLite `PRAGMA quick_check` returns `ok`;
+- newest local encrypted offsite cache `core-YYYY-MM-DD.db.gpg` exists,
+  is non-empty and is at most 26 hours old.
+
+It does **not** compare the night backup's row counts with a live database that
+may legitimately have received later writes.
+
+```bash
+cd /home/viktor/projects/silberloeffel-catering
+python3 infra/backup/check_backup_health.py
+```
+
+Success exits `0` and prints only concise `OK` lines. Any failed gate exits
+non-zero and prints a `FAIL ...` diagnostic to stderr. The checker never reads
+or prints GPG, SSH, API or application secrets.
+
+### Immediate post-backup count verification
+
+Exact live/backup row-count comparison is meaningful only immediately after
+creating the local snapshot. Use:
+
+```bash
+python3 infra/backup/check_backup_health.py --compare-live-counts
+```
+
+The default comparison set is `inquiries`, `orders`, and `order_versions`.
+Additional or alternate tables can be supplied by repeating `--count-table`.
+
+Do not schedule `--compare-live-counts` as an all-day health probe: ordinary
+production writes after the nightly backup would create a truthful count
+difference and therefore a false backup alarm.
+
+### Scheduling contract
+
+Once this checker is deployed on Lenovo, the intended schedule is:
+
+1. keep the local SQLite backup at 03:15;
+2. run the `--compare-live-counts` check immediately after that backup command
+   succeeds;
+3. keep the encrypted offsite transfer after the local backup;
+4. run the ordinary checker after the offsite job to detect missing/stale local
+   or encrypted artifacts.
+
+The checker provides the reliable exit status required by a later notification
+slice. External mail/webhook/Tailscale alert delivery is intentionally not
+chosen in #215 and must not be smuggled into production configuration as an
+implicit dependency.
+
 ## Restore production
 
 > **Destructive operation:** restoring discards writes made after the selected
