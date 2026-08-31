@@ -3963,14 +3963,21 @@ class OfficePanel:
                         else ""
                     ),
                     payment_correction_command_fields=(
-                        self._command_fields(
-                            {
-                                "payment_reminder_updated_at": (
-                                    payment.updated_at.isoformat()
-                                    if payment.updated_at
-                                    else ""
-                                )
-                            }
+                        (
+                            self._command_fields(
+                                {
+                                    "payment_reminder_updated_at": (
+                                        payment.updated_at.isoformat()
+                                        if payment.updated_at
+                                        else ""
+                                    )
+                                }
+                            )
+                            if self._remote is not None
+                            else (
+                                '<input type="hidden" name="_correction_id" '
+                                f'value="{_e(str(uuid4()))}">'
+                            )
                         )
                         if not cancelled and context.can("orders.payment.reminder")
                         else ""
@@ -4483,7 +4490,11 @@ class OfficePanel:
         reason = form.get("reason", "").strip()
         if not reason:
             raise ValueError("Grund für die Korrektur ist erforderlich.")
-        correction_id = form.get("_command_id", "").strip() or str(uuid4())
+        correction_id = (
+            form.get("_command_id", "").strip()
+            or form.get("_correction_id", "").strip()
+            or str(uuid4())
+        )
 
         def work() -> None:
             self.payment_reminder_service.correct_payment_completion(
