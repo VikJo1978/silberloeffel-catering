@@ -135,9 +135,7 @@ _INQUIRY_SUMMARY_KEYS = frozenset(
         "fulfillment_mode",
     }
 )
-_INQUIRY_TIMING_OPTIONAL_KEYS = frozenset(
-    {"event_start_local", "delivery_time_local"}
-)
+_INQUIRY_TIMING_OPTIONAL_KEYS = frozenset({"event_start_local", "delivery_time_local"})
 _INQUIRY_LIST_KEYS = _INQUIRY_SUMMARY_KEYS | {
     "intake_subject",
     "linked_order_id",
@@ -159,19 +157,22 @@ _INQUIRY_DETAIL_KEYS = _INQUIRY_LIST_KEYS | {
     "orders_truncated",
     "offer_prefill",
 }
-_INQUIRY_DETAIL_OPTIONAL_KEYS = frozenset(
-    {
-        "offer",
-        "customer_id",
-        "customer_snapshot",
-        # INQUIRY_CONTACT_COMPLETENESS_V1 §10 — typed optional read fields so
-        # this client stays compatible with the pre-completeness API contract.
-        "contact_completeness",
-        "missing_contact_fields",
-        "contact_completion_allowed",
-        "offer_preparation_blockers",
-    }
-) | _INQUIRY_TIMING_OPTIONAL_KEYS
+_INQUIRY_DETAIL_OPTIONAL_KEYS = (
+    frozenset(
+        {
+            "offer",
+            "customer_id",
+            "customer_snapshot",
+            # INQUIRY_CONTACT_COMPLETENESS_V1 §10 — typed optional read fields so
+            # this client stays compatible with the pre-completeness API contract.
+            "contact_completeness",
+            "missing_contact_fields",
+            "contact_completion_allowed",
+            "offer_preparation_blockers",
+        }
+    )
+    | _INQUIRY_TIMING_OPTIONAL_KEYS
+)
 _CONTACT_COMPLETENESS_VALUES = frozenset(
     {"complete", "missing_email", "missing_phone", "missing_email_and_phone"}
 )
