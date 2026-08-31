@@ -154,7 +154,9 @@ class InquiryService:
             # every channel that omits it gets UNKNOWN (the default above).
             fm = validate_fulfillment_mode(fulfillment_mode)
             validate_optional_local_time(event_start_local, label="event_start_local")
-            validate_optional_local_time(delivery_time_local, label="delivery_time_local")
+            validate_optional_local_time(
+                delivery_time_local, label="delivery_time_local"
+            )
             customer_snapshot = snapshot_from_structured_contact(
                 contact_email=contact_email,
                 contact_phone=contact_phone,
@@ -274,7 +276,9 @@ class InquiryService:
 
         updated = replace(
             current,
-            event_date=event_date if event_date is not _UNSET else current.event_date,  # type: ignore[arg-type]
+            event_date=event_date
+            if event_date is not _UNSET
+            else current.event_date,  # type: ignore[arg-type]
             updated_at=_utc_now(),
             inquiry_source=next_source,
             crm_stage=next_crm,
