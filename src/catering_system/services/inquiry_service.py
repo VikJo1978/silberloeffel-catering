@@ -6,7 +6,7 @@ import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from typing import Any
 
 from catering_system.domain.inquiry import (
@@ -41,6 +41,7 @@ from catering_system.domain.inquiry_customer_snapshot import (
     snapshot_from_structured_contact,
 )
 from catering_system.domain.customer_document_projection import CustomerAddress
+from catering_system.domain.logistics_timing import validate_optional_local_time
 from catering_system.repositories.inquiry_repository import InquiryRepository
 
 _ALLOWED_SOURCES: frozenset[str] = frozenset(
@@ -137,6 +138,8 @@ class InquiryService:
         contact_name: str | None = None,
         company_name: str | None = None,
         fulfillment_mode: str = "UNKNOWN",
+        event_start_local: time | None = None,
+        delivery_time_local: time | None = None,
     ) -> Inquiry:
         _log.info("create_inquiry called inquiry_source=%s", inquiry_source)
         intake_subject_norm = _normalize_intake(intake_subject)
@@ -150,6 +153,8 @@ class InquiryService:
             # FULFILLMENT_SOURCE_V1: structured, optional, never inferred —
             # every channel that omits it gets UNKNOWN (the default above).
             fm = validate_fulfillment_mode(fulfillment_mode)
+            validate_optional_local_time(event_start_local, label="event_start_local")
+            validate_optional_local_time(delivery_time_local, label="delivery_time_local")
             customer_snapshot = snapshot_from_structured_contact(
                 contact_email=contact_email,
                 contact_phone=contact_phone,
@@ -190,6 +195,8 @@ class InquiryService:
             customer_id=None,
             customer_snapshot=customer_snapshot,
             fulfillment_mode=fm,
+            event_start_local=event_start_local,
+            delivery_time_local=delivery_time_local,
         )
         self._repository.save(inquiry)
         _log.info("inquiry created inquiry_id=%s", inquiry.inquiry_id)
@@ -214,6 +221,8 @@ class InquiryService:
         intake_message: str | None | object = _UNSET,
         intake_summary: str | None | object = _UNSET,
         intake_external_ref: str | None | object = _UNSET,
+        event_start_local: time | None | object = _UNSET,
+        delivery_time_local: time | None | object = _UNSET,
     ) -> Inquiry:
         _log.info("update_inquiry called inquiry_id=%s", inquiry_id)
         current = self._repository.get_by_id(inquiry_id)
@@ -244,6 +253,20 @@ class InquiryService:
             if call_verification_status is not _UNSET:
                 next_cvs = validate_call_verification_status(
                     call_verification_status  # type: ignore[arg-type]
+                )
+
+            next_event_start = current.event_start_local
+            if event_start_local is not _UNSET:
+                next_event_start = event_start_local  # type: ignore[assignment]
+                validate_optional_local_time(
+                    next_event_start, label="event_start_local"
+                )
+
+            next_delivery_time = current.delivery_time_local
+            if delivery_time_local is not _UNSET:
+                next_delivery_time = delivery_time_local  # type: ignore[assignment]
+                validate_optional_local_time(
+                    next_delivery_time, label="delivery_time_local"
                 )
         except (ValueError, TypeError):
             _log.warning("update_inquiry validation failed inquiry_id=%s", inquiry_id)
@@ -284,6 +307,8 @@ class InquiryService:
             ),
             customer_id=current.customer_id,
             customer_snapshot=current.customer_snapshot,
+            event_start_local=next_event_start,
+            delivery_time_local=next_delivery_time,
         )
         self._repository.update(updated)
         _log.info("inquiry updated inquiry_id=%s", inquiry_id)
