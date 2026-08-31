@@ -2064,10 +2064,19 @@ class RemoteCoreClient:
         for raw in inquiry_rows:
             row = _dict(raw)
             row_keys = set(row)
-            allowed = _INQUIRY_SUMMARY_KEYS | {"next_action", "offer"}
+            allowed = (
+                _INQUIRY_SUMMARY_KEYS
+                | _INQUIRY_TIMING_OPTIONAL_KEYS
+                | {"next_action", "offer"}
+            )
             if not (_INQUIRY_SUMMARY_KEYS | {"next_action"}) <= row_keys <= allowed:
                 _bad_response()
-            _inquiry({key: row[key] for key in _INQUIRY_SUMMARY_KEYS})
+            inquiry_payload = {
+                key: row[key]
+                for key in (_INQUIRY_SUMMARY_KEYS | _INQUIRY_TIMING_OPTIONAL_KEYS)
+                if key in row
+            }
+            _inquiry(inquiry_payload)
             if _str(row["next_action"]) not in _INQUIRY_NEXT_ACTIONS:
                 _bad_response()
             if "offer" in row:
