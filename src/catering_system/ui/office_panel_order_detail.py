@@ -167,6 +167,7 @@ class OrderDetailFormFields:
     cancel_command_fields: str
     version_command_fields: str
     payment_command_fields: str
+    payment_method_command_fields: str = ""
     confirmation_command_fields: str = ""
     print_confirm_button_labels: Mapping[str, str] = field(default_factory=dict)
     print_status_messages: Mapping[str, str] = field(default_factory=dict)
