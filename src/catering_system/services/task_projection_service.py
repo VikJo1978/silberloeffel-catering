@@ -14,6 +14,7 @@ from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.task_projection import (
     TaskCategory,
     TaskProjection,
+    TaskUrgency,
     inquiry_subtitle,
     task_sort_key,
 )
@@ -185,6 +186,8 @@ class TaskProjectionService:
                 and cash_event is not None
                 and cash_event.to_state in {STATE_NOT_RECEIVED, STATE_MANUAL_REVIEW}
             )
+            due_at: date | None
+            urgency: TaskUrgency
             if cash_needs_office:
                 title = "Barzahlung klären"
                 due_at = operating_today
