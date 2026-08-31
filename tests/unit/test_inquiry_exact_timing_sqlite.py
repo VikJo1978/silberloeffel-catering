@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import date, time
 
-from catering_system.repositories.sqlite_inquiry_repository import SQLiteInquiryRepository
+from catering_system.repositories.sqlite_inquiry_repository import (
+    SQLiteInquiryRepository,
+)
 from catering_system.services.inquiry_service import InquiryService
 
 
