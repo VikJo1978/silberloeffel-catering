@@ -66,6 +66,8 @@ def _valid_queue_body() -> dict[str, object]:
                 "call_verification_required": False,
                 "call_verification_status": "not_required",
                 "fulfillment_mode": "UNKNOWN",
+                "event_start_local": "18:00",
+                "delivery_time_local": "16:30",
                 "created_at": "2026-07-14T10:00:00+02:00",
                 "updated_at": "2026-07-14T10:00:00+02:00",
                 "next_action": "verify",
@@ -226,6 +228,9 @@ def test_queue_view_accepts_valid_payload() -> None:
         parsed = RemoteCoreClient(url, _TOKEN).queue_view()
         assert parsed["attention"]["neue_anfragen"] == 0
         assert len(parsed["neue_anfragen_top"]) == 1
+        row = parsed["neue_anfragen_top"][0]
+        assert row["delivery_time_local"] == "16:30"
+        assert row["event_start_local"] == "18:00"
     finally:
         server.shutdown()
         server.server_close()
