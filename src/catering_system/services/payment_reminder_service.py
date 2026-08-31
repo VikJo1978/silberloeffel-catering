@@ -69,11 +69,7 @@ class PaymentReminderService:
             if preferred_id is None:
                 continue
             version = next(
-                (
-                    item
-                    for item in versions
-                    if item.order_version_id == preferred_id
-                ),
+                (item for item in versions if item.order_version_id == preferred_id),
                 None,
             )
             if version is not None:
