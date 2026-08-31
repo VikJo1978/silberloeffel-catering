@@ -4024,6 +4024,40 @@ class _RemotePaymentReminderService:
     def view(self, order_id: str) -> PaymentReminderView:
         return self._client.payment_reminder_view(order_id)
 
+    def change_payment_method(
+        self,
+        order_id: str,
+        *,
+        new_payment_method: str,
+        reason: str,
+        actor_reference: str,
+    ) -> PaymentReminderView:
+        current = self.view(order_id)
+        expected_at = self._client.form_value("_expect_payment_reminder_updated_at")
+        result = self._client.command(
+            f"/office/v1/orders/{quote(order_id, safe='')}/payment-method",
+            {
+                "new_payment_method": new_payment_method,
+                "reason": reason,
+                "actor_reference": actor_reference,
+            },
+            {
+                "updated_at": (
+                    expected_at
+                    if expected_at
+                    else (
+                        current.updated_at.isoformat() if current.updated_at else None
+                    )
+                )
+            },
+            expected={200},
+            result_keys={"order_id", "updated_at"},
+        )
+        if _uuid4(result["order_id"]) != order_id:
+            _bad_response()
+        self._client._order_details.pop(order_id, None)
+        return self.view(order_id)
+
     def save(
         self,
         reminder: OrderPaymentReminder,
