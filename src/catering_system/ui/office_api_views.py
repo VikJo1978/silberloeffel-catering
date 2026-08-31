@@ -920,6 +920,18 @@ def payment_reminder_shape(view: PaymentReminderView) -> dict[str, object]:
             }
             for change in view.method_changes
         ],
+        "payment_corrections": [
+            {
+                "correction_id": correction.correction_id,
+                "reason": correction.reason,
+                "actor_reference": correction.actor_reference,
+                "corrected_at": correction.corrected_at.isoformat(),
+                "previous_reminder": _payment_reminder_fact_shape(
+                    correction.previous_reminder
+                ),
+            }
+            for correction in view.payment_corrections
+        ],
     }
 
 

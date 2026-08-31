@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
+from datetime import date
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import cast
 
@@ -105,6 +106,7 @@ def _valid_queue_body() -> dict[str, object]:
 def test_payment_reminder_parser_accepts_method_change_history() -> None:
     order_id = str(uuid.uuid4())
     change_id = str(uuid.uuid4())
+    correction_id = str(uuid.uuid4())
     previous = {
         "payment_method": "RECHNUNG",
         "invoice_created": True,
@@ -167,6 +169,20 @@ def test_payment_reminder_parser_accepts_method_change_history() -> None:
                 "previous_reminder": previous,
             }
         ],
+        "payment_corrections": [
+            {
+                "correction_id": correction_id,
+                "reason": "Fehleingabe",
+                "actor_reference": "Clara",
+                "corrected_at": "2026-07-17T09:00:00+00:00",
+                "previous_reminder": {
+                    **previous,
+                    "paid_on": "2026-07-16",
+                    "paid_recorded_at": "2026-07-16T08:00:00+00:00",
+                    "paid_recorded_by": "Alice",
+                },
+            }
+        ],
     }
 
     parsed = remote_core_client._payment_reminder(payload, order_id)
@@ -181,6 +197,14 @@ def test_payment_reminder_parser_accepts_method_change_history() -> None:
     assert change.reason == "Kunde zahlt bar"
     assert change.previous_reminder.invoice_number == "RE-HIST-1"
     assert change.previous_reminder.invoice_created_by == "Alice"
+    assert len(parsed.payment_corrections) == 1
+    correction = parsed.payment_corrections[0]
+    assert correction.correction_id == correction_id
+    assert correction.reason == "Fehleingabe"
+    assert correction.actor_reference == "Clara"
+    assert correction.previous_reminder.paid_on is not None
+    assert correction.previous_reminder.paid_on.isoformat() == "2026-07-16"
+    assert correction.previous_reminder.paid_recorded_by == "Alice"
 
 
 def test_queue_view_accepts_valid_payload() -> None:
@@ -806,7 +830,6 @@ def test_list_tasks_accepts_valid_payload() -> None:
 
 
 def test_list_calendar_accepts_valid_payload() -> None:
-    from datetime import date
 
     entity_id = str(uuid.uuid4())
     inquiry_id = str(uuid.uuid4())

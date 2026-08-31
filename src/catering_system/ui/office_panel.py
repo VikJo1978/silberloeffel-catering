@@ -3962,6 +3962,26 @@ class OfficePanel:
                         if not cancelled and context.can("orders.payment.reminder")
                         else ""
                     ),
+                    payment_correction_command_fields=(
+                        (
+                            self._command_fields(
+                                {
+                                    "payment_reminder_updated_at": (
+                                        payment.updated_at.isoformat()
+                                        if payment.updated_at
+                                        else ""
+                                    )
+                                }
+                            )
+                            if self._remote is not None
+                            else (
+                                '<input type="hidden" name="_correction_id" '
+                                f'value="{_e(str(uuid4()))}">'
+                            )
+                        )
+                        if not cancelled and context.can("orders.payment.reminder")
+                        else ""
+                    ),
                     confirmation_command_fields=(
                         self._command_fields(
                             {
@@ -4449,6 +4469,37 @@ class OfficePanel:
             self.payment_reminder_service.change_payment_method(
                 order_id,
                 new_payment_method=new_payment_method,
+                reason=reason,
+                actor_reference=actor_reference,
+            )
+
+        if self._remote is not None:
+            work()
+        elif self._command_executor is not None:
+            self._command_executor.run(work)
+        else:
+            work()
+
+    def correct_payment_completion(
+        self,
+        order_id: str,
+        form: dict[str, str],
+        *,
+        actor_reference: str = "office-panel",
+    ) -> None:
+        reason = form.get("reason", "").strip()
+        if not reason:
+            raise ValueError("Grund für die Korrektur ist erforderlich.")
+        correction_id = (
+            form.get("_command_id", "").strip()
+            or form.get("_correction_id", "").strip()
+            or str(uuid4())
+        )
+
+        def work() -> None:
+            self.payment_reminder_service.correct_payment_completion(
+                order_id,
+                correction_id=correction_id,
                 reason=reason,
                 actor_reference=actor_reference,
             )

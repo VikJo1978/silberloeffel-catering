@@ -1460,6 +1460,79 @@ def test_payment_method_change_requires_reason_and_preserves_history(api) -> Non
     assert (status, conflict["error"]) == (409, "payment_method_change_conflict")
 
 
+def test_payment_completion_correction_requires_reason_and_preserves_history(
+    api,
+) -> None:
+    base, ids, _db = api
+    order_id = ids["order_unprinted"]
+    detail_url = f"{base}/office/v1/orders/{order_id}"
+    reminder_url = f"{detail_url}/payment-reminder"
+    correction_url = f"{detail_url}/payment-correction"
+
+    status, paid, _h = _post(
+        reminder_url,
+        args={
+            "payment_method": "RECHNUNG",
+            "invoice_created": True,
+            "invoice_number": "RE-CORR-API-1",
+            "sent_on": "2026-07-01",
+            "due_on": None,
+            "paid_on": "2026-07-15",
+            "cash_received": False,
+            "actor_reference": "Alice",
+        },
+        expect={"updated_at": None},
+    )
+    assert status == 200
+
+    status, invalid, _h = _post(
+        correction_url,
+        args={"reason": "", "actor_reference": "Bob"},
+        expect={"updated_at": paid["updated_at"]},
+    )
+    assert (status, invalid["error"]) == (422, "invalid_payment_correction")
+
+    command_id = str(uuid.uuid4())
+    args = {
+        "reason": "Zahlung irrtümlich als eingegangen markiert",
+        "actor_reference": "Bob",
+    }
+    status, corrected, _h = _post(
+        correction_url,
+        args=args,
+        expect={"updated_at": paid["updated_at"]},
+        command_id=command_id,
+    )
+    assert status == 200
+    status, replay, _h = _post(
+        correction_url,
+        args=args,
+        expect={"updated_at": paid["updated_at"]},
+        command_id=command_id,
+    )
+    assert (status, replay) == (200, corrected)
+
+    status, detail, _h = _get(detail_url)
+    assert status == 200
+    payment = detail["payment_reminder"]
+    assert payment["paid_on"] is None
+    assert payment["paid_recorded_at"] is None
+    assert len(payment["payment_corrections"]) == 1
+    history = payment["payment_corrections"][0]
+    assert history["correction_id"] == command_id
+    assert history["reason"] == "Zahlung irrtümlich als eingegangen markiert"
+    assert history["actor_reference"] == "Bob"
+    assert history["previous_reminder"]["paid_on"] == "2026-07-15"
+    assert history["previous_reminder"]["paid_recorded_by"] == "Alice"
+
+    status, conflict, _h = _post(
+        correction_url,
+        args={"reason": "Noch einmal", "actor_reference": "Bob"},
+        expect={"updated_at": corrected["updated_at"]},
+    )
+    assert (status, conflict["error"]) == (409, "payment_correction_conflict")
+
+
 def test_payment_reminder_rejects_cancelled_order_and_contradictory_facts(api) -> None:
     base, ids, _db = api
     base_args = {

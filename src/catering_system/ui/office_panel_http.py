@@ -2698,6 +2698,21 @@ def make_office_panel_handler(
                     self._form(),
                     actor_reference=actor_reference,
                 )
+            elif action == "payment-correction":
+                auth = self._request_auth
+                actor_reference = "office-panel"
+                if (
+                    auth is not None
+                    and auth.kind == "employee"
+                    and auth.employee is not None
+                ):
+                    account = auth.employee.account
+                    actor_reference = f"{account.display_name} [{account.id}]"
+                panel.correct_payment_completion(
+                    order_id,
+                    self._form(),
+                    actor_reference=actor_reference,
+                )
             elif action == "confirmation-document":
                 panel.prepare_confirmation_document(order_id, self._form())
             elif action == "pause":

@@ -10,6 +10,7 @@ from zoneinfo import ZoneInfo
 
 from catering_system.domain.order_payment_reminder import (
     OrderPaymentReminder,
+    PaymentCompletionCorrection,
     PaymentMethodChange,
     PaymentReminderView,
     derive_payment_reminder,
@@ -70,6 +71,7 @@ class PaymentReminderService:
             view,
             order_id=order_id,
             method_changes=self._reminders.list_method_changes(order_id),
+            payment_corrections=self._reminders.list_payment_corrections(order_id),
         )
         if order.cancelled_at is not None:
             if reminder is not None and (
@@ -303,6 +305,64 @@ class PaymentReminderService:
             return self.view(reminder.order_id)
         self._reminders.save(replace(reminder, updated_at=now))
         return self.view(reminder.order_id)
+
+    def correct_payment_completion(
+        self,
+        order_id: str,
+        *,
+        correction_id: str,
+        reason: str,
+        actor_reference: str,
+    ) -> PaymentReminderView:
+        order = self._orders.get_order(order_id)
+        if order is None:
+            raise KeyError(order_id)
+
+        clean_id = correction_id.strip()
+        if not clean_id or len(clean_id) > 200:
+            raise ValueError("payment correction id is required")
+        clean_reason = reason.strip()
+        if not clean_reason or len(clean_reason) > 500:
+            raise ValueError(
+                "payment correction reason must be non-empty and at most 500 chars"
+            )
+        actor = self._actor(actor_reference)
+
+        for existing in self._reminders.list_payment_corrections(order_id):
+            if existing.correction_id != clean_id:
+                continue
+            if existing.reason != clean_reason or existing.actor_reference != actor:
+                raise ValueError("payment correction id conflict")
+            return self.view(order_id)
+
+        current = self._reminders.get(order_id)
+        if current is None:
+            raise ValueError("payment completion is not recorded")
+        if current.paid_on is None and not current.cash_received:
+            raise ValueError("payment completion is not recorded")
+
+        now = self._now()
+        if now.utcoffset() is None:
+            raise ValueError("audit clock must return timezone-aware datetime")
+        correction = PaymentCompletionCorrection(
+            correction_id=clean_id,
+            order_id=order_id,
+            reason=clean_reason,
+            actor_reference=actor,
+            corrected_at=now,
+            previous_reminder=current,
+        )
+        replacement = replace(
+            current,
+            paid_on=None,
+            cash_received=False,
+            paid_recorded_at=None,
+            paid_recorded_by=None,
+            updated_at=now,
+        )
+        validate_payment_reminder(replacement)
+        self._reminders.save_payment_correction(replacement, correction)
+        return self.view(order_id)
 
     def change_payment_method(
         self,

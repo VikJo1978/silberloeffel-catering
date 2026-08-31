@@ -7,6 +7,7 @@ from pathlib import Path
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_payment_reminder import (
     OrderPaymentReminder,
+    PaymentCompletionCorrection,
     PaymentMethodChange,
 )
 from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepository
@@ -97,6 +98,120 @@ def test_payment_method_history_survives_restart(tmp_path: Path) -> None:
     reminders = SQLitePaymentReminderRepository(db)
     assert reminders.get(order.order_id) == current
     assert reminders.list_method_changes(order.order_id) == (change,)
+    reminders.close()
+
+
+def test_payment_completion_correction_survives_restart(tmp_path: Path) -> None:
+    db = tmp_path / "core.db"
+    orders = SQLiteOrderRepository(db)
+    order, version = _order("11111111-1111-4111-8111-111111111111")
+    orders.save_order_with_initial_version(order, version)
+    orders.close()
+
+    reminders = SQLitePaymentReminderRepository(db)
+    previous = OrderPaymentReminder(
+        order_id=order.order_id,
+        payment_method="RECHNUNG",
+        invoice_created=True,
+        invoice_number="RE-CORRECTION-1",
+        sent_on=date(2026, 7, 1),
+        paid_on=date(2026, 7, 15),
+        updated_at=datetime(2026, 7, 15, 8, 0, tzinfo=UTC),
+        invoice_created_at=datetime(2026, 7, 1, 8, 0, tzinfo=UTC),
+        invoice_created_by="Alice",
+        invoice_sent_recorded_at=datetime(2026, 7, 1, 8, 5, tzinfo=UTC),
+        invoice_sent_recorded_by="Alice",
+        paid_recorded_at=datetime(2026, 7, 15, 8, 0, tzinfo=UTC),
+        paid_recorded_by="Alice",
+    )
+    current = OrderPaymentReminder(
+        order_id=order.order_id,
+        payment_method="RECHNUNG",
+        invoice_created=True,
+        invoice_number="RE-CORRECTION-1",
+        sent_on=date(2026, 7, 1),
+        updated_at=datetime(2026, 7, 16, 9, 0, tzinfo=UTC),
+        invoice_created_at=previous.invoice_created_at,
+        invoice_created_by="Alice",
+        invoice_sent_recorded_at=previous.invoice_sent_recorded_at,
+        invoice_sent_recorded_by="Alice",
+    )
+    correction = PaymentCompletionCorrection(
+        correction_id="eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        order_id=order.order_id,
+        reason="Fehleingabe",
+        actor_reference="Bob",
+        corrected_at=datetime(2026, 7, 16, 9, 0, tzinfo=UTC),
+        previous_reminder=previous,
+    )
+
+    reminders.save(previous)
+    reminders.save_payment_correction(current, correction)
+    reminders.close()
+
+    reminders = SQLitePaymentReminderRepository(db)
+    assert reminders.get(order.order_id) == current
+    assert reminders.list_payment_corrections(order.order_id) == (correction,)
+    reminders.close()
+
+
+def test_sqlite_payment_correction_replay_and_conflict(tmp_path: Path) -> None:
+    db = tmp_path / "core.db"
+    orders = SQLiteOrderRepository(db)
+    order, version = _order("11111111-1111-4111-8111-111111111111")
+    orders.save_order_with_initial_version(order, version)
+    orders.close()
+
+    reminders = SQLitePaymentReminderRepository(db)
+    previous = OrderPaymentReminder(
+        order_id=order.order_id,
+        payment_method="RECHNUNG",
+        invoice_created=True,
+        invoice_number="RE-CORRECTION-REPLAY",
+        sent_on=date(2026, 7, 1),
+        paid_on=date(2026, 7, 15),
+        updated_at=datetime(2026, 7, 15, 8, 0, tzinfo=UTC),
+        paid_recorded_at=datetime(2026, 7, 15, 8, 0, tzinfo=UTC),
+        paid_recorded_by="Alice",
+    )
+    current = OrderPaymentReminder(
+        order_id=order.order_id,
+        payment_method="RECHNUNG",
+        invoice_created=True,
+        invoice_number="RE-CORRECTION-REPLAY",
+        sent_on=date(2026, 7, 1),
+        updated_at=datetime(2026, 7, 16, 9, 0, tzinfo=UTC),
+    )
+    correction = PaymentCompletionCorrection(
+        correction_id="ffffffff-ffff-4fff-8fff-ffffffffffff",
+        order_id=order.order_id,
+        reason="Fehleingabe",
+        actor_reference="Bob",
+        corrected_at=datetime(2026, 7, 16, 9, 0, tzinfo=UTC),
+        previous_reminder=previous,
+    )
+
+    reminders.save(previous)
+    reminders.save_payment_correction(current, correction)
+    reminders.save_payment_correction(current, correction)
+
+    assert reminders.get(order.order_id) == current
+    assert reminders.list_payment_corrections(order.order_id) == (correction,)
+
+    conflicting = PaymentCompletionCorrection(
+        correction_id=correction.correction_id,
+        order_id=order.order_id,
+        reason="Anderer Grund",
+        actor_reference="Bob",
+        corrected_at=correction.corrected_at,
+        previous_reminder=previous,
+    )
+    try:
+        reminders.save_payment_correction(current, conflicting)
+    except ValueError as exc:
+        assert str(exc) == "payment correction id conflict"
+    else:
+        raise AssertionError("payment correction id conflict was accepted")
     reminders.close()
 
 

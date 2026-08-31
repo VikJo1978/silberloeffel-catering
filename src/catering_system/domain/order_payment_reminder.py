@@ -60,6 +60,18 @@ class OrderPaymentReminder:
 
 
 @dataclass(frozen=True)
+class PaymentCompletionCorrection:
+    """Append-only correction of a previously recorded payment completion."""
+
+    correction_id: str
+    order_id: str
+    reason: str
+    actor_reference: str
+    corrected_at: datetime
+    previous_reminder: OrderPaymentReminder
+
+
+@dataclass(frozen=True)
 class PaymentMethodChange:
     """Append-only audit event for an explicit payment-method switch."""
 
@@ -104,6 +116,7 @@ class PaymentReminderView:
     paid_recorded_at: datetime | None = None
     paid_recorded_by: str | None = None
     method_changes: tuple[PaymentMethodChange, ...] = ()
+    payment_corrections: tuple[PaymentCompletionCorrection, ...] = ()
 
 
 def _validate_audit_pair(

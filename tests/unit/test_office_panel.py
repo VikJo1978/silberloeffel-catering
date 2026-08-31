@@ -2111,6 +2111,40 @@ def test_v2_order_detail_keeps_payment_separate_and_cancelled_read_only(
         assert f'action="/order/{order_id}/{action}"' not in cancelled
 
 
+def test_v2_order_detail_payment_correction_keeps_visible_history(
+    premium_panel: str,
+) -> None:
+    inquiry_id = _create_inquiry(premium_panel)
+    _set_fulfillment_mode(premium_panel, inquiry_id, "PICKUP")
+    order_id = _convert(premium_panel, inquiry_id)
+
+    _post(
+        f"{premium_panel}/order/{order_id}/payment-reminder",
+        {
+            "payment_method": "RECHNUNG",
+            "invoice_created": "1",
+            "invoice_number": "RE-UI-CORR-1",
+            "sent_on": "2026-07-01",
+            "paid_on": "2026-07-15",
+        },
+    )
+    _status, paid = _get(f"{premium_panel}/order/{order_id}")
+    assert "Zahlungsstatus korrigieren" in paid
+    assert f'action="/order/{order_id}/payment-correction"' in paid
+
+    _post(
+        f"{premium_panel}/order/{order_id}/payment-correction",
+        {"reason": "Zahlung war eine Fehleingabe"},
+    )
+    _status, corrected = _get(f"{premium_panel}/order/{order_id}")
+
+    assert "Zahlungskorrekturen (1)" in corrected
+    assert "Zahlungsbestätigung korrigiert" in corrected
+    assert "Zahlung war eine Fehleingabe" in corrected
+    assert "15.07.2026" in corrected
+    assert "Zahlungsstatus korrigieren" not in corrected
+
+
 def test_v2_order_detail_escapes_hostile_facts_and_hides_technical_values(
     premium_panel: str,
 ) -> None:

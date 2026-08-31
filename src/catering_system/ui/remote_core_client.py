@@ -86,6 +86,7 @@ from catering_system.domain.order_operational_context import (
 from catering_system.domain.order_payment_reminder import (
     PAYMENT_METHODS,
     OrderPaymentReminder,
+    PaymentCompletionCorrection,
     PaymentMethod,
     PaymentMethodChange,
     PaymentReminderView,
@@ -285,6 +286,8 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
             "order_already_paused",
             "order_not_paused",
             "already_exists",
+            "payment_method_change_conflict",
+            "payment_correction_conflict",
         }
     ),
     413: frozenset({"body_too_large"}),
@@ -298,6 +301,8 @@ _ERROR_CODES_BY_STATUS: dict[int, frozenset[str]] = {
             "kitchen_print_not_confirmed",
             "version_not_owned",
             "invalid_payment_reminder",
+            "invalid_payment_method_change",
+            "invalid_payment_correction",
             "conversion_blocked",
             "accepted_offer_required",
             "offer_blocks_conversion",
@@ -1072,6 +1077,18 @@ _PAYMENT_REMINDER_KEYS = frozenset(
         "paid_recorded_by",
         "updated_at",
         "method_changes",
+        "payment_corrections",
+    }
+)
+
+
+_PAYMENT_CORRECTION_KEYS = frozenset(
+    {
+        "correction_id",
+        "reason",
+        "actor_reference",
+        "corrected_at",
+        "previous_reminder",
     }
 )
 
@@ -1167,6 +1184,19 @@ def _payment_method_change(value: object, order_id: str) -> PaymentMethodChange:
     )
 
 
+def _payment_correction(value: object, order_id: str) -> PaymentCompletionCorrection:
+    data = _dict(value)
+    _exact(data, _PAYMENT_CORRECTION_KEYS)
+    return PaymentCompletionCorrection(
+        correction_id=_uuid4(data["correction_id"]),
+        order_id=order_id,
+        reason=_str(data["reason"]),
+        actor_reference=_str(data["actor_reference"]),
+        corrected_at=_datetime(data["corrected_at"]),
+        previous_reminder=_payment_fact_reminder(data["previous_reminder"], order_id),
+    )
+
+
 def _payment_reminder(value: object, order_id: str) -> PaymentReminderView:
     data = _dict(value)
     _exact(data, _PAYMENT_REMINDER_KEYS)
@@ -1216,6 +1246,10 @@ def _payment_reminder(value: object, order_id: str) -> PaymentReminderView:
         method_changes=tuple(
             _payment_method_change(item, order_id)
             for item in _list(data["method_changes"])
+        ),
+        payment_corrections=tuple(
+            _payment_correction(item, order_id)
+            for item in _list(data["payment_corrections"])
         ),
     )
 
@@ -4052,6 +4086,40 @@ class _RemotePaymentReminderService:
             },
             expected={200},
             result_keys={"order_id", "updated_at"},
+        )
+        if _uuid4(result["order_id"]) != order_id:
+            _bad_response()
+        self._client._order_details.pop(order_id, None)
+        return self.view(order_id)
+
+    def correct_payment_completion(
+        self,
+        order_id: str,
+        *,
+        correction_id: str,
+        reason: str,
+        actor_reference: str,
+    ) -> PaymentReminderView:
+        current = self.view(order_id)
+        expected_at = self._client.form_value("_expect_payment_reminder_updated_at")
+        result = self._client.command(
+            f"/office/v1/orders/{quote(order_id, safe='')}/payment-correction",
+            {
+                "reason": reason,
+                "actor_reference": actor_reference,
+            },
+            {
+                "updated_at": (
+                    expected_at
+                    if expected_at
+                    else (
+                        current.updated_at.isoformat() if current.updated_at else None
+                    )
+                )
+            },
+            expected={200},
+            result_keys={"order_id", "updated_at"},
+            command_id=correction_id,
         )
         if _uuid4(result["order_id"]) != order_id:
             _bad_response()
