@@ -52,11 +52,11 @@ class OrderVersion:
     created_by: str | None = None
     change_reason: str | None = None
     changed_fields: tuple[str, ...] = ()
-    event_start_local: time | None = None
-    delivery_time_local: time | None = None
     delivery_date_local: date | None = None
     delivery_window_start_local: time | None = None
     delivery_window_end_local: time | None = None
+    event_start_local: time | None = None
+    delivery_time_local: time | None = None
 
     def __post_init__(self) -> None:
         validate_optional_local_time(self.event_start_local, label="event start")
