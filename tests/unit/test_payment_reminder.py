@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 
 import pytest
 
@@ -588,6 +588,8 @@ def test_rechnung_uses_delivery_date_when_it_is_later_than_event_date() -> None:
         guest_count_estimate=20,
         planning_mode="caterer_suggestion",
         delivery_date_local=date(2026, 7, 22),
+        delivery_window_start_local=time(17, 0),
+        delivery_window_end_local=time(19, 0),
     )
     orders.save_order_with_initial_version(order, version)
     reminders.save(
