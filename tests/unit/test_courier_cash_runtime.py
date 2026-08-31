@@ -10,6 +10,7 @@ from dataclasses import replace
 from datetime import UTC, date, datetime
 from http.server import HTTPServer
 from pathlib import Path
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
@@ -570,6 +571,258 @@ def test_command_parser_is_exact_and_role_safe() -> None:
                 "not_received_reason": "OTHER",
             }
         )
+
+
+
+def test_command_parser_covers_strict_validation_edges() -> None:
+    base = {
+        "contract_version": CONTRACT_VERSION,
+        "idempotency_key": "40000000-0000-4000-8000-000000000001",
+        "event_type": EVENT_DRIVER_RECEIVED,
+        "order_id": _ORDER_ID,
+        "assignment_id": _ASSIGNMENT_ID,
+        "order_version_id": _VERSION_ID,
+        "cash_execution_context_id": "80000000-0000-4000-8000-000000000001",
+        "actor_id": "driver-17",
+        "actor_role": "DRIVER",
+        "occurred_at": _NOW.isoformat(),
+        "not_received_reason": None,
+        "note": None,
+        "correction_reason": None,
+        "correction_of_idempotency_key": None,
+    }
+
+    invalid_cases = (
+        ({"idempotency_key": 7}, "UUID string"),
+        ({"idempotency_key": "not-a-uuid"}, "UUID string"),
+        (
+            {"idempotency_key": "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"},
+            "canonical lowercase UUID",
+        ),
+        ({"actor_id": 7}, "must be string"),
+        ({"actor_id": " driver-17"}, "trimmed non-empty text"),
+        ({"occurred_at": 7}, "date-time string"),
+        ({"occurred_at": "not-a-date"}, "date-time string"),
+        ({"occurred_at": "2026-08-31T09:00:00"}, "timezone-aware"),
+        ({"event_type": "NOT_AN_EVENT"}, "invalid cash event type"),
+        (
+            {
+                "event_type": EVENT_NOT_RECEIVED,
+                "not_received_reason": "NOT_A_REASON",
+            },
+            "structured reason",
+        ),
+        (
+            {
+                "event_type": EVENT_NOT_RECEIVED,
+                "not_received_reason": "CUSTOMER_NOT_FOUND",
+                "note": "extra",
+            },
+            "note is only allowed",
+        ),
+        (
+            {
+                "event_type": EVENT_NOT_RECEIVED,
+                "not_received_reason": "CUSTOMER_NOT_FOUND",
+                "correction_reason": "extra",
+            },
+            "cannot be correction",
+        ),
+        (
+            {
+                "event_type": EVENT_CORRECTION,
+                "actor_role": "CHEF",
+                "not_received_reason": "CUSTOMER_NOT_FOUND",
+                "correction_reason": "fix",
+                "correction_of_idempotency_key": (
+                    "90000000-0000-4000-8000-000000000001"
+                ),
+            },
+            "cannot carry not-received",
+        ),
+        (
+            {
+                "event_type": EVENT_CORRECTION,
+                "actor_role": "CHEF",
+                "correction_of_idempotency_key": (
+                    "90000000-0000-4000-8000-000000000001"
+                ),
+            },
+            "correction requires reason",
+        ),
+        ({"note": "extra"}, "fields that must be null"),
+    )
+    for changes, message in invalid_cases:
+        with pytest.raises(ValueError, match=message):
+            CourierCashCommand.from_json({**base, **changes})
+
+    projection_args = {
+        "order_version_id": _VERSION_ID,
+        "cash_execution_context_id": "80000000-0000-4000-8000-000000000001",
+        "quittung_status": QUITTUNG_PRINTED_CURRENT,
+    }
+    with pytest.raises(ValueError, match="unsupported contract version"):
+        CourierCashProjection(**projection_args, contract_version="v2")
+    with pytest.raises(ValueError, match="must require BAR"):
+        CourierCashProjection(**projection_args, bar_required=False)
+    with pytest.raises(ValueError, match="invalid Quittung status"):
+        CourierCashProjection(**{**projection_args, "quittung_status": "UNKNOWN"})
+
+
+def test_context_projection_returns_none_for_missing_runtime_prerequisites() -> None:
+    orders = Mock()
+    payments = Mock()
+    cash_events = Mock()
+    service = CourierCashContextService(orders, payments, cash_events)
+
+    orders.get_order.return_value = None
+    assert service.projection(_ORDER_ID) is None
+
+    order_without_version = Order(
+        order_id=_ORDER_ID,
+        source_inquiry_id=_INQUIRY_ID,
+        created_at=_NOW,
+        updated_at=_NOW,
+    )
+    orders.get_order.return_value = order_without_version
+    payments.get.return_value = None
+    assert service.projection(_ORDER_ID) is None
+
+    payment = OrderPaymentReminder(
+        order_id=_ORDER_ID,
+        payment_method="BAR_VOR_ORT",
+    )
+    payments.get.return_value = payment
+    assert service.projection(_ORDER_ID) is None
+
+    orders.get_order.return_value = replace(
+        order_without_version,
+        effective_order_version_id=_VERSION_ID,
+    )
+    orders.get_order_version.return_value = None
+    assert service.projection(_ORDER_ID) is None
+
+
+def test_service_error_edges_are_explicit_and_covered(tmp_path: Path) -> None:
+    db = tmp_path / "core.db"
+    connection, _orders, payments, _cash, _payment, context, service = _seed_world(db)
+
+    driver = _command(
+        context,
+        event_type=EVENT_DRIVER_RECEIVED,
+        actor_role="DRIVER",
+        actor_id="driver-17",
+    )
+    with pytest.raises(CourierCashCommandError) as missing_order:
+        service.process(
+            replace(
+                driver,
+                order_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            )
+        )
+    assert missing_order.value.code == "invalid_transition"
+
+    original_context_service = service._context_service
+    service._context_service = Mock()
+    service._context_service.projection.return_value = None
+    with pytest.raises(CourierCashCommandError) as missing_context:
+        service.process(driver)
+    assert missing_context.value.code == "stale_cash_context"
+    service._context_service = original_context_service
+
+    correction_from_ready = _command(
+        context,
+        event_type=EVENT_CORRECTION,
+        actor_role="CHEF",
+        actor_id="chef-2",
+        correction_reason="Korrektur",
+        correction_of_idempotency_key="90000000-0000-4000-8000-000000000001",
+    )
+    with pytest.raises(CourierCashCommandError) as not_correctable:
+        service.process(correction_from_ready)
+    assert not_correctable.value.code == "invalid_transition"
+
+    service.process(driver)
+    correction_missing_target = _command(
+        context,
+        event_type=EVENT_CORRECTION,
+        actor_role="CHEF",
+        actor_id="chef-2",
+        correction_reason="Korrektur",
+        correction_of_idempotency_key="90000000-0000-4000-8000-000000000001",
+    )
+    with pytest.raises(CourierCashCommandError) as missing_target:
+        service.process(correction_missing_target)
+    assert missing_target.value.code == "invalid_transition"
+
+    payment = payments.get(_ORDER_ID)
+    assert payment is not None
+    service._payments = Mock()
+    service._payments.get.return_value = None
+    with pytest.raises(CourierCashCommandError) as missing_payment:
+        service._record_final_payment(driver, _NOW)
+    assert missing_payment.value.code == "stale_cash_context"
+
+    service._payments.get.return_value = replace(
+        payment,
+        paid_on=date(2026, 8, 31),
+        cash_received=True,
+    )
+    with pytest.raises(CourierCashCommandError) as already_paid:
+        service._record_final_payment(driver, _NOW)
+    assert already_paid.value.code == "invalid_transition"
+
+    service._payments.get.return_value = payment
+    service._payment_service = Mock()
+    service._payment_service.save.side_effect = ValueError("forced")
+    with pytest.raises(CourierCashCommandError) as save_failure:
+        service._record_final_payment(driver, _NOW)
+    assert save_failure.value.code == "invalid_transition"
+    connection.close()
+
+    not_ready_db = tmp_path / "not-ready.db"
+    (
+        not_ready_connection,
+        _orders2,
+        _payments2,
+        _cash2,
+        _payment2,
+        not_ready_context,
+        not_ready_service,
+    ) = _seed_world(not_ready_db, quittung_printed=False)
+    with pytest.raises(CourierCashCommandError) as not_ready:
+        not_ready_service.process(
+            _command(
+                not_ready_context,
+                event_type=EVENT_DRIVER_RECEIVED,
+                actor_role="DRIVER",
+                actor_id="driver-17",
+            )
+        )
+    assert not_ready.value.code == "invalid_transition"
+    not_ready_connection.close()
+
+    naive_db = tmp_path / "naive-clock.db"
+    (
+        naive_connection,
+        _orders3,
+        _payments3,
+        _cash3,
+        _payment3,
+        naive_context,
+        naive_service,
+    ) = _seed_world(naive_db)
+    naive_service._now = lambda: datetime(2026, 8, 31, 9, 0)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        naive_service.process(
+            _command(
+                naive_context,
+                event_type=EVENT_DRIVER_RECEIVED,
+                actor_role="DRIVER",
+                actor_id="driver-17",
+            )
+        )
+    naive_connection.close()
 
 
 def test_kiosk_feed_cash_extension_keeps_absent_null_object_semantics() -> None:
