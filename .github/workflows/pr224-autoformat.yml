@@ -1,0 +1,40 @@
+name: PR224 Autoformat
+
+on:
+  push:
+    branches:
+      - codex/issue-223-inquiry-exact-timing
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: codex/issue-223-inquiry-exact-timing
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.11.32"
+          python-version: "3.12"
+      - name: Install project and development tools
+        run: uv sync --locked --group dev
+      - name: Format changed Python files
+        run: |
+          uv run ruff format \
+            src/catering_system/ui/office_api.py \
+            src/catering_system/ui/remote_core_client.py
+      - name: Commit formatter output
+        run: |
+          if git diff --quiet -- src/catering_system/ui/office_api.py src/catering_system/ui/remote_core_client.py; then
+            echo "No formatter changes needed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/catering_system/ui/office_api.py src/catering_system/ui/remote_core_client.py
+          git commit -m "Apply Ruff formatter to exact timing changes"
+          git push origin HEAD:codex/issue-223-inquiry-exact-timing
