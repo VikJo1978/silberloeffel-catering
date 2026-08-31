@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from contextlib import nullcontext
-from datetime import date, datetime
+from datetime import date, datetime, time
 from pathlib import Path
 from typing import cast
 
@@ -143,6 +143,16 @@ def _migration_6_add_fulfillment_mode(connection: sqlite3.Connection) -> None:
         )
 
 
+def _migration_7_add_exact_timing(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(inquiries)").fetchall()
+    }
+    if "event_start_local" not in columns:
+        connection.execute("ALTER TABLE inquiries ADD COLUMN event_start_local TEXT")
+    if "delivery_time_local" not in columns:
+        connection.execute("ALTER TABLE inquiries ADD COLUMN delivery_time_local TEXT")
+
+
 _MIGRATIONS = (
     (1, "create_inquiries", _migration_1_create_table),
     (2, "add_intake_context", _migration_2_add_intake_context),
@@ -150,6 +160,7 @@ _MIGRATIONS = (
     (4, "add_customer_reference", _migration_4_add_customer_reference),
     (5, "add_customer_addresses", _migration_5_add_customer_addresses),
     (6, "add_fulfillment_mode", _migration_6_add_fulfillment_mode),
+    (7, "add_exact_timing", _migration_7_add_exact_timing),
 )
 
 
