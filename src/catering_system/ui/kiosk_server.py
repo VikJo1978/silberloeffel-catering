@@ -214,6 +214,14 @@ def _order_feed_entry_projection(
     delivery_window = _delivery_window_projection(entry)
     if delivery_window is not None:
         projection["delivery_window"] = delivery_window
+    if entry.delivery_time_local is not None:
+        projection["delivery_time_local"] = _format_local_time(
+            entry.delivery_time_local
+        )
+    if entry.event_start_local is not None:
+        projection["event_start_local"] = _format_local_time(
+            entry.event_start_local
+        )
     if include_cash_handoff:
         projection["cash_handoff"] = (
             cash_handoff.to_json() if cash_handoff is not None else None
