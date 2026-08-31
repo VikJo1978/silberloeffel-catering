@@ -2073,7 +2073,24 @@ def test_v2_order_detail_keeps_payment_separate_and_cancelled_read_only(
     assert "Reminder-Status" in body
     assert "RE-UI4-1" in body
     assert f'action="/order/{order_id}/payment-reminder"' in body
+    assert f'action="/order/{order_id}/payment-method"' in body
+    assert "Zahlungsart ändern" in body
     assert "Küchenzettel für den aktuellen Stand drucken" in body
+
+    _post(
+        f"{premium_panel}/order/{order_id}/payment-method",
+        {
+            "new_payment_method": "BAR_VOR_ORT",
+            "reason": "Kunde zahlt bei Abholung bar",
+        },
+    )
+    _status, changed = _get(f"{premium_panel}/order/{order_id}")
+    assert "Bar vor Ort" in changed
+    assert "Quittung vorbereiten/drucken" in changed
+    assert "Zahlungsarten-Historie (1)" in changed
+    assert "Rechnung → Bar vor Ort" in changed
+    assert "Kunde zahlt bei Abholung bar" in changed
+    assert "RE-UI4-1" in changed
 
     _post(f"{premium_panel}/order/{order_id}/cancel", {})
     _status, cancelled = _get(f"{premium_panel}/order/{order_id}")
@@ -2089,6 +2106,7 @@ def test_v2_order_detail_keeps_payment_separate_and_cancelled_read_only(
         "cancel",
         "version",
         "payment-reminder",
+        "payment-method",
     ):
         assert f'action="/order/{order_id}/{action}"' not in cancelled
 
