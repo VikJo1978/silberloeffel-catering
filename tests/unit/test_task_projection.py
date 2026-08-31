@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from tests.helpers.order_seed import seed_order
 
 from datetime import UTC, date, datetime, timedelta
@@ -379,6 +381,145 @@ def test_payment_method_change_retires_old_task_and_projects_new_one() -> None:
     )
     history = payment.view(order.order_id).method_changes
     assert history[0].retired_task_title == "Rechnung in der Buchhaltung erstellen"
+
+
+def test_order_revision_projects_invoice_correction_task() -> None:
+    inquiries = InMemoryInquiryRepository()
+    orders = InMemoryOrderRepository()
+    reminders = InMemoryPaymentReminderRepository()
+    inquiry = _save_inquiry(inquiries, event_date=date(2026, 8, 1))
+    order, version = seed_order(orders, inquiry)
+    payment = PaymentReminderService(
+        reminders,
+        orders,
+        now=lambda: _NOW,
+        today=lambda: _TODAY,
+    )
+    payment.save(
+        OrderPaymentReminder(
+            order_id=order.order_id,
+            payment_method="RECHNUNG",
+            invoice_created=True,
+            invoice_number="RE-CORR-TASK-1",
+            sent_on=date(2026, 7, 15),
+        ),
+        actor_reference="Alice",
+    )
+    revision_at = _NOW + timedelta(days=1)
+    revision = replace(
+        version,
+        order_version_id="99999999-9999-4999-8999-999999999991",
+        version_number=2,
+        created_at=revision_at,
+        parent_order_version_id=version.order_version_id,
+        created_by="Office",
+        change_reason="Gästezahl geändert",
+        changed_fields=("guest_count_estimate",),
+        guest_count_estimate=(version.guest_count_estimate or 0) + 5,
+    )
+    current = orders.get_order(order.order_id)
+    assert current is not None
+    orders.append_order_version(
+        replace(
+            current,
+            candidate_order_version_id=revision.order_version_id,
+            updated_at=revision_at,
+        ),
+        revision,
+    )
+
+    rows = _service(
+        inquiries=inquiries,
+        orders=orders,
+        payment_reminders=reminders,
+    ).list_tasks()
+
+    payment_row = next(row for row in rows if row.category == "payment")
+    assert payment_row.title == "Rechnungskorrektur erforderlich"
+    assert payment_row.due_at == revision_at.date()
+
+
+def test_cancelled_unpaid_order_retires_payment_task() -> None:
+    inquiries = InMemoryInquiryRepository()
+    orders = InMemoryOrderRepository()
+    reminders = InMemoryPaymentReminderRepository()
+    inquiry = _save_inquiry(inquiries, event_date=date(2026, 8, 1))
+    order, _version = seed_order(orders, inquiry)
+    reminders.save(
+        OrderPaymentReminder(
+            order_id=order.order_id,
+            payment_method="VORKASSE",
+            updated_at=_NOW,
+        )
+    )
+    current = orders.get_order(order.order_id)
+    assert current is not None
+    orders.update_order(
+        replace(
+            current,
+            cancelled_at=_NOW + timedelta(days=1),
+            updated_at=_NOW + timedelta(days=1),
+        )
+    )
+
+    rows = _service(
+        inquiries=inquiries,
+        orders=orders,
+        payment_reminders=reminders,
+    ).list_tasks()
+
+    assert not any(
+        row.category == "payment" and row.entity_id == order.order_id for row in rows
+    )
+
+
+def test_cancelled_paid_order_projects_refund_review_task() -> None:
+    inquiries = InMemoryInquiryRepository()
+    orders = InMemoryOrderRepository()
+    reminders = InMemoryPaymentReminderRepository()
+    inquiry = _save_inquiry(inquiries, event_date=date(2026, 8, 1))
+    order, _version = seed_order(orders, inquiry)
+    payment = PaymentReminderService(
+        reminders,
+        orders,
+        now=lambda: _NOW,
+        today=lambda: _TODAY,
+    )
+    payment.save(
+        OrderPaymentReminder(
+            order_id=order.order_id,
+            payment_method="RECHNUNG",
+            invoice_created=True,
+            invoice_number="RE-REFUND-TASK-1",
+            sent_on=date(2026, 7, 1),
+            paid_on=date(2026, 7, 15),
+        ),
+        actor_reference="Alice",
+    )
+    current = orders.get_order(order.order_id)
+    assert current is not None
+    cancelled_at = _NOW + timedelta(days=1)
+    orders.update_order(
+        replace(
+            current,
+            cancelled_at=cancelled_at,
+            updated_at=cancelled_at,
+        )
+    )
+
+    rows = _service(
+        inquiries=inquiries,
+        orders=orders,
+        payment_reminders=reminders,
+    ).list_tasks()
+
+    payment_row = next(
+        row
+        for row in rows
+        if row.category == "payment" and row.entity_id == order.order_id
+    )
+    assert payment_row.title == "Rückzahlung prüfen"
+    assert payment_row.due_at == cancelled_at.date()
 
 
 def test_sort_overdue_payment_before_verify() -> None:
