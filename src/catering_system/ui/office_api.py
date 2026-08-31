@@ -421,7 +421,9 @@ def _v_optional_date(value: object) -> date | None:
 def _v_optional_local_time(value: object) -> time | None:
     if value is None or value == "":
         return None
-    if not isinstance(value, str) or not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", value):
+    if not isinstance(value, str) or not re.fullmatch(
+        r"(?:[01]\d|2[0-3]):[0-5]\d", value
+    ):
         raise _invalid()
     try:
         parsed = time.fromisoformat(value)
@@ -2277,7 +2279,9 @@ class OfficeApi:
                 contact_phone=_v_optional_str(args.get("contact_phone"), 100),
                 contact_name=_v_optional_str(args.get("contact_name"), 200),
                 company_name=_v_optional_str(args.get("company_name"), 200),
-                event_start_local=_v_optional_local_time(args.get("event_start_local")),
+                event_start_local=_v_optional_local_time(
+                    args.get("event_start_local")
+                ),
                 delivery_time_local=_v_optional_local_time(
                     args.get("delivery_time_local")
                 ),
