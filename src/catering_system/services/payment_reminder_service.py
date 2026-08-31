@@ -239,6 +239,68 @@ class PaymentReminderService:
         self._reminders.save(replace(reminder, updated_at=now))
         return self.view(reminder.order_id)
 
+    def change_payment_method(
+        self,
+        order_id: str,
+        *,
+        new_payment_method: str,
+        reason: str,
+        actor_reference: str,
+    ) -> PaymentReminderView:
+        order = self._orders.get_order(order_id)
+        if order is None:
+            raise KeyError(order_id)
+        if order.cancelled_at is not None:
+            raise ValueError("cancelled order cannot change payment method")
+        current = self._reminders.get(order_id)
+        if current is None:
+            raise ValueError("current payment method is missing")
+
+        new_method = validate_payment_method(new_payment_method)
+        if new_method == current.payment_method:
+            raise ValueError("new payment method must differ")
+
+        clean_reason = reason.strip()
+        if not clean_reason or len(clean_reason) > 500:
+            raise ValueError(
+                "payment method change reason must be non-empty and at most 500 chars"
+            )
+        actor = self._actor(actor_reference)
+        if (
+            current.paid_on is not None
+            or current.cash_received
+            or current.paid_recorded_at is not None
+        ):
+            raise ValueError("payment method cannot change after payment")
+
+        now = self._now()
+        if now.utcoffset() is None:
+            raise ValueError("audit clock must return timezone-aware datetime")
+        previous_view = derive_payment_reminder(
+            current,
+            event_date=self._event_date(order_id),
+            today=self._today(),
+        )
+        change = PaymentMethodChange(
+            change_id=str(uuid4()),
+            order_id=order_id,
+            from_method=current.payment_method,
+            to_method=new_method,
+            reason=clean_reason,
+            actor_reference=actor,
+            changed_at=now,
+            retired_task_title=previous_view.next_step,
+            previous_reminder=current,
+        )
+        replacement = OrderPaymentReminder(
+            order_id=order_id,
+            payment_method=new_method,
+            updated_at=now,
+        )
+        validate_payment_reminder(replacement)
+        self._reminders.save_method_change(replacement, change)
+        return self.view(order_id)
+
     def seed_from_conversion(self, order_id: str, payment_method: str) -> None:
         """Persist the explicit conversion choice, with conflict-safe replay."""
         method = validate_payment_method(payment_method)
