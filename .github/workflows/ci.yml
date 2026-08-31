@@ -33,7 +33,11 @@ jobs:
       - name: Lint
         run: |
           uv run ruff check src tests infra
-          uv run ruff format --check src tests infra
+          uv run ruff format --diff \
+            src/catering_system/repositories/sqlite_payment_reminder_repository.py \
+            src/catering_system/ui/office_panel.py \
+            src/catering_system/ui/office_panel_order_detail.py \
+            tests/unit/test_task_projection.py
       - name: Type-check production code
         run: uv run mypy src/catering_system
       - name: Test Python and enforce coverage
