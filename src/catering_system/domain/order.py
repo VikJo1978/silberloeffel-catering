@@ -15,7 +15,10 @@ from dataclasses import dataclass
 from datetime import date, datetime, time
 
 from catering_system.domain.inquiry import PlanningMode
-from catering_system.domain.logistics_timing import validate_optional_service_window
+from catering_system.domain.logistics_timing import (
+    validate_optional_local_time,
+    validate_optional_service_window,
+)
 
 
 @dataclass(frozen=True)
@@ -52,6 +55,8 @@ class OrderVersion:
     delivery_date_local: date | None = None
     delivery_window_start_local: time | None = None
     delivery_window_end_local: time | None = None
+    delivery_time_local: time | None = None
+    event_start_local: time | None = None
 
     def __post_init__(self) -> None:
         validate_optional_service_window(
@@ -60,6 +65,21 @@ class OrderVersion:
             self.delivery_window_end_local,
             label="delivery window",
         )
+        validate_optional_local_time(
+            self.delivery_time_local, label="delivery exact time"
+        )
+        validate_optional_local_time(self.event_start_local, label="event start")
+        if self.delivery_time_local is not None and any(
+            value is not None
+            for value in (
+                self.delivery_date_local,
+                self.delivery_window_start_local,
+                self.delivery_window_end_local,
+            )
+        ):
+            raise ValueError(
+                "delivery exact time and delivery window are mutually exclusive"
+            )
 
 
 def is_order_version_superseded(
