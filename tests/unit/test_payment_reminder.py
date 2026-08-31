@@ -636,9 +636,7 @@ def test_legacy_document_without_audit_does_not_guess_revision_ordering() -> Non
 def test_cancelled_unpaid_payment_tasks_are_derived_as_entfallen() -> None:
     orders, reminders, service = _world()
     order_id = "11111111-1111-4111-8111-111111111111"
-    service.save(
-        OrderPaymentReminder(order_id=order_id, payment_method="VORKASSE")
-    )
+    service.save(OrderPaymentReminder(order_id=order_id, payment_method="VORKASSE"))
     current = orders.get_order(order_id)
     assert current is not None
     cancelled_at = datetime(2026, 7, 16, 11, 0, tzinfo=UTC)
