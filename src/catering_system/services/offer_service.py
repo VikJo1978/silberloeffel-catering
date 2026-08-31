@@ -715,6 +715,8 @@ def _build_version_from_snapshot(
         customer_notes=_normalize_narrative(snapshot.customer_text.notes),
         budget_definition=snapshot.budget_definition,
         charges_definition=snapshot.charges_definition,
+        event_start_local=snapshot.event.event_start_local,
+        delivery_time_local=snapshot.event.delivery_time_local,
         delivery_date_local=snapshot.event.delivery_date_local,
         delivery_window_start_local=snapshot.event.delivery_window_start_local,
         delivery_window_end_local=snapshot.event.delivery_window_end_local,
