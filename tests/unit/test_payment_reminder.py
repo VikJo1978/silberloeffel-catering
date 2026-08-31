@@ -504,6 +504,116 @@ def test_payment_method_change_after_payment_is_forbidden() -> None:
         )
 
 
+def test_rechnung_invoice_task_starts_only_after_fulfilment_date() -> None:
+    _orders, reminders, service = _world()
+    order_id = "11111111-1111-4111-8111-111111111111"
+    service.save(OrderPaymentReminder(order_id=order_id, payment_method="RECHNUNG"))
+
+    before = service.view(order_id)
+    assert before.next_step is None
+    assert before.next_step_due_on is None
+
+    after_service = PaymentReminderService(
+        reminders,
+        _orders,
+        now=lambda: datetime(2026, 7, 21, 8, 0, tzinfo=UTC),
+        today=lambda: date(2026, 7, 21),
+    )
+    after = after_service.view(order_id)
+    assert after.next_step == "Rechnung in der Buchhaltung erstellen"
+    assert after.next_step_due_on == date(2026, 7, 21)
+
+
+def test_rechnung_invoice_due_skips_weekend() -> None:
+    orders = InMemoryOrderRepository()
+    reminders = InMemoryPaymentReminderRepository()
+    order_id = "12121212-1212-4121-8121-121212121212"
+    created = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
+    order = Order(
+        order_id=order_id,
+        source_inquiry_id="22222222-2222-4222-8222-222222222222",
+        created_at=created,
+        updated_at=created,
+    )
+    version = OrderVersion(
+        order_version_id="34343434-3434-4343-8343-343434343434",
+        order_id=order_id,
+        version_number=1,
+        created_at=created,
+        event_date=date(2026, 7, 17),
+        time_window_text="abends",
+        location_text="Hamburg",
+        guest_count_estimate=20,
+        planning_mode="caterer_suggestion",
+    )
+    orders.save_order_with_initial_version(order, version)
+    reminders.save(
+        OrderPaymentReminder(
+            order_id=order_id,
+            payment_method="RECHNUNG",
+            updated_at=created,
+        )
+    )
+    service = PaymentReminderService(
+        reminders,
+        orders,
+        today=lambda: date(2026, 7, 18),
+    )
+
+    view = service.view(order_id)
+
+    assert view.next_step == "Rechnung in der Buchhaltung erstellen"
+    assert view.next_step_due_on == date(2026, 7, 20)
+
+
+def test_rechnung_uses_delivery_date_when_it_is_later_than_event_date() -> None:
+    orders = InMemoryOrderRepository()
+    reminders = InMemoryPaymentReminderRepository()
+    order_id = "56565656-5656-4565-8565-565656565656"
+    created = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
+    order = Order(
+        order_id=order_id,
+        source_inquiry_id="22222222-2222-4222-8222-222222222222",
+        created_at=created,
+        updated_at=created,
+    )
+    version = OrderVersion(
+        order_version_id="78787878-7878-4787-8787-787878787878",
+        order_id=order_id,
+        version_number=1,
+        created_at=created,
+        event_date=date(2026, 7, 20),
+        time_window_text="abends",
+        location_text="Hamburg",
+        guest_count_estimate=20,
+        planning_mode="caterer_suggestion",
+        delivery_date_local=date(2026, 7, 22),
+    )
+    orders.save_order_with_initial_version(order, version)
+    reminders.save(
+        OrderPaymentReminder(
+            order_id=order_id,
+            payment_method="RECHNUNG",
+            updated_at=created,
+        )
+    )
+
+    before = PaymentReminderService(
+        reminders,
+        orders,
+        today=lambda: date(2026, 7, 21),
+    ).view(order_id)
+    assert before.next_step is None
+
+    after = PaymentReminderService(
+        reminders,
+        orders,
+        today=lambda: date(2026, 7, 23),
+    ).view(order_id)
+    assert after.next_step == "Rechnung in der Buchhaltung erstellen"
+    assert after.next_step_due_on == date(2026, 7, 23)
+
+
 def test_payment_completion_correction_preserves_invoice_payment_audit() -> None:
     _orders, reminders, service = _world()
     order_id = "11111111-1111-4111-8111-111111111111"
