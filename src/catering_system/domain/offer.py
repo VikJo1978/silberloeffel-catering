@@ -245,11 +245,11 @@ class OfferVersion:
     # on legacy snapshots that never sent one; their positions (historically
     # always kind="fee") are untouched and not reinterpreted.
     charges_definition: OfferChargesDefinition | None = None
-    event_start_local: time | None = None
-    delivery_time_local: time | None = None
     delivery_date_local: date | None = None
     delivery_window_start_local: time | None = None
     delivery_window_end_local: time | None = None
+    event_start_local: time | None = None
+    delivery_time_local: time | None = None
 
     def __post_init__(self) -> None:
         _require_text(self.offer_version_id, "offer_version_id")
