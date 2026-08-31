@@ -33,6 +33,7 @@ from catering_system.domain.courier_cash_handoff import (
     CourierCashProjection,
     UnsupportedCourierCashContractVersion,
 )
+from catering_system.domain.inquiry import FulfillmentMode, Inquiry
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_payment_reminder import OrderPaymentReminder
 from catering_system.domain.wochenuebersicht import WochenuebersichtEntry
@@ -60,6 +61,7 @@ from catering_system.services.task_projection_service import TaskProjectionServi
 from catering_system.ui.kiosk_server import render_order_feed_json
 from tests.helpers.offer_pdf_static_content import fake_offer_pdf_static_content
 
+_INQUIRY_ID = "20000000-0000-4000-8000-000000000001"
 _ORDER_ID = "50000000-0000-4000-8000-000000000001"
 _VERSION_ID = "70000000-0000-4000-8000-000000000001"
 _ASSIGNMENT_ID = "60000000-0000-4000-8000-000000000001"
@@ -70,6 +72,7 @@ def _seed_world(
     db: Path,
     *,
     quittung_printed: bool = True,
+    fulfillment_mode: FulfillmentMode = "DELIVERY",
 ) -> tuple[
     sqlite3.Connection,
     SQLiteOrderRepository,
@@ -80,9 +83,29 @@ def _seed_world(
     CourierCashService,
 ]:
     connection = open_core_connection(db)
+    inquiries = SQLiteInquiryRepository.from_connection(connection)
     orders = SQLiteOrderRepository.from_connection(connection)
     payments = SQLitePaymentReminderRepository.from_connection(connection)
     cash_events = SQLiteCourierCashRepository.from_connection(connection)
+
+    inquiries.save(
+        Inquiry(
+            inquiry_id=_INQUIRY_ID,
+            event_date=date(2026, 8, 31),
+            created_at=datetime(2026, 8, 31, 7, 0, tzinfo=UTC),
+            updated_at=datetime(2026, 8, 31, 7, 0, tzinfo=UTC),
+            inquiry_source="manual",
+            crm_stage="Bestätigt / Auftrag",
+            customer_linkage={},
+            time_window_text="12:00",
+            location_text="Hamburg",
+            guest_count_estimate=20,
+            planning_mode="caterer_suggestion",
+            call_verification_required=False,
+            call_verification_status="not_required",
+            fulfillment_mode=fulfillment_mode,
+        )
+    )
 
     version = OrderVersion(
         order_version_id=_VERSION_ID,
@@ -97,7 +120,7 @@ def _seed_world(
     )
     order = Order(
         order_id=_ORDER_ID,
-        source_inquiry_id="20000000-0000-4000-8000-000000000001",
+        source_inquiry_id=_INQUIRY_ID,
         created_at=version.created_at,
         updated_at=version.created_at,
         candidate_order_version_id=_VERSION_ID,
@@ -121,6 +144,7 @@ def _seed_world(
     context_service = CourierCashContextService(orders, payments, cash_events)
     service = CourierCashService(
         orders,
+        inquiries,
         payments,
         cash_events,
         payment_service,
@@ -259,7 +283,9 @@ def test_driver_to_chef_requires_two_transitions_before_final_payment(
 
 def test_direct_chef_pickup_finalizes_without_driver_custody(tmp_path: Path) -> None:
     db = tmp_path / "core.db"
-    connection, _orders, payments, _cash, _payment, context, service = _seed_world(db)
+    connection, _orders, payments, _cash, _payment, context, service = _seed_world(
+        db, fulfillment_mode="PICKUP"
+    )
 
     result = service.process(
         _command(
@@ -273,6 +299,28 @@ def test_direct_chef_pickup_finalizes_without_driver_custody(tmp_path: Path) -> 
     assert result.cash_state == STATE_FINAL_PAID
     paid = payments.get(_ORDER_ID)
     assert paid is not None and paid.cash_received is True
+    connection.close()
+
+
+def test_direct_chef_cash_is_rejected_for_delivery(tmp_path: Path) -> None:
+    db = tmp_path / "core.db"
+    connection, _orders, payments, _cash, _payment, context, service = _seed_world(db)
+
+    with pytest.raises(CourierCashCommandError) as exc:
+        service.process(
+            _command(
+                context,
+                event_type=EVENT_CHEF_DIRECT,
+                actor_role="CHEF",
+                actor_id="chef-2",
+            )
+        )
+
+    assert exc.value.code == "invalid_transition"
+    payment = payments.get(_ORDER_ID)
+    assert payment is not None
+    assert payment.cash_received is False
+    assert payment.paid_on is None
     connection.close()
 
 
