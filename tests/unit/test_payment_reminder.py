@@ -370,7 +370,81 @@ def test_service_discards_legacy_manual_due_date() -> None:
     assert service.view(order_id).due_on == date(2026, 7, 29)
 
 
-def test_payment_method_cannot_change_after_downstream_facts() -> None:
+def test_direct_save_cannot_silently_change_payment_method() -> None:
+    _orders, _reminders, service = _world()
+    order_id = "11111111-1111-4111-8111-111111111111"
+    service.save(OrderPaymentReminder(order_id=order_id, payment_method="RECHNUNG"))
+
+    with pytest.raises(ValueError, match="explicit command"):
+        service.save(
+            OrderPaymentReminder(order_id=order_id, payment_method="BAR_VOR_ORT")
+        )
+
+
+def test_explicit_payment_method_change_archives_facts_and_resets_workflow() -> None:
+    _orders, reminders, service = _world()
+    order_id = "11111111-1111-4111-8111-111111111111"
+    service.save(
+        OrderPaymentReminder(
+            order_id=order_id,
+            payment_method="RECHNUNG",
+            invoice_created=True,
+            invoice_number="RE-OLD-1",
+            sent_on=date(2026, 7, 15),
+        ),
+        actor_reference="Alice",
+    )
+
+    changed = service.change_payment_method(
+        order_id,
+        new_payment_method="BAR_VOR_ORT",
+        reason="Kunde zahlt bei Abholung bar",
+        actor_reference="Bob",
+    )
+
+    assert changed.payment_method == "BAR_VOR_ORT"
+    assert changed.invoice_created is False
+    assert changed.invoice_number is None
+    assert changed.sent_on is None
+    assert changed.quittung_printed is False
+    assert changed.next_step == "Quittung vorbereiten/drucken"
+    assert len(changed.method_changes) == 1
+
+    event = changed.method_changes[0]
+    assert event.from_method == "RECHNUNG"
+    assert event.to_method == "BAR_VOR_ORT"
+    assert event.reason == "Kunde zahlt bei Abholung bar"
+    assert event.actor_reference == "Bob"
+    assert event.changed_at == _NOW
+    assert event.retired_task_title == "Zahlungseingang prüfen"
+    assert event.previous_reminder.invoice_number == "RE-OLD-1"
+    assert event.previous_reminder.invoice_created_by == "Alice"
+    assert reminders.get(order_id) is not None
+    assert reminders.get(order_id).payment_method == "BAR_VOR_ORT"
+
+
+def test_payment_method_change_requires_reason_and_different_method() -> None:
+    _orders, _reminders, service = _world()
+    order_id = "11111111-1111-4111-8111-111111111111"
+    service.save(OrderPaymentReminder(order_id=order_id, payment_method="VORKASSE"))
+
+    with pytest.raises(ValueError, match="reason"):
+        service.change_payment_method(
+            order_id,
+            new_payment_method="RECHNUNG",
+            reason=" ",
+            actor_reference="Alice",
+        )
+    with pytest.raises(ValueError, match="must differ"):
+        service.change_payment_method(
+            order_id,
+            new_payment_method="VORKASSE",
+            reason="Korrektur",
+            actor_reference="Alice",
+        )
+
+
+def test_payment_method_change_after_payment_is_forbidden() -> None:
     _orders, _reminders, service = _world()
     order_id = "11111111-1111-4111-8111-111111111111"
     service.save(
@@ -378,13 +452,19 @@ def test_payment_method_cannot_change_after_downstream_facts() -> None:
             order_id=order_id,
             payment_method="RECHNUNG",
             invoice_created=True,
-            invoice_number="RE-1",
-        )
+            invoice_number="RE-PAID-1",
+            sent_on=date(2026, 7, 1),
+            paid_on=date(2026, 7, 15),
+        ),
+        actor_reference="Alice",
     )
 
-    with pytest.raises(ValueError, match="cannot change"):
-        service.save(
-            OrderPaymentReminder(order_id=order_id, payment_method="BAR_VOR_ORT")
+    with pytest.raises(ValueError, match="after payment"):
+        service.change_payment_method(
+            order_id,
+            new_payment_method="BAR_VOR_ORT",
+            reason="Zu spät bemerkt",
+            actor_reference="Bob",
         )
 
 
