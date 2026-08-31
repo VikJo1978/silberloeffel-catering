@@ -82,12 +82,7 @@ def _run(
 def test_backup_health_accepts_fresh_valid_artifacts(tmp_path: Path) -> None:
     database, local_dir, encrypted_dir, _, _ = _fixture(tmp_path)
 
-    result = _run(
-        database,
-        local_dir,
-        encrypted_dir,
-        "--compare-live-counts",
-    )
+    result = _run(database, local_dir, encrypted_dir, "--compare-live-counts")
 
     assert result.returncode == 0
     assert "OK local_backup" in result.stdout
