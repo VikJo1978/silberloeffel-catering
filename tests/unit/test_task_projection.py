@@ -358,9 +358,7 @@ def test_payment_method_change_retires_old_task_and_projects_new_one() -> None:
         orders=orders,
         payment_reminders=reminders,
     ).list_tasks()
-    assert any(
-        row.title == "Rechnung in der Buchhaltung erstellen" for row in before
-    )
+    assert any(row.title == "Rechnung in der Buchhaltung erstellen" for row in before)
 
     payment.change_payment_method(
         order.order_id,
