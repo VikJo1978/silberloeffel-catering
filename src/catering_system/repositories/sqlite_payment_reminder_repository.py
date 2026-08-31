@@ -203,9 +203,7 @@ def _reminder_from_payload(payload: dict[str, object]) -> OrderPaymentReminder:
         cash_received=bool(payload["cash_received"]),
         quittung_printed=bool(payload["quittung_printed"]),
         updated_at=_datetime(_optional_text(payload.get("updated_at"))),
-        invoice_created_at=_datetime(
-            _optional_text(payload.get("invoice_created_at"))
-        ),
+        invoice_created_at=_datetime(_optional_text(payload.get("invoice_created_at"))),
         invoice_created_by=_optional_text(payload.get("invoice_created_by")),
         invoice_sent_recorded_at=_datetime(
             _optional_text(payload.get("invoice_sent_recorded_at"))
@@ -225,9 +223,7 @@ def _reminder_from_payload(payload: dict[str, object]) -> OrderPaymentReminder:
             _optional_text(payload.get("quittung_printed_at"))
         ),
         quittung_printed_by=_optional_text(payload.get("quittung_printed_by")),
-        paid_recorded_at=_datetime(
-            _optional_text(payload.get("paid_recorded_at"))
-        ),
+        paid_recorded_at=_datetime(_optional_text(payload.get("paid_recorded_at"))),
         paid_recorded_by=_optional_text(payload.get("paid_recorded_by")),
     )
 
