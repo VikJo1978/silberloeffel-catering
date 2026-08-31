@@ -56,6 +56,41 @@ class PaymentReminderService:
             raise ValueError("order has no event date")
         return version.event_date
 
+    def _fulfilment_date(self, order_id: str) -> date:
+        order = self._orders.get_order(order_id)
+        if order is None:
+            raise KeyError(order_id)
+        versions = self._orders.list_order_versions(order_id)
+        version = None
+        for preferred_id in (
+            order.effective_order_version_id,
+            order.candidate_order_version_id,
+        ):
+            if preferred_id is None:
+                continue
+            version = next(
+                (
+                    item
+                    for item in versions
+                    if item.order_version_id == preferred_id
+                ),
+                None,
+            )
+            if version is not None:
+                break
+        if version is None:
+            version = max(versions, key=lambda item: item.version_number, default=None)
+        if version is None:
+            raise ValueError("order has no fulfilment date")
+        return version.delivery_date_local or version.event_date
+
+    @staticmethod
+    def _next_working_day(day: date) -> date:
+        candidate = day + timedelta(days=1)
+        while candidate.weekday() >= 5:
+            candidate += timedelta(days=1)
+        return candidate
+
     def view(self, order_id: str) -> PaymentReminderView:
         order = self._orders.get_order(order_id)
         if order is None:
@@ -92,6 +127,15 @@ class PaymentReminderService:
 
         if reminder is None:
             return view
+        if reminder.payment_method == "RECHNUNG" and not reminder.invoice_created:
+            fulfilment_date = self._fulfilment_date(order_id)
+            if self._today() <= fulfilment_date:
+                return replace(view, next_step=None, next_step_due_on=None)
+            return replace(
+                view,
+                next_step="Rechnung in der Buchhaltung erstellen",
+                next_step_due_on=self._next_working_day(fulfilment_date),
+            )
         revisions = [
             version.created_at
             for version in self._orders.list_order_versions(order_id)
