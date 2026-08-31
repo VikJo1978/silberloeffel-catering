@@ -388,3 +388,36 @@ def test_optional_long_text_length_limit_is_enforced() -> None:
     payload["snapshot_hash"] = compute_snapshot_hash(payload)
     with pytest.raises(ValueError, match="notes exceeds length limit"):
         validate_offer_snapshot(payload)
+
+
+
+def test_exact_event_times_are_accepted_without_delivery_window() -> None:
+    payload = _valid_snapshot()
+    event = cast(dict[str, object], payload["event"])
+    event["time_window_text"] = "18:00"
+    event["delivery_time_local"] = "16:30"
+    event["event_start_local"] = "18:00"
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+
+    snapshot = validate_offer_snapshot(payload)
+
+    assert snapshot.event.delivery_time_local is not None
+    assert snapshot.event.delivery_time_local.strftime("%H:%M") == "16:30"
+    assert snapshot.event.event_start_local is not None
+    assert snapshot.event.event_start_local.strftime("%H:%M") == "18:00"
+    assert snapshot.event.delivery_date_local is None
+    assert snapshot.event.delivery_window_start_local is None
+    assert snapshot.event.delivery_window_end_local is None
+
+
+def test_exact_delivery_time_rejects_legacy_delivery_window_combination() -> None:
+    payload = _valid_snapshot()
+    event = cast(dict[str, object], payload["event"])
+    event["delivery_date_local"] = "2026-07-25"
+    event["delivery_window_start_local"] = "16:00"
+    event["delivery_window_end_local"] = "17:00"
+    event["delivery_time_local"] = "16:30"
+    payload["snapshot_hash"] = compute_snapshot_hash(payload)
+
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        validate_offer_snapshot(payload)
