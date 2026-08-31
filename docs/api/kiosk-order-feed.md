@@ -1,8 +1,11 @@
 # Kiosk order feed API
 
 The kitchen kiosk exposes one read-only JSON route so the separate courier
-app (Tourenplanung) can list the released orders of a given date. The courier
-app talks only to the kiosk; Core keeps exactly one reader.
+app (Tourenplanung) can list the released orders of a given date. Planning
+reads continue to go only through Kiosk. Issue #202 deliberately introduces a
+separate exception for authenticated cash **writes**: the Courier backend will
+write directly to a dedicated Core machine endpoint. Kiosk itself remains
+strictly read-only and is not a write relay.
 
 The original route/selection contract is frozen in
 [KIOSK_ORDER_FEED_PACK_V1](../archive/packs/KIOSK_ORDER_FEED_PACK_V1.md).
@@ -10,6 +13,24 @@ Issue #171 evolves the order payload with the explicit planning-only extension
 [KIOSK_ORDER_FEED_RETURN_LOGISTICS_V2](../proposals/KIOSK_ORDER_FEED_RETURN_LOGISTICS_V2.md).
 Issue #175 adds canonical local planning timing in
 [KIOSK_ORDER_FEED_LOGISTICS_TIMING_V3](../proposals/KIOSK_ORDER_FEED_LOGISTICS_TIMING_V3.md).
+
+Issue #202 freezes the next additive BAR execution projection plus the separate
+authenticated Courier -> Core write contract in
+[COURIER_CASH_HANDOFF_CONTRACT_V1](../contracts/courier-cash-handoff-v1/README.md).
+The current runtime does **not** project `cash_handoff` yet. Until the rollout
+slice is deployed, its absence explicitly means that Courier must hide all BAR
+execution actions rather than infer payment or Quittung state.
+
+When rolled out, each order gains an additive `cash_handoff` field:
+
+- absent: producer has not enabled contract V1;
+- `null`: contract enabled, current Order does not require BAR execution;
+- object: frozen V1 object with `bar_required=true`,
+  `quittung_status`, immutable effective `order_version_id` and opaque
+  `cash_execution_context_id`.
+
+No amount, price, billing data, invoice/Quittung contents or PDF crosses that
+extension. The write route belongs to Core, not this Kiosk server.
 
 ## Route
 
@@ -92,9 +113,13 @@ count.
 without deliveries. Ordering remains deterministic: `(time_window_text,
 order_id)`.
 
-No version numbers, planning mode, or direct customer identity/contact fields
-are exposed. The payload is still sensitive operational data (event addresses,
-dates, time windows): keep it out of logs, chats, and screenshots.
+The current V3 runtime exposes no version numbers, planning mode, or direct
+customer identity/contact fields. The #202 rollout adds only the immutable
+`order_version_id` inside the narrow `cash_handoff` object because stale
+execution must be rejected explicitly; it does not expose the human numeric
+version or any additional customer data. The payload remains sensitive
+operational data (event addresses, dates, time windows): keep it out of logs,
+chats, and screenshots.
 
 ## Selection semantics
 
