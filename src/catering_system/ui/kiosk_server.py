@@ -207,6 +207,16 @@ def _order_feed_entry_projection(
         "time_window_text": entry.time_window_text,
         "location_text": entry.location_text,
         "guest_count_estimate": entry.guest_count_estimate,
+        **(
+            {"event_start_local": entry.event_start_local.strftime("%H:%M")}
+            if entry.event_start_local is not None
+            else {}
+        ),
+        **(
+            {"delivery_time_local": entry.delivery_time_local.strftime("%H:%M")}
+            if entry.delivery_time_local is not None
+            else {}
+        ),
         "return_logistics": _return_logistics_projection(
             entry.event_date, return_logistics
         ),

@@ -639,6 +639,7 @@ def test_component_migrations_are_recorded_once(tmp_path: Path) -> None:
         ("orders", 8),  # frozen operational context per order version
         ("orders", 9),  # frozen fulfillment mode in operational context
         ("orders", 10),  # canonical delivery timing on immutable order versions
+        ("orders", 11),  # exact event-start and delivery times
     ]
 
 

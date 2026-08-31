@@ -15,7 +15,10 @@ from dataclasses import dataclass
 from datetime import date, datetime, time
 
 from catering_system.domain.inquiry import PlanningMode
-from catering_system.domain.logistics_timing import validate_optional_service_window
+from catering_system.domain.logistics_timing import (
+    validate_optional_local_time,
+    validate_optional_service_window,
+)
 
 
 @dataclass(frozen=True)
@@ -52,8 +55,12 @@ class OrderVersion:
     delivery_date_local: date | None = None
     delivery_window_start_local: time | None = None
     delivery_window_end_local: time | None = None
+    event_start_local: time | None = None
+    delivery_time_local: time | None = None
 
     def __post_init__(self) -> None:
+        validate_optional_local_time(self.event_start_local, label="event start")
+        validate_optional_local_time(self.delivery_time_local, label="delivery time")
         validate_optional_service_window(
             self.delivery_date_local,
             self.delivery_window_start_local,

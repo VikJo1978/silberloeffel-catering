@@ -129,3 +129,24 @@ def test_same_day_pickup_text_is_not_parsed_when_canonical_times_are_missing() -
         "return_date": "2026-10-01",
         "pickup_window_text": "22:00-23:00",
     }
+
+
+def test_exact_delivery_and_event_start_project_without_synthetic_window() -> None:
+    entry = WochenuebersichtEntry(
+        order_id="order-exact",
+        effective_order_version_id="version-exact",
+        version_number=1,
+        event_date=date(2026, 10, 1),
+        time_window_text="18:00",
+        location_text="Hamburg",
+        guest_count_estimate=40,
+        planning_mode=PLANNING_MODES[0],
+        event_start_local=time(18, 0),
+        delivery_time_local=time(16, 30),
+    )
+
+    order = _render(entry)
+
+    assert order["event_start_local"] == "18:00"
+    assert order["delivery_time_local"] == "16:30"
+    assert "delivery_window" not in order
