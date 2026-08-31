@@ -122,15 +122,10 @@ class PaymentReminderService:
                 )
             return view
 
-        invoice_audit = [
-            timestamp
-            for timestamp in (
-                reminder.invoice_created_at,
-                reminder.invoice_sent_recorded_at,
-            )
-            if timestamp is not None
-        ]
-        if invoice_audit and latest_revision_at > max(invoice_audit):
+        invoice_recorded_at = (
+            reminder.invoice_created_at or reminder.invoice_sent_recorded_at
+        )
+        if invoice_recorded_at is not None and latest_revision_at > invoice_recorded_at:
             return replace(
                 view,
                 next_step="Rechnungskorrektur erforderlich",
