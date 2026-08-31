@@ -3662,7 +3662,9 @@ class _RemoteInquiryService:
         args: dict[str, object] = {
             "event_date": values["event_date"].isoformat(),
             "crm_stage": values["crm_stage"],
-            "time_window_text": values.get("time_window_text", current.time_window_text),
+            "time_window_text": values.get(
+                "time_window_text", current.time_window_text
+            ),
             "location_text": values["location_text"],
             "guest_count_estimate": values["guest_count_estimate"],
             "planning_mode": values["planning_mode"],
@@ -3699,7 +3701,9 @@ class _RemoteInquiryService:
             current,
             event_date=values["event_date"],
             crm_stage=validate_crm_stage(values["crm_stage"]),
-            time_window_text=values.get("time_window_text", current.time_window_text),
+            time_window_text=values.get(
+                "time_window_text", current.time_window_text
+            ),
             location_text=values["location_text"],
             guest_count_estimate=values["guest_count_estimate"],
             planning_mode=validate_planning_mode(values["planning_mode"]),
@@ -3712,7 +3716,9 @@ class _RemoteInquiryService:
             ),
             customer_id=current.customer_id,
             customer_snapshot=current.customer_snapshot,
-            event_start_local=values.get("event_start_local", current.event_start_local),
+            event_start_local=values.get(
+                "event_start_local", current.event_start_local
+            ),
             delivery_time_local=values.get(
                 "delivery_time_local", current.delivery_time_local
             ),
