@@ -130,9 +130,10 @@ class CourierCashService:
                 raise CourierCashCommandError("invalid_transition", 409)
             to_state = STATE_MANUAL_REVIEW
         else:
-            to_state = _TRANSITIONS.get((from_state, command.event_type))
-            if to_state is None:
+            next_state = _TRANSITIONS.get((from_state, command.event_type))
+            if next_state is None:
                 raise CourierCashCommandError("invalid_transition", 409)
+            to_state = next_state
             if (
                 from_state == STATE_READY
                 and projection.quittung_status != QUITTUNG_PRINTED_CURRENT
