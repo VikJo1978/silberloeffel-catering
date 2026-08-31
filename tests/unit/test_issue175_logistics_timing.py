@@ -191,7 +191,6 @@ def test_next_working_day_never_carries_canonical_pickup_times() -> None:
         )
 
 
-
 def test_exact_delivery_and_event_start_roundtrip_without_fabricated_window(
     tmp_path: Path,
 ) -> None:
