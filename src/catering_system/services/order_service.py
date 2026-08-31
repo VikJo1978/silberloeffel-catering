@@ -197,16 +197,12 @@ class OrderService:
             location_text=location_text,
             guest_count_estimate=guest_count_estimate,
             planning_mode=pm,
-            event_start_local=(
-                latest_version.event_start_local
-                if latest_version is not None
-                else None
-            ),
-            delivery_time_local=(
-                latest_version.delivery_time_local
-                if latest_version is not None
-                else None
-            ),
+            event_start_local=latest_version.event_start_local
+            if latest_version is not None
+            else None,
+            delivery_time_local=latest_version.delivery_time_local
+            if latest_version is not None
+            else None,
             delivery_date_local=(
                 latest_version.delivery_date_local
                 if latest_version is not None
