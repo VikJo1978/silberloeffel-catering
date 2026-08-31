@@ -1,6 +1,6 @@
 # BACKUP_HEALTH_AND_ALERTING_V1 (proposal)
 
-Status: **not implemented** — audit recorded **2026-07-19T22:58:14Z**.
+Status: **verification Slice A tracked in #215**; external alert delivery remains a follow-up.
 
 ## Current backup truth (Lenovo Core)
 
