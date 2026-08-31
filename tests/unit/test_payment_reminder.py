@@ -8,6 +8,7 @@ import pytest
 from catering_system.domain.order import Order, OrderVersion
 from catering_system.domain.order_payment_reminder import (
     OrderPaymentReminder,
+    PaymentCompletionCorrection,
     derive_payment_reminder,
     validate_payment_reminder,
 )
@@ -623,6 +624,99 @@ def test_cash_payment_completion_correction_restores_open_cash_state() -> None:
     assert corrected.cash_received is False
     assert corrected.quittung_printed is True
     assert corrected.payment_corrections[0].previous_reminder.cash_received is True
+
+
+def test_payment_completion_correction_rejects_invalid_command_metadata() -> None:
+    orders, reminders, _service = _world()
+    order_id = "11111111-1111-4111-8111-111111111111"
+    service = PaymentReminderService(
+        reminders,
+        orders,
+        now=lambda: _NOW.replace(tzinfo=None),
+        today=lambda: date(2026, 7, 15),
+    )
+    reminders.save(
+        OrderPaymentReminder(
+            order_id=order_id,
+            payment_method="RECHNUNG",
+            invoice_created=True,
+            invoice_number="RE-META-1",
+            sent_on=date(2026, 7, 1),
+            paid_on=date(2026, 7, 15),
+            paid_recorded_at=_NOW,
+            paid_recorded_by="Alice",
+            updated_at=_NOW,
+        )
+    )
+
+    with pytest.raises(ValueError, match="id is required"):
+        service.correct_payment_completion(
+            order_id,
+            correction_id=" ",
+            reason="Fehleingabe",
+            actor_reference="Bob",
+        )
+    with pytest.raises(ValueError, match="reason"):
+        service.correct_payment_completion(
+            order_id,
+            correction_id="meta-1",
+            reason=" ",
+            actor_reference="Bob",
+        )
+    with pytest.raises(ValueError, match="actor_reference"):
+        service.correct_payment_completion(
+            order_id,
+            correction_id="meta-2",
+            reason="Fehleingabe",
+            actor_reference=" ",
+        )
+    with pytest.raises(ValueError, match="timezone-aware"):
+        service.correct_payment_completion(
+            order_id,
+            correction_id="meta-3",
+            reason="Fehleingabe",
+            actor_reference="Bob",
+        )
+
+
+def test_in_memory_payment_correction_repository_replay_and_conflict() -> None:
+    reminders = InMemoryPaymentReminderRepository()
+    order_id = "11111111-1111-4111-8111-111111111111"
+    previous = OrderPaymentReminder(
+        order_id=order_id,
+        payment_method="RECHNUNG",
+        invoice_created=True,
+        invoice_number="RE-MEM-1",
+        sent_on=date(2026, 7, 1),
+        paid_on=date(2026, 7, 15),
+        paid_recorded_at=_NOW,
+        paid_recorded_by="Alice",
+        updated_at=_NOW,
+    )
+    current = replace(
+        previous,
+        paid_on=None,
+        paid_recorded_at=None,
+        paid_recorded_by=None,
+    )
+    correction = PaymentCompletionCorrection(
+        correction_id="mem-correction-1",
+        order_id=order_id,
+        reason="Fehleingabe",
+        actor_reference="Bob",
+        corrected_at=_NOW,
+        previous_reminder=previous,
+    )
+
+    reminders.save_payment_correction(current, correction)
+    reminders.save_payment_correction(current, correction)
+
+    assert reminders.get(order_id) == current
+    assert reminders.list_payment_corrections(order_id) == (correction,)
+
+    conflicting = replace(correction, reason="Anderer Grund")
+    with pytest.raises(ValueError, match="id conflict"):
+        reminders.save_payment_correction(current, conflicting)
 
 
 def test_invoice_recorded_before_order_revision_requires_correction() -> None:
