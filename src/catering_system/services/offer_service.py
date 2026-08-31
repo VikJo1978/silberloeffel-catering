@@ -718,6 +718,8 @@ def _build_version_from_snapshot(
         delivery_date_local=snapshot.event.delivery_date_local,
         delivery_window_start_local=snapshot.event.delivery_window_start_local,
         delivery_window_end_local=snapshot.event.delivery_window_end_local,
+        delivery_time_local=snapshot.event.delivery_time_local,
+        event_start_local=snapshot.event.event_start_local,
     )
 
 
