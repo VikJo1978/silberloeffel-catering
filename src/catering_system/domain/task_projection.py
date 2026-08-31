@@ -16,7 +16,7 @@ TaskCategory = Literal[
     "payment",
 ]
 TaskEntityType = Literal["inquiry", "offer", "order"]
-TaskUrgency = Literal["overdue", "normal"]
+TaskUrgency = Literal["overdue", "urgent", "normal"]
 
 
 @dataclass(frozen=True)
@@ -57,7 +57,7 @@ def task_sort_key(
 
 
 def _sort_tier(task: TaskProjection) -> int:
-    if task.category == "payment" and task.urgency == "overdue":
+    if task.category == "payment" and task.urgency in {"overdue", "urgent"}:
         return 0
     if task.category == "verify":
         return 1
