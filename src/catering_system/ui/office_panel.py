@@ -4440,9 +4440,7 @@ class OfficePanel:
         *,
         actor_reference: str = "office-panel",
     ) -> None:
-        new_payment_method = validate_payment_method(
-            form.get("new_payment_method", "")
-        )
+        new_payment_method = validate_payment_method(form.get("new_payment_method", ""))
         reason = form.get("reason", "").strip()
         if not reason:
             raise ValueError("Grund für die Änderung ist erforderlich.")
