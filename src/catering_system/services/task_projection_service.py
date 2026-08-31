@@ -133,36 +133,37 @@ class TaskProjectionService:
                 )
 
         for order in orders:
-            if order.cancelled_at is not None:
-                continue
             versions = self._orders.list_order_versions(order.order_id)
-            next_action = resolve_next_action(order, versions)
             linked_inquiry = self._inquiries.get_by_id(order.source_inquiry_id)
             subtitle = _order_subtitle(linked_inquiry, order, versions)
             event_date = _order_event_date(order, versions)
-            if next_action is not None:
-                version_id = next_action["order_version_id"]
-                if next_action["action"] == "print-confirm":
-                    tasks.append(
-                        (
-                            TaskProjection(
-                                task_id=(
-                                    f"order:{order.order_id}:print-confirm:{version_id}"
+
+            if order.cancelled_at is None:
+                next_action = resolve_next_action(order, versions)
+                if next_action is not None:
+                    version_id = next_action["order_version_id"]
+                    if next_action["action"] == "print-confirm":
+                        tasks.append(
+                            (
+                                TaskProjection(
+                                    task_id=(
+                                        f"order:{order.order_id}:print-confirm:{version_id}"
+                                    ),
+                                    category="order_print",
+                                    title="Druck bestätigen",
+                                    subtitle=subtitle,
+                                    entity_type="order",
+                                    entity_id=order.order_id,
+                                    action_label="Auftrag öffnen",
+                                    action_href=f"/order/{order.order_id}",
+                                    due_at=None,
+                                    urgency="normal",
+                                    opened_at=order.created_at,
                                 ),
-                                category="order_print",
-                                title="Druck bestätigen",
-                                subtitle=subtitle,
-                                entity_type="order",
-                                entity_id=order.order_id,
-                                action_label="Auftrag öffnen",
-                                action_href=f"/order/{order.order_id}",
-                                due_at=None,
-                                urgency="normal",
-                                opened_at=order.created_at,
-                            ),
-                            event_date,
+                                event_date,
+                            )
                         )
-                    )
+
             try:
                 payment = self._payment_reminders.view(order.order_id)
             except (KeyError, ValueError):
