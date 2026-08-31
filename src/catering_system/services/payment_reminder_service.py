@@ -445,11 +445,7 @@ class PaymentReminderService:
         now = self._now()
         if now.utcoffset() is None:
             raise ValueError("audit clock must return timezone-aware datetime")
-        previous_view = derive_payment_reminder(
-            current,
-            event_date=self._event_date(order_id),
-            today=self._today(),
-        )
+        previous_view = self.view(order_id)
         change = PaymentMethodChange(
             change_id=str(uuid4()),
             order_id=order_id,
