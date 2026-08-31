@@ -168,6 +168,7 @@ class OrderDetailFormFields:
     version_command_fields: str
     payment_command_fields: str
     payment_method_command_fields: str = ""
+    payment_correction_command_fields: str = ""
     confirmation_command_fields: str = ""
     print_confirm_button_labels: Mapping[str, str] = field(default_factory=dict)
     print_status_messages: Mapping[str, str] = field(default_factory=dict)
@@ -936,6 +937,59 @@ def _payment_method_change_form(
     )
 
 
+def _payment_correction_form(
+    order: Order,
+    payment: PaymentReminderView,
+    forms: OrderDetailFormFields,
+    *,
+    context: OfficePageContext,
+) -> str:
+    if (
+        order.cancelled_at is not None
+        or not context.can("orders.payment.reminder")
+        or (payment.paid_on is None and not payment.cash_received)
+    ):
+        return ""
+    return (
+        '<details class="order-payment-correction">'
+        "<summary>Zahlungsstatus korrigieren</summary>"
+        f'<form method="post" action="/order/{_e(order.order_id)}/payment-correction">'
+        f"{forms.csrf_input}{forms.payment_correction_command_fields}<fieldset>"
+        "<p>Die bisherige Zahlungsbestätigung bleibt in der Historie erhalten.</p>"
+        "<p><label>Grund*</label>"
+        '<textarea name="reason" maxlength="500" required></textarea></p>'
+        '<p><button type="submit">Zahlungsstatus korrigieren</button></p>'
+        "</fieldset></form></details>"
+    )
+
+
+def _payment_correction_history(payment: PaymentReminderView) -> str:
+    if not payment.payment_corrections:
+        return ""
+    rows: list[str] = []
+    for correction in payment.payment_corrections:
+        previous = correction.previous_reminder
+        previous_paid = (
+            previous.paid_on.strftime("%d.%m.%Y")
+            if previous.paid_on is not None
+            else "Barzahlung erfasst"
+        )
+        rows.append(
+            "<li>"
+            f"<strong>Zahlungsbestätigung korrigiert</strong>"
+            f" · {_e(correction.corrected_at.strftime('%d.%m.%Y · %H:%M'))}"
+            f" · {_e(correction.actor_reference)}"
+            f"<br>Vorher: {_e(previous_paid)}"
+            f"<br>Grund: {_e(correction.reason)}"
+            "</li>"
+        )
+    return (
+        '<details class="order-payment-correction-history">'
+        f"<summary>Zahlungskorrekturen ({len(rows)})</summary>"
+        f"<ul>{''.join(rows)}</ul></details>"
+    )
+
+
 def _payment_method_history(payment: PaymentReminderView) -> str:
     if not payment.method_changes:
         return ""
@@ -1043,7 +1097,9 @@ def _payment_card(
         f"<strong>{_e(next_step)}</strong></div>"
         + _payment_form(order, payment, forms, context=context)
         + _payment_method_change_form(order, payment, forms, context=context)
+        + _payment_correction_form(order, payment, forms, context=context)
         + _payment_method_history(payment)
+        + _payment_correction_history(payment)
         + "</section>"
     )
 
