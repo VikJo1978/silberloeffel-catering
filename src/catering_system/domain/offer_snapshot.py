@@ -62,12 +62,12 @@ class OfferSnapshotEvent:
     location_text: str
     guest_count: int | None
     planning_mode: PlanningMode
-    event_start_local: time | None = None
-    delivery_time_local: time | None = None
     # Legacy V3 logistics window fields remain readable for historical snapshots.
     delivery_date_local: date | None = None
     delivery_window_start_local: time | None = None
     delivery_window_end_local: time | None = None
+    event_start_local: time | None = None
+    delivery_time_local: time | None = None
 
     def __post_init__(self) -> None:
         validate_optional_service_window(
