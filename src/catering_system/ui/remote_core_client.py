@@ -87,6 +87,7 @@ from catering_system.domain.order_payment_reminder import (
     PAYMENT_METHODS,
     OrderPaymentReminder,
     PaymentMethod,
+    PaymentMethodChange,
     PaymentReminderView,
     validate_payment_method,
 )
@@ -1070,8 +1071,100 @@ _PAYMENT_REMINDER_KEYS = frozenset(
         "paid_recorded_at",
         "paid_recorded_by",
         "updated_at",
+        "method_changes",
     }
 )
+
+
+_PAYMENT_METHOD_CHANGE_KEYS = frozenset(
+    {
+        "change_id",
+        "from_method",
+        "to_method",
+        "reason",
+        "actor_reference",
+        "changed_at",
+        "retired_task_title",
+        "previous_reminder",
+    }
+)
+_PAYMENT_FACT_KEYS = frozenset(
+    {
+        "payment_method",
+        "invoice_created",
+        "invoice_number",
+        "sent_on",
+        "paid_on",
+        "cash_received",
+        "quittung_printed",
+        "updated_at",
+        "invoice_created_at",
+        "invoice_created_by",
+        "invoice_sent_recorded_at",
+        "invoice_sent_recorded_by",
+        "payment_reminder_sent_at",
+        "payment_reminder_sent_by",
+        "mahnung_sent_at",
+        "mahnung_sent_by",
+        "quittung_printed_at",
+        "quittung_printed_by",
+        "paid_recorded_at",
+        "paid_recorded_by",
+    }
+)
+
+
+def _payment_fact_reminder(value: object, order_id: str) -> OrderPaymentReminder:
+    data = _dict(value)
+    _exact(data, _PAYMENT_FACT_KEYS)
+    try:
+        method = validate_payment_method(_str(data["payment_method"]))
+    except ValueError:
+        _bad_response()
+    return OrderPaymentReminder(
+        order_id=order_id,
+        payment_method=method,
+        invoice_created=_bool(data["invoice_created"]),
+        invoice_number=_optional_str(data["invoice_number"]),
+        sent_on=None if data["sent_on"] is None else _date(data["sent_on"]),
+        paid_on=None if data["paid_on"] is None else _date(data["paid_on"]),
+        cash_received=_bool(data["cash_received"]),
+        quittung_printed=_bool(data["quittung_printed"]),
+        updated_at=_optional_datetime(data["updated_at"]),
+        invoice_created_at=_optional_datetime(data["invoice_created_at"]),
+        invoice_created_by=_optional_str(data["invoice_created_by"]),
+        invoice_sent_recorded_at=_optional_datetime(data["invoice_sent_recorded_at"]),
+        invoice_sent_recorded_by=_optional_str(data["invoice_sent_recorded_by"]),
+        payment_reminder_sent_at=_optional_datetime(data["payment_reminder_sent_at"]),
+        payment_reminder_sent_by=_optional_str(data["payment_reminder_sent_by"]),
+        mahnung_sent_at=_optional_datetime(data["mahnung_sent_at"]),
+        mahnung_sent_by=_optional_str(data["mahnung_sent_by"]),
+        quittung_printed_at=_optional_datetime(data["quittung_printed_at"]),
+        quittung_printed_by=_optional_str(data["quittung_printed_by"]),
+        paid_recorded_at=_optional_datetime(data["paid_recorded_at"]),
+        paid_recorded_by=_optional_str(data["paid_recorded_by"]),
+    )
+
+
+def _payment_method_change(value: object, order_id: str) -> PaymentMethodChange:
+    data = _dict(value)
+    _exact(data, _PAYMENT_METHOD_CHANGE_KEYS)
+    try:
+        from_method = validate_payment_method(_str(data["from_method"]))
+        to_method = validate_payment_method(_str(data["to_method"]))
+    except ValueError:
+        _bad_response()
+    return PaymentMethodChange(
+        change_id=_uuid4(data["change_id"]),
+        order_id=order_id,
+        from_method=from_method,
+        to_method=to_method,
+        reason=_str(data["reason"]),
+        actor_reference=_str(data["actor_reference"]),
+        changed_at=_datetime(data["changed_at"]),
+        retired_task_title=_optional_str(data["retired_task_title"]),
+        previous_reminder=_payment_fact_reminder(data["previous_reminder"], order_id),
+    )
 
 
 def _payment_reminder(value: object, order_id: str) -> PaymentReminderView:
@@ -1120,6 +1213,10 @@ def _payment_reminder(value: object, order_id: str) -> PaymentReminderView:
         quittung_printed_by=_optional_str(data["quittung_printed_by"]),
         paid_recorded_at=_optional_datetime(data["paid_recorded_at"]),
         paid_recorded_by=_optional_str(data["paid_recorded_by"]),
+        method_changes=tuple(
+            _payment_method_change(item, order_id)
+            for item in _list(data["method_changes"])
+        ),
     )
 
 
