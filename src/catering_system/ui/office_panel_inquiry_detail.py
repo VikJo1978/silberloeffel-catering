@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import time
 
 from catering_system.domain.inquiry import (
     CRM_PIPELINE,
@@ -83,6 +84,14 @@ def _e(value: object) -> str:
 
 def _date_text(inquiry: Inquiry) -> str:
     return inquiry.event_date.strftime("%d.%m.%Y")
+
+
+def _time_value(value: time | None) -> str:
+    return value.isoformat(timespec="minutes") if value is not None else ""
+
+
+def _time_text(value: time | None) -> str:
+    return _time_value(value) or "Noch offen"
 
 
 def _source_label(value: str) -> str:
@@ -279,8 +288,10 @@ def _checks(inquiry: Inquiry, blockers: Sequence[str]) -> str:
         )
         for reason in blockers
     ]
-    if not inquiry.time_window_text:
-        items.append(("open", "Zeitfenster noch prüfen"))
+    if inquiry.delivery_time_local is None:
+        items.append(("open", "Lieferzeit noch prüfen"))
+    if inquiry.event_start_local is None:
+        items.append(("open", "Beginn der Veranstaltung noch prüfen"))
     if not inquiry.location_text:
         items.append(("open", "Ort noch prüfen"))
     if inquiry.guest_count_estimate is None:
@@ -433,8 +444,10 @@ def _edit_form(
         f"{forms.csrf_input}{forms.update_command_fields}<fieldset>"
         f'<p><label>Datum</label><input type="date" name="event_date" '
         f'value="{_e(inquiry.event_date.isoformat())}"></p>'
-        f'<p><label>Zeitfenster</label><input name="time_window_text" '
-        f'value="{_e(inquiry.time_window_text)}"></p>'
+        f'<p><label>Lieferung</label><input type="time" name="delivery_time_local" '
+        f'value="{_e(_time_value(inquiry.delivery_time_local))}"></p>'
+        f'<p><label>Beginn Veranstaltung</label><input type="time" name="event_start_local" '
+        f'value="{_e(_time_value(inquiry.event_start_local))}"></p>'
         f'<p><label>Ort</label><input name="location_text" '
         f'value="{_e(inquiry.location_text)}"></p>'
         f'<p><label>Gäste (ca.)</label><input name="guest_count_estimate" '
@@ -561,7 +574,8 @@ def render_inquiry_detail(
         '<section class="inquiry-card inquiry-content-card">'
         '<h2>Veranstaltung</h2><dl class="inquiry-facts-list">'
         f"<div><dt>Datum</dt><dd>{_e(_date_text(inquiry))}</dd></div>"
-        f"<div><dt>Zeit</dt><dd>{_e(inquiry.time_window_text or 'Noch offen')}</dd></div>"
+        f"<div><dt>Lieferung</dt><dd>{_e(_time_text(inquiry.delivery_time_local))}</dd></div>"
+        f"<div><dt>Beginn Veranstaltung</dt><dd>{_e(_time_text(inquiry.event_start_local))}</dd></div>"
         f"<div><dt>Ort</dt><dd>{_e(inquiry.location_text or 'Noch offen')}</dd></div>"
         f"<div><dt>Gäste</dt><dd>{_e(guests)}</dd></div>"
         f"<div><dt>Planung</dt><dd>{_e(_planning_label(inquiry.planning_mode))}</dd></div>"

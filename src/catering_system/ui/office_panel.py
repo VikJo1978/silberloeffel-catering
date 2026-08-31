@@ -3261,7 +3261,8 @@ class OfficePanel:
             phone_hint
             + f"""<form method="post" action="/inquiry/new">{_csrf_input(context)}{self._command_fields()}<fieldset>
 <p><label>Datum*</label><input type="date" name="event_date" value="{_e(event_date)}" required></p>
-<p><label>Zeitfenster</label><input name="time_window_text"></p>
+<p><label>Lieferung</label><input type="time" name="delivery_time_local"></p>
+<p><label>Beginn Veranstaltung</label><input type="time" name="event_start_local"></p>
 <p><label>Ort</label><input name="location_text"></p>
 <p><label>Gäste (ca.)</label><input name="guest_count_estimate" inputmode="numeric" value="{_e(guest_count_estimate)}"></p>
 <p><label>Planungsmodus</label>{_planning_mode_select(PLANNING_MODES[0])}</p>
@@ -3336,8 +3337,16 @@ class OfficePanel:
             inquiry_source="phone_by_office",
             crm_stage=CRM_PIPELINE[0],
             customer_linkage={},
-            time_window_text=form.get("time_window_text", ""),
+            # No editable legacy timing field in the UI. Keep a compatibility
+            # text for older internal projections/clients, using the exact event
+            # start when available and otherwise accepting an older submitted value.
+            time_window_text=(
+                form.get("event_start_local", "").strip()
+                or form.get("time_window_text", "").strip()
+            ),
             location_text=form.get("location_text", ""),
+            delivery_time_local=_opt_local_time(form.get("delivery_time_local", "")),
+            event_start_local=_opt_local_time(form.get("event_start_local", "")),
             guest_count_estimate=_opt_int(form.get("guest_count_estimate", "")),
             planning_mode=form.get("planning_mode", PLANNING_MODES[0]),
             call_verification_required=required,
@@ -3593,7 +3602,8 @@ class OfficePanel:
             update_form = f"""<h2>Anfrage bearbeiten</h2>
 <form method="post" action="/inquiry/{_e(inquiry_id)}/update">{_csrf_input(context)}{self._command_fields({"updated_at": inq.updated_at.isoformat()})}<fieldset>
 <p><label>Datum</label><input type="date" name="event_date" value="{_e(inq.event_date.isoformat())}"></p>
-<p><label>Zeitfenster</label><input name="time_window_text" value="{_e(inq.time_window_text)}"></p>
+<p><label>Lieferung</label><input type="time" name="delivery_time_local" value="{_e(_time_value(inq.delivery_time_local))}"></p>
+<p><label>Beginn Veranstaltung</label><input type="time" name="event_start_local" value="{_e(_time_value(inq.event_start_local))}"></p>
 <p><label>Ort</label><input name="location_text" value="{_e(inq.location_text)}"></p>
 <p><label>Gäste (ca.)</label><input name="guest_count_estimate" value="{_e(guests)}"></p>
 <p><label>Planungsmodus</label>{_planning_mode_select(inq.planning_mode)}</p>
@@ -3609,7 +3619,8 @@ class OfficePanel:
             inquiry_truncation_warning
             + f"""<table>
 <tr><th>Datum</th><td>{_e(inq.event_date.isoformat())}</td></tr>
-<tr><th>Zeitfenster</th><td>{_e(inq.time_window_text)}</td></tr>
+<tr><th>Lieferung</th><td>{_e(_time_text(inq.delivery_time_local))}</td></tr>
+<tr><th>Beginn Veranstaltung</th><td>{_e(_time_text(inq.event_start_local))}</td></tr>
 <tr><th>Ort</th><td>{_e(inq.location_text)}</td></tr>
 <tr><th>Gäste</th><td>{_e(guests or "–")}</td></tr>
 <tr><th>CRM-Stufe</th><td>{_e(inq.crm_stage)}</td></tr>
@@ -3643,7 +3654,8 @@ class OfficePanel:
         self.inquiry_service.update_inquiry(
             inquiry_id,
             event_date=date.fromisoformat(form["event_date"]),
-            time_window_text=form.get("time_window_text", ""),
+            delivery_time_local=_opt_local_time(form.get("delivery_time_local", "")),
+            event_start_local=_opt_local_time(form.get("event_start_local", "")),
             location_text=form.get("location_text", ""),
             guest_count_estimate=_opt_int(form.get("guest_count_estimate", "")),
             planning_mode=form.get("planning_mode", PLANNING_MODES[0]),
@@ -4718,6 +4730,24 @@ def _opt_int(raw: str) -> int | None:
     if not raw:
         return None
     return int(raw)
+
+
+def _opt_local_time(raw: str) -> time | None:
+    value = raw.strip()
+    if not value:
+        return None
+    parsed = time.fromisoformat(value)
+    if parsed.tzinfo is not None or parsed.second or parsed.microsecond:
+        raise ValueError("local time must be HH:MM")
+    return parsed
+
+
+def _time_value(value: time | None) -> str:
+    return value.isoformat(timespec="minutes") if value is not None else ""
+
+
+def _time_text(value: time | None) -> str:
+    return _time_value(value) or "Noch offen"
 
 
 def _opt_contact(form: dict[str, str], key: str) -> str | None:

@@ -22,7 +22,7 @@ import sqlite3
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import TypeVar
 from urllib.parse import parse_qsl, quote, unquote, urlparse
@@ -416,6 +416,22 @@ def _v_date(value: object) -> date:
 
 def _v_optional_date(value: object) -> date | None:
     return None if value is None else _v_date(value)
+
+
+def _v_optional_local_time(value: object) -> time | None:
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str) or not re.fullmatch(
+        r"(?:[01]\d|2[0-3]):[0-5]\d", value
+    ):
+        raise _invalid()
+    try:
+        parsed = time.fromisoformat(value)
+    except ValueError as exc:
+        raise _invalid() from exc
+    if parsed.tzinfo is not None or parsed.second or parsed.microsecond:
+        raise _invalid()
+    return parsed
 
 
 def _v_optional_str(value: object, max_len: int) -> str | None:
@@ -2263,6 +2279,10 @@ class OfficeApi:
                 contact_phone=_v_optional_str(args.get("contact_phone"), 100),
                 contact_name=_v_optional_str(args.get("contact_name"), 200),
                 company_name=_v_optional_str(args.get("company_name"), 200),
+                event_start_local=_v_optional_local_time(args.get("event_start_local")),
+                delivery_time_local=_v_optional_local_time(
+                    args.get("delivery_time_local")
+                ),
             )
         except DuplicateExternalReferenceError as exc:
             raise ApiError(409, "external_ref_conflict") from exc
@@ -2392,6 +2412,16 @@ class OfficeApi:
                 ),
                 intake_external_ref=_v_intake(
                     args, "intake_external_ref", 200, current.intake_external_ref
+                ),
+                event_start_local=(
+                    _v_optional_local_time(args.get("event_start_local"))
+                    if "event_start_local" in args
+                    else current.event_start_local
+                ),
+                delivery_time_local=(
+                    _v_optional_local_time(args.get("delivery_time_local"))
+                    if "delivery_time_local" in args
+                    else current.delivery_time_local
                 ),
             )
         except DuplicateExternalReferenceError as exc:
@@ -3497,7 +3527,11 @@ _CREATE_ARGS = _ArgKeys(
             "call_verification_required",
         }
     ),
-    optional=_INTAKE_OPTIONAL | _STRUCTURED_CONTACT_OPTIONAL,
+    optional=(
+        _INTAKE_OPTIONAL
+        | _STRUCTURED_CONTACT_OPTIONAL
+        | frozenset({"event_start_local", "delivery_time_local"})
+    ),
 )
 _CONTACT_COMPLETION_ARGS = _ArgKeys(
     required=frozenset(),
@@ -3526,7 +3560,7 @@ _UPDATE_ARGS = _ArgKeys(
             "planning_mode",
         }
     ),
-    optional=_INTAKE_OPTIONAL,
+    optional=_INTAKE_OPTIONAL | frozenset({"event_start_local", "delivery_time_local"}),
 )
 _VERSION_ARGS = _ArgKeys(
     required=frozenset(),

@@ -428,6 +428,16 @@ def inquiry_summary(inquiry: Inquiry) -> dict[str, object]:
         "call_verification_required": inquiry.call_verification_required,
         "call_verification_status": inquiry.call_verification_status,
         "fulfillment_mode": inquiry.fulfillment_mode,
+        "event_start_local": (
+            inquiry.event_start_local.isoformat(timespec="minutes")
+            if inquiry.event_start_local is not None
+            else None
+        ),
+        "delivery_time_local": (
+            inquiry.delivery_time_local.isoformat(timespec="minutes")
+            if inquiry.delivery_time_local is not None
+            else None
+        ),
     }
 
 

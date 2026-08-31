@@ -524,6 +524,23 @@ def test_create_inquiry_appears_in_queue(panel: str) -> None:
     assert "Hamburg" in body
 
 
+def test_inquiry_timing_is_shown_once_with_exact_fields(premium_panel: str) -> None:
+    iid = _create_inquiry(
+        premium_panel,
+        delivery_time_local="16:30",
+        event_start_local="18:00",
+    )
+    _status, body = _get(f"{premium_panel}/inquiry/{iid}")
+
+    assert "<dt>Lieferung</dt><dd>16:30</dd>" in body
+    assert "<dt>Beginn Veranstaltung</dt><dd>18:00</dd>" in body
+    assert 'name="delivery_time_local" value="16:30"' in body
+    assert 'name="event_start_local" value="18:00"' in body
+    assert 'name="time_window_text"' not in body
+    assert "<dt>Zeit</dt>" not in body
+    assert "Zeitfenster</label>" not in body
+
+
 def test_inquiry_detail_and_update(panel: str) -> None:
     iid = _create_inquiry(panel)
     _status, _url, body = _post(

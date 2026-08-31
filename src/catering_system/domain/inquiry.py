@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import TYPE_CHECKING, Any, Literal, TypedDict, cast
 
 if TYPE_CHECKING:
@@ -202,6 +202,10 @@ class Inquiry:
     # address/text/payment); Office is the only writer via a dedicated
     # command. Not copied to Order/OrderVersion in this slice.
     fulfillment_mode: FulfillmentMode = "UNKNOWN"
+    # Exact timing facts for the single Office timing model. Legacy
+    # time_window_text remains stored for historical compatibility only.
+    event_start_local: time | None = None
+    delivery_time_local: time | None = None
 
 
 def inquiry_shows_convert_accepted_button(state: InquiryOfficeState) -> bool:

@@ -4,7 +4,7 @@ import base64
 import json
 import sqlite3
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 
 import pytest
@@ -114,6 +114,8 @@ def _inquiry(*, guest_count: int | None = 42) -> Inquiry:
             email="joerg@example.test",
             phone="040 12345",
         ),
+        event_start_local=time(18, 30),
+        delivery_time_local=time(16, 30),
     )
 
 
@@ -151,6 +153,8 @@ def test_payload_maps_labelled_context_without_creating_core_records() -> None:
     assert context["email"] == "joerg@example.test"
     assert context["phone"] == "040 12345"
     assert context["eventDate"] == "2026-10-03"
+    assert context["deliveryTime"] == "16:30"
+    assert context["eventStart"] == "18:30"
 
 
 def test_fragment_maps_structured_customer_snapshot_and_all_event_fields() -> None:
@@ -183,6 +187,8 @@ def test_fragment_maps_structured_customer_snapshot_and_all_event_fields() -> No
         "phone": "+49 40 98765",
         "eventDate": "2026-10-03",
         "eventTime": "18:30–23:00",
+        "eventStart": "18:30",
+        "deliveryTime": "16:30",
         "location": "Große Bleichen 1, Hamburg",
         "billingAddress": "",
         "remarks": (

@@ -14,7 +14,7 @@ import urllib.request
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Any, NoReturn, cast
 from urllib.parse import quote, urlencode, urlparse
 
@@ -135,6 +135,7 @@ _INQUIRY_SUMMARY_KEYS = frozenset(
         "fulfillment_mode",
     }
 )
+_INQUIRY_TIMING_OPTIONAL_KEYS = frozenset({"event_start_local", "delivery_time_local"})
 _INQUIRY_LIST_KEYS = _INQUIRY_SUMMARY_KEYS | {
     "intake_subject",
     "linked_order_id",
@@ -142,7 +143,9 @@ _INQUIRY_LIST_KEYS = _INQUIRY_SUMMARY_KEYS | {
 }
 # Optional typed list-row field (INQUIRY_CONTACT_COMPLETENESS_V1 §10) — the
 # pre-completeness API contract has no snapshot on list rows.
-_INQUIRY_LIST_OPTIONAL_KEYS = frozenset({"customer_snapshot"})
+_INQUIRY_LIST_OPTIONAL_KEYS = (
+    frozenset({"customer_snapshot"}) | _INQUIRY_TIMING_OPTIONAL_KEYS
+)
 _INQUIRY_DETAIL_KEYS = _INQUIRY_LIST_KEYS | {
     "customer_linkage",
     "intake_message",
@@ -154,18 +157,21 @@ _INQUIRY_DETAIL_KEYS = _INQUIRY_LIST_KEYS | {
     "orders_truncated",
     "offer_prefill",
 }
-_INQUIRY_DETAIL_OPTIONAL_KEYS = frozenset(
-    {
-        "offer",
-        "customer_id",
-        "customer_snapshot",
-        # INQUIRY_CONTACT_COMPLETENESS_V1 §10 — typed optional read fields so
-        # this client stays compatible with the pre-completeness API contract.
-        "contact_completeness",
-        "missing_contact_fields",
-        "contact_completion_allowed",
-        "offer_preparation_blockers",
-    }
+_INQUIRY_DETAIL_OPTIONAL_KEYS = (
+    frozenset(
+        {
+            "offer",
+            "customer_id",
+            "customer_snapshot",
+            # INQUIRY_CONTACT_COMPLETENESS_V1 §10 — typed optional read fields so
+            # this client stays compatible with the pre-completeness API contract.
+            "contact_completeness",
+            "missing_contact_fields",
+            "contact_completion_allowed",
+            "offer_preparation_blockers",
+        }
+    )
+    | _INQUIRY_TIMING_OPTIONAL_KEYS
 )
 _CONTACT_COMPLETENESS_VALUES = frozenset(
     {"complete", "missing_email", "missing_phone", "missing_email_and_phone"}
@@ -675,6 +681,21 @@ def _date(value: object) -> date:
         _bad_response()
 
 
+def _optional_local_time(value: object) -> time | None:
+    if value is None or value == "":
+        return None
+    raw = _str(value)
+    if re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", raw) is None:
+        _bad_response()
+    try:
+        parsed = time.fromisoformat(raw)
+    except ValueError:
+        _bad_response()
+    if parsed.tzinfo is not None or parsed.second or parsed.microsecond:
+        _bad_response()
+    return parsed
+
+
 def _datetime(value: object) -> datetime:
     try:
         parsed = datetime.fromisoformat(_str(value))
@@ -705,7 +726,10 @@ def _inquiry(
         if not _INQUIRY_LIST_KEYS <= keys <= allowed:
             _bad_response()
     else:
-        _exact(data, _INQUIRY_SUMMARY_KEYS)
+        keys = set(data)
+        allowed = _INQUIRY_SUMMARY_KEYS | _INQUIRY_TIMING_OPTIONAL_KEYS
+        if not _INQUIRY_SUMMARY_KEYS <= keys <= allowed:
+            _bad_response()
     linkage_raw = data.get("customer_linkage", {})
     try:
         linkage = validate_customer_linkage(_dict(linkage_raw))
@@ -743,6 +767,8 @@ def _inquiry(
             if isinstance(data.get("customer_snapshot"), dict)
             else None
         ),
+        event_start_local=_optional_local_time(data.get("event_start_local")),
+        delivery_time_local=_optional_local_time(data.get("delivery_time_local")),
     )
 
 
@@ -1493,22 +1519,25 @@ def _validate_offer_prefill(value: object) -> None:
     for key in ("dietaryRequirements", "eventType", "serviceStyle"):
         _str(planning[key])
     context = _dict(transfer["orderContextPrefill"])
-    _exact(
-        context,
-        {
-            "companyName",
-            "contactPerson",
-            "email",
-            "phone",
-            "eventDate",
-            "eventTime",
-            "location",
-            "billingAddress",
-            "remarks",
-        },
-    )
-    for item in context.values():
-        _str(item)
+    required_context_keys = {
+        "companyName",
+        "contactPerson",
+        "email",
+        "phone",
+        "eventDate",
+        "eventTime",
+        "location",
+        "billingAddress",
+        "remarks",
+    }
+    allowed_context_keys = required_context_keys | {"eventStart", "deliveryTime"}
+    if not required_context_keys <= set(context) <= allowed_context_keys:
+        _bad_response()
+    for key, item in context.items():
+        if key in {"eventStart", "deliveryTime"}:
+            _optional_local_time(item)
+        else:
+            _str(item)
     _date(context["eventDate"])
 
     if "fulfillmentPrefill" in transfer:
@@ -2035,10 +2064,19 @@ class RemoteCoreClient:
         for raw in inquiry_rows:
             row = _dict(raw)
             row_keys = set(row)
-            allowed = _INQUIRY_SUMMARY_KEYS | {"next_action", "offer"}
+            allowed = (
+                _INQUIRY_SUMMARY_KEYS
+                | _INQUIRY_TIMING_OPTIONAL_KEYS
+                | {"next_action", "offer"}
+            )
             if not (_INQUIRY_SUMMARY_KEYS | {"next_action"}) <= row_keys <= allowed:
                 _bad_response()
-            _inquiry({key: row[key] for key in _INQUIRY_SUMMARY_KEYS})
+            inquiry_payload = {
+                key: row[key]
+                for key in (_INQUIRY_SUMMARY_KEYS | _INQUIRY_TIMING_OPTIONAL_KEYS)
+                if key in row
+            }
+            _inquiry(inquiry_payload)
             if _str(row["next_action"]) not in _INQUIRY_NEXT_ACTIONS:
                 _bad_response()
             if "offer" in row:
@@ -3562,6 +3600,10 @@ class _RemoteInquiryService:
             "planning_mode": values["planning_mode"],
             "call_verification_required": values["call_verification_required"],
         }
+        for timing_key in ("event_start_local", "delivery_time_local"):
+            timing_value = values.get(timing_key)
+            if timing_value is not None:
+                args[timing_key] = timing_value.isoformat(timespec="minutes")
         for key in (
             "intake_subject",
             "intake_message",
@@ -3619,6 +3661,8 @@ class _RemoteInquiryService:
                 intake_message=values.get("intake_message"),
                 intake_subject=values.get("intake_subject"),
             ),
+            event_start_local=values.get("event_start_local"),
+            delivery_time_local=values.get("delivery_time_local"),
         )
 
     def update_inquiry(self, inquiry_id: str, **values: Any) -> Inquiry:
@@ -3628,10 +3672,22 @@ class _RemoteInquiryService:
         args: dict[str, object] = {
             "event_date": values["event_date"].isoformat(),
             "crm_stage": values["crm_stage"],
-            "time_window_text": values["time_window_text"],
+            "time_window_text": values.get(
+                "time_window_text", current.time_window_text
+            ),
             "location_text": values["location_text"],
             "guest_count_estimate": values["guest_count_estimate"],
             "planning_mode": values["planning_mode"],
+            "event_start_local": (
+                values["event_start_local"].isoformat(timespec="minutes")
+                if values.get("event_start_local") is not None
+                else None
+            ),
+            "delivery_time_local": (
+                values["delivery_time_local"].isoformat(timespec="minutes")
+                if values.get("delivery_time_local") is not None
+                else None
+            ),
         }
         for key in (
             "intake_subject",
@@ -3655,7 +3711,7 @@ class _RemoteInquiryService:
             current,
             event_date=values["event_date"],
             crm_stage=validate_crm_stage(values["crm_stage"]),
-            time_window_text=values["time_window_text"],
+            time_window_text=values.get("time_window_text", current.time_window_text),
             location_text=values["location_text"],
             guest_count_estimate=values["guest_count_estimate"],
             planning_mode=validate_planning_mode(values["planning_mode"]),
@@ -3668,6 +3724,12 @@ class _RemoteInquiryService:
             ),
             customer_id=current.customer_id,
             customer_snapshot=current.customer_snapshot,
+            event_start_local=values.get(
+                "event_start_local", current.event_start_local
+            ),
+            delivery_time_local=values.get(
+                "delivery_time_local", current.delivery_time_local
+            ),
         )
 
     def complete_inquiry_contact_information(
