@@ -112,6 +112,8 @@ _EVENT_KEYS = frozenset(
         "delivery_date_local",
         "delivery_window_start_local",
         "delivery_window_end_local",
+        "delivery_time_local",
+        "event_start_local",
     }
 )
 _CUSTOMER_TEXT_KEYS = frozenset({"title", "introduction", "notes"})
@@ -480,6 +482,14 @@ def _parse_event(payload: dict[str, object]) -> OfferSnapshotEvent:
         delivery_window_end_local=_optional_local_time(
             payload.get("delivery_window_end_local"),
             "event.delivery_window_end_local",
+        ),
+        delivery_time_local=_optional_local_time(
+            payload.get("delivery_time_local"),
+            "event.delivery_time_local",
+        ),
+        event_start_local=_optional_local_time(
+            payload.get("event_start_local"),
+            "event.event_start_local",
         ),
     )
 
