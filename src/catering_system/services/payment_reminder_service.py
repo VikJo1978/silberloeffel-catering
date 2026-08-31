@@ -5,13 +5,14 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Callable
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from catering_system.domain.order_payment_reminder import (
     OrderPaymentReminder,
+    PaymentMethodChange,
     PaymentReminderView,
     derive_payment_reminder,
-    has_downstream_payment_facts,
     validate_payment_method,
     validate_payment_reminder,
 )
@@ -61,7 +62,11 @@ class PaymentReminderService:
             event_date=event_date,
             today=self._today(),
         )
-        return replace(view, order_id=order_id)
+        return replace(
+            view,
+            order_id=order_id,
+            method_changes=self._reminders.list_method_changes(order_id),
+        )
 
     @staticmethod
     def _actor(value: str) -> str:
@@ -129,11 +134,8 @@ class PaymentReminderService:
         )
         current = self._reminders.get(reminder.order_id)
         if current is not None:
-            if (
-                current.payment_method != reminder.payment_method
-                and has_downstream_payment_facts(current)
-            ):
-                raise ValueError("payment method cannot change after payment facts")
+            if current.payment_method != reminder.payment_method:
+                raise ValueError("payment method change requires explicit command")
             self._reject_silent_fact_rewrite(current, reminder)
             reminder = replace(
                 reminder,
