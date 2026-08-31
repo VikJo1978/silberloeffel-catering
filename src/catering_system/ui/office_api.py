@@ -197,7 +197,9 @@ from catering_system.services.chat_service import (
     ChatReferenceNotFoundError,
     ChatService,
 )
-from catering_system.services.courier_cash_context_service import CourierCashContextService
+from catering_system.services.courier_cash_context_service import (
+    CourierCashContextService,
+)
 from catering_system.services.courier_cash_service import (
     CourierCashCommandError,
     CourierCashService,
@@ -4221,9 +4223,7 @@ def make_office_api_handler(
 ) -> type[BaseHTTPRequestHandler]:
     expected_auth = f"Bearer {token}"
     expected_courier_cash_auth = (
-        f"Bearer {courier_cash_service_token}"
-        if courier_cash_service_token
-        else None
+        f"Bearer {courier_cash_service_token}" if courier_cash_service_token else None
     )
     service_auth = OfficeApiServiceAuth(
         office_panel_token=token,
@@ -4524,9 +4524,7 @@ def make_office_api_handler(
                 if not hmac.compare_digest(presented, expected_courier_cash_auth):
                     self._respond(401, {"error": "unauthorized"}, suppress_body=True)
                     return
-                self._respond(
-                    405, {"error": "method_not_allowed"}, suppress_body=True
-                )
+                self._respond(405, {"error": "method_not_allowed"}, suppress_body=True)
                 return
             if self._is_introspect_path(path):
                 if not self._introspect_service_auth_or_respond():
