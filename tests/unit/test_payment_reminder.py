@@ -54,6 +54,41 @@ def _world() -> tuple[
     return orders, reminders, service
 
 
+def _append_revision(
+    orders: InMemoryOrderRepository,
+    *,
+    created_at: datetime,
+) -> OrderVersion:
+    order_id = "11111111-1111-4111-8111-111111111111"
+    current = orders.get_order(order_id)
+    assert current is not None
+    source = orders.list_order_versions(order_id)[0]
+    revision = OrderVersion(
+        order_version_id="44444444-4444-4444-8444-444444444444",
+        order_id=order_id,
+        version_number=2,
+        created_at=created_at,
+        event_date=date(2026, 7, 21),
+        time_window_text="abends",
+        location_text="Hamburg",
+        guest_count_estimate=25,
+        planning_mode="caterer_suggestion",
+        parent_order_version_id=source.order_version_id,
+        created_by="Office",
+        change_reason="Kunde hat den Auftrag geändert",
+        changed_fields=("event_date", "guest_count_estimate"),
+    )
+    orders.append_order_version(
+        replace(
+            current,
+            candidate_order_version_id=revision.order_version_id,
+            updated_at=created_at,
+        ),
+        revision,
+    )
+    return revision
+
+
 def test_legacy_order_without_reminder_derives_selection_task() -> None:
     _orders, _reminders, service = _world()
 
@@ -466,6 +501,190 @@ def test_payment_method_change_after_payment_is_forbidden() -> None:
             reason="Zu spät bemerkt",
             actor_reference="Bob",
         )
+
+
+def test_invoice_recorded_before_order_revision_requires_correction() -> None:
+    orders, reminders, _service = _world()
+    order_id = "11111111-1111-4111-8111-111111111111"
+    invoice_at = datetime(2026, 7, 15, 9, 0, tzinfo=UTC)
+    service = PaymentReminderService(
+        reminders,
+        orders,
+        now=lambda: invoice_at,
+        today=lambda: date(2026, 7, 16),
+    )
+    service.save(
+        OrderPaymentReminder(
+            order_id=order_id,
+            payment_method="RECHNUNG",
+            invoice_created=True,
+            invoice_number="RE-CORR-1",
+            sent_on=date(2026, 7, 15),
+        ),
+        actor_reference="Alice",
+    )
+    revision = _append_revision(
+        orders,
+        created_at=datetime(2026, 7, 16, 10, 0, tzinfo=UTC),
+    )
+
+    view = service.view(order_id)
+
+    assert view.next_step == "Rechnungskorrektur erforderlich"
+    assert view.next_step_due_on == revision.created_at.date()
+    assert view.invoice_number == "RE-CORR-1"
+
+    current = orders.get_order(order_id)
+    assert current is not None
+    orders.update_order(
+        replace(
+            current,
+            effective_order_version_id=revision.order_version_id,
+            candidate_order_version_id=None,
+            updated_at=revision.created_at,
+        )
+    )
+    assert service.view(order_id).next_step == "Rechnungskorrektur erforderlich"
+
+
+def test_quittung_recorded_before_order_revision_requires_reprint() -> None:
+    orders, reminders, _service = _world()
+    order_id = "11111111-1111-4111-8111-111111111111"
+    printed_at = datetime(2026, 7, 15, 9, 0, tzinfo=UTC)
+    service = PaymentReminderService(
+        reminders,
+        orders,
+        now=lambda: printed_at,
+        today=lambda: date(2026, 7, 16),
+    )
+    service.save(
+        OrderPaymentReminder(
+            order_id=order_id,
+            payment_method="BAR_VOR_ORT",
+            quittung_printed=True,
+        ),
+        actor_reference="Alice",
+    )
+    revision = _append_revision(
+        orders,
+        created_at=datetime(2026, 7, 16, 10, 0, tzinfo=UTC),
+    )
+
+    view = service.view(order_id)
+
+    assert view.next_step == "Quittung neu erstellen und drucken"
+    assert view.next_step_due_on == revision.created_at.date()
+    assert view.quittung_printed is True
+
+
+def test_paid_order_revision_requires_payment_review_without_difference() -> None:
+    orders, reminders, _service = _world()
+    order_id = "11111111-1111-4111-8111-111111111111"
+    paid_at = datetime(2026, 7, 15, 9, 0, tzinfo=UTC)
+    service = PaymentReminderService(
+        reminders,
+        orders,
+        now=lambda: paid_at,
+        today=lambda: date(2026, 7, 16),
+    )
+    service.save(
+        OrderPaymentReminder(
+            order_id=order_id,
+            payment_method="RECHNUNG",
+            invoice_created=True,
+            invoice_number="RE-PAID-CORR-1",
+            sent_on=date(2026, 7, 10),
+            paid_on=date(2026, 7, 15),
+        ),
+        actor_reference="Alice",
+    )
+    revision = _append_revision(
+        orders,
+        created_at=datetime(2026, 7, 16, 10, 0, tzinfo=UTC),
+    )
+
+    view = service.view(order_id)
+
+    assert view.next_step == "Zahlung nach Auftragsänderung prüfen"
+    assert view.next_step_due_on == revision.created_at.date()
+    assert view.payment_state_label == "Bezahlt"
+
+
+def test_legacy_document_without_audit_does_not_guess_revision_ordering() -> None:
+    orders, reminders, service = _world()
+    order_id = "11111111-1111-4111-8111-111111111111"
+    reminders.save(
+        OrderPaymentReminder(
+            order_id=order_id,
+            payment_method="RECHNUNG",
+            invoice_created=True,
+            invoice_number="RE-LEGACY",
+            sent_on=date(2026, 7, 15),
+            updated_at=_NOW,
+        )
+    )
+    _append_revision(
+        orders,
+        created_at=datetime(2026, 7, 16, 10, 0, tzinfo=UTC),
+    )
+
+    view = service.view(order_id)
+
+    assert view.next_step != "Rechnungskorrektur erforderlich"
+
+
+def test_cancelled_unpaid_payment_tasks_are_derived_as_entfallen() -> None:
+    orders, reminders, service = _world()
+    order_id = "11111111-1111-4111-8111-111111111111"
+    service.save(OrderPaymentReminder(order_id=order_id, payment_method="VORKASSE"))
+    current = orders.get_order(order_id)
+    assert current is not None
+    cancelled_at = datetime(2026, 7, 16, 11, 0, tzinfo=UTC)
+    orders.update_order(
+        replace(current, cancelled_at=cancelled_at, updated_at=cancelled_at)
+    )
+
+    view = service.view(order_id)
+
+    assert view.payment_state_label == "Entfallen · Auftrag storniert"
+    assert view.next_step is None
+    assert view.next_step_due_on is None
+
+
+def test_cancelled_paid_order_requires_refund_review() -> None:
+    orders, reminders, _service = _world()
+    order_id = "11111111-1111-4111-8111-111111111111"
+    paid_at = datetime(2026, 7, 15, 9, 0, tzinfo=UTC)
+    service = PaymentReminderService(
+        reminders,
+        orders,
+        now=lambda: paid_at,
+        today=lambda: date(2026, 7, 16),
+    )
+    service.save(
+        OrderPaymentReminder(
+            order_id=order_id,
+            payment_method="RECHNUNG",
+            invoice_created=True,
+            invoice_number="RE-REFUND-1",
+            sent_on=date(2026, 7, 10),
+            paid_on=date(2026, 7, 15),
+        ),
+        actor_reference="Alice",
+    )
+    current = orders.get_order(order_id)
+    assert current is not None
+    cancelled_at = datetime(2026, 7, 16, 11, 0, tzinfo=UTC)
+    orders.update_order(
+        replace(current, cancelled_at=cancelled_at, updated_at=cancelled_at)
+    )
+
+    view = service.view(order_id)
+
+    assert view.payment_state_label == "Bezahlt · Auftrag storniert"
+    assert view.next_step == "Rückzahlung prüfen"
+    assert view.next_step_due_on == date(2026, 7, 16)
+    assert view.paid_on == date(2026, 7, 15)
 
 
 def test_cancelled_order_cannot_update_reminder() -> None:

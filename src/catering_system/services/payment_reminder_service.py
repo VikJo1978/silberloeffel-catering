@@ -56,17 +56,82 @@ class PaymentReminderService:
         return version.event_date
 
     def view(self, order_id: str) -> PaymentReminderView:
+        order = self._orders.get_order(order_id)
+        if order is None:
+            raise KeyError(order_id)
+        reminder = self._reminders.get(order_id)
         event_date = self._event_date(order_id)
         view = derive_payment_reminder(
-            self._reminders.get(order_id),
+            reminder,
             event_date=event_date,
             today=self._today(),
         )
-        return replace(
+        view = replace(
             view,
             order_id=order_id,
             method_changes=self._reminders.list_method_changes(order_id),
         )
+        if order.cancelled_at is not None:
+            if reminder is not None and (
+                reminder.paid_on is not None or reminder.cash_received
+            ):
+                return replace(
+                    view,
+                    payment_state_label="Bezahlt · Auftrag storniert",
+                    next_step="Rückzahlung prüfen",
+                    next_step_due_on=self._local_date(order.cancelled_at),
+                )
+            return replace(
+                view,
+                payment_state_label="Entfallen · Auftrag storniert",
+                next_step=None,
+                next_step_due_on=None,
+            )
+
+        if reminder is None:
+            return view
+        revisions = [
+            version.created_at
+            for version in self._orders.list_order_versions(order_id)
+            if version.parent_order_version_id is not None
+        ]
+        if not revisions:
+            return view
+        latest_revision_at = max(revisions)
+        revision_due = self._local_date(latest_revision_at)
+
+        if (
+            reminder.paid_recorded_at is not None
+            and latest_revision_at > reminder.paid_recorded_at
+        ):
+            return replace(
+                view,
+                next_step="Zahlung nach Auftragsänderung prüfen",
+                next_step_due_on=revision_due,
+            )
+
+        if reminder.payment_method == "BAR_VOR_ORT":
+            if (
+                reminder.quittung_printed_at is not None
+                and latest_revision_at > reminder.quittung_printed_at
+            ):
+                return replace(
+                    view,
+                    next_step="Quittung neu erstellen und drucken",
+                    next_step_due_on=revision_due,
+                )
+            return view
+
+        invoice_recorded_at = (
+            reminder.invoice_created_at or reminder.invoice_sent_recorded_at
+        )
+        if invoice_recorded_at is not None and latest_revision_at > invoice_recorded_at:
+            return replace(
+                view,
+                next_step="Rechnungskorrektur erforderlich",
+                next_step_due_on=revision_due,
+            )
+        return view
 
     @staticmethod
     def _actor(value: str) -> str:
