@@ -59,7 +59,10 @@ from catering_system.domain.order_operational_pause import (
     OrderOperationalPauseEvent,
     derive_operational_pause_projection,
 )
-from catering_system.domain.order_payment_reminder import PaymentReminderView
+from catering_system.domain.order_payment_reminder import (
+    OrderPaymentReminder,
+    PaymentReminderView,
+)
 from catering_system.domain.ready_to_send import ReadyToSendEvaluation
 from catering_system.domain.task_projection import TaskProjection
 from catering_system.domain.wochenuebersicht import Wochenuebersicht
@@ -835,6 +838,39 @@ def customer_document_preview_shape(preview: object) -> dict[str, object]:
     }
 
 
+def _payment_reminder_fact_shape(
+    reminder: OrderPaymentReminder,
+) -> dict[str, object]:
+    def d(value: date | None) -> str | None:
+        return value.isoformat() if value is not None else None
+
+    def dt(value: datetime | None) -> str | None:
+        return value.isoformat() if value is not None else None
+
+    return {
+        "payment_method": reminder.payment_method,
+        "invoice_created": reminder.invoice_created,
+        "invoice_number": reminder.invoice_number,
+        "sent_on": d(reminder.sent_on),
+        "paid_on": d(reminder.paid_on),
+        "cash_received": reminder.cash_received,
+        "quittung_printed": reminder.quittung_printed,
+        "updated_at": dt(reminder.updated_at),
+        "invoice_created_at": dt(reminder.invoice_created_at),
+        "invoice_created_by": reminder.invoice_created_by,
+        "invoice_sent_recorded_at": dt(reminder.invoice_sent_recorded_at),
+        "invoice_sent_recorded_by": reminder.invoice_sent_recorded_by,
+        "payment_reminder_sent_at": dt(reminder.payment_reminder_sent_at),
+        "payment_reminder_sent_by": reminder.payment_reminder_sent_by,
+        "mahnung_sent_at": dt(reminder.mahnung_sent_at),
+        "mahnung_sent_by": reminder.mahnung_sent_by,
+        "quittung_printed_at": dt(reminder.quittung_printed_at),
+        "quittung_printed_by": reminder.quittung_printed_by,
+        "paid_recorded_at": dt(reminder.paid_recorded_at),
+        "paid_recorded_by": reminder.paid_recorded_by,
+    }
+
+
 def payment_reminder_shape(view: PaymentReminderView) -> dict[str, object]:
     def dt(value: datetime | None) -> str | None:
         return value.isoformat() if value is not None else None
@@ -869,6 +905,21 @@ def payment_reminder_shape(view: PaymentReminderView) -> dict[str, object]:
         "paid_recorded_at": dt(view.paid_recorded_at),
         "paid_recorded_by": view.paid_recorded_by,
         "updated_at": dt(view.updated_at),
+        "method_changes": [
+            {
+                "change_id": change.change_id,
+                "from_method": change.from_method,
+                "to_method": change.to_method,
+                "reason": change.reason,
+                "actor_reference": change.actor_reference,
+                "changed_at": change.changed_at.isoformat(),
+                "retired_task_title": change.retired_task_title,
+                "previous_reminder": _payment_reminder_fact_shape(
+                    change.previous_reminder
+                ),
+            }
+            for change in view.method_changes
+        ],
     }
 
 

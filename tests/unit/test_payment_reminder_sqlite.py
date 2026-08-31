@@ -5,7 +5,10 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from catering_system.domain.order import Order, OrderVersion
-from catering_system.domain.order_payment_reminder import OrderPaymentReminder
+from catering_system.domain.order_payment_reminder import (
+    OrderPaymentReminder,
+    PaymentMethodChange,
+)
 from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepository
 from catering_system.repositories.sqlite_payment_reminder_repository import (
     SQLitePaymentReminderRepository,
@@ -47,6 +50,53 @@ def test_additive_migration_keeps_existing_order_without_financial_data(
     reminders = SQLitePaymentReminderRepository(db)
 
     assert reminders.get(order.order_id) is None
+    reminders.close()
+
+
+def test_payment_method_history_survives_restart(tmp_path: Path) -> None:
+    db = tmp_path / "core.db"
+    orders = SQLiteOrderRepository(db)
+    order, version = _order("11111111-1111-4111-8111-111111111111")
+    orders.save_order_with_initial_version(order, version)
+    orders.close()
+
+    reminders = SQLitePaymentReminderRepository(db)
+    previous = OrderPaymentReminder(
+        order_id=order.order_id,
+        payment_method="RECHNUNG",
+        invoice_created=True,
+        invoice_number="RE-HISTORY-1",
+        sent_on=date(2026, 7, 15),
+        updated_at=datetime(2026, 7, 15, 8, 0, tzinfo=UTC),
+        invoice_created_at=datetime(2026, 7, 15, 8, 0, tzinfo=UTC),
+        invoice_created_by="Alice",
+        invoice_sent_recorded_at=datetime(2026, 7, 15, 8, 5, tzinfo=UTC),
+        invoice_sent_recorded_by="Alice",
+    )
+    current = OrderPaymentReminder(
+        order_id=order.order_id,
+        payment_method="BAR_VOR_ORT",
+        updated_at=datetime(2026, 7, 16, 9, 0, tzinfo=UTC),
+    )
+    change = PaymentMethodChange(
+        change_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        order_id=order.order_id,
+        from_method="RECHNUNG",
+        to_method="BAR_VOR_ORT",
+        reason="Kunde zahlt bar",
+        actor_reference="Bob",
+        changed_at=datetime(2026, 7, 16, 9, 0, tzinfo=UTC),
+        retired_task_title="Zahlungseingang prüfen",
+        previous_reminder=previous,
+    )
+
+    reminders.save(previous)
+    reminders.save_method_change(current, change)
+    reminders.close()
+
+    reminders = SQLitePaymentReminderRepository(db)
+    assert reminders.get(order.order_id) == current
+    assert reminders.list_method_changes(order.order_id) == (change,)
     reminders.close()
 
 
