@@ -101,9 +101,7 @@ def test_driver_never_produces_final_paid_and_chef_confirmation_is_distinct() ->
     }
     handoff = next(row for row in rows if row["event_type"] == "BAR_HANDED_TO_CHEF")
     confirm = next(
-        row
-        for row in rows
-        if row["event_type"] == "BAR_RECEIVED_FROM_DRIVER_BY_CHEF"
+        row for row in rows if row["event_type"] == "BAR_RECEIVED_FROM_DRIVER_BY_CHEF"
     )
     assert handoff["to_state"] == "AWAITING_CHEF_CONFIRMATION"
     assert handoff["actor_roles"] == ["DRIVER"]
@@ -140,9 +138,7 @@ def test_success_stale_unauthorized_and_outage_fixtures_are_explicit() -> None:
         "error": "stale_cash_context"
     }
     assert validate_response(responses["unauthorized"]) == {"error": "unauthorized"}
-    assert validate_response(responses["unavailable"]) == {
-        "error": "core_unavailable"
-    }
+    assert validate_response(responses["unavailable"]) == {"error": "core_unavailable"}
 
 
 def test_replay_stale_and_outage_behaviour_is_frozen() -> None:
@@ -164,6 +160,4 @@ def test_replay_stale_and_outage_behaviour_is_frozen() -> None:
 
 def test_contract_json_assets_never_contain_financial_fields() -> None:
     for path in sorted(_CONTRACT.glob("*.json")):
-        assert_no_financial_fields(
-            json.loads(path.read_text(encoding="utf-8"))
-        )
+        assert_no_financial_fields(json.loads(path.read_text(encoding="utf-8")))
