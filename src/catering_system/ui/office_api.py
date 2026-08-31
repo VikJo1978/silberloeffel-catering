@@ -3221,6 +3221,46 @@ class OfficeApi:
             "updated_at": view.updated_at.isoformat(),
         }
 
+    def cmd_payment_method_change(
+        self, path_ids: dict[str, str], args: dict[str, object], expect: dict
+    ) -> tuple[int, dict[str, object]]:
+        order = self._require_active_order(path_ids["id"])
+        current = self.payment_reminders.get(order.order_id)
+        expected_at = expect["updated_at"]
+        if expected_at is not None and not isinstance(expected_at, str):
+            raise _invalid()
+        actual_at = (
+            current.updated_at.isoformat()
+            if current is not None and current.updated_at is not None
+            else None
+        )
+        if expected_at != actual_at:
+            raise ApiError(409, "stale_state")
+        try:
+            actor_reference = (
+                _v_optional_str(args.get("actor_reference"), 200) or CLIENT_ID
+            )
+            view = self.payment_reminder_service.change_payment_method(
+                order.order_id,
+                new_payment_method=_v_enum(
+                    args["new_payment_method"], validate_payment_method
+                ),
+                reason=_v_str(args["reason"], 500),
+                actor_reference=actor_reference,
+            )
+        except ValueError as exc:
+            if str(exc) in {
+                "payment method cannot change after payment",
+                "new payment method must differ",
+            }:
+                raise ApiError(409, "payment_method_change_conflict") from exc
+            raise ApiError(422, "invalid_payment_method_change") from exc
+        assert view.updated_at is not None
+        return 200, {
+            "order_id": order.order_id,
+            "updated_at": view.updated_at.isoformat(),
+        }
+
     def cmd_confirmation_document(
         self, path_ids: dict[str, str], args: dict[str, object], expect: dict
     ) -> tuple[int, dict[str, object]]:
@@ -3492,6 +3532,10 @@ _PAYMENT_REMINDER_ARGS = _ArgKeys(
         }
     ),
 )
+_PAYMENT_METHOD_CHANGE_ARGS = _ArgKeys(
+    required=frozenset({"new_payment_method", "reason"}),
+    optional=frozenset({"actor_reference"}),
+)
 _CONFIRMATION_DOCUMENT_ARGS = _ArgKeys(required=frozenset({"created_by"}))
 _CONFIRMATION_DOCUMENT_SEND_ARGS = _ArgKeys(
     required=frozenset({"document_snapshot_id", "requested_by"})
@@ -3637,6 +3681,11 @@ _COMMANDS: dict[str, _CommandSpec] = {
     "delete-order": _CommandSpec("cmd_delete_order", _ORDER_DELETE_ARGS, set()),
     "payment-reminder": _CommandSpec(
         "cmd_payment_reminder", _PAYMENT_REMINDER_ARGS, {"updated_at"}
+    ),
+    "payment-method": _CommandSpec(
+        "cmd_payment_method_change",
+        _PAYMENT_METHOD_CHANGE_ARGS,
+        {"updated_at"},
     ),
     "confirmation-document": _CommandSpec(
         "cmd_confirmation_document",
@@ -4029,6 +4078,11 @@ _ROUTES: tuple[tuple[re.Pattern[str], str, dict[str, str]], ...] = (
         re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/payment-reminder$"),
         "/office/v1/orders/{id}/payment-reminder",
         {"POST": "payment-reminder"},
+    ),
+    (
+        re.compile(r"^/office/v1/orders/(?P<id>[^/]+)/payment-method$"),
+        "/office/v1/orders/{id}/payment-method",
+        {"POST": "payment-method"},
     ),
     (
         re.compile(
