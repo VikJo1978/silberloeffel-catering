@@ -205,8 +205,8 @@ class SQLiteInquiryRepository:
                     "snapshot_company_name, snapshot_contact_name, snapshot_email, "
                     "snapshot_phone, snapshot_delivery_address_mode, "
                     "snapshot_invoice_address_json, snapshot_delivery_address_json, "
-                    "fulfillment_mode) VALUES "
-                    "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "fulfillment_mode, event_start_local, delivery_time_local) VALUES "
+                    "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     self._values(inquiry),
                 )
         except sqlite3.IntegrityError as exc:
@@ -309,7 +309,8 @@ class SQLiteInquiryRepository:
                         snapshot_delivery_address_mode = ?,
                         snapshot_invoice_address_json = ?,
                         snapshot_delivery_address_json = ?,
-                        fulfillment_mode = ?
+                        fulfillment_mode = ?, event_start_local = ?,
+                        delivery_time_local = ?
                     WHERE inquiry_id = ?
                     """,
                     self._values(inquiry)[1:] + (inquiry.inquiry_id,),
