@@ -113,6 +113,16 @@ def offer_prefill_payload(inquiry: Inquiry) -> dict[str, object]:
                 ),
                 "eventDate": inquiry.event_date.isoformat(),
                 "eventTime": _clip(inquiry.time_window_text),
+                "eventStart": (
+                    inquiry.event_start_local.isoformat(timespec="minutes")
+                    if inquiry.event_start_local is not None
+                    else ""
+                ),
+                "deliveryTime": (
+                    inquiry.delivery_time_local.isoformat(timespec="minutes")
+                    if inquiry.delivery_time_local is not None
+                    else ""
+                ),
                 "location": _clip(inquiry.location_text),
                 "billingAddress": _formatted_address(
                     customer.invoice_address if customer is not None else None
