@@ -830,7 +830,7 @@ def test_list_tasks_accepts_valid_payload() -> None:
 
 
 def test_list_calendar_accepts_valid_payload() -> None:
-    
+
     entity_id = str(uuid.uuid4())
     inquiry_id = str(uuid.uuid4())
     payload = {
