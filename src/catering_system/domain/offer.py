@@ -270,12 +270,8 @@ class OfferVersion:
             raise ValueError("guest_count must be a positive integer")
         validate_planning_mode(self.planning_mode)
         validate_payment_method(self.payment_method)
-        validate_optional_local_time(
-            self.event_start_local, label="event start"
-        )
-        validate_optional_local_time(
-            self.delivery_time_local, label="delivery time"
-        )
+        validate_optional_local_time(self.event_start_local, label="event start")
+        validate_optional_local_time(self.delivery_time_local, label="delivery time")
         validate_optional_service_window(
             self.delivery_date_local,
             self.delivery_window_start_local,
