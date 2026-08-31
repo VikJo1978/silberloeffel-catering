@@ -108,7 +108,16 @@ class CourierCashService:
         latest = self._cash_events.get_latest_for_context(
             command.order_id, command.cash_execution_context_id
         )
-        from_state = latest.to_state if latest is not None else STATE_READY
+        if latest is not None:
+            from_state = latest.to_state
+        else:
+            latest_for_order = self._cash_events.get_latest_for_order(command.order_id)
+            from_state = (
+                STATE_MANUAL_REVIEW
+                if latest_for_order is not None
+                and latest_for_order.to_state == STATE_MANUAL_REVIEW
+                else STATE_READY
+            )
 
         if command.event_type == EVENT_CORRECTION:
             if from_state not in _CORRECTABLE_STATES:
