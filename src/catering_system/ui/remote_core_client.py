@@ -14,7 +14,7 @@ import urllib.request
 import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
-from datetime import date, datetime
+from datetime import date, datetime, time
 from typing import Any, NoReturn, cast
 from urllib.parse import quote, urlencode, urlparse
 
@@ -133,6 +133,8 @@ _INQUIRY_SUMMARY_KEYS = frozenset(
         "call_verification_required",
         "call_verification_status",
         "fulfillment_mode",
+        "event_start_local",
+        "delivery_time_local",
     }
 )
 _INQUIRY_LIST_KEYS = _INQUIRY_SUMMARY_KEYS | {
@@ -675,6 +677,21 @@ def _date(value: object) -> date:
         _bad_response()
 
 
+def _optional_local_time(value: object) -> time | None:
+    if value is None or value == "":
+        return None
+    raw = _str(value)
+    if re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", raw) is None:
+        _bad_response()
+    try:
+        parsed = time.fromisoformat(raw)
+    except ValueError:
+        _bad_response()
+    if parsed.tzinfo is not None or parsed.second or parsed.microsecond:
+        _bad_response()
+    return parsed
+
+
 def _datetime(value: object) -> datetime:
     try:
         parsed = datetime.fromisoformat(_str(value))
@@ -743,6 +760,8 @@ def _inquiry(
             if isinstance(data.get("customer_snapshot"), dict)
             else None
         ),
+        event_start_local=_optional_local_time(data.get("event_start_local")),
+        delivery_time_local=_optional_local_time(data.get("delivery_time_local")),
     )
 
 
@@ -1502,13 +1521,18 @@ def _validate_offer_prefill(value: object) -> None:
             "phone",
             "eventDate",
             "eventTime",
+            "eventStart",
+            "deliveryTime",
             "location",
             "billingAddress",
             "remarks",
         },
     )
-    for item in context.values():
-        _str(item)
+    for key, item in context.items():
+        if key in {"eventStart", "deliveryTime"}:
+            _optional_local_time(item)
+        else:
+            _str(item)
     _date(context["eventDate"])
 
     if "fulfillmentPrefill" in transfer:
@@ -3563,6 +3587,8 @@ class _RemoteInquiryService:
             "call_verification_required": values["call_verification_required"],
         }
         for key in (
+            "event_start_local",
+            "delivery_time_local",
             "intake_subject",
             "intake_message",
             "intake_summary",
@@ -3596,7 +3622,7 @@ class _RemoteInquiryService:
             inquiry_source=validate_inquiry_source(values["inquiry_source"]),
             crm_stage=validate_crm_stage(values["crm_stage"]),
             customer_linkage=validate_customer_linkage(values["customer_linkage"]),
-            time_window_text=values["time_window_text"],
+            time_window_text=values.get("time_window_text", current.time_window_text),
             location_text=values["location_text"],
             guest_count_estimate=values["guest_count_estimate"],
             planning_mode=validate_planning_mode(values["planning_mode"]),
@@ -3619,6 +3645,8 @@ class _RemoteInquiryService:
                 intake_message=values.get("intake_message"),
                 intake_subject=values.get("intake_subject"),
             ),
+            event_start_local=values.get("event_start_local"),
+            delivery_time_local=values.get("delivery_time_local"),
         )
 
     def update_inquiry(self, inquiry_id: str, **values: Any) -> Inquiry:
@@ -3628,10 +3656,20 @@ class _RemoteInquiryService:
         args: dict[str, object] = {
             "event_date": values["event_date"].isoformat(),
             "crm_stage": values["crm_stage"],
-            "time_window_text": values["time_window_text"],
+            "time_window_text": values.get("time_window_text", current.time_window_text),
             "location_text": values["location_text"],
             "guest_count_estimate": values["guest_count_estimate"],
             "planning_mode": values["planning_mode"],
+            "event_start_local": (
+                values["event_start_local"].isoformat(timespec="minutes")
+                if values.get("event_start_local") is not None
+                else None
+            ),
+            "delivery_time_local": (
+                values["delivery_time_local"].isoformat(timespec="minutes")
+                if values.get("delivery_time_local") is not None
+                else None
+            ),
         }
         for key in (
             "intake_subject",
@@ -3668,6 +3706,10 @@ class _RemoteInquiryService:
             ),
             customer_id=current.customer_id,
             customer_snapshot=current.customer_snapshot,
+            event_start_local=values.get("event_start_local", current.event_start_local),
+            delivery_time_local=values.get(
+                "delivery_time_local", current.delivery_time_local
+            ),
         )
 
     def complete_inquiry_contact_information(
