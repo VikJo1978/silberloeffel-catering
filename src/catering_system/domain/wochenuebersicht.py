@@ -26,6 +26,8 @@ class WochenuebersichtEntry:
     location_text: str
     guest_count_estimate: int | None
     planning_mode: PlanningMode
+    event_start_local: time | None = None
+    delivery_time_local: time | None = None
     delivery_date_local: date | None = None
     delivery_window_start_local: time | None = None
     delivery_window_end_local: time | None = None
@@ -60,6 +62,8 @@ def entry_from_effective(
         location_text=effective.location_text,
         guest_count_estimate=effective.guest_count_estimate,
         planning_mode=effective.planning_mode,
+        event_start_local=effective.event_start_local,
+        delivery_time_local=effective.delivery_time_local,
         delivery_date_local=effective.delivery_date_local,
         delivery_window_start_local=effective.delivery_window_start_local,
         delivery_window_end_local=effective.delivery_window_end_local,
