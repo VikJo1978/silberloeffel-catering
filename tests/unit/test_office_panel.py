@@ -180,7 +180,8 @@ def _post(
 def _create_inquiry(base: str, **overrides: str) -> str:
     data = {
         "event_date": "2026-10-01",
-        "time_window_text": "mittags",
+        "delivery_time_local": "16:30",
+        "event_start_local": "18:00",
         "location_text": "Hamburg",
         "guest_count_estimate": "25",
         "planning_mode": "caterer_suggestion",
@@ -522,6 +523,19 @@ def test_create_inquiry_appears_in_queue(panel: str) -> None:
     _status, body = _get(f"{panel}/")
     assert iid[:8] in body
     assert "Hamburg" in body
+
+
+def test_inquiry_timing_is_shown_once_with_exact_fields(premium_panel: str) -> None:
+    iid = _create_inquiry(premium_panel)
+    _status, body = _get(f"{premium_panel}/inquiry/{iid}")
+
+    assert "<dt>Lieferung</dt><dd>16:30</dd>" in body
+    assert "<dt>Beginn Veranstaltung</dt><dd>18:00</dd>" in body
+    assert 'name="delivery_time_local" value="16:30"' in body
+    assert 'name="event_start_local" value="18:00"' in body
+    assert 'name="time_window_text"' not in body
+    assert "<dt>Zeit</dt>" not in body
+    assert "Zeitfenster</label>" not in body
 
 
 def test_inquiry_detail_and_update(panel: str) -> None:
