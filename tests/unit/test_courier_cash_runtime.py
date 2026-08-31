@@ -123,10 +123,15 @@ def _seed_world(
         source_inquiry_id=_INQUIRY_ID,
         created_at=version.created_at,
         updated_at=version.created_at,
-        candidate_order_version_id=_VERSION_ID,
-        effective_order_version_id=_VERSION_ID,
     )
     orders.save_order_with_initial_version(order, version)
+    orders.update_order(
+        replace(
+            order,
+            candidate_order_version_id=_VERSION_ID,
+            effective_order_version_id=_VERSION_ID,
+        )
+    )
     payment_service = PaymentReminderService(
         payments,
         orders,
