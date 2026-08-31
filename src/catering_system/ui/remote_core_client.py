@@ -1184,9 +1184,7 @@ def _payment_method_change(value: object, order_id: str) -> PaymentMethodChange:
     )
 
 
-def _payment_correction(
-    value: object, order_id: str
-) -> PaymentCompletionCorrection:
+def _payment_correction(value: object, order_id: str) -> PaymentCompletionCorrection:
     data = _dict(value)
     _exact(data, _PAYMENT_CORRECTION_KEYS)
     return PaymentCompletionCorrection(
