@@ -144,6 +144,8 @@ class OrderService:
             delivery_date_local=offer_version.delivery_date_local,
             delivery_window_start_local=offer_version.delivery_window_start_local,
             delivery_window_end_local=offer_version.delivery_window_end_local,
+            delivery_time_local=offer_version.delivery_time_local,
+            event_start_local=offer_version.event_start_local,
         )
         context = (
             _initial_operational_context(order, version, inquiry, created_at=now)
@@ -207,6 +209,16 @@ class OrderService:
             ),
             delivery_window_end_local=(
                 latest_version.delivery_window_end_local
+                if latest_version is not None
+                else None
+            ),
+            delivery_time_local=(
+                latest_version.delivery_time_local
+                if latest_version is not None
+                else None
+            ),
+            event_start_local=(
+                latest_version.event_start_local
                 if latest_version is not None
                 else None
             ),
@@ -296,6 +308,8 @@ class OrderService:
             delivery_date_local=source.delivery_date_local,
             delivery_window_start_local=source.delivery_window_start_local,
             delivery_window_end_local=source.delivery_window_end_local,
+            delivery_time_local=source.delivery_time_local,
+            event_start_local=source.event_start_local,
         )
         previous_candidate_id = current.candidate_order_version_id
         updated = replace(
@@ -397,6 +411,11 @@ class OrderService:
             created_by=actor_reference,
             change_reason=change_reason,
             changed_fields=("delivery_address",),
+            delivery_date_local=parent.delivery_date_local,
+            delivery_window_start_local=parent.delivery_window_start_local,
+            delivery_window_end_local=parent.delivery_window_end_local,
+            delivery_time_local=parent.delivery_time_local,
+            event_start_local=parent.event_start_local,
         )
         operational_context = OrderOperationalContextData(
             recipient_company=parent_context.recipient_company,
