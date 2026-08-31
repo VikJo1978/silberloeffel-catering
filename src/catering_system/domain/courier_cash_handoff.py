@@ -190,9 +190,7 @@ class CourierCashCommand:
                 raise ValueError("correction cannot carry not-received fields")
             if correction_reason is None:
                 raise ValueError("correction requires reason")
-            correction_of = _uuid(
-                correction_of, "correction_of_idempotency_key"
-            )
+            correction_of = _uuid(correction_of, "correction_of_idempotency_key")
         elif any(
             item is not None
             for item in (reason, note, correction_reason, correction_of)
