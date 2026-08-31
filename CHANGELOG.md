@@ -5,6 +5,17 @@ here. Historical fine-grained execution notes remain in `WORKLOG.md`.
 
 ## Unreleased
 
+- Activated the frozen Courier cash-handoff flow in production on the Lenovo:
+  Core `ed78e82` (PR #213) and courier-app `f3419a4` (PR #16) are deployed;
+  the Core Office API machine route is bearer-gated on `8084`, Courier is
+  configured with the matching service token, Kiosk loaded the new read-only
+  `cash_handoff` projection, and route/service smoke checks passed
+  (`401` without bearer, authenticated empty payload reaching `400`, Kiosk
+  and order-feed `200`). Production currently has zero `BAR_VOR_ORT`
+  payment reminders, so no synthetic order was created merely to force an E2E;
+  the first real BAR order will provide the final driver → customer → chef
+  `FINAL_PAID` production proof.
+
 - Implemented Phase 1 of the frozen Proxmox office pack
   (`docs/proposals/PROXMOX_OFFICE_SERVER_CORE_API_PACK_V1.md`): a dormant
   Core Office API on the Lenovo Tailscale address (`8084`) serving the full
