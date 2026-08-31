@@ -851,6 +851,7 @@ class OfficeApi:
         )
         self.courier_cash_service = CourierCashService(
             self.orders,
+            self.inquiries,
             self.payment_reminders,
             self.courier_cash,
             self.payment_reminder_service,
