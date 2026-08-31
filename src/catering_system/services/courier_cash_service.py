@@ -29,6 +29,7 @@ from catering_system.domain.courier_cash_handoff import (
     CourierCashStoredEvent,
 )
 from catering_system.repositories.courier_cash_repository import CourierCashRepository
+from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.repositories.order_repository import OrderRepository
 from catering_system.repositories.payment_reminder_repository import (
     PaymentReminderRepository,
@@ -65,6 +66,7 @@ class CourierCashService:
     def __init__(
         self,
         orders: OrderRepository,
+        inquiries: InquiryRepository,
         payments: PaymentReminderRepository,
         cash_events: CourierCashRepository,
         payment_service: PaymentReminderService,
@@ -73,6 +75,7 @@ class CourierCashService:
         now: Callable[[], datetime] | None = None,
     ) -> None:
         self._orders = orders
+        self._inquiries = inquiries
         self._payments = payments
         self._cash_events = cash_events
         self._payment_service = payment_service
@@ -98,6 +101,10 @@ class CourierCashService:
             raise CourierCashCommandError("invalid_transition", 409)
         if order.effective_order_version_id != command.order_version_id:
             raise CourierCashCommandError("stale_order_revision", 409)
+        if command.event_type == EVENT_CHEF_DIRECT:
+            inquiry = self._inquiries.get_by_id(order.source_inquiry_id)
+            if inquiry is None or inquiry.fulfillment_mode != "PICKUP":
+                raise CourierCashCommandError("invalid_transition", 409)
 
         projection = self._context_service.projection(command.order_id)
         if projection is None:
