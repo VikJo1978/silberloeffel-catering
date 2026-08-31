@@ -449,7 +449,9 @@ def test_privileged_correction_preserves_history_and_forces_manual_review(
     tmp_path: Path,
 ) -> None:
     db = tmp_path / "core.db"
-    connection, _orders, payments, cash, _payment, context, service = _seed_world(db)
+    connection, _orders, payments, cash, _payment, context, service = _seed_world(
+        db, fulfillment_mode="PICKUP"
+    )
     before_context = context.projection(_ORDER_ID)
     assert before_context is not None
 
