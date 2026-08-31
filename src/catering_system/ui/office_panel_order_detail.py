@@ -840,7 +840,7 @@ def _payment_form(
                 f'<option value="{method}">{_e(PAYMENT_METHOD_LABELS[method])}</option>'
             )
         method_field = (
-            '<p><label>Zahlungsart*</label>'
+            "<p><label>Zahlungsart*</label>"
             '<select name="payment_method" required>'
             f"{''.join(options)}</select></p>"
         )
@@ -923,10 +923,10 @@ def _payment_method_change_form(
         "<summary>Zahlungsart ändern</summary>"
         f'<form method="post" action="/order/{_e(order.order_id)}/payment-method">'
         f"{forms.csrf_input}{forms.payment_method_command_fields}<fieldset>"
-        '<p><label>Neue Zahlungsart*</label>'
+        "<p><label>Neue Zahlungsart*</label>"
         '<select name="new_payment_method" required>'
         f"{''.join(options)}</select></p>"
-        '<p><label>Grund*</label>'
+        "<p><label>Grund*</label>"
         '<textarea name="reason" maxlength="500" required></textarea></p>'
         '<p class="order-context-note">'
         "Die bisherige Zahlungsart und ihre Dokument-/Reminder-Fakten "
