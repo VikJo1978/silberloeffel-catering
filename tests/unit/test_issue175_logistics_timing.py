@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from datetime import UTC, date, datetime, time
 from pathlib import Path
 
@@ -19,8 +21,10 @@ from catering_system.domain.offer_charges import (
     ReturnLogisticsDefinition,
 )
 from catering_system.domain.order import Order, OrderVersion
+from catering_system.domain.wochenuebersicht import WochenuebersichtEntry
 from catering_system.repositories.sqlite_offer_repository import SQLiteOfferRepository
 from catering_system.repositories.sqlite_order_repository import SQLiteOrderRepository
+from catering_system.ui.kiosk_server import render_order_feed_json
 
 NOW = datetime(2026, 8, 25, 9, 0, tzinfo=UTC)
 DAY = date(2026, 9, 12)
@@ -185,3 +189,91 @@ def test_next_working_day_never_carries_canonical_pickup_times() -> None:
             pickup_window_start_local=time(9, 0),
             pickup_window_end_local=time(10, 0),
         )
+
+
+
+def test_exact_delivery_and_event_start_roundtrip_without_fabricated_window(
+    tmp_path: Path,
+) -> None:
+    offer_repo = SQLiteOfferRepository(tmp_path / "exact-offers.db")
+    exact_offer = replace(
+        _offer_version(),
+        delivery_date_local=None,
+        delivery_window_start_local=None,
+        delivery_window_end_local=None,
+        delivery_time_local=time(16, 30),
+        event_start_local=time(18, 0),
+    )
+    offer_repo.save(
+        Offer(
+            offer_id="offer-1",
+            source_inquiry_id="inquiry-1",
+            created_at=NOW,
+            versions=(exact_offer,),
+        )
+    )
+    loaded_offer = offer_repo.get("offer-1")
+    assert loaded_offer is not None
+    loaded_version = loaded_offer.versions[0]
+    assert loaded_version.delivery_time_local == time(16, 30)
+    assert loaded_version.event_start_local == time(18, 0)
+    assert loaded_version.delivery_date_local is None
+    assert loaded_version.delivery_window_start_local is None
+    assert loaded_version.delivery_window_end_local is None
+
+    order_repo = SQLiteOrderRepository(tmp_path / "exact-orders.db")
+    order = Order("order-exact", "inquiry-1", NOW, NOW)
+    order_version = OrderVersion(
+        order_version_id="order-version-exact",
+        order_id=order.order_id,
+        version_number=1,
+        created_at=NOW,
+        event_date=DAY,
+        time_window_text="18:00",
+        location_text="Hamburg",
+        guest_count_estimate=20,
+        planning_mode="caterer_suggestion",
+        delivery_time_local=time(16, 30),
+        event_start_local=time(18, 0),
+    )
+    order_repo.save_order_with_initial_version(order, order_version)
+    assert order_repo.get_order_version(order_version.order_version_id) == order_version
+
+
+def test_exact_delivery_time_and_legacy_window_are_mutually_exclusive() -> None:
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        OrderVersion(
+            order_version_id="v-exact-conflict",
+            order_id="o",
+            version_number=1,
+            created_at=NOW,
+            event_date=DAY,
+            time_window_text="18:00",
+            location_text="Hamburg",
+            guest_count_estimate=10,
+            planning_mode="caterer_suggestion",
+            delivery_date_local=DAY,
+            delivery_window_start_local=time(16, 0),
+            delivery_window_end_local=time(17, 0),
+            delivery_time_local=time(16, 30),
+        )
+
+
+def test_kiosk_feed_projects_exact_times_without_delivery_window() -> None:
+    entry = WochenuebersichtEntry(
+        order_id="order-1",
+        effective_order_version_id="version-1",
+        version_number=1,
+        event_date=DAY,
+        time_window_text="18:00",
+        location_text="Hamburg",
+        guest_count_estimate=20,
+        planning_mode="caterer_suggestion",
+        delivery_time_local=time(16, 30),
+        event_start_local=time(18, 0),
+    )
+    payload = json.loads(render_order_feed_json(DAY, (entry,)))
+    order = payload["orders"][0]
+    assert order["delivery_time_local"] == "16:30"
+    assert order["event_start_local"] == "18:00"
+    assert "delivery_window" not in order
