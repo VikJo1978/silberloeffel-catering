@@ -141,6 +141,8 @@ class OrderService:
             location_text=offer_version.location_text,
             guest_count_estimate=offer_version.guest_count,
             planning_mode=offer_version.planning_mode,
+            event_start_local=offer_version.event_start_local,
+            delivery_time_local=offer_version.delivery_time_local,
             delivery_date_local=offer_version.delivery_date_local,
             delivery_window_start_local=offer_version.delivery_window_start_local,
             delivery_window_end_local=offer_version.delivery_window_end_local,
@@ -195,6 +197,12 @@ class OrderService:
             location_text=location_text,
             guest_count_estimate=guest_count_estimate,
             planning_mode=pm,
+            event_start_local=(
+                latest_version.event_start_local if latest_version is not None else None
+            ),
+            delivery_time_local=(
+                latest_version.delivery_time_local if latest_version is not None else None
+            ),
             delivery_date_local=(
                 latest_version.delivery_date_local
                 if latest_version is not None
