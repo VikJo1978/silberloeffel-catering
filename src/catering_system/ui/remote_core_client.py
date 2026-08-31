@@ -1512,22 +1512,20 @@ def _validate_offer_prefill(value: object) -> None:
     for key in ("dietaryRequirements", "eventType", "serviceStyle"):
         _str(planning[key])
     context = _dict(transfer["orderContextPrefill"])
-    _exact(
-        context,
-        {
-            "companyName",
-            "contactPerson",
-            "email",
-            "phone",
-            "eventDate",
-            "eventTime",
-            "eventStart",
-            "deliveryTime",
-            "location",
-            "billingAddress",
-            "remarks",
-        },
-    )
+    required_context_keys = {
+        "companyName",
+        "contactPerson",
+        "email",
+        "phone",
+        "eventDate",
+        "eventTime",
+        "location",
+        "billingAddress",
+        "remarks",
+    }
+    allowed_context_keys = required_context_keys | {"eventStart", "deliveryTime"}
+    if not required_context_keys <= set(context) <= allowed_context_keys:
+        _bad_response()
     for key, item in context.items():
         if key in {"eventStart", "deliveryTime"}:
             _optional_local_time(item)
@@ -3586,9 +3584,11 @@ class _RemoteInquiryService:
             "planning_mode": values["planning_mode"],
             "call_verification_required": values["call_verification_required"],
         }
+        for timing_key in ("event_start_local", "delivery_time_local"):
+            timing_value = values.get(timing_key)
+            if timing_value is not None:
+                args[timing_key] = timing_value.isoformat(timespec="minutes")
         for key in (
-            "event_start_local",
-            "delivery_time_local",
             "intake_subject",
             "intake_message",
             "intake_summary",
