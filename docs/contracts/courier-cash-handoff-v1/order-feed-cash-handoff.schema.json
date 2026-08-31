@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://silberloeffel.local/contracts/courier-cash-handoff-v1/order-feed-cash-handoff.schema.json",
+  "title": "Courier cash handoff order-feed projection V1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "bar_required",
+    "quittung_status",
+    "order_version_id",
+    "cash_execution_context_id"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": "courier-cash-handoff-v1"
+    },
+    "bar_required": {
+      "const": true
+    },
+    "quittung_status": {
+      "enum": [
+        "PRINTED_CURRENT",
+        "NOT_READY"
+      ]
+    },
+    "order_version_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "cash_execution_context_id": {
+      "type": "string",
+      "format": "uuid"
+    }
+  }
+}

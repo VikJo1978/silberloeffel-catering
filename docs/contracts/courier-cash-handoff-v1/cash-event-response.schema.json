@@ -1,0 +1,71 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://silberloeffel.local/contracts/courier-cash-handoff-v1/cash-event-response.schema.json",
+  "title": "Courier cash event response V1",
+  "oneOf": [
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "contract_version",
+        "event_id",
+        "idempotency_key",
+        "order_id",
+        "cash_state",
+        "recorded_at"
+      ],
+      "properties": {
+        "contract_version": {
+          "const": "courier-cash-handoff-v1"
+        },
+        "event_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "idempotency_key": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "order_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "cash_state": {
+          "enum": [
+            "READY_FOR_CUSTOMER_HANDOFF",
+            "DRIVER_CUSTODY",
+            "AWAITING_CHEF_CONFIRMATION",
+            "FINAL_PAID",
+            "NOT_RECEIVED",
+            "MANUAL_REVIEW_REQUIRED"
+          ]
+        },
+        "recorded_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "error"
+      ],
+      "properties": {
+        "error": {
+          "enum": [
+            "unauthorized",
+            "invalid_request",
+            "unsupported_contract_version",
+            "idempotency_conflict",
+            "stale_order_revision",
+            "stale_cash_context",
+            "invalid_transition",
+            "core_unavailable"
+          ]
+        }
+      }
+    }
+  ]
+}

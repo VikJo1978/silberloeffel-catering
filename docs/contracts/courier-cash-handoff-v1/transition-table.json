@@ -1,0 +1,82 @@
+{
+  "contract_version": "courier-cash-handoff-v1",
+  "transitions": [
+    {
+      "from_states": [
+        "READY_FOR_CUSTOMER_HANDOFF"
+      ],
+      "event_type": "BAR_RECEIVED_AND_QUITTUNG_HANDED_TO_CUSTOMER",
+      "actor_roles": [
+        "DRIVER"
+      ],
+      "to_state": "DRIVER_CUSTODY",
+      "final_payment": false,
+      "office_task": null
+    },
+    {
+      "from_states": [
+        "READY_FOR_CUSTOMER_HANDOFF"
+      ],
+      "event_type": "BAR_NOT_RECEIVED",
+      "actor_roles": [
+        "DRIVER",
+        "CHEF"
+      ],
+      "to_state": "NOT_RECEIVED",
+      "final_payment": false,
+      "office_task": "Barzahlung klären"
+    },
+    {
+      "from_states": [
+        "DRIVER_CUSTODY"
+      ],
+      "event_type": "BAR_HANDED_TO_CHEF",
+      "actor_roles": [
+        "DRIVER"
+      ],
+      "to_state": "AWAITING_CHEF_CONFIRMATION",
+      "final_payment": false,
+      "office_task": null
+    },
+    {
+      "from_states": [
+        "AWAITING_CHEF_CONFIRMATION"
+      ],
+      "event_type": "BAR_RECEIVED_FROM_DRIVER_BY_CHEF",
+      "actor_roles": [
+        "CHEF"
+      ],
+      "to_state": "FINAL_PAID",
+      "final_payment": true,
+      "office_task": null
+    },
+    {
+      "from_states": [
+        "READY_FOR_CUSTOMER_HANDOFF"
+      ],
+      "event_type": "BAR_RECEIVED_DIRECT_BY_CHEF_AND_QUITTUNG_HANDED_TO_CUSTOMER",
+      "actor_roles": [
+        "CHEF"
+      ],
+      "to_state": "FINAL_PAID",
+      "final_payment": true,
+      "office_task": null
+    },
+    {
+      "from_states": [
+        "DRIVER_CUSTODY",
+        "AWAITING_CHEF_CONFIRMATION",
+        "FINAL_PAID",
+        "NOT_RECEIVED"
+      ],
+      "event_type": "BAR_HANDOFF_CORRECTION",
+      "actor_roles": [
+        "CHEF",
+        "OFFICE"
+      ],
+      "to_state": "MANUAL_REVIEW_REQUIRED",
+      "final_payment": false,
+      "office_task": "Barzahlung klären"
+    }
+  ]
+}
