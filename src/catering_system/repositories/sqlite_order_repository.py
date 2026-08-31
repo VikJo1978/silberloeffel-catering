@@ -418,6 +418,24 @@ def _migration_10_order_version_logistics_timing(
     )
 
 
+def _migration_11_order_version_exact_timing(
+    connection: sqlite3.Connection,
+) -> None:
+    columns = {
+        row[1] for row in connection.execute("PRAGMA table_info(order_versions)")
+    }
+    for name in ("event_start_local", "delivery_time_local"):
+        if name not in columns:
+            connection.execute(f"ALTER TABLE order_versions ADD COLUMN {name} TEXT")
+    connection.execute(
+        """CREATE TRIGGER IF NOT EXISTS trg_order_version_exact_timing_immutable
+        BEFORE UPDATE OF event_start_local, delivery_time_local ON order_versions
+        WHEN NEW.event_start_local IS NOT OLD.event_start_local
+          OR NEW.delivery_time_local IS NOT OLD.delivery_time_local
+        BEGIN SELECT RAISE(ABORT, 'order version exact timing is immutable'); END"""
+    )
+
+
 _MIGRATIONS = (
     (1, "create_order_tables", _migration_1_create_tables),
     (2, "add_cancelled_at", _migration_2_add_cancelled_at),
@@ -444,6 +462,11 @@ _MIGRATIONS = (
         10,
         "order_version_logistics_timing",
         _migration_10_order_version_logistics_timing,
+    ),
+    (
+        11,
+        "order_version_exact_timing",
+        _migration_11_order_version_exact_timing,
     ),
 )
 
@@ -532,8 +555,9 @@ class SQLiteOrderRepository:
                     event_date, time_window_text, location_text, guest_count_estimate,
                     planning_mode, kitchen_print_confirmed_at, parent_order_version_id,
                     created_by, change_reason, changed_fields_json, delivery_date_local,
-                    delivery_window_start_local, delivery_window_end_local
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    delivery_window_start_local, delivery_window_end_local,
+                    event_start_local, delivery_time_local
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 self._version_values(version),
             )
@@ -594,8 +618,9 @@ class SQLiteOrderRepository:
                     event_date, time_window_text, location_text, guest_count_estimate,
                     planning_mode, kitchen_print_confirmed_at, parent_order_version_id,
                     created_by, change_reason, changed_fields_json, delivery_date_local,
-                    delivery_window_start_local, delivery_window_end_local
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    delivery_window_start_local, delivery_window_end_local,
+                    event_start_local, delivery_time_local
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 self._version_values(version),
             )
@@ -734,6 +759,16 @@ class SQLiteOrderRepository:
                 if version.delivery_window_end_local is not None
                 else None
             ),
+            (
+                version.event_start_local.isoformat(timespec="minutes")
+                if version.event_start_local is not None
+                else None
+            ),
+            (
+                version.delivery_time_local.isoformat(timespec="minutes")
+                if version.delivery_time_local is not None
+                else None
+            ),
         )
 
     def get_order_version(self, order_version_id: str) -> OrderVersion | None:
@@ -807,5 +842,11 @@ class SQLiteOrderRepository:
             ),
             delivery_window_end_local=(
                 time.fromisoformat(row[16]) if row[16] is not None else None
+            ),
+            event_start_local=(
+                time.fromisoformat(row[17]) if row[17] is not None else None
+            ),
+            delivery_time_local=(
+                time.fromisoformat(row[18]) if row[18] is not None else None
             ),
         )
