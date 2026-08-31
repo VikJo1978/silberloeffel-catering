@@ -9,6 +9,12 @@ from __future__ import annotations
 from datetime import date, time
 
 
+def validate_optional_local_time(value: time | None, *, label: str) -> None:
+    """Validate one explicit local wall-clock fact without inventing a window."""
+    if value is not None and value.tzinfo is not None:
+        raise ValueError(f"{label} must use local wall-clock time without tzinfo")
+
+
 def validate_optional_local_window(
     starts_at: time | None,
     ends_at: time | None,
