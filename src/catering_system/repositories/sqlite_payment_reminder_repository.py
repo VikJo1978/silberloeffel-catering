@@ -10,6 +10,7 @@ from pathlib import Path
 
 from catering_system.domain.order_payment_reminder import (
     OrderPaymentReminder,
+    PaymentCompletionCorrection,
     PaymentMethodChange,
     validate_payment_method,
 )
@@ -113,11 +114,45 @@ def _migration_4_add_payment_method_history(connection: sqlite3.Connection) -> N
     )
 
 
+def _migration_5_add_payment_completion_corrections(
+    connection: sqlite3.Connection,
+) -> None:
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS order_payment_completion_corrections (
+            correction_id TEXT PRIMARY KEY,
+            order_id TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            actor_reference TEXT NOT NULL,
+            corrected_at TEXT NOT NULL,
+            previous_reminder_json TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """CREATE TRIGGER IF NOT EXISTS trg_payment_correction_owner_insert
+        BEFORE INSERT ON order_payment_completion_corrections
+        WHEN NOT EXISTS (SELECT 1 FROM orders WHERE order_id = NEW.order_id)
+        BEGIN SELECT RAISE(ABORT, 'payment correction owner does not exist'); END"""
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_payment_corrections_order_corrected
+        ON order_payment_completion_corrections(order_id, corrected_at DESC)
+        """
+    )
+
+
 _MIGRATIONS = (
     (1, "create_order_payment_reminders", _migration_1_create_table),
     (2, "add_quittung_printed", _migration_2_add_quittung_printed),
     (3, "add_payment_audit_facts", _migration_3_add_audit_facts),
     (4, "add_payment_method_history", _migration_4_add_payment_method_history),
+    (
+        5,
+        "add_payment_completion_corrections",
+        _migration_5_add_payment_completion_corrections,
+    ),
 )
 
 _SELECT_COLUMNS = """
@@ -325,6 +360,41 @@ class SQLitePaymentReminderRepository:
             )
         return tuple(result)
 
+    def list_payment_corrections(
+        self, order_id: str
+    ) -> tuple[PaymentCompletionCorrection, ...]:
+        rows = self._conn.execute(
+            """
+            SELECT
+                correction_id,
+                order_id,
+                reason,
+                actor_reference,
+                corrected_at,
+                previous_reminder_json
+            FROM order_payment_completion_corrections
+            WHERE order_id = ?
+            ORDER BY corrected_at DESC, correction_id DESC
+            """,
+            (order_id,),
+        ).fetchall()
+        result: list[PaymentCompletionCorrection] = []
+        for row in rows:
+            raw = json.loads(row[5])
+            if not isinstance(raw, dict):
+                raise ValueError("invalid payment correction history payload")
+            result.append(
+                PaymentCompletionCorrection(
+                    correction_id=row[0],
+                    order_id=row[1],
+                    reason=row[2],
+                    actor_reference=row[3],
+                    corrected_at=datetime.fromisoformat(row[4]),
+                    previous_reminder=_reminder_from_payload(raw),
+                )
+            )
+        return tuple(result)
+
     def _upsert(self, reminder: OrderPaymentReminder) -> None:
         values = (
             reminder.order_id,
@@ -453,6 +523,59 @@ class SQLitePaymentReminderRepository:
                         ensure_ascii=False,
                         sort_keys=True,
                     ),
+                ),
+            )
+            self._upsert(reminder)
+
+    def save_payment_correction(
+        self,
+        reminder: OrderPaymentReminder,
+        correction: PaymentCompletionCorrection,
+    ) -> None:
+        with self._write_scope():
+            existing = self._conn.execute(
+                """
+                SELECT order_id, reason, actor_reference, corrected_at,
+                       previous_reminder_json
+                FROM order_payment_completion_corrections
+                WHERE correction_id = ?
+                """,
+                (correction.correction_id,),
+            ).fetchone()
+            payload = json.dumps(
+                _reminder_payload(correction.previous_reminder),
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            if existing is not None:
+                if existing != (
+                    correction.order_id,
+                    correction.reason,
+                    correction.actor_reference,
+                    correction.corrected_at.isoformat(),
+                    payload,
+                ):
+                    raise ValueError("payment correction id conflict")
+                self._upsert(reminder)
+                return
+            self._conn.execute(
+                """
+                INSERT INTO order_payment_completion_corrections (
+                    correction_id,
+                    order_id,
+                    reason,
+                    actor_reference,
+                    corrected_at,
+                    previous_reminder_json
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    correction.correction_id,
+                    correction.order_id,
+                    correction.reason,
+                    correction.actor_reference,
+                    correction.corrected_at.isoformat(),
+                    payload,
                 ),
             )
             self._upsert(reminder)
