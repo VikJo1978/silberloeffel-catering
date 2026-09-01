@@ -761,6 +761,7 @@ class OfficePanel:
         if (
             latest.rejected_at is not None
             or latest.superseded_at is not None
+            or self.kitchen_print_service.is_acceptance_overdue(latest)
             or self.kitchen_print_service.is_ack_overdue(latest)
         ):
             return "Erneut drucken"
@@ -779,6 +780,7 @@ class OfficePanel:
             latest.acknowledged_at is None
             and latest.rejected_at is None
             and latest.superseded_at is None
+            and not self.kitchen_print_service.is_acceptance_overdue(latest)
             and not self.kitchen_print_service.is_ack_overdue(latest)
         )
 
@@ -798,6 +800,8 @@ class OfficePanel:
                 latest.rejection_code or "",
                 "Druckauftrag fehlgeschlagen.",
             )
+        if self.kitchen_print_service.is_acceptance_overdue(latest):
+            return "Druckauftrag nicht rechtzeitig angenommen."
         if self.kitchen_print_service.is_ack_overdue(latest):
             return "Druckauftrag fehlgeschlagen."
         if latest.accepted_at is not None:
