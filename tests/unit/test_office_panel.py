@@ -1161,6 +1161,36 @@ def test_stale_print_attempt_offers_explicit_reprint(panel: str) -> None:
     assert attempts[1].supersedes_print_job_id == stale_job_id
 
 
+def test_unaccepted_expired_print_attempt_reprints_from_office(panel: str) -> None:
+    iid = _create_inquiry(panel)
+    oid = _convert(panel, iid)
+    _status, body = _get(f"{panel}/order/{oid}")
+    vid = body.split('name="order_version_id" value="')[1].split('"')[0]
+    requested_at = datetime(2026, 7, 14, 9, 0, tzinfo=UTC)
+    expired_job_id = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+    _PANEL_JOBS[panel].save(
+        KitchenPrintJob(
+            print_job_id=expired_job_id,
+            order_id=oid,
+            order_version_id=vid,
+            attempt_number=1,
+            requested_at=requested_at,
+            accept_deadline_at=requested_at + timedelta(seconds=30),
+        )
+    )
+
+    _status, body = _get(f"{panel}/order/{oid}")
+    assert "Erneut drucken" in body
+    assert "Druckauftrag nicht rechtzeitig angenommen." in body
+
+    _post(f"{panel}/order/{oid}/print-confirm", {"order_version_id": vid})
+
+    attempts = _PANEL_JOBS[panel].list_for_version(vid)
+    assert [attempt.attempt_number for attempt in attempts] == [1, 2]
+    assert attempts[0].superseded_at is not None
+    assert attempts[1].supersedes_print_job_id == expired_job_id
+
+
 def test_full_release_flow(panel: str) -> None:
     iid = _create_inquiry(panel)
     oid = _convert(panel, iid)
