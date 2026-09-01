@@ -950,6 +950,7 @@ def test_offer_component_migrations_are_recorded_once(tmp_path: Path) -> None:
         (8, "offer_version_budget_definition"),
         (9, "offer_version_charges_definition"),
         (10, "offer_version_logistics_timing"),
+        (11, "offer_version_exact_timing"),
     ]
     conn = sqlite3.connect(db)
     apply_migrations(conn, "offers", _MIGRATIONS)
@@ -957,4 +958,4 @@ def test_offer_component_migrations_are_recorded_once(tmp_path: Path) -> None:
         "SELECT COUNT(*) FROM schema_migrations WHERE component = 'offers'"
     ).fetchone()
     conn.close()
-    assert rows_after == (10,)
+    assert rows_after == (11,)
