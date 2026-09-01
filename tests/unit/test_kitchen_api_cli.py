@@ -32,7 +32,15 @@ def test_main_requires_agent_token(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         sys,
         "argv",
-        ["kitchen_api", "--db", "/tmp/core.db", "--host", "127.0.0.1", "--port", "8086"],
+        [
+            "kitchen_api",
+            "--db",
+            "/tmp/core.db",
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "8086",
+        ],
     )
 
     with pytest.raises(SystemExit, match="KITCHEN_PRINT_AGENT_TOKEN is required"):
