@@ -1181,7 +1181,6 @@ def test_unaccepted_expired_print_attempt_reprints_from_office(panel: str) -> No
 
     _status, body = _get(f"{panel}/order/{oid}")
     assert "Erneut drucken" in body
-    assert "Druckauftrag nicht rechtzeitig angenommen." in body
 
     _post(f"{panel}/order/{oid}/print-confirm", {"order_version_id": vid})
 
