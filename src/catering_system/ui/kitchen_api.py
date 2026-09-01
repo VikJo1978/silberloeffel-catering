@@ -386,3 +386,43 @@ def create_kitchen_api_server(
     server = HTTPServer((host, port), make_kitchen_api_handler(api, token))
     server.kitchen_connection = connection  # type: ignore[attr-defined]
     return server, api
+
+
+def main() -> None:
+    """Run the loopback Kitchen Print Agent API as a long-lived process."""
+    import argparse
+    import os
+
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    parser = argparse.ArgumentParser(description="Catering Kitchen Print Agent API")
+    parser.add_argument("--db", required=True, help="Path to the Core SQLite database")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8086)
+    args = parser.parse_args()
+
+    token = os.environ.get("KITCHEN_PRINT_AGENT_TOKEN", "")
+    if not token:
+        raise SystemExit(
+            "KITCHEN_PRINT_AGENT_TOKEN is required; refusing to start unauthenticated"
+        )
+
+    server, api = create_kitchen_api_server(
+        args.db,
+        token,
+        args.host,
+        args.port,
+    )
+    _log.info(
+        "Catering Kitchen Print API on http://%s:%s/kitchen/v1/",
+        args.host,
+        args.port,
+    )
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
+        api.close()
+
+
+if __name__ == "__main__":
+    main()
