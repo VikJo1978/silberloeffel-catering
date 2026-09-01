@@ -1073,7 +1073,7 @@ def make_office_panel_handler(
             body = (
                 f'<p class="blocked">{_e(message)}</p>'
                 f'<p><a class="order-button secondary" href="{_e(return_href)}">'
-                f'{_e(return_label)}</a></p>'
+                f"{_e(return_label)}</a></p>"
             )
             self._html(
                 _page(
