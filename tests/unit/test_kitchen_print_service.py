@@ -459,12 +459,32 @@ def test_acceptance_deadline_and_cancelled_state_are_pure_derivations() -> None:
     clock.advance(timedelta(seconds=12))
 
     assert derive_kitchen_print_job_state(job, now=clock.now) == "acceptance_overdue"
+    assert service.is_acceptance_overdue(job) is True
     assert (
         derive_kitchen_print_job_state(job, now=clock.now, order_cancelled=True)
         == "cancelled"
     )
     with pytest.raises(ValueError, match="deadline has passed"):
         service.accept_print_job(JOB_1)
+
+
+def test_office_reprint_action_after_acceptance_timeout() -> None:
+    _orders, service, _core, clock, order_id, version_id, _events = _setup()
+    panel = OfficePanel.__new__(OfficePanel)
+    panel.kitchen_print_service = service
+    service.request_print(order_id, version_id, print_job_id=JOB_1)
+    clock.advance(timedelta(seconds=12))
+
+    assert panel._kitchen_print_is_processing(version_id) is False
+    assert panel._kitchen_print_action_label(version_id) == "Erneut drucken"
+    assert (
+        panel._kitchen_print_status_message(version_id)
+        == "Druckauftrag nicht rechtzeitig angenommen."
+    )
+
+    retry = service.reprint(JOB_1, new_print_job_id=JOB_2)
+    assert retry.attempt_number == 2
+    assert retry.supersedes_print_job_id == JOB_1
 
 
 def test_claim_next_eligible_records_order_cancelled_after_atomic_accept() -> None:

@@ -85,6 +85,15 @@ class KitchenPrintService:
     ) -> list[KitchenPrintJob]:
         return self._jobs.list_for_version(order_version_id)
 
+    def is_acceptance_overdue(self, job: KitchenPrintJob) -> bool:
+        return (
+            job.accepted_at is None
+            and job.acknowledged_at is None
+            and job.rejected_at is None
+            and job.superseded_at is None
+            and self._clock() >= job.accept_deadline_at
+        )
+
     def is_ack_overdue(self, job: KitchenPrintJob) -> bool:
         return (
             job.accepted_at is not None
