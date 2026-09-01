@@ -387,6 +387,7 @@ def create_kitchen_api_server(
     server.kitchen_connection = connection  # type: ignore[attr-defined]
     return server, api
 
+
 def main() -> None:
     """Run the loopback Kitchen Print Agent API as a long-lived process."""
     import argparse
