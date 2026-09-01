@@ -729,6 +729,8 @@ def test_order_domain_has_no_kitchen_or_release_surface() -> None:
         "delivery_date_local",
         "delivery_window_start_local",
         "delivery_window_end_local",
+        "delivery_time_local",
+        "event_start_local",
     }
 
 
