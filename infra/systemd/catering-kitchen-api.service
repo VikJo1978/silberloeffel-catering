@@ -1,0 +1,20 @@
+# Kitchen Print Agent API — Lenovo deployment.
+# Loopback-only, bearer-gated with the same agent token consumed by kitchen-print-agent.
+
+[Unit]
+Description=Catering Kitchen Print Agent API (loopback, bearer-gated)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=viktor
+WorkingDirectory=/home/viktor/projects/silberloeffel-catering
+Environment=PYTHONPATH=/home/viktor/projects/silberloeffel-catering/src
+EnvironmentFile=/etc/kitchen-print-agent.env
+ExecStart=/home/viktor/projects/silberloeffel-catering/.venv/bin/python3 -m catering_system.ui.kitchen_api --db /home/viktor/catering-runtime/core.db --host 127.0.0.1 --port 8086
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
