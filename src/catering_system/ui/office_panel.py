@@ -738,6 +738,7 @@ class OfficePanel:
             if (
                 latest.rejected_at is not None
                 or latest.superseded_at is not None
+                or kitchen_print_service.is_acceptance_overdue(latest)
                 or kitchen_print_service.is_ack_overdue(latest)
             ):
                 kitchen_print_service.reprint(latest.print_job_id)
