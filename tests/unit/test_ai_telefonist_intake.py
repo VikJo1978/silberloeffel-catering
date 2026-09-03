@@ -166,7 +166,7 @@ def test_adapter_normalizes_spoken_digit_phone() -> None:
     }
     q = intake_from_ai_telefonist(service, payload)
     assert q.customer_snapshot is not None
-    assert q.customer_snapshot.phone == "017642795029"
+    assert q.customer_snapshot.phone == "+4917642795029"
     assert "Telefon: 017642795029" in (q.intake_message or "")
 
 
@@ -203,7 +203,7 @@ def test_http_post_accepts_blank_optional_strato_values(server) -> None:
     assert q.fulfillment_mode == "UNKNOWN"
     assert q.intake_external_ref == "strato-0176-blank-optionals"
     assert q.customer_snapshot is not None
-    assert q.customer_snapshot.phone == "017642795029"
+    assert q.customer_snapshot.phone == "+4917642795029"
 
 
 def test_valid_http_post_creates_only_one_inquiry(server) -> None:
