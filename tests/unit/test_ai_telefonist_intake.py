@@ -272,9 +272,10 @@ def test_sqlite_ai_telefonist_submission_id_is_unique(tmp_path) -> None:
         "event_start": time(18, 30),
     }
     first = intake_from_ai_telefonist(service, payload)
-    assert repo.find_by_source_and_external_ref(
-        "ai_telefonist", "strato-call-001"
-    ) == first
+    assert (
+        repo.find_by_source_and_external_ref("ai_telefonist", "strato-call-001")
+        == first
+    )
 
     with pytest.raises(DuplicateExternalReferenceError):
         intake_from_ai_telefonist(service, payload)
