@@ -18,9 +18,8 @@ Content-Type: application/json
 ```
 
 The service is intentionally loopback-only. STRATO requires a publicly reachable
-HTTPS endpoint, so a narrow TLS reverse proxy/tunnel must forward exactly this
-route to the local receiver. Do not expose the Office Panel, Office API, Kitchen
-API, or the SQLite database.
+HTTPS endpoint, so a narrow TLS reverse proxy/tunnel must forward only this
+receiver. Do not expose the Office Panel, Office API, Kitchen API, or SQLite.
 
 Success:
 
@@ -42,11 +41,11 @@ create_catering_inquiry
 Description:
 
 ```text
-Erstellt eine neue Catering-Anfrage im internen System. Nutze dieses Tool,
-wenn ein Anrufer eine konkrete Catering-Anfrage stellt oder ein Angebot
-erhalten möchte. Frage die Pflichtangaben ab und fasse freie Wünsche knapp
-zusammen. submission_id ist eine technische UUID: nicht vom Anrufer erfragen,
-sondern pro Tool-Aufruf selbst erzeugen.
+Erstellt eine Catering-Anfrage im internen System. Nutze dieses Tool, wenn ein
+Anrufer konkret Catering anfragt oder ein Angebot erhalten möchte. Erfasse
+mindestens Name, Telefonnummer, Veranstaltungsdatum und Gästezahl. Frage, soweit
+bekannt, zusätzlich nach Firma, E-Mail-Adresse, Beginn, Veranstaltungsort,
+Veranstaltungsart, Lieferung oder Abholung sowie besonderen Wünschen.
 ```
 
 Parameters:
@@ -55,10 +54,6 @@ Parameters:
 {
   "type": "object",
   "properties": {
-    "submission_id": {
-      "type": "string",
-      "description": "Technische eindeutige UUID. Nicht vom Anrufer erfragen; pro Tool-Aufruf selbst erzeugen."
-    },
     "contact_name": {
       "type": "string",
       "description": "Vor- und Nachname der Kontaktperson"
@@ -73,7 +68,7 @@ Parameters:
     },
     "email": {
       "type": "string",
-      "description": "E-Mail-Adresse, falls der Anrufer eine angibt"
+      "description": "E-Mail-Adresse, falls vorhanden"
     },
     "event_date": {
       "type": "string",
@@ -82,8 +77,7 @@ Parameters:
     },
     "event_start": {
       "type": "string",
-      "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
-      "description": "Startzeit im Format HH:MM, falls bekannt"
+      "description": "Beginn der Veranstaltung im Format HH:MM, falls bekannt"
     },
     "guest_count": {
       "type": "integer",
@@ -93,11 +87,11 @@ Parameters:
     },
     "location": {
       "type": "string",
-      "description": "Ort oder Adresse der Veranstaltung"
+      "description": "Veranstaltungsort oder Veranstaltungsadresse, falls bekannt"
     },
     "event_type": {
       "type": "string",
-      "description": "Art der Veranstaltung"
+      "description": "Art der Veranstaltung, zum Beispiel Firmenfeier, Hochzeit oder Geburtstag"
     },
     "fulfillment_mode": {
       "type": "string",
@@ -106,11 +100,10 @@ Parameters:
     },
     "customer_request": {
       "type": "string",
-      "description": "Speisenwünsche, Besonderheiten, Allergien oder sonstige Hinweise"
+      "description": "Speisenwünsche, Ernährungswünsche, Allergien oder sonstige Hinweise"
     }
   },
   "required": [
-    "submission_id",
     "contact_name",
     "phone",
     "event_date",
@@ -119,72 +112,44 @@ Parameters:
 }
 ```
 
+The technical `submission_id` is not a customer-facing parameter. The current
+STRATO HAR builds it from already collected values so the assistant never asks
+the caller for an internal identifier.
+
 ## HAR request template
 
-Replace only the public HTTPS URL and bearer token with the real values inside
-STRATO. Conversation values use STRATO's documented `{{ variableName }}`
-placeholder syntax.
+Replace only the public HTTPS URL and bearer token with the live values in
+STRATO. Parameter values use STRATO's `{{ variableName }}` placeholders.
 
 ```json
 {
-  "log": {
-    "version": "1.2",
-    "creator": {
-      "name": "STRATO Smart-Telefonassistent",
-      "version": "1.0"
+  "method": "POST",
+  "url": "https://YOUR_PUBLIC_HTTPS_HOST/intake/ai-telefonist",
+  "headers": [
+    {
+      "name": "Authorization",
+      "value": "Bearer YOUR_AI_TELEFONIST_INTAKE_TOKEN"
     },
-    "entries": [
-      {
-        "request": {
-          "method": "POST",
-          "url": "https://YOUR_PUBLIC_HTTPS_HOST/intake/ai-telefonist",
-          "httpVersion": "HTTP/1.1",
-          "headers": [
-            {
-              "name": "Authorization",
-              "value": "Bearer YOUR_AI_TELEFONIST_INTAKE_TOKEN"
-            },
-            {
-              "name": "Content-Type",
-              "value": "application/json"
-            }
-          ],
-          "queryString": [],
-          "cookies": [],
-          "headersSize": -1,
-          "bodySize": -1,
-          "postData": {
-            "mimeType": "application/json",
-            "text": "{\"submission_id\":\"{{ submission_id }}\",\"contact_name\":\"{{ contact_name }}\",\"company_name\":\"{{ company_name }}\",\"phone\":\"{{ phone }}\",\"email\":\"{{ email }}\",\"event_date\":\"{{ event_date }}\",\"event_start\":\"{{ event_start }}\",\"guest_count\":{{ guest_count }},\"location\":\"{{ location }}\",\"event_type\":\"{{ event_type }}\",\"fulfillment_mode\":\"{{ fulfillment_mode }}\",\"customer_request\":\"{{ customer_request }}\"}"
-          }
-        },
-        "response": {
-          "status": 0,
-          "statusText": "",
-          "httpVersion": "",
-          "headers": [],
-          "cookies": [],
-          "content": {
-            "size": 0,
-            "mimeType": "application/json"
-          },
-          "redirectURL": "",
-          "headersSize": -1,
-          "bodySize": -1
-        },
-        "cache": {},
-        "timings": {
-          "send": 0,
-          "wait": 0,
-          "receive": 0
-        },
-        "time": 0,
-        "startedDateTime": "2026-09-03T00:00:00.000Z"
-      }
-    ]
+    {
+      "name": "Content-Type",
+      "value": "application/json"
+    }
+  ],
+  "postData": {
+    "mimeType": "application/json",
+    "text": "{\"submission_id\":\"strato-{{ phone }}-{{ event_date }}-{{ guest_count }}-{{ contact_name }}\",\"contact_name\":\"{{ contact_name }}\",\"company_name\":\"{{ company_name }}\",\"phone\":\"{{ phone }}\",\"email\":\"{{ email }}\",\"event_date\":\"{{ event_date }}\",\"event_start\":\"{{ event_start }}\",\"guest_count\":{{ guest_count }},\"location\":\"{{ location }}\",\"event_type\":\"{{ event_type }}\",\"fulfillment_mode\":\"{{ fulfillment_mode }}\",\"customer_request\":\"{{ customer_request }}\"}"
   }
 }
 ```
+
+STRATO may render absent optional string placeholders as empty strings. The
+receiver therefore treats blank `event_start` as absent and blank
+`fulfillment_mode` as `UNKNOWN`.
+
+STRATO may also transcribe a spoken phone number as comma-separated digits such
+as `0,1,7,6,...`. The receiver compacts common separators before storing the
+phone number and compacts comma-separated digits in the technical submission
+reference.
 
 ## Stored Core facts
 
@@ -192,7 +157,14 @@ placeholder syntax.
 - `crm_stage = Neue Anfrage`
 - call verification required, status `pending`
 - event date and exact event start are stored separately
-- guest count and location are stored on Inquiry
+- guest count and event location are stored on Inquiry
 - contact name/company/phone/email are stored in the Inquiry customer snapshot
-- free customer wishes are stored in intake context
+- event type and customer wishes are stored in the intake message
+- fulfillment mode is stored as `DELIVERY`, `PICKUP`, or `UNKNOWN`
 - `submission_id` is source-scoped and unique for retry protection
+
+## Public HTTPS note
+
+A `trycloudflare.com` quick tunnel is suitable only for an integration test.
+Its URL exists only while that foreground `cloudflared tunnel --url ...`
+process is running. Production needs a persistent public HTTPS endpoint.
