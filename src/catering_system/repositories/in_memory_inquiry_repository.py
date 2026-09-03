@@ -31,16 +31,19 @@ class InMemoryInquiryRepository:
         self._by_id[inquiry.inquiry_id] = inquiry
 
     def _ensure_external_ref_available(self, inquiry: Inquiry) -> None:
-        if inquiry.inquiry_source != "website_form" or not inquiry.intake_external_ref:
+        if (
+            inquiry.inquiry_source not in {"website_form", "ai_telefonist"}
+            or not inquiry.intake_external_ref
+        ):
             return
         for existing in self._by_id.values():
             if (
                 existing.inquiry_id != inquiry.inquiry_id
-                and existing.inquiry_source == "website_form"
+                and existing.inquiry_source == inquiry.inquiry_source
                 and existing.intake_external_ref == inquiry.intake_external_ref
             ):
                 raise DuplicateExternalReferenceError(
-                    "website_form submission_id already exists"
+                    f"{inquiry.inquiry_source} submission_id already exists"
                 )
 
     def find_by_source_and_external_ref(
