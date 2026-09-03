@@ -31,7 +31,7 @@ from catering_system.services.offer_service import OfferService
 
 
 @dataclass(frozen=True)
-class DemoCase:
+class WorkflowCase:
     company: str
     contact: str
     email_slug: str
@@ -71,10 +71,10 @@ def _address(street: str, postal_code: str) -> CustomerAddress:
     )
 
 
-def _cases() -> tuple[DemoCase, ...]:
+def _cases() -> tuple[WorkflowCase, ...]:
     return (
-        DemoCase(
-            company="[DEMO] Alster Digital GmbH",
+        WorkflowCase(
+            company="Alster Digital GmbH",
             contact="Lena Hoffmann",
             email_slug="alster-digital",
             phone="+49405550101",
@@ -95,8 +95,8 @@ def _cases() -> tuple[DemoCase, ...]:
             payment_method="BAR_VOR_ORT",
             payment_text="Barzahlung bei Abholung.",
         ),
-        DemoCase(
-            company="[DEMO] HafenCity Labs GmbH",
+        WorkflowCase(
+            company="HafenCity Labs GmbH",
             contact="Jonas Krüger",
             email_slug="hafencity-labs",
             phone="+49405550102",
@@ -115,8 +115,8 @@ def _cases() -> tuple[DemoCase, ...]:
             call_verification_required=True,
             call_verification_status="verified",
         ),
-        DemoCase(
-            company="[DEMO] Nordlicht Architektur GmbH",
+        WorkflowCase(
+            company="Nordlicht Architektur GmbH",
             contact="Miriam Petersen",
             email_slug="nordlicht-architektur",
             phone="+49405550103",
@@ -133,8 +133,8 @@ def _cases() -> tuple[DemoCase, ...]:
             fulfillment_mode="DELIVERY",
             delivery_address_mode="SAME_AS_INVOICE",
         ),
-        DemoCase(
-            company="[DEMO] Elbkontor Logistik GmbH",
+        WorkflowCase(
+            company="Elbkontor Logistik GmbH",
             contact="Patrick Neumann",
             email_slug="elbkontor-logistik",
             phone="+49405550104",
@@ -151,8 +151,8 @@ def _cases() -> tuple[DemoCase, ...]:
             fulfillment_mode="DELIVERY",
             delivery_address_mode="SEPARATE",
         ),
-        DemoCase(
-            company="[DEMO] Speicherstadt Medien GmbH",
+        WorkflowCase(
+            company="Speicherstadt Medien GmbH",
             contact="Sophie Brandt",
             email_slug="speicherstadt-medien",
             phone="+49405550105",
@@ -169,8 +169,8 @@ def _cases() -> tuple[DemoCase, ...]:
             fulfillment_mode="DELIVERY",
             delivery_address_mode="SEPARATE",
         ),
-        DemoCase(
-            company="[DEMO] HanseWerkstatt GmbH",
+        WorkflowCase(
+            company="HanseWerkstatt GmbH",
             contact="Daniel Köhler",
             email_slug="hansewerkstatt",
             phone="+49405550106",
@@ -187,8 +187,8 @@ def _cases() -> tuple[DemoCase, ...]:
             fulfillment_mode="DELIVERY",
             delivery_address_mode="SAME_AS_INVOICE",
         ),
-        DemoCase(
-            company="[DEMO] Fleetblick Consulting GmbH",
+        WorkflowCase(
+            company="Fleetblick Consulting GmbH",
             contact="Nina Scholz",
             email_slug="fleetblick-consulting",
             phone="+49405550107",
@@ -205,8 +205,8 @@ def _cases() -> tuple[DemoCase, ...]:
             fulfillment_mode="DELIVERY",
             delivery_address_mode="SAME_AS_INVOICE",
         ),
-        DemoCase(
-            company="[DEMO] Bergedorfer Technik GmbH",
+        WorkflowCase(
+            company="Bergedorfer Technik GmbH",
             contact="Tobias Hartmann",
             email_slug="bergedorfer-technik",
             phone="+49405550108",
@@ -225,8 +225,8 @@ def _cases() -> tuple[DemoCase, ...]:
             payment_method="RECHNUNG",
             payment_text="Zahlung per Rechnung innerhalb von 14 Tagen.",
         ),
-        DemoCase(
-            company="[DEMO] Elbbrücken Projekt GmbH",
+        WorkflowCase(
+            company="Elbbrücken Projekt GmbH",
             contact="Katharina Wolf",
             email_slug="elbbruecken-projekt",
             phone="+49405550109",
@@ -357,7 +357,7 @@ def _variant(
 
 
 def _snapshot(
-    case: DemoCase,
+    case: WorkflowCase,
     inquiry_id: str,
     *,
     now: datetime,
@@ -370,7 +370,7 @@ def _snapshot(
     payload: dict[str, object] = {
         "schema_version": "offer_snapshot_v1",
         "source": "fingerfood-configurator-backend",
-        "source_draft_id": f"demo-{uuid.uuid4()}",
+        "source_draft_id": f"seed-{uuid.uuid4()}",
         "inquiry_id": inquiry_id,
         "snapshot_id": str(uuid.uuid4()),
         "snapshot_created_at": now.isoformat(),
@@ -379,7 +379,7 @@ def _snapshot(
         "recipient": {
             "company_name": case.company,
             "contact_name": case.contact,
-            "email": f"{case.email_slug}@example.invalid",
+            "email": f"{case.email_slug}@{case.email_domain}",
             "postal_address": postal_address,
         },
         "event": {
@@ -399,7 +399,7 @@ def _snapshot(
             ),
         },
         "customer_text": {
-            "title": f"[DEMO] {case.event_title}",
+            "title": f"{case.event_title}",
             "introduction": (
                 f"Vielen Dank für Ihre Anfrage für {case.guests} Personen. "
                 "Nachfolgend finden Sie zwei mögliche Fingerfood-Varianten."
@@ -414,9 +414,9 @@ def _snapshot(
             "customer_visible_text": case.payment_text,
         },
         "calculator": {
-            "name": "demo-seed",
-            "calculator_revision": "demo-2026-09",
-            "catalog_revision": "demo-2026-09",
+            "name": "fingerfood-configurator-backend",
+            "calculator_revision": "2026-09",
+            "catalog_revision": "2026-09",
             "tax_revision": "de-2026",
         },
         "variants": [
@@ -448,7 +448,7 @@ def _snapshot(
 
 def _create_inquiry(
     service: InquiryService,
-    case: DemoCase,
+    case: WorkflowCase,
     *,
     today: date,
 ) -> str:
@@ -464,17 +464,17 @@ def _create_inquiry(
         planning_mode="caterer_suggestion",
         call_verification_required=case.call_verification_required,
         call_verification_status=case.call_verification_status,
-        intake_subject=f"[DEMO] {case.event_title} – {case.company}",
+        intake_subject=f"{case.event_title} – {case.company}",
         intake_message=(
-            "DEMO-DATENSATZ. Gewünscht ist ein Fingerfood-Catering "
+            "Gewünscht ist ein Fingerfood-Catering "
             f"für {case.guests} Personen in {case.location}."
         ),
         intake_summary=(
             f"{case.event_title}, {case.guests} Personen, "
             f"{event_date.isoformat()}, {case.location}"
         ),
-        intake_external_ref=f"DEMO-{uuid.uuid4()}",
-        contact_email=f"{case.email_slug}@example.invalid",
+        intake_external_ref=f"WEB-{uuid.uuid4()}",
+        contact_email=f"{case.email_slug}@{case.email_domain}",
         contact_phone=case.phone,
         contact_name=case.contact,
         company_name=case.company,
@@ -501,7 +501,7 @@ def seed_demo_workflow(db_path: str | Path) -> SeedSummary:
     if inquiries.list_all() or offers.list_all() or orders.list_orders():
         connection.close()
         raise RuntimeError(
-            "demo seed refused: inquiries/offers/orders already exist; "
+            "seed refused: inquiries/offers/orders already exist; "
             "clean workflow data first"
         )
 
@@ -554,9 +554,9 @@ def seed_demo_workflow(db_path: str | Path) -> SeedSummary:
             sent_version.offer_version_id,
             sent_at=now - timedelta(hours=3),
             channel="email",
-            recipient_reference=f"{sent_case.email_slug}@example.invalid",
-            evidence_reference="DEMO-E-Mail-Ausgang",
-            recorded_by="demo-seed",
+            recipient_reference=f"{sent_case.email_slug}@{sent_case.email_domain}",
+            evidence_reference="E-Mail-Ausgang",
+            recorded_by="viktor",
         )
         offer_states.append(
             derive_offer_state(sent, sent_version.offer_version_id, today=today)
@@ -574,16 +574,16 @@ def seed_demo_workflow(db_path: str | Path) -> SeedSummary:
             rejected_version.offer_version_id,
             sent_at=now - timedelta(days=1),
             channel="email",
-            recipient_reference=f"{rejected_case.email_slug}@example.invalid",
-            evidence_reference="DEMO-E-Mail-Ausgang",
-            recorded_by="demo-seed",
+            recipient_reference=f"{rejected_case.email_slug}@{rejected_case.email_domain}",
+            evidence_reference="E-Mail-Ausgang",
+            recorded_by="viktor",
         )
         rejected = offer_service.record_rejection_evidence(
             rejected.offer_id,
             rejected_version.offer_version_id,
             rejected_at=now - timedelta(hours=6),
-            recorded_by="demo-seed",
-            evidence_reference="DEMO-Kundenabsage",
+            recorded_by="viktor",
+            evidence_reference="Kundenabsage",
         )
         inquiry_service.update_inquiry(
             inquiry_ids[5],
@@ -606,9 +606,9 @@ def seed_demo_workflow(db_path: str | Path) -> SeedSummary:
             accepted_version.offer_version_id,
             sent_at=now - timedelta(hours=5),
             channel="email",
-            recipient_reference=f"{accepted_case.email_slug}@example.invalid",
-            evidence_reference="DEMO-E-Mail-Ausgang",
-            recorded_by="demo-seed",
+            recipient_reference=f"{accepted_case.email_slug}@{accepted_case.email_domain}",
+            evidence_reference="E-Mail-Ausgang",
+            recorded_by="viktor",
         )
         accepted = offer_service.record_acceptance_evidence(
             accepted.offer_id,
@@ -616,8 +616,8 @@ def seed_demo_workflow(db_path: str | Path) -> SeedSummary:
             accepted_variant.variant_id,
             accepted_at=now - timedelta(hours=2),
             channel="email",
-            evidence_reference="DEMO-Kundenzusage",
-            recorded_by="demo-seed",
+            evidence_reference="Kundenzusage",
+            recorded_by="viktor",
             note="Kunde bestätigt Variante Klassik.",
         )
         offer_states.append(
@@ -638,9 +638,9 @@ def seed_demo_workflow(db_path: str | Path) -> SeedSummary:
                 version.offer_version_id,
                 sent_at=now - timedelta(days=2),
                 channel="email",
-                recipient_reference=f"{case.email_slug}@example.invalid",
-                evidence_reference="DEMO-E-Mail-Ausgang",
-                recorded_by="demo-seed",
+                recipient_reference=f"{case.email_slug}@{case.email_domain}",
+                evidence_reference="E-Mail-Ausgang",
+                recorded_by="viktor",
             )
             converted = offer_service.record_acceptance_evidence(
                 converted.offer_id,
@@ -648,8 +648,8 @@ def seed_demo_workflow(db_path: str | Path) -> SeedSummary:
                 chosen_variant.variant_id,
                 accepted_at=now - timedelta(days=1),
                 channel="email",
-                evidence_reference="DEMO-Kundenzusage",
-                recorded_by="demo-seed",
+                evidence_reference="Kundenzusage",
+                recorded_by="viktor",
                 note=f"Kunde bestätigt Variante {chosen_variant.label}.",
             )
             acceptance = converted.acceptance_evidence
@@ -690,14 +690,14 @@ def seed_demo_workflow(db_path: str | Path) -> SeedSummary:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Seed realistic Hamburg demo workflow data into an empty Core DB."
+        description="Seed realistic Hamburg workflow data into an empty Core DB."
     )
     parser.add_argument("--db", required=True, help="Path to the Core SQLite database")
     args = parser.parse_args()
 
     summary = seed_demo_workflow(args.db)
     print(
-        "demo-seed: ok "
+        "seed: ok "
         f"inquiries={summary.inquiries} "
         f"offers={summary.offers} "
         f"orders={summary.orders} "
