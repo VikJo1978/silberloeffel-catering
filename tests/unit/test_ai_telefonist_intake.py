@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -20,6 +21,7 @@ from catering_system.repositories.inquiry_repository import (
 )
 from catering_system.repositories.sqlite_inquiry_repository import SQLiteInquiryRepository
 from catering_system.services.inquiry_service import InquiryService
+from catering_system.ui import ai_telefonist_intake_endpoint
 from catering_system.ui.ai_telefonist_intake_endpoint import (
     create_ai_telefonist_intake_server,
 )
@@ -305,3 +307,85 @@ def test_same_external_ref_is_allowed_for_other_source(tmp_path) -> None:
     assert website.inquiry_source == "website_form"
     assert len(repo.list_all()) == 2
     repo.close()
+
+
+def test_endpoint_parsers_leave_invalid_values_for_adapter() -> None:
+    assert ai_telefonist_intake_endpoint._parse_event_date("bad") == "bad"
+    assert ai_telefonist_intake_endpoint._parse_event_date(123) == 123
+    assert ai_telefonist_intake_endpoint._parse_event_start("bad") == "bad"
+    assert ai_telefonist_intake_endpoint._parse_event_start(123) == 123
+    assert ai_telefonist_intake_endpoint._parse_event_start(None) is None
+
+
+def test_main_refuses_without_token(monkeypatch, tmp_path) -> None:
+    monkeypatch.delenv("AI_TELEFONIST_INTAKE_TOKEN", raising=False)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["ai-telefonist-intake", "--db", str(tmp_path / "core.db")],
+    )
+    with pytest.raises(SystemExit, match="refuses to start without a token"):
+        ai_telefonist_intake_endpoint.main()
+
+
+def test_main_builds_repository_and_server(monkeypatch, tmp_path, capsys) -> None:
+    captured: dict[str, object] = {}
+    fake_repo = object()
+
+    class FakeServer:
+        def serve_forever(self) -> None:
+            captured["served"] = True
+
+    def build_repo(path):
+        captured["db"] = str(path)
+        return fake_repo
+
+    def build_server(repository, token: str, host: str, port: int):
+        captured.update(
+            repository=repository,
+            token=token,
+            host=host,
+            port=port,
+        )
+        return FakeServer()
+
+    from catering_system.repositories import sqlite_inquiry_repository
+
+    monkeypatch.setattr(
+        sqlite_inquiry_repository,
+        "SQLiteInquiryRepository",
+        build_repo,
+    )
+    monkeypatch.setattr(
+        ai_telefonist_intake_endpoint,
+        "create_ai_telefonist_intake_server",
+        build_server,
+    )
+    db_path = str(tmp_path / "core.db")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "ai-telefonist-intake",
+            "--db",
+            db_path,
+            "--host",
+            "127.0.0.1",
+            "--port",
+            "9085",
+            "--token",
+            "cli-token",
+        ],
+    )
+
+    ai_telefonist_intake_endpoint.main()
+
+    assert captured == {
+        "db": db_path,
+        "repository": fake_repo,
+        "token": "cli-token",
+        "host": "127.0.0.1",
+        "port": 9085,
+        "served": True,
+    }
+    assert "/intake/ai-telefonist" in capsys.readouterr().out
