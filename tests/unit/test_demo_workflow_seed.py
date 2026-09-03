@@ -8,12 +8,12 @@ import pytest
 from catering_system.demo_workflow_seed import seed_demo_workflow
 
 
-def _counts(db_path: Path) -> tuple[int, int, int, int]:
+def _counts(db_path: Path) -> tuple[int, int, int]:
     connection = sqlite3.connect(db_path)
     try:
         return tuple(
             int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-            for table in ("inquiries", "offers", "orders", "employee_accounts")
+            for table in ("inquiries", "offers", "orders")
         )
     finally:
         connection.close()
