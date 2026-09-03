@@ -19,7 +19,9 @@ from catering_system.repositories.in_memory_order_repository import (
 from catering_system.repositories.inquiry_repository import (
     DuplicateExternalReferenceError,
 )
-from catering_system.repositories.sqlite_inquiry_repository import SQLiteInquiryRepository
+from catering_system.repositories.sqlite_inquiry_repository import (
+    SQLiteInquiryRepository,
+)
 from catering_system.services.inquiry_service import InquiryService
 from catering_system.ui import ai_telefonist_intake_endpoint
 from catering_system.ui.ai_telefonist_intake_endpoint import (
