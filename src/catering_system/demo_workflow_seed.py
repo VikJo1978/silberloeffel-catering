@@ -1,6 +1,6 @@
-"""Seed realistic pre-production workflow data for customer demos.
+"""Seed realistic pre-production workflow data for customer presentations.
 
-This is deliberately a maintenance/demo tool, not an application write path.
+This is deliberately a maintenance tool, not an application write path.
 It refuses to run when Inquiry/Offer/Order data already exists and leaves
 employee accounts, permissions, catalog, production configuration and chat
 untouched.
@@ -379,7 +379,7 @@ def _snapshot(
         "recipient": {
             "company_name": case.company,
             "contact_name": case.contact,
-            "email": f"{case.email_slug}@{case.email_domain}",
+            "email": f"anfrage@{case.email_slug}.de",
             "postal_address": postal_address,
         },
         "event": {
@@ -405,8 +405,8 @@ def _snapshot(
                 "Nachfolgend finden Sie zwei mögliche Fingerfood-Varianten."
             ),
             "notes": (
-                "DEMO-DATENSATZ für eine Softwarepräsentation. "
-                "Keine echte Kundenanfrage und kein verbindliches Angebot."
+                "Bitte berücksichtigen Sie die vereinbarte Personenzahl "
+                "und die angegebenen Lieferzeiten."
             ),
         },
         "payment_terms": {
@@ -474,7 +474,7 @@ def _create_inquiry(
             f"{event_date.isoformat()}, {case.location}"
         ),
         intake_external_ref=f"WEB-{uuid.uuid4()}",
-        contact_email=f"{case.email_slug}@{case.email_domain}",
+        contact_email=f"anfrage@{case.email_slug}.de",
         contact_phone=case.phone,
         contact_name=case.contact,
         company_name=case.company,
@@ -554,7 +554,7 @@ def seed_demo_workflow(db_path: str | Path) -> SeedSummary:
             sent_version.offer_version_id,
             sent_at=now - timedelta(hours=3),
             channel="email",
-            recipient_reference=f"{sent_case.email_slug}@{sent_case.email_domain}",
+            recipient_reference=f"anfrage@{sent_case.email_slug}.de",
             evidence_reference="E-Mail-Ausgang",
             recorded_by="viktor",
         )
@@ -574,7 +574,7 @@ def seed_demo_workflow(db_path: str | Path) -> SeedSummary:
             rejected_version.offer_version_id,
             sent_at=now - timedelta(days=1),
             channel="email",
-            recipient_reference=f"{rejected_case.email_slug}@{rejected_case.email_domain}",
+            recipient_reference=f"anfrage@{rejected_case.email_slug}.de",
             evidence_reference="E-Mail-Ausgang",
             recorded_by="viktor",
         )
@@ -606,7 +606,7 @@ def seed_demo_workflow(db_path: str | Path) -> SeedSummary:
             accepted_version.offer_version_id,
             sent_at=now - timedelta(hours=5),
             channel="email",
-            recipient_reference=f"{accepted_case.email_slug}@{accepted_case.email_domain}",
+            recipient_reference=f"anfrage@{accepted_case.email_slug}.de",
             evidence_reference="E-Mail-Ausgang",
             recorded_by="viktor",
         )
@@ -638,7 +638,7 @@ def seed_demo_workflow(db_path: str | Path) -> SeedSummary:
                 version.offer_version_id,
                 sent_at=now - timedelta(days=2),
                 channel="email",
-                recipient_reference=f"{case.email_slug}@{case.email_domain}",
+                recipient_reference=f"anfrage@{case.email_slug}.de",
                 evidence_reference="E-Mail-Ausgang",
                 recorded_by="viktor",
             )
