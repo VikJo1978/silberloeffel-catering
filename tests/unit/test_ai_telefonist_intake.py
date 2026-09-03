@@ -15,6 +15,10 @@ from catering_system.repositories.in_memory_inquiry_repository import (
 from catering_system.repositories.in_memory_order_repository import (
     InMemoryOrderRepository,
 )
+from catering_system.repositories.inquiry_repository import (
+    DuplicateExternalReferenceError,
+)
+from catering_system.repositories.sqlite_inquiry_repository import SQLiteInquiryRepository
 from catering_system.services.inquiry_service import InquiryService
 from catering_system.ui.ai_telefonist_intake_endpoint import (
     create_ai_telefonist_intake_server,
@@ -253,3 +257,51 @@ def test_response_security_headers(server) -> None:
         assert response.headers["Cache-Control"] == "no-store"
         assert response.headers["Content-Security-Policy"] == "default-src 'none'"
         assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_sqlite_ai_telefonist_submission_id_is_unique(tmp_path) -> None:
+    repo = SQLiteInquiryRepository(tmp_path / "core.db")
+    service = InquiryService(repo)
+    payload = {
+        **_VALID,
+        "event_date": _D,
+        "event_start": time(18, 30),
+    }
+    first = intake_from_ai_telefonist(service, payload)
+    assert repo.find_by_source_and_external_ref(
+        "ai_telefonist", "strato-call-001"
+    ) == first
+
+    with pytest.raises(DuplicateExternalReferenceError):
+        intake_from_ai_telefonist(service, payload)
+    assert len(repo.list_all()) == 1
+    repo.close()
+
+
+def test_same_external_ref_is_allowed_for_other_source(tmp_path) -> None:
+    repo = SQLiteInquiryRepository(tmp_path / "core.db")
+    service = InquiryService(repo)
+    ai_payload = {
+        **_VALID,
+        "event_date": _D,
+        "event_start": time(18, 30),
+    }
+    intake_from_ai_telefonist(service, ai_payload)
+    website = service.create_inquiry(
+        event_date=_D,
+        inquiry_source="website_form",
+        crm_stage="Neue Anfrage",
+        customer_linkage={},
+        time_window_text="",
+        location_text="Hamburg",
+        guest_count_estimate=10,
+        planning_mode="caterer_suggestion",
+        call_verification_required=True,
+        call_verification_status="pending",
+        intake_external_ref="strato-call-001",
+        contact_email="web@example.test",
+        contact_phone="+49405550000",
+    )
+    assert website.inquiry_source == "website_form"
+    assert len(repo.list_all()) == 2
+    repo.close()
