@@ -155,6 +155,57 @@ def test_adapter_email_is_optional() -> None:
     assert q.customer_snapshot.phone == "+494055512345"
 
 
+def test_adapter_normalizes_spoken_digit_phone() -> None:
+    repo = InMemoryInquiryRepository()
+    service = InquiryService(repo)
+    payload = {
+        **_VALID,
+        "event_date": _D,
+        "event_start": time(18, 30),
+        "phone": "0,1,7,6,4,2,7,9,5,0,2,9",
+    }
+    q = intake_from_ai_telefonist(service, payload)
+    assert q.customer_snapshot is not None
+    assert q.customer_snapshot.phone == "+4917642795029"
+    assert "Telefon: 017642795029" in (q.intake_message or "")
+
+
+def test_adapter_blank_fulfillment_becomes_unknown() -> None:
+    repo = InMemoryInquiryRepository()
+    service = InquiryService(repo)
+    payload = {
+        **_VALID,
+        "event_date": _D,
+        "event_start": time(18, 30),
+        "fulfillment_mode": "  ",
+    }
+    q = intake_from_ai_telefonist(service, payload)
+    assert q.fulfillment_mode == "UNKNOWN"
+
+
+def test_http_post_accepts_blank_optional_strato_values(server) -> None:
+    base, inquiry_repo, _order_repo = server
+    status, body, _ = _post(
+        base,
+        {
+            **_VALID,
+            "submission_id": "strato-0,1,7,6-blank-optionals",
+            "phone": "0,1,7,6,4,2,7,9,5,0,2,9",
+            "event_start": "",
+            "fulfillment_mode": "",
+        },
+    )
+
+    assert status == 202
+    q = inquiry_repo.get_by_id(body["inquiry_id"])
+    assert q is not None
+    assert q.event_start_local is None
+    assert q.fulfillment_mode == "UNKNOWN"
+    assert q.intake_external_ref == "strato-0176-blank-optionals"
+    assert q.customer_snapshot is not None
+    assert q.customer_snapshot.phone == "+4917642795029"
+
+
 def test_valid_http_post_creates_only_one_inquiry(server) -> None:
     base, inquiry_repo, order_repo = server
     status, body, raw = _post(base, _VALID)
@@ -318,6 +369,17 @@ def test_endpoint_parsers_leave_invalid_values_for_adapter() -> None:
     assert ai_telefonist_intake_endpoint._parse_event_start("bad") == "bad"
     assert ai_telefonist_intake_endpoint._parse_event_start(123) == 123
     assert ai_telefonist_intake_endpoint._parse_event_start(None) is None
+    assert ai_telefonist_intake_endpoint._parse_event_start("") is None
+    assert ai_telefonist_intake_endpoint._parse_event_start("   ") is None
+
+
+def test_submission_id_compacts_comma_separated_digits() -> None:
+    assert (
+        ai_telefonist_intake_endpoint._normalize_submission_id(
+            "strato-0,1,7,6-2026-10-10"
+        )
+        == "strato-0176-2026-10-10"
+    )
 
 
 def test_main_refuses_without_token(monkeypatch, tmp_path) -> None:

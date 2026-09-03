@@ -7,6 +7,7 @@ import hmac
 import json
 import logging
 import os
+import re
 from datetime import date, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
@@ -36,11 +37,21 @@ def _parse_event_start(raw: object) -> object:
     if raw is None:
         return None
     if isinstance(raw, str):
+        raw = raw.strip()
+        if not raw:
+            return None
         try:
             return time.fromisoformat(raw)
         except ValueError:
             return raw
     return raw
+
+
+def _normalize_submission_id(raw: object) -> object:
+    if not isinstance(raw, str):
+        return raw
+    value = raw.strip()
+    return re.sub(r"(?<=\d),(?=\d)", "", value)
 
 
 def make_ai_telefonist_intake_handler(
@@ -113,6 +124,10 @@ def make_ai_telefonist_intake_handler(
                 payload["event_date"] = _parse_event_date(payload["event_date"])
             if "event_start" in payload:
                 payload["event_start"] = _parse_event_start(payload["event_start"])
+            if "submission_id" in payload:
+                payload["submission_id"] = _normalize_submission_id(
+                    payload["submission_id"]
+                )
 
             submission_id = payload.get("submission_id")
             if isinstance(submission_id, str) and submission_id.strip():

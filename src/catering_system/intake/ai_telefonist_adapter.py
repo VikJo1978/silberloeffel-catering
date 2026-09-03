@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import date, time
 from typing import Any, Mapping
 
@@ -37,6 +38,14 @@ def _optional_text(raw: Mapping[str, Any], key: str) -> str:
     return value.strip()[:_MAX_TEXT_LEN]
 
 
+def _normalize_phone(value: str) -> str:
+    """Compact phone numbers when STRATO spells digits with separators."""
+    compact = re.sub(r"[\s,;./()\-]+", "", value)
+    if re.fullmatch(r"\+?\d+", compact):
+        return compact
+    return value
+
+
 def intake_from_ai_telefonist(
     service: InquiryService,
     raw: Mapping[str, Any],
@@ -67,7 +76,7 @@ def _intake_from_ai_telefonist_body(
         )
 
     contact_name = _required_text(raw, "contact_name")
-    phone = _required_text(raw, "phone")
+    phone = _normalize_phone(_required_text(raw, "phone"))
     submission_id = _required_text(raw, "submission_id")[:_MAX_EXTERNAL_REF_LEN]
 
     company_name = _optional_text(raw, "company_name")
@@ -84,7 +93,7 @@ def _intake_from_ai_telefonist_body(
     if fulfillment_raw is None:
         fulfillment_mode = "UNKNOWN"
     elif isinstance(fulfillment_raw, str):
-        fulfillment_mode = fulfillment_raw
+        fulfillment_mode = fulfillment_raw.strip().upper() or "UNKNOWN"
     else:
         raise TypeError("ai_telefonist intake: fulfillment_mode must be str or absent")
 
