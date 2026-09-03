@@ -83,6 +83,16 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_inquiries_website_external_ref
       AND intake_external_ref <> '';
 """
 
+_AI_TELEFONIST_EXTERNAL_REF_INDEX = """
+CREATE UNIQUE INDEX IF NOT EXISTS uq_inquiries_ai_telefonist_external_ref
+    ON inquiries (inquiry_source, intake_external_ref)
+    WHERE inquiry_source = 'ai_telefonist'
+      AND intake_external_ref IS NOT NULL
+      AND intake_external_ref <> '';
+"""
+
+_IDEMPOTENT_EXTERNAL_REF_SOURCES = frozenset({"website_form", "ai_telefonist"})
+
 
 def _migration_1_create_table(connection: sqlite3.Connection) -> None:
     connection.execute(_CREATE_INQUIRIES)
@@ -153,6 +163,23 @@ def _migration_7_add_exact_timing(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE inquiries ADD COLUMN delivery_time_local TEXT")
 
 
+def _migration_8_unique_ai_telefonist_external_ref(
+    connection: sqlite3.Connection,
+) -> None:
+    duplicate = connection.execute(
+        "SELECT intake_external_ref FROM inquiries "
+        "WHERE inquiry_source = 'ai_telefonist' "
+        "AND intake_external_ref IS NOT NULL AND intake_external_ref <> '' "
+        "GROUP BY intake_external_ref HAVING COUNT(*) > 1 LIMIT 1"
+    ).fetchone()
+    if duplicate is not None:
+        raise ValueError(
+            "cannot enforce ai_telefonist intake idempotency: duplicate "
+            f"submission_id {duplicate[0]!r}"
+        )
+    connection.execute(_AI_TELEFONIST_EXTERNAL_REF_INDEX)
+
+
 _MIGRATIONS = (
     (1, "create_inquiries", _migration_1_create_table),
     (2, "add_intake_context", _migration_2_add_intake_context),
@@ -161,6 +188,11 @@ _MIGRATIONS = (
     (5, "add_customer_addresses", _migration_5_add_customer_addresses),
     (6, "add_fulfillment_mode", _migration_6_add_fulfillment_mode),
     (7, "add_exact_timing", _migration_7_add_exact_timing),
+    (
+        8,
+        "unique_ai_telefonist_external_ref",
+        _migration_8_unique_ai_telefonist_external_ref,
+    ),
 )
 
 
@@ -334,14 +366,17 @@ class SQLiteInquiryRepository:
     def _raise_duplicate_external_ref(
         self, inquiry: Inquiry, cause: sqlite3.IntegrityError
     ) -> None:
-        if inquiry.inquiry_source != "website_form" or not inquiry.intake_external_ref:
+        if (
+            inquiry.inquiry_source not in _IDEMPOTENT_EXTERNAL_REF_SOURCES
+            or not inquiry.intake_external_ref
+        ):
             return
         existing = self.find_by_source_and_external_ref(
             inquiry.inquiry_source, inquiry.intake_external_ref
         )
         if existing is not None and existing.inquiry_id != inquiry.inquiry_id:
             raise DuplicateExternalReferenceError(
-                "website_form submission_id already exists"
+                f"{inquiry.inquiry_source} submission_id already exists"
             ) from cause
 
     @staticmethod
