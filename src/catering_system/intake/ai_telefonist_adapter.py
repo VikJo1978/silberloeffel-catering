@@ -86,9 +86,7 @@ def _intake_from_ai_telefonist_body(
     elif isinstance(fulfillment_raw, str):
         fulfillment_mode = fulfillment_raw
     else:
-        raise TypeError(
-            "ai_telefonist intake: fulfillment_mode must be str or absent"
-        )
+        raise TypeError("ai_telefonist intake: fulfillment_mode must be str or absent")
 
     subject_base = company_name or contact_name
     subject = f"{subject_base} — {event_type}" if event_type else subject_base
