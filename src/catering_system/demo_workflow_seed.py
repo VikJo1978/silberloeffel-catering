@@ -13,6 +13,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
+from typing import cast
 
 from catering_system.domain.customer_document_projection import CustomerAddress
 from catering_system.domain.offer import derive_offer_state
@@ -319,24 +320,24 @@ def _variant(
     if delivery:
         positions.append(_delivery_position())
 
-    net = sum(int(item["net_total_cents"]) for item in positions)
+    net = sum(cast(int, item["net_total_cents"]) for item in positions)
     vat_7_base = sum(
-        int(item["net_total_cents"])
+        cast(int, item["net_total_cents"])
         for item in positions
         if item["vat_rate_percent"] == 7
     )
     vat_7 = sum(
-        int(item["vat_amount_cents"])
+        cast(int, item["vat_amount_cents"])
         for item in positions
         if item["vat_rate_percent"] == 7
     )
     vat_19_base = sum(
-        int(item["net_total_cents"])
+        cast(int, item["net_total_cents"])
         for item in positions
         if item["vat_rate_percent"] == 19
     )
     vat_19 = sum(
-        int(item["vat_amount_cents"])
+        cast(int, item["vat_amount_cents"])
         for item in positions
         if item["vat_rate_percent"] == 19
     )
