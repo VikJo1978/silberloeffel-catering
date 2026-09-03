@@ -374,7 +374,7 @@ def _snapshot(
         "source_draft_id": f"seed-{uuid.uuid4()}",
         "inquiry_id": inquiry_id,
         "snapshot_id": str(uuid.uuid4()),
-        "snapshot_created_at": now.isoformat(),
+        "snapshot_created_at": (now - timedelta(days=3)).isoformat(),
         "valid_until": (today + timedelta(days=21)).isoformat(),
         "currency": "EUR",
         "recipient": {
