@@ -185,9 +185,7 @@ def create_ai_telefonist_intake_server(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="STRATO AI telephone intake receiver"
-    )
+    parser = argparse.ArgumentParser(description="STRATO AI telephone intake receiver")
     parser.add_argument("--db", required=True, help="Path to the Core SQLite database")
     parser.add_argument("--port", type=int, default=8085)
     parser.add_argument("--host", default="127.0.0.1")
