@@ -8,7 +8,17 @@ from typing import Any
 from catering_system.repositories.sqlite_office_edit_lease_repository import (
     SQLiteOfficeEditLeaseRepository,
 )
-from catering_system.ui.office_panel_multiuser import add_edit_lease_coordination
+from catering_system.ui.office_panel_multiuser import (
+    _can_coordinate,
+    _detail_record,
+    _employee_actor,
+    _lease_banner,
+    _lease_repository,
+    _lease_route,
+    _post_record,
+    _record_url,
+    add_edit_lease_coordination,
+)
 from catering_system.ui.office_panel_views import OfficePageContext
 
 
@@ -225,3 +235,147 @@ def test_takeover_switches_owner_and_release_returns_to_list() -> None:
     )
     assert handler.redirect_location == "/angebote"
     assert repo.get_active("offer", "offer-1") is None
+
+
+def test_coordination_helpers_cover_routes_identity_and_repository_wiring() -> None:
+    assert _detail_record("/inquiry/inq-1?tab=kontakt") == ("inquiry", "inq-1")
+    assert _detail_record("/kontakt/contact-1") is None
+    assert _detail_record("/order/order-1/extra") is None
+
+    assert _post_record(["offer", "offer-1", "status"]) == ("offer", "offer-1")
+    assert _post_record(
+        ["order", "order-1", "confirmation-document", "send"]
+    ) == ("order", "order-1")
+    assert _post_record(["order", "order-1"]) is None
+
+    assert _lease_route(["work-lease", "order", "order-1", "takeover"]) == (
+        "order",
+        "order-1",
+        "takeover",
+    )
+    assert _lease_route(["work-lease", "order", "order-1", "invalid"]) is None
+    assert _lease_route(["order", "order-1", "takeover"]) is None
+
+    assert _employee_actor(None) is None
+    assert _employee_actor(SimpleNamespace(kind="basic")) is None
+    assert (
+        _employee_actor(
+            SimpleNamespace(
+                kind="employee",
+                employee=None,
+                legacy_shared_access=False,
+            )
+        )
+        is None
+    )
+
+    legacy = _auth("anna", "Anna Bromm", "inquiries.edit")
+    legacy.legacy_shared_access = True
+    assert _employee_actor(legacy) is None
+
+    employee = _auth("anna", "Anna Bromm", "orders.pause")
+    actor = _employee_actor(employee)
+    assert actor is not None
+    assert actor[0] == "anna"
+    assert actor[1] == "Anna Bromm"
+    assert _can_coordinate(employee, "order") is True
+    assert _can_coordinate(_auth("viewer", "Viewer", "orders.view"), "order") is False
+    assert _can_coordinate(None, "order") is False
+
+    assert _record_url("inquiry", "a b/x") == "/inquiry/a%20b%2Fx"
+
+    assert _lease_repository(None) is None
+    assert (
+        _lease_repository(SimpleNamespace(repository=SimpleNamespace(_conn="not-sqlite")))
+        is None
+    )
+    connection = sqlite3.connect(":memory:")
+    wired = _lease_repository(
+        SimpleNamespace(repository=SimpleNamespace(_conn=connection))
+    )
+    assert isinstance(wired, SQLiteOfficeEditLeaseRepository)
+
+
+def test_owned_lease_banner_and_owner_write_path() -> None:
+    repo = _repository()
+    claim = repo.claim_or_observe(
+        "inquiry",
+        "inq-own",
+        holder_account_id="anna",
+        holder_display_name="Anna Bromm",
+    )
+    banner = _lease_banner(claim, csrf_token='<csrf&"token>')
+    assert "In Bearbeitung durch Sie." in banner
+    assert "Bearbeitung beenden" in banner
+    assert "/work-lease/inquiry/inq-own/release" in banner
+    assert "&lt;csrf&amp;&quot;token&gt;" in banner
+
+    class FakeHandler:
+        def _route_get(self) -> None:
+            self.base_get_called = True
+
+        def _route_post(self, parts: list[str]) -> None:
+            self.base_post_parts = parts
+
+        def _page_context(self, *args: Any, **kwargs: Any) -> OfficePageContext:
+            del args, kwargs
+            return OfficePageContext(
+                employee_effective_permissions=frozenset(
+                    {"inquiries.view", "inquiries.edit"}
+                )
+            )
+
+        def _html(self, page: str, status: int = 200, **kwargs: Any) -> None:
+            del kwargs
+            self.rendered_page = page
+            self.rendered_status = status
+
+        def _error_page(self, message: str, status: int = 400) -> None:
+            self.error = (message, status)
+
+        def _business_forbidden(self, *, active_section: str = "home") -> None:
+            self.forbidden_section = active_section
+
+        def _redirect(self, location: str) -> None:
+            self.redirect_location = location
+
+    assert add_edit_lease_coordination(FakeHandler, None) is FakeHandler  # type: ignore[arg-type]
+
+    coordinated = add_edit_lease_coordination(FakeHandler, repo)  # type: ignore[arg-type]
+    owner = coordinated()
+    owner.path = "/inquiry/inq-own"
+    owner._request_auth = _auth(  # type: ignore[attr-defined]
+        "anna",
+        "Anna Bromm",
+        "inquiries.view",
+        "inquiries.edit",
+    )
+    owner._route_get()  # type: ignore[attr-defined]
+    context = owner._page_context()  # type: ignore[attr-defined]
+    assert "inquiries.edit" in context.employee_effective_permissions
+
+    owner._html(  # type: ignore[attr-defined]
+        '<html><div class="office-content"><p>Detail</p></div></html>'
+    )
+    assert "In Bearbeitung durch Sie." in owner.rendered_page
+
+    owner._route_post(["inquiry", "inq-own", "update"])  # type: ignore[attr-defined]
+    assert owner.base_post_parts == ["inquiry", "inq-own", "update"]
+
+    outsider = coordinated()
+    outsider._request_auth = _auth(  # type: ignore[attr-defined]
+        "viewer",
+        "Viewer",
+        "offers.view",
+    )
+    outsider._route_post(  # type: ignore[attr-defined]
+        ["work-lease", "offer", "offer-1", "takeover"]
+    )
+    assert outsider.forbidden_section == "offers"
+
+    no_detail = coordinated()
+    no_detail.path = "/dashboard"
+    no_detail._request_auth = owner._request_auth
+    no_detail._route_get()  # type: ignore[attr-defined]
+    assert no_detail.base_get_called is True
+    assert no_detail._office_edit_lease_claim is None  # type: ignore[attr-defined]
