@@ -175,7 +175,7 @@ def _lease_banner(
         f"Lease bis {html.escape(expires)}. "
         '<form class="inline" method="post" '
         f'action="{action_base}/takeover" '
-        'onsubmit="return confirm(\'Bearbeitung wirklich übernehmen?\');">'
+        "onsubmit=\"return confirm('Bearbeitung wirklich übernehmen?');\">"
         f'<input type="hidden" name="_csrf_token" value="{csrf}">'
         '<button type="submit">Bearbeitung übernehmen</button>'
         "</form></div>"
