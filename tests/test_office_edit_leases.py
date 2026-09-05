@@ -77,7 +77,9 @@ def test_lease_claim_renew_conflict_expiry_takeover_and_release() -> None:
     assert taken.holder_account_id == "viktor"
     assert repo.release("inquiry", "inq-1", holder_account_id="anna") is False
     assert repo.release("inquiry", "inq-1", holder_account_id="viktor") is True
-    assert repo.get_active("inquiry", "inq-1", now=start + timedelta(minutes=12)) is None
+    assert (
+        repo.get_active("inquiry", "inq-1", now=start + timedelta(minutes=12)) is None
+    )
 
     repo.claim_or_observe(
         "order",
