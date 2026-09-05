@@ -33,9 +33,7 @@ jobs:
       - name: Lint
         run: |
           uv run ruff check src tests infra
-          uv run ruff format src/catering_system/ui/office_panel_multiuser.py tests/test_office_edit_leases.py
-          git diff -- src/catering_system/ui/office_panel_multiuser.py tests/test_office_edit_leases.py
-          exit 1
+          uv run ruff format --check src tests infra
       - name: Type-check production code
         run: uv run mypy src/catering_system
       - name: Test Python and enforce coverage
