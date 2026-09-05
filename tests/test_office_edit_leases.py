@@ -75,12 +75,8 @@ def test_lease_claim_renew_conflict_expiry_takeover_and_release() -> None:
         now=start + timedelta(minutes=11),
     )
     assert taken.holder_account_id == "viktor"
-    assert repo.release(
-        "inquiry", "inq-1", holder_account_id="anna"
-    ) is False
-    assert repo.release(
-        "inquiry", "inq-1", holder_account_id="viktor"
-    ) is True
+    assert repo.release("inquiry", "inq-1", holder_account_id="anna") is False
+    assert repo.release("inquiry", "inq-1", holder_account_id="viktor") is True
     assert repo.get_active("inquiry", "inq-1", now=start + timedelta(minutes=12)) is None
 
     repo.claim_or_observe(
@@ -118,7 +114,9 @@ def test_foreign_lease_removes_write_permissions_and_blocks_post() -> None:
                 csrf_token="csrf-test",
                 current_user_name=self._request_auth.employee.account.display_name,
                 employee_account_id=self._request_auth.employee.account.id,
-                employee_effective_permissions=self._request_auth.employee.effective_permissions,
+                employee_effective_permissions=(
+                    self._request_auth.employee.effective_permissions
+                ),
             )
 
         def _html(self, page: str, status: int = 200, **kwargs: Any) -> None:
