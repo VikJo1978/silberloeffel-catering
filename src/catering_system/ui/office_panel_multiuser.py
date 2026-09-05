@@ -219,8 +219,8 @@ def add_edit_lease_coordination(
         blocked = _RECORD_WRITE_PERMISSIONS[claim.lease.entity_type]
         return replace(
             context,
-            employee_effective_permissions=context.employee_effective_permissions.difference(
-                blocked
+            employee_effective_permissions=(
+                context.employee_effective_permissions.difference(blocked)
             ),
         )
 
@@ -240,9 +240,7 @@ def add_edit_lease_coordination(
         if lease_action is not None:
             entity_type, entity_id, action = lease_action
             if not _can_coordinate(auth, entity_type):
-                self._business_forbidden(
-                    active_section=_ACTIVE_SECTIONS[entity_type]
-                )
+                self._business_forbidden(active_section=_ACTIVE_SECTIONS[entity_type])
                 return
             actor = _employee_actor(auth)
             assert actor is not None
@@ -328,7 +326,8 @@ def main() -> None:
     """Run the existing Office Panel main with the coordinated server factory."""
     from catering_system.ui import office_panel
 
-    office_panel.create_office_panel_server = create_office_panel_server
+    office_panel_runtime = cast(Any, office_panel)
+    office_panel_runtime.create_office_panel_server = create_office_panel_server
     office_panel.main()
 
 
