@@ -743,6 +743,8 @@ def test_mark_sent_future_timestamp_shows_german_error(direct_world) -> None:
     assert status == 400
     assert "Der Versandnachweis ist ungültig" in body
     assert "invalid_sent_evidence" not in body
+    assert "Zurück zum Angebot" in body
+    assert f'href="/offer/{offer_id}"' in body
 
 
 def test_mark_sent_before_offer_version_created_at_shows_german_error(
