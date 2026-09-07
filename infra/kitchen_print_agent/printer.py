@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import math
+import plistlib
 import subprocess
 import tempfile
 import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Protocol
+from xml.parsers.expat import ExpatError
 
 from kitchen_print_agent.errors import PrinterError
 
@@ -43,18 +46,6 @@ class FakePrinterAdapter:
         self.printed.append((content_type, body))
 
 
-def _listing_contains_exact_job_id(text: str, job_id: str) -> bool:
-    """Return True when an lpstat listing line starts with the exact job id."""
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        first_field = stripped.split(maxsplit=1)[0]
-        if first_field == job_id:
-            return True
-    return False
-
-
 def _map_lp_failure(stderr: str) -> str:
     normalized = stderr.lower()
     if (
@@ -86,15 +77,66 @@ def _extract_cups_job_id(text: str) -> str | None:
     return None
 
 
+class CommandRunner(Protocol):
+    def __call__(
+        self, command: Sequence[str], *, timeout: float
+    ) -> subprocess.CompletedProcess[str]: ...
+
+
+def _reported_job_state(text: str, expected_id: int) -> int | None:
+    """Read the exact job's IPP enum from ipptool's machine-readable plist."""
+    try:
+        report = plistlib.loads(text.encode("utf-8"))
+        if not isinstance(report, dict) or report.get("Successful") is not True:
+            return None
+        tests = report.get("Tests")
+        if not isinstance(tests, list) or len(tests) != 1:
+            return None
+        test = tests[0]
+        if not isinstance(test, dict) or test.get("Successful") is not True:
+            return None
+        if test.get("StatusCode") != "successful-ok":
+            return None
+        attributes = test.get("ResponseAttributes")
+        if not isinstance(attributes, list):
+            return None
+        jobs = [
+            group
+            for group in attributes
+            if isinstance(group, dict) and "job-id" in group
+        ]
+        if len(jobs) != 1:
+            return None
+        job = jobs[0]
+        state = job.get("job-state")
+        if type(job["job-id"]) is not int or job["job-id"] != expected_id:
+            return None
+        if state == 9:
+            reasons = job.get("job-state-reasons")
+            reasons = [reasons] if isinstance(reasons, str) else reasons
+            # A forwarding server may report completed while merely queued on
+            # the device. Require a positive, unambiguous success reason.
+            if not isinstance(reasons, list) or not reasons:
+                return None
+            if "job-completed-successfully" not in reasons or any(
+                not isinstance(reason, str)
+                or reason not in {"job-completed-successfully", "job-restartable"}
+                for reason in reasons
+            ):
+                return None
+        return state if type(state) is int and 3 <= state <= 9 else None
+    except (ValueError, TypeError, ExpatError, plistlib.InvalidFileException):
+        return None
+
+
 class CupsPrinterAdapter:
-    """Send document bytes to a CUPS queue via lp."""
+    """Submit and verify a job against the same local CUPS server."""
 
     def __init__(
         self,
         printer_name: str,
         *,
-        run_lp: Callable[[Sequence[str]], subprocess.CompletedProcess[str]]
-        | None = None,
+        run_lp: CommandRunner | None = None,
         poll_interval_seconds: float = _DEFAULT_POLL_INTERVAL_SECONDS,
         sleep: Callable[[float], None] = time.sleep,
         monotonic: Callable[[], float] = time.monotonic,
@@ -109,6 +151,22 @@ class CupsPrinterAdapter:
         self._sleep = sleep
         self._monotonic = monotonic
 
+    def _run_command(
+        self, command: Sequence[str], deadline: float
+    ) -> subprocess.CompletedProcess[str]:
+        remaining = deadline - self._monotonic()
+        if remaining <= 0:
+            raise PrinterError("CUPS ACK deadline expired", "printer_unavailable")
+        try:
+            result = self._run_lp(command, timeout=remaining)
+        except (OSError, UnicodeError, subprocess.TimeoutExpired) as exc:
+            raise PrinterError(
+                "CUPS command failed or timed out", "printer_unavailable"
+            ) from exc
+        if self._monotonic() >= deadline:
+            raise PrinterError("CUPS ACK deadline expired", "printer_unavailable")
+        return result
+
     def print_document(
         self, content_type: str, body: bytes, *, timeout_seconds: float | None = None
     ) -> None:
@@ -117,79 +175,78 @@ class CupsPrinterAdapter:
                 f"unsupported print document content type: {content_type}",
                 "invalid_printer_configuration",
             )
+        timeout = (
+            timeout_seconds
+            if timeout_seconds is not None
+            else _DEFAULT_WAIT_TIMEOUT_SECONDS
+        )
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise PrinterError("CUPS ACK deadline expired", "printer_unavailable")
+        deadline = self._monotonic() + timeout
         temp_path: str | None = None
         try:
             with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as handle:
                 handle.write(body)
                 temp_path = handle.name
-            result = self._run_lp(
-                ["lp", "-d", self._printer_name, temp_path],
+            result = self._run_command(
+                ["lp", "-h", "localhost:631", "-d", self._printer_name, temp_path],
+                deadline,
             )
         except OSError as exc:
             raise PrinterError(str(exc), "printer_unavailable") from exc
         finally:
             if temp_path is not None:
                 Path(temp_path).unlink(missing_ok=True)
-
-        if result.returncode == 0:
-            job_id = _extract_cups_job_id(f"{result.stdout}\n{result.stderr}")
-            if job_id is None:
-                raise PrinterError(
-                    "lp accepted the job but did not report a CUPS job id",
-                    "invalid_printer_configuration",
-                )
-            self._wait_for_completed_job(
-                job_id,
-                timeout_seconds=(
-                    timeout_seconds
-                    if timeout_seconds is not None
-                    else _DEFAULT_WAIT_TIMEOUT_SECONDS
-                ),
-            )
-            return
-
-        message = (result.stderr or result.stdout or "lp failed").strip()
-        raise PrinterError(message, _map_lp_failure(message))
-
-    def _wait_for_completed_job(self, job_id: str, *, timeout_seconds: float) -> None:
-        if timeout_seconds <= 0:
+        if result.returncode != 0:
+            message = (result.stderr or result.stdout or "lp failed").strip()
+            raise PrinterError(message, _map_lp_failure(message))
+        job_id = _extract_cups_job_id(f"{result.stdout}\n{result.stderr}")
+        if job_id is None or job_id.rsplit("-", 1)[0] != self._printer_name:
             raise PrinterError(
-                f"CUPS job {job_id} did not complete before ACK deadline",
-                "printer_unavailable",
+                "lp did not report a job id for the requested queue",
+                "invalid_printer_configuration",
             )
-        deadline = self._monotonic() + timeout_seconds
-        last_status = ""
-        while self._monotonic() <= deadline:
-            completed = self._run_lp(
-                ["lpstat", "-W", "completed", "-o", self._printer_name],
-            )
-            completed_text = f"{completed.stdout}\n{completed.stderr}"
-            if completed.returncode == 0 and _listing_contains_exact_job_id(
-                completed_text, job_id
-            ):
-                return
+        self._wait_for_completed_job(job_id, deadline=deadline)
 
-            not_completed = self._run_lp(
-                ["lpstat", "-W", "not-completed", "-o", self._printer_name],
+    def _wait_for_completed_job(self, job_id: str, *, deadline: float) -> None:
+        numeric_id = int(job_id.rsplit("-", 1)[1])
+        test_file = str(Path(__file__).with_name("get-job-state.test"))
+        while self._monotonic() < deadline:
+            result = self._run_command(
+                ["ipptool", "-X", f"ipp://localhost:631/jobs/{numeric_id}", test_file],
+                deadline,
             )
-            not_completed_text = f"{not_completed.stdout}\n{not_completed.stderr}"
-            printer = self._run_lp(["lpstat", "-p", self._printer_name, "-l"])
-            printer_text = f"{printer.stdout}\n{printer.stderr}"
-            combined = "\n".join(
-                part for part in (not_completed_text, printer_text) if part
+            state = (
+                _reported_job_state(result.stdout, numeric_id)
+                if result.returncode == 0
+                else None
             )
-            last_status = combined.strip() or last_status
-            self._sleep(self._poll_interval_seconds)
+            if state == 9:  # RFC 8011 completed; canceled=7 and aborted=8 are failures.
+                return
+            if state in {7, 8}:
+                raise PrinterError(
+                    f"CUPS job {job_id} canceled or aborted", "spool_rejected"
+                )
+            if state is None:
+                raise PrinterError(
+                    f"Cannot verify CUPS job {job_id}", "printer_unavailable"
+                )
+            remaining = deadline - self._monotonic()
+            if remaining > 0:
+                self._sleep(min(self._poll_interval_seconds, remaining))
         raise PrinterError(
-            last_status or f"CUPS job {job_id} did not complete before ACK deadline",
+            f"CUPS job {job_id} did not complete before ACK deadline",
             "printer_unavailable",
         )
 
     @staticmethod
-    def _default_run_lp(command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+    def _default_run_lp(
+        command: Sequence[str], *, timeout: float
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             list(command),
             capture_output=True,
             text=True,
             check=False,
+            timeout=timeout,
         )

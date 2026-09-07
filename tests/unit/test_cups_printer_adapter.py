@@ -1,338 +1,259 @@
-"""CUPS printer adapter tests — no real lp/CUPS required."""
+"""CUPS completion must be exact, positive, and inside the ACK deadline."""
 
 from __future__ import annotations
 
+import plistlib
 import subprocess
+from pathlib import Path
+from collections.abc import Sequence
 
 import pytest
 from kitchen_print_agent.errors import PrinterError
-from kitchen_print_agent.printer import CupsPrinterAdapter
-
-_PRINTER = "Brother_L2710DN_LAN"
-_JOB_ID = f"{_PRINTER}-123"
+from kitchen_print_agent.printer import CupsPrinterAdapter, _reported_job_state
 
 
-def _completed(
-    *,
-    returncode: int = 0,
-    stdout: str = "",
-    stderr: str = "",
-) -> subprocess.CompletedProcess[str]:
-    return subprocess.CompletedProcess(
-        args=["lp"],
-        returncode=returncode,
-        stdout=stdout,
-        stderr=stderr,
-    )
+def report(state: object = 9, job_id: object = 12, *, successful: bool = True) -> str:
+    return plistlib.dumps(
+        {
+            "Successful": successful,
+            "Tests": [
+                {
+                    "Successful": successful,
+                    "StatusCode": "successful-ok",
+                    "ResponseAttributes": [
+                        {"attributes-charset": "utf-8"},
+                        {
+                            "job-id": job_id,
+                            "job-state": state,
+                            "job-state-reasons": "job-completed-successfully",
+                        },
+                    ],
+                }
+            ],
+        }
+    ).decode()
 
 
-def _is_completed_lpstat(command: list[str]) -> bool:
-    return command[:4] == ["lpstat", "-W", "completed", "-o"]
+def completed(stdout="", returncode=0, stderr=""):
+    return subprocess.CompletedProcess([], returncode, stdout, stderr)
 
 
-def _is_not_completed_lpstat(command: list[str]) -> bool:
-    return command[:5] == ["lpstat", "-W", "not-completed", "-o"]
+class Clock:
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
 
 
-def test_successful_print_polls_completed_jobs_for_printer() -> None:
-    calls: list[list[str]] = []
+@pytest.mark.parametrize(
+    "announcement",
+    ["request id is Kitchen-12 (1 file(s))", "Anfrage-ID ist Kitchen-12 (1 Datei(en))"],
+)
+def test_processing_then_completed_submits_once(announcement):
+    calls = []
+    timeouts = []
+    states = iter([3, 5, 9])
+    clock = Clock()
 
-    def run_lp(command: list[str]) -> subprocess.CompletedProcess[str]:
+    def run(command, *, timeout):
         calls.append(list(command))
+        timeouts.append(timeout)
         if command[0] == "lp":
-            return _completed(stdout=f"request id is {_JOB_ID} (1 file(s))")
-        if _is_completed_lpstat(command):
-            return _completed(stdout=f"{_JOB_ID} viktor 1024 Mon 10 Aug 2026")
-        return _completed()
+            assert Path(command[-1]).read_bytes() == b"%PDF"
+            return completed(announcement)
+        return completed(report(next(states)))
 
-    adapter = CupsPrinterAdapter(_PRINTER, run_lp=run_lp, sleep=lambda _seconds: None)
-    adapter.print_document("application/pdf", b"%PDF-1.4")
-
-    assert calls[0][:3] == ["lp", "-d", _PRINTER]
-    assert calls[1] == ["lpstat", "-W", "completed", "-o", _PRINTER]
-
-
-def test_successful_print_parses_german_cups_job_id() -> None:
-    calls: list[list[str]] = []
-
-    def run_lp(command: list[str]) -> subprocess.CompletedProcess[str]:
-        calls.append(list(command))
-        if command[0] == "lp":
-            return _completed(
-                stdout=f"Anfrage-ID ist {_JOB_ID} (1 Datei(en))",
-            )
-        if _is_completed_lpstat(command):
-            return _completed(stdout=f"{_JOB_ID} viktor 1024")
-        return _completed()
-
-    adapter = CupsPrinterAdapter(_PRINTER, run_lp=run_lp, sleep=lambda _seconds: None)
-    adapter.print_document("application/pdf", b"%PDF-1.4")
-
-    assert calls[1] == ["lpstat", "-W", "completed", "-o", _PRINTER]
-
-
-def test_completed_listing_exact_job_id_match_succeeds() -> None:
-    def run_lp(command: list[str]) -> subprocess.CompletedProcess[str]:
-        if command[0] == "lp":
-            return _completed(stdout=f"request id is {_JOB_ID} (1 file(s))")
-        if _is_completed_lpstat(command):
-            return _completed(
-                stdout=(f"{_PRINTER}-122 viktor 1024\n{_JOB_ID} viktor 2048\n"),
-            )
-        return _completed()
-
-    adapter = CupsPrinterAdapter(_PRINTER, run_lp=run_lp, sleep=lambda _seconds: None)
-    adapter.print_document("application/pdf", b"%PDF-1.4")
-
-
-def test_completed_listing_only_similar_job_id_fails() -> None:
-    def run_lp(command: list[str]) -> subprocess.CompletedProcess[str]:
-        if command[0] == "lp":
-            return _completed(stdout=f"request id is {_JOB_ID} (1 file(s))")
-        if _is_completed_lpstat(command):
-            return _completed(stdout=f"{_PRINTER}-122 viktor 1024")
-        if _is_not_completed_lpstat(command):
-            return _completed(stdout=f"{_JOB_ID} viktor 1024 active")
-        return _completed()
-
-    ticks = [0.0, 0.0, 2.0]
     adapter = CupsPrinterAdapter(
-        _PRINTER,
-        run_lp=run_lp,
-        sleep=lambda _seconds: None,
-        monotonic=lambda: ticks.pop(0) if ticks else 2.0,
+        "Kitchen", run_lp=run, monotonic=clock.monotonic, sleep=clock.sleep
     )
+    adapter.print_document("application/pdf", b"%PDF", timeout_seconds=10)
+    assert calls[0][:5] == ["lp", "-h", "localhost:631", "-d", "Kitchen"]
+    assert all(
+        call[:3] == ["ipptool", "-X", "ipp://localhost:631/jobs/12"]
+        for call in calls[1:]
+    )
+    assert len(calls) == 4
+    assert timeouts == [10, 10, 9, 8]
+    assert not Path(calls[0][-1]).exists()
 
-    with pytest.raises(PrinterError) as exc_info:
-        adapter.print_document("application/pdf", b"%PDF-1.4", timeout_seconds=1.0)
 
-    assert exc_info.value.rejection_code == "printer_unavailable"
+@pytest.mark.parametrize("state", [7, 8])
+def test_canceled_or_aborted_never_succeeds(state):
+    def run(command, *, timeout):
+        return completed(
+            "request id is Kitchen-12" if command[0] == "lp" else report(state)
+        )
+
+    with pytest.raises(PrinterError) as error:
+        CupsPrinterAdapter("Kitchen", run_lp=run).print_document(
+            "application/pdf", b"%PDF"
+        )
+    assert error.value.rejection_code == "spool_rejected"
 
 
-def test_completed_listing_longer_job_id_does_not_false_match() -> None:
-    def run_lp(command: list[str]) -> subprocess.CompletedProcess[str]:
-        if command[0] == "lp":
-            return _completed(stdout=f"request id is {_JOB_ID} (1 file(s))")
-        if _is_completed_lpstat(command):
-            return _completed(stdout=f"{_PRINTER}-1234 viktor 1024")
-        if _is_not_completed_lpstat(command):
-            return _completed(stdout=f"{_JOB_ID} viktor 1024 active")
-        return _completed()
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",
+        "not xml",
+        "Kitchen-12 owner 1024",
+        report(9, 123),
+        report(9, "12"),
+        report(True),
+        report(10),
+        report(9, successful=False),
+        "<plist><dict>",
+    ],
+)
+def test_unverifiable_response_fails_closed(text):
+    def run(command, *, timeout):
+        return completed("request id is Kitchen-12" if command[0] == "lp" else text)
 
-    ticks = [0.0, 0.0, 2.0]
+    with pytest.raises(PrinterError) as error:
+        CupsPrinterAdapter("Kitchen", run_lp=run).print_document(
+            "application/pdf", b"%PDF"
+        )
+    assert error.value.rejection_code == "printer_unavailable"
+
+
+def test_active_job_expires_without_resubmission():
+    clock = Clock()
+    calls = []
+
+    def run(command, *, timeout):
+        calls.append(command[0])
+        return completed(
+            "request id is Kitchen-12" if command[0] == "lp" else report(5)
+        )
+
     adapter = CupsPrinterAdapter(
-        _PRINTER,
-        run_lp=run_lp,
-        sleep=lambda _seconds: None,
-        monotonic=lambda: ticks.pop(0) if ticks else 2.0,
+        "Kitchen", run_lp=run, monotonic=clock.monotonic, sleep=clock.sleep
     )
+    with pytest.raises(PrinterError):
+        adapter.print_document("application/pdf", b"%PDF", timeout_seconds=0.5)
+    assert clock.now == 0.5
+    assert calls == ["lp", "ipptool"]
 
-    with pytest.raises(PrinterError) as exc_info:
-        adapter.print_document("application/pdf", b"%PDF-1.4", timeout_seconds=1.0)
 
-    assert exc_info.value.rejection_code == "printer_unavailable"
+@pytest.mark.parametrize("command_name", ["lp", "ipptool"])
+def test_real_subprocess_boundary_has_timeout_and_cleans_file(
+    monkeypatch, command_name
+):
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        assert 0 < kwargs["timeout"] <= 2
+        if command[0] == command_name:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return completed("request id is Kitchen-12")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(PrinterError) as error:
+        CupsPrinterAdapter("Kitchen").print_document(
+            "application/pdf", b"%PDF", timeout_seconds=2
+        )
+    assert error.value.rejection_code == "printer_unavailable"
+    assert not Path(calls[0][-1]).exists()
 
 
-def test_job_still_not_completed_fails_without_ack() -> None:
-    def run_lp(command: list[str]) -> subprocess.CompletedProcess[str]:
+def test_late_success_cannot_ack():
+    clock = Clock()
+
+    def run(command, *, timeout):
         if command[0] == "lp":
-            return _completed(stdout=f"request id is {_JOB_ID} (1 file(s))")
-        if _is_completed_lpstat(command):
-            return _completed(stdout="")
-        if _is_not_completed_lpstat(command):
-            return _completed(stdout=f"{_JOB_ID} viktor 1024 active")
-        return _completed()
+            return completed("request id is Kitchen-12")
+        clock.now = 11
+        return completed(report())
 
-    ticks = [0.0, 0.0, 2.0]
-    adapter = CupsPrinterAdapter(
-        _PRINTER,
-        run_lp=run_lp,
-        sleep=lambda _seconds: None,
-        monotonic=lambda: ticks.pop(0) if ticks else 2.0,
-    )
-
-    with pytest.raises(PrinterError) as exc_info:
-        adapter.print_document("application/pdf", b"%PDF-1.4", timeout_seconds=1.0)
-
-    assert exc_info.value.rejection_code == "printer_unavailable"
+    with pytest.raises(PrinterError):
+        CupsPrinterAdapter(
+            "Kitchen", run_lp=run, monotonic=clock.monotonic
+        ).print_document("application/pdf", b"%PDF", timeout_seconds=10)
 
 
-def test_lp_success_without_completed_job_fails_closed() -> None:
-    def run_lp(command: list[str]) -> subprocess.CompletedProcess[str]:
-        if command[0] == "lp":
-            return _completed(stdout=f"request id is {_JOB_ID} (1 file(s))")
-        if _is_completed_lpstat(command):
-            return _completed(stdout="")
-        if _is_not_completed_lpstat(command):
-            return _completed(stdout=f"{_JOB_ID} viktor 1024 active")
-        return _completed()
+@pytest.mark.parametrize(
+    "message,code",
+    [
+        ("unknown printer", "printer_unavailable"),
+        ("job rejected", "spool_rejected"),
+        ("unsupported format", "invalid_printer_configuration"),
+    ],
+)
+def test_submission_failure_mapping(message, code):
+    def run(command: Sequence[str], *, timeout: float):
+        return completed(returncode=1, stderr=message)
 
-    adapter = CupsPrinterAdapter(_PRINTER, run_lp=run_lp, sleep=lambda _seconds: None)
-
-    with pytest.raises(PrinterError) as exc_info:
-        adapter.print_document("application/pdf", b"%PDF-1.4", timeout_seconds=0.01)
-
-    assert exc_info.value.rejection_code == "printer_unavailable"
-
-
-def test_status_text_is_diagnostic_only_and_completion_is_required() -> None:
-    completed_checks = 0
-
-    def run_lp(command: list[str]) -> subprocess.CompletedProcess[str]:
-        nonlocal completed_checks
-        if command[0] == "lp":
-            return _completed(stdout="request id is Kitchen-12 (1 file(s))")
-        if _is_completed_lpstat(command):
-            completed_checks += 1
-            if completed_checks == 1:
-                return _completed(stdout="")
-            return _completed(stdout="Kitchen-12 viktor 1024 Mon 10 Aug 2026")
-        if command[:2] == ["lpstat", "-p"]:
-            return _completed(stdout="printer Kitchen disabled since paper-out")
-        if _is_not_completed_lpstat(command):
-            return _completed(stdout="Kitchen-12 viktor 1024 active")
-        return _completed()
-
-    adapter = CupsPrinterAdapter("Kitchen", run_lp=run_lp, sleep=lambda _seconds: None)
-
-    adapter.print_document("application/pdf", b"%PDF-1.4")
+    with pytest.raises(PrinterError) as error:
+        CupsPrinterAdapter("Kitchen", run_lp=run).print_document(
+            "application/pdf", b"%PDF"
+        )
+    assert error.value.rejection_code == code
 
 
-def test_terminal_status_text_without_completed_job_fails_after_timeout() -> None:
-    def run_lp(command: list[str]) -> subprocess.CompletedProcess[str]:
-        if command[0] == "lp":
-            return _completed(stdout="request id is Kitchen-12 (1 file(s))")
-        if _is_completed_lpstat(command):
-            return _completed(stdout="")
-        if command[:2] == ["lpstat", "-p"]:
-            return _completed(stdout="printer Kitchen disabled since cancelled")
-        if _is_not_completed_lpstat(command):
-            return _completed(stdout="Kitchen-12 viktor 1024 active")
-        return _completed()
-
-    ticks = [0.0, 0.0, 2.0]
-    adapter = CupsPrinterAdapter(
-        "Kitchen",
-        run_lp=run_lp,
-        sleep=lambda _seconds: None,
-        monotonic=lambda: ticks.pop(0) if ticks else 2.0,
-    )
-
-    with pytest.raises(PrinterError) as exc_info:
-        adapter.print_document("application/pdf", b"%PDF-1.4", timeout_seconds=1.0)
-
-    assert exc_info.value.rejection_code == "printer_unavailable"
+@pytest.mark.parametrize("announcement", ["accepted", "request id is WrongQueue-12"])
+def test_missing_or_wrong_queue_job_id_rejected(announcement):
+    with pytest.raises(PrinterError) as error:
+        CupsPrinterAdapter(
+            "Kitchen", run_lp=lambda command, timeout: completed(announcement)
+        ).print_document("application/pdf", b"%PDF")
+    assert error.value.rejection_code == "invalid_printer_configuration"
 
 
-def test_german_status_text_is_diagnostic_only() -> None:
-    completed_checks = 0
-
-    def run_lp(command: list[str]) -> subprocess.CompletedProcess[str]:
-        nonlocal completed_checks
-        if command[0] == "lp":
-            return _completed(stdout="request id is Kitchen-12 (1 file(s))")
-        if _is_completed_lpstat(command):
-            completed_checks += 1
-            if completed_checks == 1:
-                return _completed(stdout="")
-            return _completed(stdout="Kitchen-12 viktor 1024 Mon 10 Aug 2026")
-        if command[:2] == ["lpstat", "-p"]:
-            return _completed(stdout="Drucker Kitchen ist deaktiviert: Papierstau")
-        if _is_not_completed_lpstat(command):
-            return _completed(stdout="Kitchen-12 viktor 1024 active")
-        return _completed()
-
-    adapter = CupsPrinterAdapter("Kitchen", run_lp=run_lp, sleep=lambda _seconds: None)
-
-    adapter.print_document("application/pdf", b"%PDF-1.4")
-
-
-def test_missing_completed_job_fails_closed_with_german_diagnostic() -> None:
-    def run_lp(command: list[str]) -> subprocess.CompletedProcess[str]:
-        if command[0] == "lp":
-            return _completed(stdout="request id is Kitchen-12 (1 file(s))")
-        if _is_completed_lpstat(command):
-            return _completed(stdout="")
-        if command[:2] == ["lpstat", "-p"]:
-            return _completed(stdout="Drucker Kitchen ist deaktiviert: Papierstau")
-        if _is_not_completed_lpstat(command):
-            return _completed(stdout="Kitchen-12 viktor 1024 active")
-        return _completed()
-
-    ticks = [0.0, 0.0, 2.0]
-    adapter = CupsPrinterAdapter(
-        "Kitchen",
-        run_lp=run_lp,
-        sleep=lambda _seconds: None,
-        monotonic=lambda: ticks.pop(0) if ticks else 2.0,
-    )
-
-    with pytest.raises(PrinterError) as exc_info:
-        adapter.print_document("application/pdf", b"%PDF-1.4", timeout_seconds=1.0)
-
-    assert exc_info.value.rejection_code == "printer_unavailable"
-
-
-def test_transient_active_job_completes_without_second_submission() -> None:
-    calls: list[list[str]] = []
-    completed_checks = 0
-
-    def run_lp(command: list[str]) -> subprocess.CompletedProcess[str]:
-        nonlocal completed_checks
-        calls.append(list(command))
-        if command[0] == "lp":
-            return _completed(stdout="request id is Kitchen-12 (1 file(s))")
-        if _is_completed_lpstat(command):
-            completed_checks += 1
-            if completed_checks == 1:
-                return _completed(stdout="")
-            return _completed(stdout="Kitchen-12 viktor 1024 Mon 10 Aug 2026")
-        if _is_not_completed_lpstat(command):
-            return _completed(stdout="Kitchen-12 viktor 1024 active")
-        return _completed()
-
-    adapter = CupsPrinterAdapter("Kitchen", run_lp=run_lp, sleep=lambda _seconds: None)
-
-    adapter.print_document("application/pdf", b"%PDF-1.4")
-
-    assert [call[0] for call in calls].count("lp") == 1
-
-
-def test_queue_missing_maps_to_printer_unavailable() -> None:
-    def run_lp(_command: list[str]) -> subprocess.CompletedProcess[str]:
-        return _completed(returncode=1, stderr="lp: Unknown printer 'Kitchen'")
-
-    adapter = CupsPrinterAdapter("Kitchen", run_lp=run_lp)
-
-    with pytest.raises(PrinterError) as exc_info:
-        adapter.print_document("application/pdf", b"%PDF-1.4")
-
-    assert exc_info.value.rejection_code == "printer_unavailable"
-
-
-def test_spool_reject_maps_to_spool_rejected() -> None:
-    def run_lp(_command: list[str]) -> subprocess.CompletedProcess[str]:
-        return _completed(returncode=1, stderr="job rejected by spooler")
-
-    adapter = CupsPrinterAdapter("Kitchen", run_lp=run_lp)
-
-    with pytest.raises(PrinterError) as exc_info:
-        adapter.print_document("application/pdf", b"%PDF-1.4")
-
-    assert exc_info.value.rejection_code == "spool_rejected"
-
-
-def test_unsupported_format_maps_to_invalid_printer_configuration() -> None:
-    calls: list[list[str]] = []
-
-    def run_lp(_command: list[str]) -> subprocess.CompletedProcess[str]:
-        calls.append(list(_command))
-        return _completed(returncode=1, stderr="unsupported document format")
-
-    adapter = CupsPrinterAdapter("Kitchen", run_lp=run_lp)
-
-    with pytest.raises(PrinterError) as exc_info:
-        adapter.print_document("text/html; charset=utf-8", b"<html>test</html>")
-
-    assert exc_info.value.rejection_code == "invalid_printer_configuration"
+def test_unsupported_content_never_submits():
+    calls = []
+    with pytest.raises(PrinterError) as error:
+        CupsPrinterAdapter(
+            "Kitchen", run_lp=lambda command, timeout: calls.append(command)
+        ).print_document("text/html", b"html")
+    assert error.value.rejection_code == "invalid_printer_configuration"
     assert calls == []
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("inf"), float("nan")])
+def test_invalid_deadline_never_submits(timeout):
+    calls = []
+    with pytest.raises(PrinterError):
+        CupsPrinterAdapter(
+            "Kitchen", run_lp=lambda command, timeout: calls.append(command)
+        ).print_document("application/pdf", b"%PDF", timeout_seconds=timeout)
+    assert calls == []
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        {},
+        {"Successful": True, "Tests": []},
+        {"Successful": True, "Tests": ["invalid"]},
+        {
+            "Successful": True,
+            "Tests": [{"Successful": True, "StatusCode": "server-error"}],
+        },
+    ],
+)
+def test_plist_shape_validation(payload):
+    assert _reported_job_state(plistlib.dumps(payload).decode(), 12) is None
+
+
+@pytest.mark.parametrize(
+    "reasons",
+    [
+        "job-completed-with-errors",
+        "job-completed-with-warnings",
+        "queued-in-device",
+        "none",
+        [],
+        ["job-completed-successfully", "queued-in-device"],
+        ["job-completed-successfully", {}],
+    ],
+)
+def test_completed_without_unambiguous_success_is_rejected(reasons):
+    payload = plistlib.loads(report().encode())
+    payload["Tests"][0]["ResponseAttributes"][1]["job-state-reasons"] = reasons
+    assert _reported_job_state(plistlib.dumps(payload).decode(), 12) is None

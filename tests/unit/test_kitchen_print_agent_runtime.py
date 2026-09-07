@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import inspect
 import queue
+import plistlib
 import subprocess
 import threading
 import uuid
@@ -193,7 +194,9 @@ def test_cups_adapter_failure_propagates_rejection_code(kitchen_api_server) -> N
     base, db = kitchen_api_server
     _order_id, version_id = _seed_claimable_job(db)
 
-    def run_lp(_command: list[str]) -> subprocess.CompletedProcess[str]:
+    def run_lp(
+        _command: list[str], *, timeout: float
+    ) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess(
             args=["lp"],
             returncode=1,
@@ -228,7 +231,9 @@ def test_lp_accept_without_completed_job_does_not_ack(kitchen_api_server) -> Non
     base, db = kitchen_api_server
     _order_id, version_id = _seed_claimable_job(db)
 
-    def run_lp(command: list[str]) -> subprocess.CompletedProcess[str]:
+    def run_lp(
+        command: list[str], *, timeout: float
+    ) -> subprocess.CompletedProcess[str]:
         if command[0] == "lp":
             return subprocess.CompletedProcess(
                 args=command,
@@ -236,7 +241,7 @@ def test_lp_accept_without_completed_job_does_not_ack(kitchen_api_server) -> Non
                 stdout="request id is Kitchen-12 (1 file(s))",
                 stderr="",
             )
-        if command[:4] == ["lpstat", "-W", "completed", "-o"]:
+        if command[0] == "ipptool":
             return subprocess.CompletedProcess(
                 args=command, returncode=0, stdout="", stderr=""
             )
@@ -283,15 +288,19 @@ def test_lp_accept_without_completed_job_does_not_ack(kitchen_api_server) -> Non
     assert version.kitchen_print_confirmed_at is None
 
 
-def test_transient_cups_state_acknowledges_without_second_print_submission(
+@pytest.mark.parametrize("terminal_state", [7, 8, 9])
+def test_transient_cups_state_acknowledges_only_success_without_second_submission(
     kitchen_api_server,
+    terminal_state,
 ) -> None:
     base, db = kitchen_api_server
     _order_id, version_id = _seed_claimable_job(db)
     calls: list[list[str]] = []
     completed_checks = 0
 
-    def run_lp(command: list[str]) -> subprocess.CompletedProcess[str]:
+    def run_lp(
+        command: list[str], *, timeout: float
+    ) -> subprocess.CompletedProcess[str]:
         nonlocal completed_checks
         calls.append(list(command))
         if command[0] == "lp":
@@ -301,9 +310,28 @@ def test_transient_cups_state_acknowledges_without_second_print_submission(
                 stdout="request id is Kitchen-12 (1 file(s))",
                 stderr="",
             )
-        if command[:4] == ["lpstat", "-W", "completed", "-o"]:
+        if command[0] == "ipptool":
             completed_checks += 1
-            stdout = "" if completed_checks == 1 else "Kitchen-12 viktor 1024 done"
+            stdout = plistlib.dumps(
+                {
+                    "Successful": True,
+                    "Tests": [
+                        {
+                            "Successful": True,
+                            "StatusCode": "successful-ok",
+                            "ResponseAttributes": [
+                                {
+                                    "job-id": 12,
+                                    "job-state": 5
+                                    if completed_checks == 1
+                                    else terminal_state,
+                                    "job-state-reasons": "job-completed-successfully",
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ).decode()
             return subprocess.CompletedProcess(
                 args=command, returncode=0, stdout=stdout, stderr=""
             )
@@ -334,7 +362,14 @@ def test_transient_cups_state_acknowledges_without_second_print_submission(
     version = orders.get_order_version(version_id)
     orders.close()
     assert version is not None
-    assert version.kitchen_print_confirmed_at == _NOW
+    assert version.kitchen_print_confirmed_at == (_NOW if terminal_state == 9 else None)
+    jobs = SQLiteKitchenPrintJobRepository(db)
+    job = jobs.get(_JOB_A)
+    jobs.close()
+    assert job is not None
+    if terminal_state != 9:
+        assert job.acknowledged_at is None
+        assert job.rejection_code == "spool_rejected"
 
 
 def test_printer_status_text_without_completed_job_does_not_ack(
@@ -343,7 +378,9 @@ def test_printer_status_text_without_completed_job_does_not_ack(
     base, db = kitchen_api_server
     _order_id, version_id = _seed_claimable_job(db)
 
-    def run_lp(command: list[str]) -> subprocess.CompletedProcess[str]:
+    def run_lp(
+        command: list[str], *, timeout: float
+    ) -> subprocess.CompletedProcess[str]:
         if command[0] == "lp":
             return subprocess.CompletedProcess(
                 args=command,
@@ -351,7 +388,7 @@ def test_printer_status_text_without_completed_job_does_not_ack(
                 stdout="request id is Kitchen-12 (1 file(s))",
                 stderr="",
             )
-        if command[:4] == ["lpstat", "-W", "completed", "-o"]:
+        if command[0] == "ipptool":
             return subprocess.CompletedProcess(
                 args=command, returncode=0, stdout="", stderr=""
             )
