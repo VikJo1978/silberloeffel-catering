@@ -1,30 +1,27 @@
 # Current status
 
-Operational truth last updated: **2026-08-31**.
+Operational truth last updated: **2026-09-08**.
 
-This file is a **current operational snapshot**, not a deployment diary. Historical
-details remain available in Git history, merged pull requests, issue history and the
-runbooks under `docs/runbooks/`.
+This file is a current operational snapshot, not a deployment diary. Historical details
+remain available in Git history, merged pull requests, issue history and the runbooks
+under `docs/runbooks/`.
 
-Repository state and production state are deliberately kept separate. A commit on
+Repository state and production state are deliberately separate. A commit on
 `origin/main` is not production until the relevant service has loaded it and the
-deployment has been checked.
+post-deploy checks have been recorded.
 
 ## Current repository state
 
 | Item | Value |
 |---|---|
-| `origin/main` HEAD before this docs update | `ed78e8211a4edf293e695aa770aa8a3752b20bd7` (`ed78e82`) |
-| Commit | `Implement Courier cash handoff runtime V1 (#213)` |
-| CI immediately before #213 merge | **green** — PR head `79d2316`, run `33395580432` |
-| Open issues after backlog cleanup | **0** |
-| Open pull requests after backlog cleanup | **0** |
+| `origin/main` at the start of this operational-truth update | `a314b51c2f7d942e815bcbf133ec72bb47ddb668` (`a314b51`) |
+| Latest deployed application change | `fix(print): require verified IPP completion within ACK deadline (#241)` |
 | Working release flow | branch → PR → green CI → merge → production fast-forward |
+| Active pre-launch validation | issue #218, coherent end-to-end operational validation |
 
-The repository had accumulated old stacked and superseded pull requests from earlier
-architecture slices. On 2026-08-27 they were reviewed against current `main` and all
-remaining stale PRs were closed. Their branches and Git history remain available for
-archaeology, but they are not active implementation work.
+The kitchen-print observability/runtime-truth cleanup is being prepared separately from
+production. Documentation or branch commits must not be interpreted as a production
+deployment and must not trigger a service restart by themselves.
 
 ## Production state
 
@@ -34,93 +31,75 @@ Production host: `debiancatering`.
 |---|---|
 | Application repository | `/home/viktor/projects/silberloeffel-catering` |
 | Core DB | `/home/viktor/catering-runtime/core.db` |
-| Deployed application commit | `ed78e8211a4edf293e695aa770aa8a3752b20bd7` (`ed78e82`) |
-| Relationship to application `main` before this docs-only update | **matches** |
-| Latest functional deployment scope | Courier cash handoff rollout across Core Office API, Kiosk, Office Panel and Courier app |
-| Latest functional verification | machine-route auth gates, shared bearer, Kiosk order-feed, Courier service and service health verified; no real BAR order exists yet for E2E |
-| Office Panel unauthenticated health behavior | HTTP `303` redirect, expected |
-| Office API after cash rollout | `active` on `100.109.6.74:8084`, restarted with the cash service bearer configured |
+| Deployed application commit | `a314b51c2f7d942e815bcbf133ec72bb47ddb668` (`a314b51`) |
+| Kitchen Print Agent | `active/running`; PID `1173322` at 2026-09-08 verification; `NRestarts=0` |
+| Kitchen API | loopback `127.0.0.1:8086` |
+| Office API | `active` on `100.109.6.74:8084` |
+| CUPS | active; queue `Brother_L2710DN_LAN` enabled and idle after E2E |
+| Kitchen Print Agent environment | tracked checkout + project `.venv`, no systemd drop-in |
 
-The latest application change (#195) was deployed after its post-merge CI passed.
-The operator then verified the manual-task detail flow interactively in production.
-No database migration was part of #188, #190, #192 or #194/#195.
+The effective production Kitchen Print Agent unit at verification time was:
 
-This documentation commit must **not** be treated as a reason to restart production
-services. It changes operational documentation only.
+```text
+WorkingDirectory=/home/viktor/projects/silberloeffel-catering
+Environment=PYTHONPATH=/home/viktor/projects/silberloeffel-catering/infra
+EnvironmentFile=/etc/kitchen-print-agent.env
+ExecStart=/home/viktor/projects/silberloeffel-catering/.venv/bin/python3 -m kitchen_print_agent
+Restart=always
+RestartSec=5
+```
 
+No production database migration was part of the Kitchen Print completion-verification
+rollout.
 
-## Courier cash handoff production rollout
+## Kitchen Print completion verification
 
-The frozen Courier cash-handoff contract is now activated on the Lenovo production
-host.
+The 2026-09-08 rollout closed the critical false-ACK risk in the kitchen print path.
+The agent now waits for the exact local CUPS job to reach a verified successful IPP
+terminal state before acknowledging Core. Canceled, aborted or unverifiable states fail
+closed and do not produce an ACK.
 
-- Core is deployed at `ed78e8211a4edf293e695aa770aa8a3752b20bd7`
-  (`ed78e82`, PR #213).
-- Courier is deployed at `f3419a40cabd53bd9badc900ddf40a9426e0a863`
-  (`f3419a4`, courier-app PR #16).
-- `catering-office-api` is active on `100.109.6.74:8084`.
-- `catering-courier-app` is active on `0.0.0.0:8090`.
-- `catering-kiosk` is active on `0.0.0.0:8082` and loaded the new
-  `cash_handoff` projection code.
-- Core and Courier use the same dedicated `COURIER_CASH_SERVICE_TOKEN`; its
-  value remains only in the production environment files.
-- An unauthenticated POST to the cash machine route returns `401`.
-- The same route with the configured bearer and an intentionally empty payload
-  reaches request validation and returns `400`, proving authentication and
-  connectivity without creating a cash event.
-- Kiosk root and order-feed checks return `200`; the kiosk journal records
-  `pickup signal refresh succeeded`.
-- Production currently contains zero `BAR_VOR_ORT` payment reminders, so a
-  truthful end-to-end cash handoff cannot yet be exercised.
+Production evidence recorded during the rollout:
 
-No synthetic BAR order was created in production merely to force the last E2E
-step. The first real BAR order is the production E2E candidate.
+- previous production commit before the rollout:
+  `1626d616b842f54749c82d769d86dd7b2c080db8`;
+- deployed commit: `a314b51c2f7d942e815bcbf133ec72bb47ddb668`;
+- production worktree was clean after the fast-forward and restart;
+- `kitchen-print-agent` restarted successfully at 2026-09-08 09:26:43 CEST;
+- no subsequent automatic service restart was observed (`NRestarts=0`);
+- real historical CUPS job `Brother_L2710DN_LAN-17` parsed as IPP state `9`
+  (successful completion);
+- real historical CUPS job `Brother_L2710DN_LAN-18` parsed as IPP state `7`
+  (canceled), proving that the new parser distinguishes success from cancellation;
+- a controlled synthetic E2E used a consistent disposable copy of `core.db`, a
+  synthetic PDF containing no customer data, the real Kitchen Print Agent code, local
+  CUPS and the real Brother queue;
+- that E2E created `Brother_L2710DN_LAN-19` at 2026-09-08 09:39:33 CEST;
+- the test print job was accepted at `2026-09-08T07:39:33.656371+00:00` and
+  acknowledged at `2026-09-08T07:39:56.025896+00:00` with no rejection;
+- the test concluded with `E2E_ACK_SUCCESS`;
+- the disposable test database was removed after verification;
+- the production Core database was not mutated by the synthetic E2E.
 
-## Current Office task workflow
+The recorded evidence proves the software path through Core/Kitchen API → agent → local
+CUPS → verified IPP completion → ACK. Physical paper output should only be claimed as a
+separate assurance when an operator explicitly records seeing the expected sheet; that
+physical observation is not promoted as independently recorded fact in this status
+snapshot.
 
-Manual office tasks are now a first-class Office workflow:
+## Kitchen Print runtime truth and observability follow-up
 
-- persisted manual tasks are exposed in `/aufgaben`;
-- open manual tasks are included in the Arbeitszentrale together with system tasks;
-- priority is explicit (`HIGH`, `NORMAL`, `LOW`) and ranks before due date;
-- a task may reference Kontakt, Anfrage, Angebot, Auftrag or no subject;
-- the Bezug picker is searchable and category-filterable;
-- its inline JavaScript is permitted by CSP only through an exact SHA-256 hash;
-- Safari hidden-state behavior is explicitly covered;
-- a manual task opens its own `/aufgaben/{task_id}` detail page;
-- title, description, priority, due date, assignee, status and Bezug are readable
-  before navigating to the referenced business object;
-- `Bezug öffnen` remains a separate action;
-- completion remains permission-controlled.
+Audit after the rollout found an operational-truth mismatch: the tracked
+`infra/systemd/kitchen-print-agent.service` still described the obsolete `/opt` +
+`/usr/bin/python3` layout even though the live Lenovo unit uses the repository checkout
+and `.venv`. The cleanup branch aligns the tracked unit with the effective production
+unit and adds lifecycle logging for opaque print-job IDs, CUPS job IDs, successful
+completion, rejection codes and ACKs. Logs must never contain bearer tokens, customer
+data or document bodies.
 
-Relevant completed work:
-
-| Issue / PR | Result |
-|---|---|
-| #182 / #185 | manual tasks exposed in Aufgaben UI |
-| #186 / #187 | manual tasks integrated into Arbeitszentrale with priority and subject links |
-| #188 / #189 | searchable, category-first Bezug picker |
-| #190 / #191 | reliable hidden-state handling in Safari |
-| #192 / #193 | strict CSP hash authorization for the picker script |
-| #194 / #195 | readable manual-task detail page before Bezug navigation |
-
-## Customer recommendation / repeat-customer foundation
-
-Issue #152 is completed in current `main`.
-
-The current model keeps **factual order history separate from explicit customer
-preferences**. Recommendation hints are derived and explainable rather than silently
-rewriting customer facts. This remains the intended boundary for future recommendation
-work.
-
-## Logistics / kiosk work
-
-The current repository includes the completed logistics timing and return-logistics
-work from #171 and #175. Older stacked Kitchen Execution / Delivery Execution PRs from
-the earlier August branch series were reviewed during backlog cleanup and closed as
-obsolete rather than merged into the much newer architecture.
-
-Closing those PRs did not delete their branches or history.
+The cleanup is a repository change only until separately approved for production.
+Do not install the unit or restart `kitchen-print-agent` merely because the cleanup PR
+merges.
 
 ## Runtime / release controls
 
@@ -128,72 +107,60 @@ The established production deployment discipline remains:
 
 1. exact target commit has green CI;
 2. production worktree must be clean;
-3. DB-affecting deploys require backup and integrity verification;
-4. production updates use `git merge --ff-only origin/main`, never a hard reset;
-5. restart only services affected by the change;
-6. verify service state, HTTP behavior and journals after restart;
-7. documentation changes go through Git/PR and do not dirty the production worktree.
-
-Runtime continues to use the project virtual environment and committed dependency lock
-established by the earlier PDF runtime migration.
+3. DB-affecting deploys require a consistent backup and integrity verification;
+4. production updates use `git merge --ff-only origin/main`, never an ad-hoc force
+   update;
+5. restart only services that must load changed code;
+6. verify effective systemd properties, service state, journals and relevant HTTP/CUPS
+   behavior after restart;
+7. update this operational-truth snapshot after a verified production deploy;
+8. documentation-only changes do not constitute an application deployment.
 
 ## Known operational risks
 
 ### High — branch protection is not independently verified
 
-The GitHub integration used for this update cannot read the branch-protection endpoint
-(it returns HTTP 403 to the integration), so server-side enforcement has **not** been
-re-verified here.
-
-The desired state remains:
-
-- PR required for `main`;
-- green CI required before merge;
-- force push disabled;
-- direct push prevented or tightly controlled.
-
-Until owner/admin verification proves that state, release discipline remains partly a
-process control rather than a guaranteed server-side control.
+The GitHub integration available to prior audits could not independently verify the
+branch-protection endpoint. The desired server-side state remains PR-required `main`,
+green CI required before merge, force push disabled, and direct push prevented or
+tightly controlled. Until owner/admin verification proves that state, release discipline
+remains partly a process control.
 
 ### High — no backup health / stale-backup alerting
 
-The repository still contains
-`docs/proposals/BACKUP_HEALTH_AND_ALERTING_V1.md`; automated failure/staleness
-notification is not recorded as implemented.
+The repository contains `docs/proposals/BACKUP_HEALTH_AND_ALERTING_V1.md`, but automated
+failure/staleness notification is not recorded as implemented. Backups must not be
+considered healthy merely because a schedule exists.
 
-Backups should not be considered operationally healthy merely because cron jobs exist.
-A silent failed backup is just a scheduled confidence trick.
+### Medium — Kitchen Print alerting is not implemented
 
-### Accepted / reverify before relying on old runtime notes
+The Kitchen Print Agent now has service-level visibility and the cleanup branch adds
+useful lifecycle logs, but automatic notification for repeated restart, Kitchen API
+unavailability, `printer_unavailable` or repeated `spool_rejected` remains separate
+future operational work.
 
-Older status snapshots contained point-in-time facts about Auerswald, Courier,
-Fingerfood, kiosk and website-intake runtime state. Those July snapshots are no longer
-promoted here as current truth. Re-check the actual services when work on those
-components resumes.
+### Accepted — first real BAR cash E2E still depends on a real BAR order
+
+Do not create synthetic production customer/order data solely to force the Courier cash
+handoff E2E. Exercise that path on the first real `BAR_VOR_ORT` order and verify the
+receipt/handoff/final-paid facts truthfully.
 
 ## Recovery controls
 
-Production DB changes continue to require a pre-deploy backup when migrations or other
-DB-affecting work are involved.
+Production DB changes require a pre-deploy backup when migrations or other data risk are
+involved. Code rollback and database restore remain separate decisions. For Kitchen Print
+completion-verification, the 2026-09-08 pre-rollout commit
+`1626d616b842f54749c82d769d86dd7b2c080db8` is historical evidence for that deployment,
+not a permanent rollback target for future deployments.
 
-Existing recovery and deployment runbooks remain under `docs/runbooks/`. Historical
-backup hashes, PIDs and old deployment timestamps belong in deployment evidence and Git
-history, not in this living status page.
+Use the current runbooks under `docs/runbooks/` and record the known-good commit separately
+for every deployment.
 
-## Next action
+## Next actions
 
-**Exercise the Courier cash handoff on the first real `BAR_VOR_ORT` order.**
-
-Do not create synthetic production customer/order data solely for this check.
-When the first real BAR order exists, verify the coherent path:
-
-1. current Quittung is printed;
-2. driver records receipt from the customer and Quittung handoff;
-3. driver records handoff to the chef;
-4. chef confirms receipt from the driver;
-5. Core reaches `FINAL_PAID`;
-6. journals, idempotency state and both SQLite databases remain healthy.
-
-Until such an order exists, the cash rollout is operationally complete at the
-infrastructure/contract level. General application E2E validation may continue
-independently.
+1. Complete the Kitchen Print runtime-truth/observability cleanup PR and require green CI.
+2. Do **not** deploy that cleanup to production without a separate explicit deployment
+   decision and a fresh preflight.
+3. Continue issue #218 with clearly synthetic pre-launch data across the remaining
+   application boundaries.
+4. Exercise the Courier cash handoff on the first real `BAR_VOR_ORT` order.
