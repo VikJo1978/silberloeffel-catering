@@ -85,6 +85,7 @@ class KitchenPrintAgent:
         if result.document is None or result.print_job_id is None:
             return False
 
+        _log.info("claimed kitchen print job print_job_id=%s", result.print_job_id)
         try:
             timeout_seconds = None
             if result.ack_deadline_at is not None:
@@ -104,9 +105,15 @@ class KitchenPrintAgent:
                 reject_command_id,
                 exc.rejection_code,
             )
+            _log.warning(
+                "rejected kitchen print job print_job_id=%s code=%s",
+                result.print_job_id,
+                exc.rejection_code,
+            )
             return True
         ack_command_id = self._uuid_factory()
         self._client.acknowledge(result.print_job_id, ack_command_id)
+        _log.info("acknowledged kitchen print job print_job_id=%s", result.print_job_id)
         return True
 
     def run_forever(self) -> None:
