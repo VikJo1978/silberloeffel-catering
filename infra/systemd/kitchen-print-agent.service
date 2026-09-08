@@ -9,10 +9,10 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=viktor
-WorkingDirectory=/opt/kitchen-print-agent
-Environment=PYTHONPATH=/opt/kitchen-print-agent/infra
+WorkingDirectory=/home/viktor/projects/silberloeffel-catering
+Environment=PYTHONPATH=/home/viktor/projects/silberloeffel-catering/infra
 EnvironmentFile=/etc/kitchen-print-agent.env
-ExecStart=/usr/bin/python3 -m kitchen_print_agent
+ExecStart=/home/viktor/projects/silberloeffel-catering/.venv/bin/python3 -m kitchen_print_agent
 Restart=always
 RestartSec=5
 
