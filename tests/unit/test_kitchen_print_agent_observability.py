@@ -131,6 +131,12 @@ def test_cups_adapter_logs_submission_and_verified_completion(caplog) -> None:
 
     adapter.print_document("application/pdf", b"%PDF-test", timeout_seconds=10)
 
-    assert "submitted kitchen print to CUPS cups_job_id=Kitchen-42 printer=Kitchen" in caplog.text
-    assert "completed kitchen print in CUPS cups_job_id=Kitchen-42 printer=Kitchen" in caplog.text
+    assert (
+        "submitted kitchen print to CUPS cups_job_id=Kitchen-42 printer=Kitchen"
+        in caplog.text
+    )
+    assert (
+        "completed kitchen print in CUPS cups_job_id=Kitchen-42 printer=Kitchen"
+        in caplog.text
+    )
     assert "%PDF-test" not in caplog.text
