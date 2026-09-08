@@ -14,13 +14,16 @@ reconstructable from CRM or staging; protect it before every deployment.
 | Core database | `/home/viktor/catering-runtime/core.db` |
 | Daily backups | `/home/viktor/catering-runtime/backups` |
 | Off-host sender | `/home/viktor/catering-runtime/bin/catering-offsite-backup.sh` |
-| Environment files | `/etc/catering/*.env` |
+| Environment files | `/etc/catering/*.env` plus `/etc/kitchen-print-agent.env` |
 
 | Service | Port | Exposure | Writes Core |
 |---|---:|---|---|
 | `catering-office-panel` | 8081 | LAN/Tailscale | yes |
 | `catering-kiosk` | 8082 | LAN/Tailscale | no |
 | `catering-website-intake` | 8083 | loopback only | Inquiry only |
+| `catering-office-api` | 8084 | Tailscale | yes |
+| Kitchen API | 8086 | loopback only | yes |
+| `kitchen-print-agent` | n/a | local process → Kitchen API/CUPS | via Kitchen API |
 
 ## Planned AUTH-2A rollout (not yet executed)
 
@@ -57,10 +60,13 @@ ssh -i ~/.ssh/id_ed25519 viktor@100.109.6.74
 systemctl is-active \
   catering-kiosk \
   catering-office-panel \
-  catering-website-intake
+  catering-website-intake \
+  catering-office-api \
+  kitchen-print-agent \
+  cups
 ```
 
-Expected: three lines containing `active`.
+Expected: each installed production service prints `active`.
 
 Useful read-only checks:
 
@@ -71,10 +77,12 @@ git log -1 --oneline
 sqlite3 /home/viktor/catering-runtime/core.db 'PRAGMA quick_check;'
 ss -ltn
 journalctl -u catering-office-panel -n 100 --no-pager
+SYSTEMD_PAGER=cat systemctl show kitchen-print-agent \
+  -p ActiveState -p SubState -p MainPID -p NRestarts -p WorkingDirectory -p ExecStart
 ```
 
-Never paste `/etc/catering/*.env` contents into chat, tickets, documentation,
-or logs.
+Never paste production environment-file contents into chat, tickets,
+documentation or logs.
 
 ## Courier app and kiosk pickup signal
 
@@ -177,57 +185,54 @@ The equivalent manual steps are retained below for recovery and audit:
 
 ## Python dependencies (`uv`)
 
-`pyproject.toml` declares the dependencies; `uv.lock` pins the exact resolved
-versions, including transitive ones. `uv` is the only supported way to build
-the environment — `pip install` reproduces neither the transitive pins nor the
-runtime/development split.
+`pyproject.toml` declares dependencies; `uv.lock` pins the resolved versions.
+`uv` is the supported way to build a reproducible project environment.
 
-Install the **runtime** set (`reportlab` and its transitive dependencies only —
-no test or lint tooling):
+Install the runtime set:
 
 ```bash
 cd /home/viktor/projects/silberloeffel-catering
 uv sync --no-dev
 ```
 
-Install the **development** set as well (adds `pytest`, `mypy`, `ruff`,
-`coverage`, `pypdf`):
+Install the development set when a development/CI environment is required:
 
 ```bash
 uv sync --dev
 ```
 
-Both commands create or update `.venv` in the repository directory from
-`uv.lock`. `.venv` is disposable and git-ignored: deleting and re-syncing it is
-always safe.
+Do not assume production contains development tools. At the 2026-09-08 Kitchen
+Print verification, the production `.venv` did **not** provide `pytest`, while
+the running Kitchen Print Agent correctly used that `.venv` for application
+code. If development dependencies are absent on production, rely on green CI
+for the exact commit and run only safe runtime checks such as `compileall` on
+the host.
 
-Verify the PDF dependency is importable by the interpreter that actually serves
-requests:
+The verified Kitchen Print Agent runtime on 2026-09-08 uses no systemd drop-in:
 
-```bash
-.venv/bin/python -c "import reportlab; print(reportlab.Version)"   # 5.0.0
+```text
+WorkingDirectory=/home/viktor/projects/silberloeffel-catering
+Environment=PYTHONPATH=/home/viktor/projects/silberloeffel-catering/infra
+EnvironmentFile=/etc/kitchen-print-agent.env
+ExecStart=/home/viktor/projects/silberloeffel-catering/.venv/bin/python3 -m kitchen_print_agent
 ```
 
-> **Not yet applied to production.** The live host currently reaches `.venv`
-> through an untracked `systemd` drop-in override, and its `.venv` still
-> contains development tooling installed by hand. Aligning the tracked unit
-> files and rebuilding the production environment from `uv.lock` is a separate,
-> later slice (`PDF_RUNTIME_VENV_AND_SYSTEMD_V1`, slices B and D). Until that
-> slice runs, do **not** execute `uv sync --no-dev` on Lenovo: it would remove
-> the `pytest` and `mypy` that step 4 of the deployment below currently relies
-> on.
+Always inspect effective properties rather than assuming an old runtime note is
+still true:
+
+```bash
+systemctl show kitchen-print-agent \
+  -p FragmentPath -p DropInPaths -p WorkingDirectory -p EnvironmentFiles -p ExecStart
+```
 
 ## PDF runtime verification (read-only)
 
 `infra/deploy/verify_pdf_runtime.py` cross-checks the PDF runtime and systemd
 alignment without changing anything: no package installation, no `uv sync`, no
 unit installation, no `daemon-reload`, no service restart, no override edit or
-removal, no application code change, no database write. It only reads
-git-tracked files, runs `uv lock --check`, queries systemd with `systemctl
-show` (never `systemctl cat` — `show` alone reports the effective,
-drop-in-resolved property values this tool needs), and reads `/proc/<pid>/
-cmdline` and `/proc/<pid>/environ` (variable **names** only — values are
-never printed).
+removal, no application code change, no database write. It reads tracked files,
+runs `uv lock --check`, queries systemd and reads process metadata without
+printing environment values.
 
 Two modes; one must be given explicitly:
 
@@ -239,57 +244,10 @@ uv run python infra/deploy/verify_pdf_runtime.py --repository-only
 python infra/deploy/verify_pdf_runtime.py --host-runtime
 ```
 
-Add `--json` for machine-readable output alongside the human-readable report.
-
-Run `--host-runtime`:
-
-- **before** the Slice D migration below, to see how close the host already
-  is to ready — some individual checks (venv, `reportlab`, the systemd
-  alignment classification) may already pass even though the overall exit
-  code is non-zero (see below), because the git checkout itself hasn't
-  received Slices A/B yet;
-- **after** installing the tracked units and removing the overrides, to
-  confirm the migration landed cleanly — a fully successful post-migration
-  run (exit `0`) should report `READY_WITHOUT_OVERRIDE` for both services and
-  no other failures.
-
-`MISMATCHED_OVERRIDE`, `TRACKED_UNIT_MISMATCH`, `RUNTIME_INTERPRETER_MISSING`,
-`REPORTLAB_MISSING`, `REPORTLAB_VERSION_MISMATCH`, `PDF_CONFIG_MISSING`,
-`LOCK_MISSING`, and `LOCK_OUT_OF_DATE` are all failures (non-zero exit) and
-mean the runtime is not ready for that step of the migration — investigate
-before proceeding, do not work around them by installing anything by hand.
-
-### What `--host-runtime` reports today, before Slices A/B reach the checkout
-
-Lenovo's checkout is still at the commit that predates both `uv.lock` (Slice
-A) and the tracked-unit venv alignment (Slice B). Running `--host-runtime`
-there today is expected to produce a **non-zero exit** with exactly:
-
-```
-LOCK_MISSING           — uv.lock does not exist on this checkout yet
-TRACKED_UNIT_MISMATCH  — catering-office-api.service   (tracked file still says /usr/bin/python3)
-TRACKED_UNIT_MISMATCH  — catering-office-panel.service  (same)
-```
-
-while the runtime-derived checks — which inspect the actually-running system,
-not the stale checkout — may still correctly report `READY_WITH_COMPATIBLE_
-OVERRIDE` for both services, since the existing untracked drop-in override
-already runs them under `.venv/bin/python3`.
-
-**`LOCK_MISSING` occurs first, before `uv` availability is ever tested**,
-because `check_repository_state` requires `uv.lock` to exist before it
-attempts `uv lock --check` at all. `uv` is also not installed on Lenovo as of
-this writing (`uv` is absent from `PATH`); once the checkout is fast-forwarded
-past Slice A so `uv.lock` exists, the failure at that step will shift to
-`LOCK_OUT_OF_DATE` instead (the file exists, but the check can't run without
-the `uv` binary) — that too is expected until a later slice installs `uv` on
-the host, not a script defect.
-
-Do **not** read a `--host-runtime` run against today's checkout as globally
-successful just because some checks pass: the overall exit code stays
-non-zero until the checkout has received Slices A/B and `uv` is installed.
-These specific, expected pre-migration failures prove the checkout hasn't
-received those slices yet — they are not evidence of a defect in this tool.
+Add `--json` for machine-readable output. Do not hardcode old expected failures
+or old drop-in classifications into the runbook. Runtime truth changes as
+slices are deployed; use the tool's current output and inspect any non-zero
+result before proceeding.
 
 ## Safe deployment
 
@@ -322,20 +280,33 @@ git fetch origin
 git merge --ff-only origin/main
 ```
 
-Do not use `git reset --hard` on production. If fast-forward is impossible,
-stop and investigate the divergence.
+Do not use `git reset --hard` for a normal deployment. If fast-forward is
+impossible, stop and investigate the divergence. A deliberate emergency
+rollback is a separate procedure and must use the recorded known-good commit
+for that deployment.
 
 ### 4. Validate before restart
 
+If development dependencies exist in the current environment:
+
 ```bash
-PYTHONPATH=src python3 -m pytest -q
-python3 -m compileall -q src/catering_system
+uv run pytest -q
 ```
 
-If development dependencies are not installed on Lenovo, rely on the successful
-CI run for the exact commit and at least run `compileall` locally on the host.
+On production, where development dependencies may intentionally be absent,
+require successful CI for the exact commit and at minimum compile the affected
+runtime modules without changing dependencies:
+
+```bash
+PYTHONPATH=src:infra .venv/bin/python3 -m compileall -q src/catering_system infra/kitchen_print_agent
+```
 
 ### 5. Restart and verify
+
+Restart **only** services that need to load the deployed code. Do not copy every
+service name from an old deployment example.
+
+Example for an Office/Kiosk/Intake change:
 
 ```bash
 sudo systemctl restart \
@@ -349,20 +320,18 @@ systemctl is-active \
 sqlite3 /home/viktor/catering-runtime/core.db 'PRAGMA quick_check;'
 ```
 
-Then verify:
-
-- office login and dashboard over the private network;
-- kiosk week view;
-- unauthenticated intake request is rejected;
-- recent service journals contain no traceback or repeated restart.
+For a Kitchen Print Agent code change, restart only that agent unless the change
+also affects another runtime boundary:
 
 ```bash
-curl -i http://127.0.0.1:8083/intake/website-form
-journalctl -u catering-office-panel -u catering-kiosk \
-  -u catering-website-intake --since '10 minutes ago' --no-pager
+sudo systemctl restart kitchen-print-agent
+SYSTEMD_PAGER=cat systemctl show kitchen-print-agent \
+  -p ActiveState -p SubState -p MainPID -p NRestarts -p Result
+journalctl -u kitchen-print-agent --since '5 minutes ago' --no-pager
 ```
 
-The intake smoke request should return `405`, not `200`.
+Then verify the specific affected workflow. The detailed Kitchen Print checks
+live in `kitchen-print-verification.md`.
 
 ## PDF configuration (Offer/Confirmation documents)
 
@@ -413,10 +382,6 @@ Rollback is the standard [code-only rollback](#code-only-rollback) below
 checks) — no database restore and no environment-file change is ever needed
 for this slice.
 
-Systemd `ExecStart`/interpreter and dependency-installation changes are
-tracked separately (`PDF_RUNTIME_VENV_AND_SYSTEMD_V1`) and are not part of
-this procedure.
-
 ## Unit files
 
 The live units are in `/etc/systemd/system/`. Always inspect the effective unit
@@ -426,6 +391,7 @@ before changing it:
 systemctl cat catering-office-panel
 systemctl cat catering-kiosk
 systemctl cat catering-website-intake
+systemctl cat kitchen-print-agent
 ```
 
 After editing or installing a unit:
@@ -444,11 +410,15 @@ Code rollback and data rollback are different operations.
 
 Use only when the database schema remains compatible with the known-good code:
 
-1. identify the last known-good commit;
-2. switch the production checkout to that exact commit without deleting local
-   operator files;
-3. restart the affected services;
-4. run the smoke checks above.
+1. identify and record the last known-good commit for the deployment being
+   rolled back;
+2. move the production checkout to that exact known-good state using the
+   approved release/recovery procedure, without deleting operator files;
+3. restart only the affected services;
+4. run the relevant smoke checks and record the resulting runtime commit.
+
+A SHA recorded for one historical deployment is evidence for that deployment,
+not a permanent rollback target for future releases.
 
 ### Database restore
 
@@ -578,6 +548,7 @@ and re-check, don't attempt any manual `ALTER TABLE`.
 | Symptom | Check | Typical cause |
 |---|---|---|
 | service restart loop | `journalctl -u <service>` | invalid env, migration failure, wrong path |
+| kitchen print rejected | `journalctl -u kitchen-print-agent`; CUPS job state | printer/CUPS/API failure |
 | office returns 401 | environment file and username `office` | password mismatch |
 | kiosk empty | selected week and DB path | wrong week or unit points at wrong DB |
 | intake returns 401 | token pairing | Worker and receiver tokens differ |
@@ -587,6 +558,6 @@ and re-check, don't attempt any manual `ALTER TABLE`.
 ## Exposure rules
 
 - Never publish `8081` or `8082` to the internet.
-- Keep `8083` on `127.0.0.1`; publish only through the narrow Cloudflare path.
-- Never reuse the office password as the intake token.
+- Keep `8083` and `8086` loopback/private according to their service contracts.
+- Never reuse the office password as the intake or Kitchen Print Agent token.
 - Do not copy production `core.db` to the public VPS.
