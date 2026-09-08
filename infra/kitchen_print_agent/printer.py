@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import math
 import plistlib
 import subprocess
@@ -13,6 +14,8 @@ from typing import Protocol
 from xml.parsers.expat import ExpatError
 
 from kitchen_print_agent.errors import PrinterError
+
+_log = logging.getLogger(__name__)
 
 _PDF_CONTENT_TYPE = "application/pdf"
 _DEFAULT_WAIT_TIMEOUT_SECONDS = 300.0
@@ -206,6 +209,11 @@ class CupsPrinterAdapter:
                 "lp did not report a job id for the requested queue",
                 "invalid_printer_configuration",
             )
+        _log.info(
+            "submitted kitchen print to CUPS cups_job_id=%s printer=%s",
+            job_id,
+            self._printer_name,
+        )
         self._wait_for_completed_job(job_id, deadline=deadline)
 
     def _wait_for_completed_job(self, job_id: str, *, deadline: float) -> None:
@@ -222,6 +230,11 @@ class CupsPrinterAdapter:
                 else None
             )
             if state == 9:  # RFC 8011 completed; canceled=7 and aborted=8 are failures.
+                _log.info(
+                    "completed kitchen print in CUPS cups_job_id=%s printer=%s",
+                    job_id,
+                    self._printer_name,
+                )
                 return
             if state in {7, 8}:
                 raise PrinterError(
