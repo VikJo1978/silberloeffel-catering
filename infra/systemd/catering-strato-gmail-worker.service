@@ -1,0 +1,22 @@
+# STRATO Smart-Telefonassistent -> Gmail -> KI Telefonassistent inbox.
+# Google/OpenAI packages live in a small dedicated worker venv so the frozen
+# Core/Office runtime dependency set stays untouched.
+
+[Unit]
+Description=Catering STRATO Gmail AI call importer
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=viktor
+WorkingDirectory=/home/viktor/projects/silberloeffel-catering
+Environment=PYTHONPATH=/home/viktor/projects/silberloeffel-catering/src
+EnvironmentFile=/etc/catering/strato-gmail-worker.env
+ExecStart=/home/viktor/catering-runtime/strato-gmail-venv/bin/python3 scripts/strato_gmail_worker.py --db ${STRATO_GMAIL_DB_PATH} --token ${STRATO_GMAIL_TOKEN_PATH} --model ${STRATO_LLM_MODEL} --poll-seconds ${STRATO_GMAIL_POLL_SECONDS}
+Restart=always
+RestartSec=10
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
