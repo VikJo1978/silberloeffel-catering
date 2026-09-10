@@ -73,7 +73,7 @@ def create_ai_enabled_office_panel_server(
 
     from catering_system.ui.office_panel_http import make_office_panel_handler
 
-    base_handler = make_office_panel_handler(
+    base_handler: Any = make_office_panel_handler(
         inquiry_repo,
         order_repo,
         password,
@@ -237,6 +237,8 @@ def _manual_task_service(
     if auth_service is None:
         return None
     auth_repository = getattr(auth_service, "repository", None)
+    if auth_repository is None:
+        return None
     auth_connection = getattr(auth_repository, "_conn", None)
     if auth_connection is not connection:
         return None
