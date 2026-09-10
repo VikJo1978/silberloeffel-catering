@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, time
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from datetime import date, datetime, time
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any, Mapping
 
 _STRATO_FIELDS = (
@@ -163,7 +163,9 @@ def _text(value: object) -> str:
 def _optional_date(value: object, field: str) -> date | None:
     if value in (None, ""):
         return None
-    if isinstance(value, date) and not isinstance(value, type):
+    if isinstance(value, datetime):
+        raise TypeError(f"{field} must be ISO date string or date, not datetime")
+    if isinstance(value, date):
         return value
     if not isinstance(value, str):
         raise TypeError(f"{field} must be ISO date string or null")
@@ -196,10 +198,15 @@ def _optional_guest_count(value: object) -> int | None:
         return None
     if isinstance(value, bool):
         raise TypeError("guest_count must be integer or null")
-    try:
-        count = int(value)
-    except (TypeError, ValueError) as exc:
-        raise TypeError("guest_count must be integer or null") from exc
+    if isinstance(value, int):
+        count = value
+    elif isinstance(value, str):
+        try:
+            count = int(value.strip())
+        except ValueError as exc:
+            raise TypeError("guest_count must be integer or null") from exc
+    else:
+        raise TypeError("guest_count must be integer or null")
     if not (1 <= count <= _MAX_GUEST_COUNT):
         raise ValueError(f"guest_count must be between 1 and {_MAX_GUEST_COUNT}")
     return count
