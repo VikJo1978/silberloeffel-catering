@@ -10,7 +10,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time, timedelta
-from typing import Literal, cast
+from typing import Literal
 
 from catering_system.domain.inquiry import FulfillmentMode, validate_fulfillment_mode
 
@@ -85,7 +85,7 @@ def validate_ai_telefon_call_status(value: str) -> AiTelefonCallStatus:
         raise ValueError(
             f"status must be one of {sorted(AI_TELEFON_CALL_STATUS_SET)}, got {value!r}"
         )
-    return cast(AiTelefonCallStatus, value)
+    return value
 
 
 def validate_ai_telefon_call_result_type(value: str) -> AiTelefonCallResultType:
@@ -94,7 +94,7 @@ def validate_ai_telefon_call_result_type(value: str) -> AiTelefonCallResultType:
             "result_type must be one of "
             f"{sorted(AI_TELEFON_CALL_RESULT_TYPE_SET)}, got {value!r}"
         )
-    return cast(AiTelefonCallResultType, value)
+    return value
 
 
 def validate_ai_telefon_call_linked_type(value: str) -> AiTelefonCallLinkedType:
@@ -103,7 +103,7 @@ def validate_ai_telefon_call_linked_type(value: str) -> AiTelefonCallLinkedType:
             "linked_type must be one of "
             f"{sorted(AI_TELEFON_CALL_LINKED_TYPE_SET)}, got {value!r}"
         )
-    return cast(AiTelefonCallLinkedType, value)
+    return value
 
 
 def validate_ai_telefon_call(call: AiTelefonCall) -> AiTelefonCall:
