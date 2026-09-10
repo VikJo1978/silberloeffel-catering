@@ -1,0 +1,45 @@
+name: KI Telefonassistent format once
+
+on:
+  push:
+    branches:
+      - feat/ki-telefonassistent-inbox
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: feat/ki-telefonassistent-inbox
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          version: "0.11.32"
+          python-version: "3.12"
+      - run: uv sync --dev
+      - name: Format KI Telefonassistent files
+        run: |
+          uv run ruff format \
+            src/catering_system/intake/strato_summary_email.py \
+            src/catering_system/repositories/ai_telefon_call_repository.py \
+            src/catering_system/repositories/sqlite_ai_telefon_call_repository.py \
+            src/catering_system/services/ai_telefon_call_service.py \
+            src/catering_system/ui/office_panel_ai_runtime.py \
+            src/catering_system/ui/office_panel_ai_telefonist.py \
+            tests/unit/test_ai_telefon_call_repository.py \
+            tests/unit/test_ai_telefon_call_service.py
+      - name: Commit formatting
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/catering_system tests/unit
+          git commit -m "Format KI Telefonassistent files"
+          git push origin HEAD:feat/ki-telefonassistent-inbox
