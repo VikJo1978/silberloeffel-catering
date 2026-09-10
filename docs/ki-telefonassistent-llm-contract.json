@@ -1,0 +1,15 @@
+{
+  "email": null,
+  "event_type": null,
+  "event_date": null,
+  "event_period": null,
+  "event_start": null,
+  "guest_count": null,
+  "location": null,
+  "budget_per_person": null,
+  "fulfillment_mode": "UNKNOWN",
+  "customer_request": null,
+  "callback_requested": null,
+  "callback_date": null,
+  "callback_time": null
+}
