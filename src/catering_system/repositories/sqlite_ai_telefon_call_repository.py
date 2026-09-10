@@ -73,9 +73,7 @@ def _migration_1_create_table(connection: sqlite3.Connection) -> None:
         connection.execute(statement)
 
 
-_MIGRATIONS = (
-    (1, "create_ai_telefon_calls", _migration_1_create_table),
-)
+_MIGRATIONS = ((1, "create_ai_telefon_calls", _migration_1_create_table),)
 
 
 class SQLiteAiTelefonCallRepository:
@@ -216,7 +214,9 @@ def _values(call: AiTelefonCall) -> tuple[object, ...]:
         call.customer_request,
         None if call.callback_requested is None else int(call.callback_requested),
         call.callback_date.isoformat() if call.callback_date else None,
-        call.callback_time.isoformat(timespec="minutes") if call.callback_time else None,
+        call.callback_time.isoformat(timespec="minutes")
+        if call.callback_time
+        else None,
         call.status,
         call.result_type,
         call.result_id,
@@ -259,7 +259,9 @@ def _row_to_call(row: tuple[object, ...]) -> AiTelefonCall:
             linked_type=cast(AiTelefonCallLinkedType | None, row[24]),
             linked_id=cast(str | None, row[25]),
             received_at=datetime.fromisoformat(cast(str, row[26])),
-            processed_at=datetime.fromisoformat(cast(str, row[27])) if row[27] else None,
+            processed_at=datetime.fromisoformat(cast(str, row[27]))
+            if row[27]
+            else None,
             updated_at=datetime.fromisoformat(cast(str, row[28])),
         )
     )

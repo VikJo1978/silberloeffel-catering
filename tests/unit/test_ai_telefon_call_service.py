@@ -7,7 +7,9 @@ import pytest
 from catering_system.repositories.sqlite_ai_telefon_call_repository import (
     SQLiteAiTelefonCallRepository,
 )
-from catering_system.repositories.sqlite_inquiry_repository import SQLiteInquiryRepository
+from catering_system.repositories.sqlite_inquiry_repository import (
+    SQLiteInquiryRepository,
+)
 from catering_system.services.ai_telefon_call_service import (
     AiTelefonCallCannotConvert,
     AiTelefonCallService,

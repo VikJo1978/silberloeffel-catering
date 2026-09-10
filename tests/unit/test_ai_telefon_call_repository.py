@@ -5,7 +5,9 @@ from datetime import UTC, date, datetime, time
 import pytest
 
 from catering_system.domain.ai_telefon_call import AiTelefonCall
-from catering_system.repositories.ai_telefon_call_repository import DuplicateAiTelefonCallError
+from catering_system.repositories.ai_telefon_call_repository import (
+    DuplicateAiTelefonCallError,
+)
 from catering_system.repositories.sqlite_ai_telefon_call_repository import (
     SQLiteAiTelefonCallRepository,
 )
@@ -57,7 +59,9 @@ def test_duplicate_strato_id_is_rejected(tmp_path) -> None:
     try:
         repo.save(_call(strato_id="same", gmail_message_id="gmail-1"))
         duplicate = _call(strato_id="same", gmail_message_id="gmail-2")
-        duplicate = AiTelefonCall(**{**duplicate.__dict__, "call_id": "88d2656a-f17c-4686-9f91-b6b9bad20a7c"})
+        duplicate = AiTelefonCall(
+            **{**duplicate.__dict__, "call_id": "88d2656a-f17c-4686-9f91-b6b9bad20a7c"}
+        )
         with pytest.raises(DuplicateAiTelefonCallError):
             repo.save(duplicate)
     finally:

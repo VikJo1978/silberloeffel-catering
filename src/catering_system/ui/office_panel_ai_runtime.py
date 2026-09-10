@@ -172,9 +172,7 @@ def create_ai_enabled_office_panel_server(
                         lambda: call_service.convert_to_inquiry(call_id)
                     )
                     assert updated.result_id is not None
-                    self._redirect(
-                        f"/inquiry/{quote(updated.result_id, safe='')}"
-                    )
+                    self._redirect(f"/inquiry/{quote(updated.result_id, safe='')}")
                     return
 
                 if action == "aufgabe":
@@ -201,9 +199,7 @@ def create_ai_enabled_office_panel_server(
                         )
                     )
                     assert updated.result_id is not None
-                    self._redirect(
-                        f"/aufgaben/{quote(updated.result_id, safe='')}"
-                    )
+                    self._redirect(f"/aufgaben/{quote(updated.result_id, safe='')}")
                     return
 
                 if action == "erledigt":
@@ -263,12 +259,16 @@ def _inject_ai_nav(page: str, handler: Any, call_service: AiTelefonCallService) 
     auth = getattr(handler, "_request_auth", None)
     if auth is None or not can_access(auth, "queue.view"):
         return page
-    current = ' aria-current="page"' if handler.path.startswith("/ki-telefonassistent") else ""
+    current = (
+        ' aria-current="page"'
+        if handler.path.startswith("/ki-telefonassistent")
+        else ""
+    )
     count = call_service.count_new()
     badge = f'<span class="badge">{count}</span>' if count else ""
     link = (
         f'<a class="office-nav-link" href="/ki-telefonassistent"{current}>'
         '<svg aria-hidden="true"><use href="#office-i-phone"></use></svg>'
-        f'<span>KI Telefonassistent</span>{badge}</a>'
+        f"<span>KI Telefonassistent</span>{badge}</a>"
     )
     return page.replace(marker, link + marker, 1)

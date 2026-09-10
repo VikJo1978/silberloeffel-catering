@@ -37,9 +37,9 @@ def render_ai_telefon_calls(
         body = (
             '<p class="subtitle">Gespräche des STRATO Smart-Telefonassistenten.</p>'
             '<div class="inquiry-card inquiry-content-card">'
-            '<h2>Noch keine Gespräche</h2>'
+            "<h2>Noch keine Gespräche</h2>"
             '<p class="inquiry-section-note">Neue STRATO-Zusammenfassungen erscheinen hier automatisch.</p>'
-            '</div>'
+            "</div>"
         )
         return _page(
             "KI Telefonassistent", body, active_section=_ACTIVE_SECTION, context=context
@@ -59,7 +59,7 @@ def render_ai_telefon_calls(
             '<span class="chat-meta">{}{}</span></div>'
             '<div class="chat-preview">{}</div>'
             '<div class="chat-meta">{} · {}</div>'
-            '</a>'.format(
+            "</a>".format(
                 " unread" if call.status == "NEW" else "",
                 _e(call.call_id),
                 _e(customer),
@@ -73,17 +73,15 @@ def render_ai_telefon_calls(
 
     body = (
         '<div class="dashboard-page-header">'
-        '<div><h1>KI Telefonassistent</h1>'
+        "<div><h1>KI Telefonassistent</h1>"
         '<p class="subtitle">STRATO-Gespräche prüfen und anschließend gezielt übernehmen.</p></div>'
         f'<span class="dashboard-button">{new_count} neu</span>'
-        '</div>'
+        "</div>"
         '<div class="chat-layout">'
-        '<div class="chat-thread-list">'
-        + "".join(rows)
-        + '</div>'
+        '<div class="chat-thread-list">' + "".join(rows) + "</div>"
         '<div class="chat-thread-view">'
         '<p class="chat-empty">Gespräch links auswählen.</p>'
-        '</div></div>'
+        "</div></div>"
     )
     return _page(
         "KI Telefonassistent", body, active_section=_ACTIVE_SECTION, context=context
@@ -113,7 +111,7 @@ def render_ai_telefon_call_detail(
         ("Rückruf", _callback_label(call)),
     ]
     fact_html = "".join(
-        '<div><dt>{}</dt><dd>{}</dd></div>'.format(
+        "<div><dt>{}</dt><dd>{}</dd></div>".format(
             _e(label), _e(value or "Nicht angegeben")
         )
         for label, value in facts
@@ -138,7 +136,7 @@ def render_ai_telefon_call_detail(
                 missing.append("Telefon")
             actions.append(
                 '<p class="inquiry-section-note">Anfrage noch nicht direkt übernehmbar. '
-                'Fehlt: {}.</p>'.format(_e(", ".join(missing)))
+                "Fehlt: {}.</p>".format(_e(", ".join(missing)))
             )
         if context.employee_account_id:
             actions.append(
@@ -172,16 +170,16 @@ def render_ai_telefon_call_detail(
         + error_html
         + '<section class="inquiry-hero">'
         '<div><div class="inquiry-eyebrow">KI Telefonassistent</div>'
-        f'<h1>{_e(customer)}</h1>'
+        f"<h1>{_e(customer)}</h1>"
         '<div class="inquiry-hero-facts">'
-        f'<span>{_e(call.caller_phone or "Keine Telefonnummer")}</span>'
-        f'<span>{_e(_format_datetime(call.received_at))}</span>'
-        f'<span>STRATO-ID {_e(call.strato_id)}</span>'
-        '</div></div>'
+        f"<span>{_e(call.caller_phone or 'Keine Telefonnummer')}</span>"
+        f"<span>{_e(_format_datetime(call.received_at))}</span>"
+        f"<span>STRATO-ID {_e(call.strato_id)}</span>"
+        "</div></div>"
         '<div class="inquiry-state-panel"><span>Status</span>'
-        f'<strong>{_e(status)}</strong>'
-        f'<p>{_e(call.subject or "Telefonat")}</p></div>'
-        '</section>'
+        f"<strong>{_e(status)}</strong>"
+        f"<p>{_e(call.subject or 'Telefonat')}</p></div>"
+        "</section>"
         '<div class="inquiry-detail-layout"><div class="inquiry-detail-main">'
         '<section class="inquiry-card inquiry-content-card"><h2>Gespräch</h2>'
         f'<p class="inquiry-message">{_e(call.summary)}</p></section>'
@@ -189,21 +187,21 @@ def render_ai_telefon_call_detail(
         f'<dl class="inquiry-facts-list">{fact_html}</dl></section>'
         '<details class="inquiry-edit"><summary>Technische Originaldaten</summary>'
         '<div class="inquiry-edit-body">'
-        f'<p><strong>Gmail Message-ID:</strong> {_e(call.gmail_message_id)}</p>'
+        f"<p><strong>Gmail Message-ID:</strong> {_e(call.gmail_message_id)}</p>"
         f'<pre class="inquiry-message">{_e(call.raw_message)}</pre>'
-        '</div></details></div>'
+        "</div></details></div>"
         '<aside class="inquiry-detail-side">'
         '<section class="inquiry-card inquiry-content-card"><h2>Kontakt</h2>'
         '<dl class="inquiry-facts-list single">'
-        f'<div><dt>Name</dt><dd>{_e(call.contact_name or "Nicht angegeben")}</dd></div>'
-        f'<div><dt>Telefon</dt><dd>{_e(call.caller_phone or "Nicht angegeben")}</dd></div>'
-        f'<div><dt>E-Mail</dt><dd>{_e(call.email or "Nicht angegeben")}</dd></div>'
-        '</dl></section>'
+        f"<div><dt>Name</dt><dd>{_e(call.contact_name or 'Nicht angegeben')}</dd></div>"
+        f"<div><dt>Telefon</dt><dd>{_e(call.caller_phone or 'Nicht angegeben')}</dd></div>"
+        f"<div><dt>E-Mail</dt><dd>{_e(call.email or 'Nicht angegeben')}</dd></div>"
+        "</dl></section>"
         '<section class="inquiry-next-step"><h2>Weiterverarbeiten</h2>'
-        '<p>Erst hier wird aus dem Gespräch ein echter Geschäftsvorgang.</p>'
+        "<p>Erst hier wird aus dem Gespräch ein echter Geschäftsvorgang.</p>"
         '<div class="chat-composer-actions">'
         + "".join(actions)
-        + '</div></section></aside></div>'
+        + "</div></section></aside></div>"
     )
     return _page(
         f"KI Telefonassistent · {customer}",

@@ -7,7 +7,10 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Callable
 
-from catering_system.domain.ai_telefon_call import AiTelefonCall, validate_ai_telefon_call
+from catering_system.domain.ai_telefon_call import (
+    AiTelefonCall,
+    validate_ai_telefon_call,
+)
 from catering_system.repositories.ai_telefon_call_repository import (
     AiTelefonCallRepository,
     DuplicateAiTelefonCallError,
@@ -220,7 +223,10 @@ class AiTelefonCallService:
         if self._manual_task_service is None:
             raise AiTelefonCallCannotConvert("task conversion is not configured")
 
-        title = current.subject or f"Telefonanruf: {current.contact_name or current.caller_phone}"
+        title = (
+            current.subject
+            or f"Telefonanruf: {current.contact_name or current.caller_phone}"
+        )
         description_lines = [current.summary]
         if current.caller_phone:
             description_lines.append(f"Telefon: {current.caller_phone}")
