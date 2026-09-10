@@ -239,10 +239,10 @@ def _manual_task_service(
     auth_repository = getattr(auth_service, "repository", None)
     if auth_repository is None:
         return None
-    auth_connection = getattr(auth_repository, "_conn", None)
-    if auth_connection is not connection:
-        return None
 
+    # Keep the task write on the same Core connection as the AiTelefonCall
+    # update so CoreCommandExecutor can commit both facts atomically. The auth
+    # repository may legitimately use another connection to the same DB.
     repository = SQLiteManualTaskRepository.from_connection(connection)
 
     def employee_exists(employee_id: str) -> bool:
@@ -255,8 +255,8 @@ def _manual_task_service(
 def _inject_ai_nav(page: str, handler: Any, call_service: AiTelefonCallService) -> str:
     """Add one sidebar entry without modifying the large shared page renderer."""
 
-    marker = "</nav>"
-    if marker not in page or "/ki-telefonassistent" in page.split(marker, 1)[0]:
+    nav_end = "</nav>"
+    if nav_end not in page or "/ki-telefonassistent" in page.split(nav_end, 1)[0]:
         return page
     auth = getattr(handler, "_request_auth", None)
     if auth is None or not can_access(auth, "queue.view"):
@@ -273,4 +273,10 @@ def _inject_ai_nav(page: str, handler: Any, call_service: AiTelefonCallService) 
         '<svg aria-hidden="true"><use href="#office-i-phone"></use></svg>'
         f"<span>KI Telefonassistent</span>{badge}</a>"
     )
-    return page.replace(marker, link + marker, 1)
+
+    # Place it beside the other Vertrieb work queues when Aufgaben is visible;
+    # otherwise append it to the nav as a safe fallback.
+    tasks_link = '<a class="office-nav-link" href="/aufgaben"'
+    if tasks_link in page:
+        return page.replace(tasks_link, link + tasks_link, 1)
+    return page.replace(nav_end, link + nav_end, 1)
