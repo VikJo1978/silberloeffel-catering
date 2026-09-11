@@ -436,9 +436,7 @@ def test_richtangebot_runtime_routes_and_offer_injection(monkeypatch) -> None:
         handler._route_get()
         assert handler.base_get_called is True
 
-        handler._route_post(
-            ["ki-telefonassistent", call.call_id, "richtangebot"]
-        )
+        handler._route_post(["ki-telefonassistent", call.call_id, "richtangebot"])
         assert handler.redirect_path.startswith("/richtangebot/")
         updated = call_repo.get(call.call_id)
         assert updated is not None
