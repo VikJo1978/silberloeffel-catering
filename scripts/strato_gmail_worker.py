@@ -24,6 +24,7 @@ from zoneinfo import ZoneInfo
 
 from catering_system.intake.strato_summary_email import (
     llm_extraction_contract,
+    llm_extraction_json_schema,
     parse_strato_summary_mail,
     structured_call_facts_from_mapping,
 )
@@ -78,8 +79,7 @@ Referenzzeit des eingegangenen Anrufs in Europe/Berlin: {reference_local.isoform
 
 Regeln:
 - Erfinde nichts. Nicht genannte Werte sind null.
-- Gib ausschließlich ein JSON-Objekt aus, keinen Markdown-Block und keine Erklärung.
-- Verwende exakt die Schlüssel des Schemas unten.
+- Verwende exakt die vorgegebenen Felder.
 - event_date und callback_date: YYYY-MM-DD oder null.
 - event_start und callback_time: HH:MM oder null.
 - Wenn nur ein Zeitraum wie "im Januar" bekannt ist, bleibt event_date null und event_period enthält den genannten Zeitraum.
@@ -90,7 +90,7 @@ Regeln:
 - customer_request enthält nur geäußerte Wünsche/Besonderheiten, keine Empfehlung.
 - callback_requested ist true, false oder null.
 
-JSON-Schema-Beispiel:
+Erwartete Felder:
 {contract}
 
 STRATO-Zusammenfassung:
@@ -130,6 +130,14 @@ def _openai_structured_facts(
     response = client.responses.create(
         model=model,
         input=_prompt(summary, reference_time),
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": "strato_call_facts",
+                "strict": True,
+                "schema": llm_extraction_json_schema(),
+            }
+        },
     )
     output_text = getattr(response, "output_text", "")
     if not isinstance(output_text, str) or not output_text.strip():
