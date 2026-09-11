@@ -94,7 +94,7 @@ def _handler_fixture(monkeypatch):
         get_order=lambda order_id: None,
     )
     repository = SQLiteAiTelefonCallRepository.from_connection(connection)
-    repository.insert(_call())
+    repository.save(_call())
     server = create_ai_enabled_office_panel_server(
         inquiry_repo,
         order_repo,
