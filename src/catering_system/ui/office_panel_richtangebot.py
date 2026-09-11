@@ -64,7 +64,7 @@ def render_richtangebot_detail(
         f'<p class="inquiry-message">{_e(value.customer_request or "Nicht angegeben")}</p></section>'
         '<section class="inquiry-card inquiry-content-card"><h2>Hinweis</h2>'
         f'<p class="inquiry-message">{_e(value.disclaimer)}</p></section>'
-        '<aside class="inquiry-detail-side">'
+        '</div><aside class="inquiry-detail-side">'
         '<section class="inquiry-card inquiry-content-card"><h2>Kontakt</h2>'
         '<dl class="inquiry-facts-list single">'
         f"<div><dt>Name</dt><dd>{_e(value.contact_name or 'Nicht angegeben')}</dd></div>"
