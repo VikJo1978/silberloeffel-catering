@@ -68,7 +68,9 @@ class SQLiteRichtangebotRepository:
             raise
 
     @classmethod
-    def from_connection(cls, connection: sqlite3.Connection) -> "SQLiteRichtangebotRepository":
+    def from_connection(
+        cls, connection: sqlite3.Connection
+    ) -> "SQLiteRichtangebotRepository":
         repo = cls.__new__(cls)
         repo._conn = connection
         repo._manage_transactions = False
