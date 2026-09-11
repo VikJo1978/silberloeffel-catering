@@ -15,6 +15,7 @@ from catering_system.repositories.ai_telefon_call_repository import (
 from catering_system.repositories.inquiry_repository import InquiryRepository
 from catering_system.services.inquiry_service import InquiryService
 from catering_system.services.manual_task_service import ManualTaskService
+from catering_system.services.richtangebot_service import RichtangebotService
 
 Clock = Callable[[], datetime]
 IdFactory = Callable[[], str]
@@ -32,6 +33,7 @@ class AiTelefonCallService:
         inquiry_repository: InquiryRepository | None = None,
         inquiry_service: InquiryService | None = None,
         manual_task_service: ManualTaskService | None = None,
+        richtangebot_service: RichtangebotService | None = None,
         now: Clock | None = None,
         id_factory: IdFactory | None = None,
     ) -> None:
@@ -39,6 +41,7 @@ class AiTelefonCallService:
         self._inquiry_repository = inquiry_repository
         self._inquiry_service = inquiry_service
         self._manual_task_service = manual_task_service
+        self._richtangebot_service = richtangebot_service
         self._now = now or (lambda: datetime.now(UTC))
         self._id_factory = id_factory or (lambda: str(uuid.uuid4()))
 
@@ -142,8 +145,6 @@ class AiTelefonCallService:
             raise AiTelefonCallCannotConvert("inquiry conversion is not configured")
         if current.event_date is None:
             raise AiTelefonCallCannotConvert("event_date_required")
-        if current.guest_count is None and current.guest_count_min is not None:
-            raise AiTelefonCallCannotConvert("exact_guest_count_required")
         if not current.contact_name:
             raise AiTelefonCallCannotConvert("contact_name_required")
         if not current.caller_phone:
@@ -206,6 +207,27 @@ class AiTelefonCallService:
                 status="PROCESSED",
                 result_type="INQUIRY",
                 result_id=inquiry.inquiry_id,
+                processed_at=current.processed_at or now,
+                updated_at=now,
+            )
+        )
+        self._repository.update(updated)
+        return updated
+
+    def convert_to_richtangebot(self, call_id: str) -> AiTelefonCall:
+        current = self._require_call(call_id)
+        if current.result_type == "RICHTANGEBOT" and current.result_id is not None:
+            return current
+        if self._richtangebot_service is None:
+            raise AiTelefonCallCannotConvert("richtangebot conversion is not configured")
+        value = self._richtangebot_service.create_from_call(current)
+        now = self._now()
+        updated = validate_ai_telefon_call(
+            replace(
+                current,
+                status="PROCESSED",
+                result_type="RICHTANGEBOT",
+                result_id=value.richtangebot_id,
                 processed_at=current.processed_at or now,
                 updated_at=now,
             )
