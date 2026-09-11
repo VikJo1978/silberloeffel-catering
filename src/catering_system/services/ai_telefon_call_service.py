@@ -7,7 +7,10 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Callable
 
-from catering_system.domain.ai_telefon_call import AiTelefonCall, validate_ai_telefon_call
+from catering_system.domain.ai_telefon_call import (
+    AiTelefonCall,
+    validate_ai_telefon_call,
+)
 from catering_system.repositories.ai_telefon_call_repository import (
     AiTelefonCallRepository,
     DuplicateAiTelefonCallError,
@@ -133,7 +136,9 @@ class AiTelefonCallService:
         current = self._require_call(call_id)
         if current.status == "DONE":
             return current
-        updated = validate_ai_telefon_call(replace(current, status="DONE", updated_at=self._now()))
+        updated = validate_ai_telefon_call(
+            replace(current, status="DONE", updated_at=self._now())
+        )
         self._repository.update(updated)
         return updated
 
@@ -157,7 +162,10 @@ class AiTelefonCallService:
             message_lines = [current.summary]
             if current.event_period:
                 message_lines.append(f"Zeitraum: {current.event_period}")
-            if current.guest_count_min is not None and current.guest_count_max is not None:
+            if (
+                current.guest_count_min is not None
+                and current.guest_count_max is not None
+            ):
                 message_lines.append(
                     f"Gäste: ca. {current.guest_count_min}–{current.guest_count_max}"
                 )
@@ -180,7 +188,9 @@ class AiTelefonCallService:
                 crm_stage="Neue Anfrage",
                 customer_linkage={},
                 time_window_text=(
-                    f"ab {current.event_start.strftime('%H:%M')} Uhr" if current.event_start else ""
+                    f"ab {current.event_start.strftime('%H:%M')} Uhr"
+                    if current.event_start
+                    else ""
                 ),
                 location_text=current.location,
                 guest_count_estimate=current.guest_count,
@@ -219,7 +229,9 @@ class AiTelefonCallService:
         if current.result_type == "RICHTANGEBOT" and current.result_id is not None:
             return current
         if self._richtangebot_service is None:
-            raise AiTelefonCallCannotConvert("richtangebot conversion is not configured")
+            raise AiTelefonCallCannotConvert(
+                "richtangebot conversion is not configured"
+            )
         value = self._richtangebot_service.create_from_call(current)
         now = self._now()
         updated = validate_ai_telefon_call(
@@ -248,7 +260,10 @@ class AiTelefonCallService:
         if self._manual_task_service is None:
             raise AiTelefonCallCannotConvert("task conversion is not configured")
 
-        title = current.subject or f"Telefonanruf: {current.contact_name or current.caller_phone}"
+        title = (
+            current.subject
+            or f"Telefonanruf: {current.contact_name or current.caller_phone}"
+        )
         description_lines = [current.summary]
         if current.caller_phone:
             description_lines.append(f"Telefon: {current.caller_phone}")
@@ -277,7 +292,9 @@ class AiTelefonCallService:
         self._repository.update(updated)
         return updated
 
-    def link_existing(self, call_id: str, *, linked_type: str, linked_id: str) -> AiTelefonCall:
+    def link_existing(
+        self, call_id: str, *, linked_type: str, linked_id: str
+    ) -> AiTelefonCall:
         current = self._require_call(call_id)
         now = self._now()
         updated = validate_ai_telefon_call(
