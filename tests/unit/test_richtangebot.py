@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from datetime import UTC, date, datetime, time, timezone
 from http.server import BaseHTTPRequestHandler
 from types import SimpleNamespace
@@ -89,51 +90,31 @@ def test_richtangebot_accepts_exact_values_and_normalizes_text() -> None:
 
 
 def test_richtangebot_validation_rejects_invalid_business_facts() -> None:
-    now = datetime(2026, 9, 11, 14, 0, tzinfo=UTC)
     base = _value(value_id=30, source_id=31)
+    earlier = datetime(2026, 9, 11, 13, 0, tzinfo=UTC)
 
     with pytest.raises(ValueError, match="updated_at"):
-        validate_richtangebot(
-            Richtangebot(
-                **{
-                    **base.__dict__,
-                    "updated_at": datetime(2026, 9, 11, 13, 0, tzinfo=UTC),
-                }
-            )
-        )
+        validate_richtangebot(replace(base, updated_at=earlier))
+
     with pytest.raises(TypeError, match="event_start"):
-        validate_richtangebot(
-            Richtangebot(**{**base.__dict__, "event_start": "16:00"})
-        )  # type: ignore[arg-type]
+        validate_richtangebot(replace(base, event_start="16:00"))  # type: ignore[arg-type]
+
     with pytest.raises(ValueError, match="wall-clock"):
-        validate_richtangebot(
-            Richtangebot(
-                **{
-                    **base.__dict__,
-                    "event_start": time(16, 0, tzinfo=timezone.utc),
-                }
-            )
-        )
+        validate_richtangebot(replace(base, event_start=time(16, 0, tzinfo=timezone.utc)))
+
     with pytest.raises(ValueError, match="cannot be combined"):
-        validate_richtangebot(Richtangebot(**{**base.__dict__, "guest_count": 120}))
+        validate_richtangebot(replace(base, guest_count=120))
+
     with pytest.raises(ValueError, match="set together"):
-        validate_richtangebot(
-            Richtangebot(**{**base.__dict__, "guest_count_max": None})
-        )
+        validate_richtangebot(replace(base, guest_count_max=None))
+
     with pytest.raises(ValueError, match="must not exceed"):
-        validate_richtangebot(
-            Richtangebot(
-                **{
-                    **base.__dict__,
-                    "guest_count_min": 160,
-                    "guest_count_max": 150,
-                }
-            )
-        )
+        validate_richtangebot(replace(base, guest_count_min=160, guest_count_max=150))
+
     with pytest.raises(ValueError, match="invalid Richtangebot status"):
-        validate_richtangebot(
-            Richtangebot(**{**base.__dict__, "status": "INVALID"})
-        )  # type: ignore[arg-type]
+        validate_richtangebot(replace(base, status="INVALID"))  # type: ignore[arg-type]
+
+    now = datetime(2026, 9, 11, 14, 0, tzinfo=UTC)
     with pytest.raises(ValueError, match="customer contact"):
         validate_richtangebot(
             Richtangebot(
@@ -144,6 +125,7 @@ def test_richtangebot_validation_rejects_invalid_business_facts() -> None:
                 event_type="Taufe",
             )
         )
+
     with pytest.raises(ValueError, match="event or commercial fact"):
         validate_richtangebot(
             Richtangebot(
@@ -158,46 +140,28 @@ def test_richtangebot_validation_rejects_invalid_business_facts() -> None:
 
 def test_richtangebot_validation_rejects_bad_primitives() -> None:
     base = _value(value_id=40, source_id=41)
+
     with pytest.raises(ValueError, match="UUID"):
-        validate_richtangebot(
-            Richtangebot(**{**base.__dict__, "richtangebot_id": "nope"})
-        )
+        validate_richtangebot(replace(base, richtangebot_id="nope"))
+
     with pytest.raises(TypeError, match="text field"):
-        validate_richtangebot(
-            Richtangebot(**{**base.__dict__, "event_type": 123})
-        )  # type: ignore[arg-type]
+        validate_richtangebot(replace(base, event_type=123))  # type: ignore[arg-type]
+
     with pytest.raises(ValueError, match="disclaimer"):
-        validate_richtangebot(Richtangebot(**{**base.__dict__, "disclaimer": ""}))
+        validate_richtangebot(replace(base, disclaimer=""))
+
+    no_range = replace(base, guest_count_min=None, guest_count_max=None)
     with pytest.raises(TypeError, match="guest_count"):
-        validate_richtangebot(
-            Richtangebot(
-                **{
-                    **base.__dict__,
-                    "guest_count_min": None,
-                    "guest_count_max": None,
-                    "guest_count": True,
-                }
-            )
-        )
+        validate_richtangebot(replace(no_range, guest_count=True))  # type: ignore[arg-type]
+
     with pytest.raises(ValueError, match="guest_count"):
-        validate_richtangebot(
-            Richtangebot(
-                **{
-                    **base.__dict__,
-                    "guest_count_min": None,
-                    "guest_count_max": None,
-                    "guest_count": 0,
-                }
-            )
-        )
+        validate_richtangebot(replace(no_range, guest_count=0))
+
     with pytest.raises(TypeError, match="budget_per_person_cents"):
-        validate_richtangebot(
-            Richtangebot(**{**base.__dict__, "budget_per_person_cents": True})
-        )
+        validate_richtangebot(replace(base, budget_per_person_cents=True))  # type: ignore[arg-type]
+
     with pytest.raises(ValueError, match="budget_per_person_cents"):
-        validate_richtangebot(
-            Richtangebot(**{**base.__dict__, "budget_per_person_cents": -1})
-        )
+        validate_richtangebot(replace(base, budget_per_person_cents=-1))
 
 
 def test_richtangebot_repository_roundtrip_update_and_list() -> None:
@@ -217,13 +181,13 @@ def test_richtangebot_repository_roundtrip_update_and_list() -> None:
     assert repo.list_recent(limit=0) == []
     assert repo.list_recent(limit=10) == [loaded]
 
-    updated = Richtangebot(**{**loaded.__dict__, "customer_request": "Geändert"})
+    updated = replace(loaded, customer_request="Geändert")
     repo.update(updated)
     reloaded = repo.get(value.richtangebot_id)
     assert reloaded is not None
     assert reloaded.customer_request == "Geändert"
 
-    missing = Richtangebot(**{**updated.__dict__, "richtangebot_id": _uuid(99)})
+    missing = replace(updated, richtangebot_id=_uuid(99))
     with pytest.raises(KeyError):
         repo.update(missing)
 
@@ -289,20 +253,18 @@ def test_richtangebot_views_cover_exact_range_and_empty_list() -> None:
     assert render_richtangebote_section([]) == ""
 
     exact = validate_richtangebot(
-        Richtangebot(
-            **{
-                **value.__dict__,
-                "richtangebot_id": _uuid(52),
-                "source_call_id": _uuid(53),
-                "event_date": date(2027, 5, 1),
-                "event_date_text": "",
-                "event_start": time(16, 30),
-                "event_time_text": "",
-                "guest_count": 120,
-                "guest_count_min": None,
-                "guest_count_max": None,
-                "budget_per_person_cents": None,
-            }
+        replace(
+            value,
+            richtangebot_id=_uuid(52),
+            source_call_id=_uuid(53),
+            event_date=date(2027, 5, 1),
+            event_date_text="",
+            event_start=time(16, 30),
+            event_time_text="",
+            guest_count=120,
+            guest_count_min=None,
+            guest_count_max=None,
+            budget_per_person_cents=None,
         )
     )
     exact_html = render_richtangebot_detail(exact, context=context)
