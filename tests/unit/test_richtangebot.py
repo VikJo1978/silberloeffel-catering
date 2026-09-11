@@ -113,9 +113,7 @@ def test_richtangebot_validation_rejects_invalid_business_facts() -> None:
         validate_richtangebot(replace(base, guest_count_max=None))
 
     with pytest.raises(ValueError, match="must not exceed"):
-        validate_richtangebot(
-            replace(base, guest_count_min=160, guest_count_max=150)
-        )
+        validate_richtangebot(replace(base, guest_count_min=160, guest_count_max=150))
 
     with pytest.raises(ValueError, match="invalid Richtangebot status"):
         validate_richtangebot(
@@ -310,24 +308,20 @@ def test_richtangebot_runtime_wraps_local_server_and_leaves_remote_untouched(
         fake_server,
     )
 
-    remote = (
-        office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
-            object(),
-            object(),
-            "pw",
-            remote=object(),
-        )
+    remote = office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
+        object(),
+        object(),
+        "pw",
+        remote=object(),
     )
     assert remote.RequestHandlerClass is DummyHandler
 
     connection = sqlite3.connect(":memory:")
     try:
-        local = (
-            office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
-                SimpleNamespace(_conn=connection),
-                object(),
-                "pw",
-            )
+        local = office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
+            SimpleNamespace(_conn=connection),
+            object(),
+            "pw",
         )
         assert local.RequestHandlerClass.__name__ == "RichtangebotEnabledHandler"
     finally:
