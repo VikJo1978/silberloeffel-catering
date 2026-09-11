@@ -26,6 +26,37 @@ ID: 07a45b4c-68e4-424e-a670-372c3d50df92
     assert parsed.strato_id == "07a45b4c-68e4-424e-a670-372c3d50df92"
 
 
+def test_parse_real_strato_plain_text_with_standalone_labels() -> None:
+    raw = """STRATO Smart-Telefonassistent
+Neuer Anruf
+
+Anrufer: +4917642795029
+
+Name
+Viktor Merkel
+
+Telefonnummer
++49 176 42795029
+
+Betreff
+Catering-Anfrage für Geburtstagsfeier am 12.01.2027
+
+Zusammenfassung
+Herr Viktor Merkel rief an, um ein Catering für seine Geburtstagsfeier
+am 12.01.2027 um 16:45 Uhr in Hamburg zu organisieren.
+
+ID: 07a45b4c-68e4-424e-a670-372c3d50df92
+"""
+
+    parsed = parse_strato_summary_mail(raw)
+
+    assert parsed.name == "Viktor Merkel"
+    assert parsed.phone == "+4917642795029"
+    assert parsed.subject.startswith("Catering-Anfrage")
+    assert "16:45" in parsed.summary
+    assert parsed.strato_id == "07a45b4c-68e4-424e-a670-372c3d50df92"
+
+
 def test_structured_facts_keep_missing_values_missing() -> None:
     facts = structured_call_facts_from_mapping(
         {
