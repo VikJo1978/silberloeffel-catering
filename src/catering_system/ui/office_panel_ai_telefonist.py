@@ -24,6 +24,7 @@ _STATUS_LABELS = {
 }
 _RESULT_LABELS = {
     "INQUIRY": "Anfrage",
+    "RICHTANGEBOT": "Richtangebot",
     "TASK": "Aufgabe",
     "LINKED": "Verknüpft",
 }
@@ -55,9 +56,7 @@ def render_ai_telefon_calls(
             '<p class="inquiry-section-note">Neue STRATO-Zusammenfassungen erscheinen hier automatisch.</p>'
             "</div>"
         )
-        return _page(
-            "KI Telefonassistent", body, active_section=_ACTIVE_SECTION, context=context
-        )
+        return _page("KI Telefonassistent", body, active_section=_ACTIVE_SECTION, context=context)
 
     new_count = sum(call.status == "NEW" for call in calls)
     rows = []
@@ -97,9 +96,7 @@ def render_ai_telefon_calls(
         '<p class="chat-empty">Gespräch links auswählen.</p>'
         "</div></div>"
     )
-    return _page(
-        "KI Telefonassistent", body, active_section=_ACTIVE_SECTION, context=context
-    )
+    return _page("KI Telefonassistent", body, active_section=_ACTIVE_SECTION, context=context)
 
 
 def render_ai_telefon_call_detail(
@@ -119,7 +116,7 @@ def render_ai_telefon_call_detail(
         ("Datum", _format_date(call.event_date)),
         ("Zeitraum", call.event_period),
         ("Beginn", _format_time(call.event_start)),
-        ("Gäste", str(call.guest_count) if call.guest_count is not None else ""),
+        ("Gäste", _guest_text(call)),
         ("Ort", call.location),
         ("Budget", _format_budget(call.budget_per_person_cents)),
         ("Lieferung / Abholung", _fulfillment_label(call.fulfillment_mode)),
@@ -127,9 +124,7 @@ def render_ai_telefon_call_detail(
         ("Rückruf", _callback_label(call)),
     ]
     fact_html = "".join(
-        "<div><dt>{}</dt><dd>{}</dd></div>".format(
-            _e(label), _e(value or "Nicht angegeben")
-        )
+        "<div><dt>{}</dt><dd>{}</dd></div>".format(_e(label), _e(value or "Nicht angegeben"))
         for label, value in facts
     )
 
@@ -154,6 +149,22 @@ def render_ai_telefon_call_detail(
                 '<p class="inquiry-section-note">Anfrage noch nicht direkt übernehmbar. '
                 "Fehlt: {}.</p>".format(_e(", ".join(missing)))
             )
+
+        commercial_missing = _commercial_missing(call)
+        if commercial_missing:
+            actions.append(
+                '<p class="inquiry-section-note">Für ein konkretes Angebot noch offen: {}. '
+                "Ein Richtangebot kann ohne erfundene Werte erstellt werden.</p>".format(
+                    _e(", ".join(commercial_missing))
+                )
+            )
+            actions.append(
+                '<form method="post" action="/ki-telefonassistent/{}/richtangebot">{}'
+                '<button class="inquiry-button">Richtangebot erstellen</button></form>'.format(
+                    _e(call.call_id), _csrf_input(context)
+                )
+            )
+
         if context.employee_account_id:
             actions.append(
                 '<form method="post" action="/ki-telefonassistent/{}/aufgabe">{}'
@@ -161,9 +172,7 @@ def render_ai_telefon_call_detail(
                     _e(call.call_id), _csrf_input(context)
                 )
             )
-        actions.append(
-            _render_link_existing(call, context, link_query, link_candidates)
-        )
+        actions.append(_render_link_existing(call, context, link_query, link_candidates))
         actions.append(
             '<form method="post" action="/ki-telefonassistent/{}/erledigt">{}'
             '<button class="inquiry-button secondary">Erledigt</button></form>'.format(
@@ -187,9 +196,7 @@ def render_ai_telefon_call_detail(
             )
 
     error_html = (
-        f'<div class="inquiry-notice blocked">{_e(error_message)}</div>'
-        if error_message
-        else ""
+        f'<div class="inquiry-notice blocked">{_e(error_message)}</div>' if error_message else ""
     )
     body = (
         '<a class="inquiry-back" href="/ki-telefonassistent">← Alle Gespräche</a>'
@@ -237,6 +244,25 @@ def render_ai_telefon_call_detail(
     )
 
 
+def _commercial_missing(call: AiTelefonCall) -> list[str]:
+    missing = []
+    if call.event_date is None:
+        missing.append("genaues Datum")
+    if call.event_start is None:
+        missing.append("genaue Zeit")
+    if call.guest_count is None:
+        missing.append("genaue Gästezahl")
+    return missing
+
+
+def _guest_text(call: AiTelefonCall) -> str:
+    if call.guest_count is not None:
+        return str(call.guest_count)
+    if call.guest_count_min is not None and call.guest_count_max is not None:
+        return f"ca. {call.guest_count_min}–{call.guest_count_max}"
+    return ""
+
+
 def _render_link_existing(
     call: AiTelefonCall,
     context: OfficePageContext,
@@ -262,11 +288,7 @@ def _render_link_existing(
     else:
         rows = []
         for candidate in candidates:
-            details = (
-                f'<div class="chat-meta">{_e(candidate.details)}</div>'
-                if candidate.details
-                else ""
-            )
+            details = f'<div class="chat-meta">{_e(candidate.details)}</div>' if candidate.details else ""
             rows.append(
                 '<form method="post" action="/ki-telefonassistent/{}/verknuepfen">{}'
                 '<input type="hidden" name="linked_type" value="{}">'
@@ -307,9 +329,7 @@ def _format_budget(cents: int | None) -> str:
 
 
 def _fulfillment_label(value: str) -> str:
-    return {"DELIVERY": "Lieferung", "PICKUP": "Abholung", "UNKNOWN": ""}.get(
-        value, value
-    )
+    return {"DELIVERY": "Lieferung", "PICKUP": "Abholung", "UNKNOWN": ""}.get(value, value)
 
 
 def _callback_label(call: AiTelefonCall) -> str:
@@ -328,6 +348,8 @@ def _callback_label(call: AiTelefonCall) -> str:
 def _result_href(result_type: str, result_id: str) -> str:
     if result_type == "INQUIRY":
         return f"/inquiry/{result_id}"
+    if result_type == "RICHTANGEBOT":
+        return f"/richtangebot/{result_id}"
     if result_type == "TASK":
         return f"/aufgaben/{result_id}"
     return ""
