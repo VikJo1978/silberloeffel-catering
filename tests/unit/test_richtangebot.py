@@ -18,6 +18,9 @@ from catering_system.domain.richtangebot import (
     Richtangebot,
     validate_richtangebot,
 )
+from catering_system.repositories.sqlite_ai_telefon_call_repository import (
+    SQLiteAiTelefonCallRepository,
+)
 from catering_system.repositories.sqlite_richtangebot_repository import (
     SQLiteRichtangebotRepository,
 )
@@ -324,5 +327,131 @@ def test_richtangebot_runtime_wraps_local_server_and_leaves_remote_untouched(
             "pw",
         )
         assert local.RequestHandlerClass.__name__ == "RichtangebotEnabledHandler"
+    finally:
+        connection.close()
+
+
+def test_richtangebot_runtime_routes_and_offer_injection(monkeypatch) -> None:
+    class DummyHandler:
+        _request_auth = object()
+        path = "/"
+
+        def __init__(self) -> None:
+            self.last_html = ""
+            self.last_status = 0
+            self.error_status = 0
+            self.redirect_path = ""
+            self.base_get_called = False
+            self.base_post_parts: list[str] | None = None
+
+        def _require_business_permission_get(self, *args, **kwargs) -> bool:
+            return True
+
+        def _require_business_permission_post(self, *args, **kwargs) -> bool:
+            return True
+
+        def _page_context(self) -> OfficePageContext:
+            return OfficePageContext(
+                csrf_token="csrf",
+                employee_account_id="employee-1",
+            )
+
+        def send_error(self, status: int) -> None:
+            self.error_status = status
+
+        def _redirect(self, path: str) -> None:
+            self.redirect_path = path
+
+        def _route_get(self) -> None:
+            self.base_get_called = True
+
+        def _route_post(self, parts: list[str]) -> None:
+            self.base_post_parts = parts
+
+        def _html(
+            self,
+            page: str,
+            status: int = 200,
+            *,
+            cookie_headers: tuple[str, ...] = (),
+        ) -> None:
+            self.last_html = page
+            self.last_status = status
+
+    def fake_server(*args, **kwargs):
+        return SimpleNamespace(RequestHandlerClass=DummyHandler)
+
+    monkeypatch.setattr(
+        office_panel_richtangebot_runtime,
+        "create_ai_enabled_office_panel_server",
+        fake_server,
+    )
+
+    connection = sqlite3.connect(":memory:")
+    try:
+        richt_repo = SQLiteRichtangebotRepository.from_connection(connection)
+        richt_value = _value(value_id=60, source_id=61)
+        richt_repo.save(richt_value)
+
+        call_repo = SQLiteAiTelefonCallRepository.from_connection(connection)
+        now = datetime(2026, 9, 11, 14, 0, tzinfo=UTC)
+        call = validate_ai_telefon_call(
+            AiTelefonCall(
+                call_id=_uuid(62),
+                strato_id="strato-runtime",
+                gmail_message_id="gmail-runtime",
+                caller_phone="+49123",
+                contact_name="Runtime Kunde",
+                email="",
+                subject="Taufe",
+                summary="Taufe für 100 bis 150 Personen.",
+                raw_message="raw",
+                event_type="Taufe",
+                event_period="im nächsten Jahr",
+                guest_count_min=100,
+                guest_count_max=150,
+                location="Hamburg",
+                received_at=now,
+                updated_at=now,
+            )
+        )
+        call_repo.save(call)
+
+        server = office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
+            SimpleNamespace(_conn=connection),
+            object(),
+            "pw",
+        )
+        handler = server.RequestHandlerClass()
+
+        handler.path = f"/richtangebot/{richt_value.richtangebot_id}"
+        handler._route_get()
+        assert "Richtangebot" in handler.last_html
+
+        handler.path = "/richtangebot/does-not-exist"
+        handler._route_get()
+        assert handler.error_status == 404
+
+        handler.path = "/anderer-pfad"
+        handler._route_get()
+        assert handler.base_get_called is True
+
+        handler._route_post(
+            ["ki-telefonassistent", call.call_id, "richtangebot"]
+        )
+        assert handler.redirect_path.startswith("/richtangebot/")
+        updated = call_repo.get(call.call_id)
+        assert updated is not None
+        assert updated.result_type == "RICHTANGEBOT"
+
+        handler.path = "/angebote"
+        handler._html(
+            '<main><p><a href="/">← Zurück zur Arbeitszentrale</a></p></main>'
+        )
+        assert richt_value.richtangebot_id in handler.last_html
+        assert handler.last_status == 200
+
+        handler._route_post(["anderer-pfad"])
+        assert handler.base_post_parts == ["anderer-pfad"]
     finally:
         connection.close()
