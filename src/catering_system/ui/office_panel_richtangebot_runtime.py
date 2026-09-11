@@ -23,7 +23,7 @@ from catering_system.ui.office_panel_richtangebot import (
 )
 from catering_system.ui.office_panel_shell import OfficeSection
 
-_OFFERS_SECTION = cast(OfficeSection, "offers")
+_OFFERS_SECTION: OfficeSection = "offers"
 _AI_SECTION = cast(OfficeSection, "ai_phone")
 
 
@@ -54,7 +54,7 @@ def create_richtangebot_enabled_office_panel_server(
     call_repo = SQLiteAiTelefonCallRepository.from_connection(connection)
     call_service = AiTelefonCallService(call_repo, richtangebot_service=richt_service)
     command_executor = kwargs.get("command_executor")
-    base_handler = server.RequestHandlerClass
+    base_handler: Any = server.RequestHandlerClass
 
     class RichtangebotEnabledHandler(base_handler):
         def _run_richtangebot_write(self, work):
