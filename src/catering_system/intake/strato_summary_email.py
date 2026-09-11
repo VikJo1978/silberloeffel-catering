@@ -43,6 +43,8 @@ class StructuredCallFacts:
     event_period: str = ""
     event_start: time | None = None
     guest_count: int | None = None
+    guest_count_min: int | None = None
+    guest_count_max: int | None = None
     location: str = ""
     budget_per_person_cents: int | None = None
     fulfillment_mode: str = "UNKNOWN"
@@ -106,13 +108,25 @@ def structured_call_facts_from_mapping(raw: Mapping[str, Any]) -> StructuredCall
     if not isinstance(raw, Mapping):
         raise TypeError("structured call facts must be a mapping")
 
+    guest_count = _optional_guest_count(raw.get("guest_count"), "guest_count")
+    guest_min = _optional_guest_count(raw.get("guest_count_min"), "guest_count_min")
+    guest_max = _optional_guest_count(raw.get("guest_count_max"), "guest_count_max")
+    if guest_count is not None and (guest_min is not None or guest_max is not None):
+        raise ValueError("guest_count cannot be combined with guest_count_min/max")
+    if (guest_min is None) != (guest_max is None):
+        raise ValueError("guest_count_min and guest_count_max must be set together")
+    if guest_min is not None and guest_max is not None and guest_min > guest_max:
+        raise ValueError("guest_count_min must not exceed guest_count_max")
+
     return StructuredCallFacts(
         email=_text(raw.get("email")),
         event_type=_text(raw.get("event_type")),
         event_date=_optional_date(raw.get("event_date"), "event_date"),
         event_period=_text(raw.get("event_period")),
         event_start=_optional_time(raw.get("event_start"), "event_start"),
-        guest_count=_optional_guest_count(raw.get("guest_count")),
+        guest_count=guest_count,
+        guest_count_min=guest_min,
+        guest_count_max=guest_max,
         location=_text(raw.get("location")),
         budget_per_person_cents=_optional_budget_cents(
             raw.get("budget_per_person")
@@ -122,9 +136,7 @@ def structured_call_facts_from_mapping(raw: Mapping[str, Any]) -> StructuredCall
         ),
         fulfillment_mode=_fulfillment(raw.get("fulfillment_mode")),
         customer_request=_text(raw.get("customer_request")),
-        callback_requested=_optional_bool(
-            raw.get("callback_requested"), "callback_requested"
-        ),
+        callback_requested=_optional_bool(raw.get("callback_requested"), "callback_requested"),
         callback_date=_optional_date(raw.get("callback_date"), "callback_date"),
         callback_time=_optional_time(raw.get("callback_time"), "callback_time"),
     )
@@ -139,6 +151,8 @@ def llm_extraction_contract() -> dict[str, object]:
         "event_period": None,
         "event_start": None,
         "guest_count": None,
+        "guest_count_min": None,
+        "guest_count_max": None,
         "location": None,
         "budget_per_person": None,
         "fulfillment_mode": "UNKNOWN",
@@ -151,9 +165,12 @@ def llm_extraction_contract() -> dict[str, object]:
 
 def llm_extraction_json_schema() -> dict[str, object]:
     """Strict JSON Schema used by the OpenAI Responses API Structured Outputs."""
-
-    nullable_string: dict[str, object] = {
-        "anyOf": [{"type": "string"}, {"type": "null"}]
+    nullable_string: dict[str, object] = {"anyOf": [{"type": "string"}, {"type": "null"}]}
+    nullable_guest: dict[str, object] = {
+        "anyOf": [
+            {"type": "integer", "minimum": 1, "maximum": _MAX_GUEST_COUNT},
+            {"type": "null"},
+        ]
     }
     properties: dict[str, object] = {
         "email": nullable_string,
@@ -161,12 +178,9 @@ def llm_extraction_json_schema() -> dict[str, object]:
         "event_date": nullable_string,
         "event_period": nullable_string,
         "event_start": nullable_string,
-        "guest_count": {
-            "anyOf": [
-                {"type": "integer", "minimum": 1, "maximum": _MAX_GUEST_COUNT},
-                {"type": "null"},
-            ]
-        },
+        "guest_count": nullable_guest,
+        "guest_count_min": nullable_guest,
+        "guest_count_max": nullable_guest,
         "location": nullable_string,
         "budget_per_person": {
             "anyOf": [{"type": "number", "minimum": 0}, {"type": "null"}]
@@ -234,22 +248,22 @@ def _optional_time(value: object, field: str) -> time | None:
     return parsed.replace(second=0, microsecond=0)
 
 
-def _optional_guest_count(value: object) -> int | None:
+def _optional_guest_count(value: object, field: str) -> int | None:
     if value in (None, ""):
         return None
     if isinstance(value, bool):
-        raise TypeError("guest_count must be integer or null")
+        raise TypeError(f"{field} must be integer or null")
     if isinstance(value, int):
         count = value
     elif isinstance(value, str):
         try:
             count = int(value.strip())
         except ValueError as exc:
-            raise TypeError("guest_count must be integer or null") from exc
+            raise TypeError(f"{field} must be integer or null") from exc
     else:
-        raise TypeError("guest_count must be integer or null")
+        raise TypeError(f"{field} must be integer or null")
     if not (1 <= count <= _MAX_GUEST_COUNT):
-        raise ValueError(f"guest_count must be between 1 and {_MAX_GUEST_COUNT}")
+        raise ValueError(f"{field} must be between 1 and {_MAX_GUEST_COUNT}")
     return count
 
 
