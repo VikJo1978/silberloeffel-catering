@@ -48,7 +48,7 @@ def render_richtangebot_detail(
         f"<span>{_e(_guest_text(value))} Gäste</span>"
         "</div></div>"
         '<div class="inquiry-state-panel"><span>Status</span><strong>Richtangebot</strong>'
-        '<p>Unverbindliche Budget- und Leistungsorientierung</p></div>'
+        "<p>Unverbindliche Budget- und Leistungsorientierung</p></div>"
         "</section>"
         '<div class="inquiry-detail-layout"><div class="inquiry-detail-main">'
         '<section class="inquiry-card inquiry-content-card"><h2>Rahmendaten</h2>'
@@ -72,7 +72,7 @@ def render_richtangebot_detail(
         f"<div><dt>E-Mail</dt><dd>{_e(value.email or 'Nicht angegeben')}</dd></div>"
         "</dl></section>"
         '<section class="inquiry-next-step"><h2>Nächster Schritt</h2>'
-        '<p>Sobald Datum, Zeit, Gästezahl und Leistungsumfang konkret sind, kann daraus eine normale Anfrage und anschließend ein verbindliches Angebot entstehen.</p>'
+        "<p>Sobald Datum, Zeit, Gästezahl und Leistungsumfang konkret sind, kann daraus eine normale Anfrage und anschließend ein verbindliches Angebot entstehen.</p>"
         "</section></aside></div>"
     )
     return _page(
@@ -103,7 +103,7 @@ def render_richtangebote_section(values: list[Richtangebot]) -> str:
         '<section class="offer-queue-section">'
         f"<h2>Richtangebote ({len(values)})</h2>"
         '<p class="muted">Unverbindliche Budget- und Leistungsorientierung bei noch offenen Eckdaten.</p>'
-        '<table><tr><th>Kunde</th><th>Datum</th><th>Zeit</th><th>Gäste</th><th>Budget</th><th></th></tr>'
+        "<table><tr><th>Kunde</th><th>Datum</th><th>Zeit</th><th>Gäste</th><th>Budget</th><th></th></tr>"
         + "".join(rows)
         + "</table></section>"
     )
