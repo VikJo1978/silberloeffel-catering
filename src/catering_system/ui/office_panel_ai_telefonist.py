@@ -161,7 +161,9 @@ def render_ai_telefon_call_detail(
                     _e(call.call_id), _csrf_input(context)
                 )
             )
-        actions.append(_render_link_existing(call, context, link_query, link_candidates))
+        actions.append(
+            _render_link_existing(call, context, link_query, link_candidates)
+        )
         actions.append(
             '<form method="post" action="/ki-telefonassistent/{}/erledigt">{}'
             '<button class="inquiry-button secondary">Erledigt</button></form>'.format(
@@ -269,7 +271,7 @@ def _render_link_existing(
                 '<form method="post" action="/ki-telefonassistent/{}/verknuepfen">{}'
                 '<input type="hidden" name="linked_type" value="{}">'
                 '<input type="hidden" name="linked_id" value="{}">'
-                '<div><strong>{}</strong>{}</div>'
+                "<div><strong>{}</strong>{}</div>"
                 '<button class="inquiry-button secondary" type="submit">Verknüpfen</button>'
                 "</form>".format(
                     _e(call.call_id),

@@ -131,7 +131,9 @@ def create_ai_enabled_office_panel_server(
                 return command_executor.run(work)
             return work()
 
-        def _ai_link_candidates(self, query: str, auth: Any) -> tuple[AiTelefonLinkCandidate, ...]:
+        def _ai_link_candidates(
+            self, query: str, auth: Any
+        ) -> tuple[AiTelefonLinkCandidate, ...]:
             allowed_types = frozenset(
                 linked_type
                 for linked_type, permission in _LINK_VIEW_PERMISSIONS.items()
@@ -148,7 +150,9 @@ def create_ai_enabled_office_panel_server(
 
         def _render_ai_detail(self, call: Any, *, error_message: str = "") -> None:
             parsed = urlparse(self.path)
-            query = parse_qs(parsed.query, keep_blank_values=True).get("q", [""])[0].strip()
+            query = (
+                parse_qs(parsed.query, keep_blank_values=True).get("q", [""])[0].strip()
+            )
             self._html(
                 render_ai_telefon_call_detail(
                     call,
@@ -380,7 +384,11 @@ def _link_candidates(
         for order in order_repo.list_orders():
             inquiry = inquiry_by_id.get(order.source_inquiry_id)
             versions = order_repo.list_order_versions(order.order_id)
-            latest = max(versions, key=lambda version: version.version_number) if versions else None
+            latest = (
+                max(versions, key=lambda version: version.version_number)
+                if versions
+                else None
+            )
             if not _matches_link_query(needle, order, inquiry, latest):
                 continue
             source_title, _ = _inquiry_candidate_text(inquiry)

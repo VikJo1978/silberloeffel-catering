@@ -40,7 +40,9 @@ def _call() -> AiTelefonCall:
 
 
 def test_render_link_search_and_select_controls() -> None:
-    context = OfficePageContext(csrf_token="csrf-token", employee_account_id="employee-1")
+    context = OfficePageContext(
+        csrf_token="csrf-token", employee_account_id="employee-1"
+    )
     candidate = AiTelefonLinkCandidate(
         linked_type="OFFER",
         linked_id=_OFFER_ID,
@@ -122,13 +124,16 @@ def test_link_candidates_searches_inquiry_offer_and_order_context() -> None:
         "ORDER",
     ]
     assert all("Viktor Schmidt" in candidate.title for candidate in candidates)
-    assert _link_candidates(
-        "S",
-        inquiry_repo,
-        order_repo,
-        offer_repo,
-        allowed_types=frozenset({"INQUIRY", "OFFER", "ORDER"}),
-    ) == ()
+    assert (
+        _link_candidates(
+            "S",
+            inquiry_repo,
+            order_repo,
+            offer_repo,
+            allowed_types=frozenset({"INQUIRY", "OFFER", "ORDER"}),
+        )
+        == ()
+    )
     order_only = _link_candidates(
         "Schmidt",
         inquiry_repo,
@@ -143,7 +148,9 @@ def test_link_target_existence_checks_real_repository_lookup() -> None:
     inquiry_repo = SimpleNamespace(
         get_by_id=lambda value: object() if value == _INQUIRY_ID else None
     )
-    offer_repo = SimpleNamespace(get=lambda value: object() if value == _OFFER_ID else None)
+    offer_repo = SimpleNamespace(
+        get=lambda value: object() if value == _OFFER_ID else None
+    )
     order_repo = SimpleNamespace(
         get_order=lambda value: object() if value == _ORDER_ID else None
     )
@@ -151,10 +158,14 @@ def test_link_target_existence_checks_real_repository_lookup() -> None:
     assert _linked_target_exists(
         "INQUIRY", _INQUIRY_ID, inquiry_repo, order_repo, offer_repo
     )
-    assert _linked_target_exists("OFFER", _OFFER_ID, inquiry_repo, order_repo, offer_repo)
-    assert _linked_target_exists("ORDER", _ORDER_ID, inquiry_repo, order_repo, offer_repo)
-    assert not _linked_target_exists(
-        "OFFER", _OFFER_ID, inquiry_repo, order_repo, None
+    assert _linked_target_exists(
+        "OFFER", _OFFER_ID, inquiry_repo, order_repo, offer_repo
     )
-    assert not _linked_target_exists("CONTACT", _INQUIRY_ID, inquiry_repo, order_repo, offer_repo)
+    assert _linked_target_exists(
+        "ORDER", _ORDER_ID, inquiry_repo, order_repo, offer_repo
+    )
+    assert not _linked_target_exists("OFFER", _OFFER_ID, inquiry_repo, order_repo, None)
+    assert not _linked_target_exists(
+        "CONTACT", _INQUIRY_ID, inquiry_repo, order_repo, offer_repo
+    )
     assert not _linked_target_exists("ORDER", "", inquiry_repo, order_repo, offer_repo)
