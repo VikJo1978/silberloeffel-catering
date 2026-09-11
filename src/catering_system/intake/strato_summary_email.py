@@ -150,7 +150,9 @@ def llm_extraction_contract() -> dict[str, object]:
 def llm_extraction_json_schema() -> dict[str, object]:
     """Strict JSON Schema used by the OpenAI Responses API Structured Outputs."""
 
-    nullable_string: dict[str, object] = {"anyOf": [{"type": "string"}, {"type": "null"}]}
+    nullable_string: dict[str, object] = {
+        "anyOf": [{"type": "string"}, {"type": "null"}]
+    }
     properties: dict[str, object] = {
         "email": nullable_string,
         "event_type": nullable_string,
