@@ -83,7 +83,6 @@ def _configured_service(tmp_path):
         inquiry_repository=inquiry_repo,
         inquiry_service=InquiryService(inquiry_repo),
         now=lambda: _NOW,
-        id_factory=lambda: _CALL_ID,
     )
     return service, call_repo, inquiry_repo
 
@@ -448,7 +447,6 @@ def test_service_task_conversion_and_linking(tmp_path) -> None:
         call_repo,
         manual_task_service=fake_tasks,  # type: ignore[arg-type]
         now=lambda: _NOW,
-        id_factory=lambda: _CALL_ID,
     )
     try:
         call = service.ingest(
