@@ -97,10 +97,14 @@ def test_richtangebot_validation_rejects_invalid_business_facts() -> None:
         validate_richtangebot(replace(base, updated_at=earlier))
 
     with pytest.raises(TypeError, match="event_start"):
-        validate_richtangebot(replace(base, event_start="16:00"))  # type: ignore[arg-type]
+        validate_richtangebot(
+            replace(base, event_start="16:00")  # type: ignore[arg-type]
+        )
 
     with pytest.raises(ValueError, match="wall-clock"):
-        validate_richtangebot(replace(base, event_start=time(16, 0, tzinfo=timezone.utc)))
+        validate_richtangebot(
+            replace(base, event_start=time(16, 0, tzinfo=timezone.utc))
+        )
 
     with pytest.raises(ValueError, match="cannot be combined"):
         validate_richtangebot(replace(base, guest_count=120))
@@ -109,10 +113,14 @@ def test_richtangebot_validation_rejects_invalid_business_facts() -> None:
         validate_richtangebot(replace(base, guest_count_max=None))
 
     with pytest.raises(ValueError, match="must not exceed"):
-        validate_richtangebot(replace(base, guest_count_min=160, guest_count_max=150))
+        validate_richtangebot(
+            replace(base, guest_count_min=160, guest_count_max=150)
+        )
 
     with pytest.raises(ValueError, match="invalid Richtangebot status"):
-        validate_richtangebot(replace(base, status="INVALID"))  # type: ignore[arg-type]
+        validate_richtangebot(
+            replace(base, status="INVALID")  # type: ignore[arg-type]
+        )
 
     now = datetime(2026, 9, 11, 14, 0, tzinfo=UTC)
     with pytest.raises(ValueError, match="customer contact"):
@@ -145,20 +153,29 @@ def test_richtangebot_validation_rejects_bad_primitives() -> None:
         validate_richtangebot(replace(base, richtangebot_id="nope"))
 
     with pytest.raises(TypeError, match="text field"):
-        validate_richtangebot(replace(base, event_type=123))  # type: ignore[arg-type]
+        validate_richtangebot(
+            replace(base, event_type=123)  # type: ignore[arg-type]
+        )
 
     with pytest.raises(ValueError, match="disclaimer"):
         validate_richtangebot(replace(base, disclaimer=""))
 
     no_range = replace(base, guest_count_min=None, guest_count_max=None)
     with pytest.raises(TypeError, match="guest_count"):
-        validate_richtangebot(replace(no_range, guest_count=True))  # type: ignore[arg-type]
+        validate_richtangebot(
+            replace(no_range, guest_count=True)  # type: ignore[arg-type]
+        )
 
     with pytest.raises(ValueError, match="guest_count"):
         validate_richtangebot(replace(no_range, guest_count=0))
 
     with pytest.raises(TypeError, match="budget_per_person_cents"):
-        validate_richtangebot(replace(base, budget_per_person_cents=True))  # type: ignore[arg-type]
+        validate_richtangebot(
+            replace(
+                base,
+                budget_per_person_cents=True,  # type: ignore[arg-type]
+            )
+        )
 
     with pytest.raises(ValueError, match="budget_per_person_cents"):
         validate_richtangebot(replace(base, budget_per_person_cents=-1))
@@ -238,7 +255,10 @@ def test_service_creates_richtangebot_from_incomplete_ai_call_idempotently() -> 
 
 def test_richtangebot_views_cover_exact_range_and_empty_list() -> None:
     value = validate_richtangebot(_value(value_id=50, source_id=51))
-    context = OfficePageContext(csrf_token="csrf", employee_account_id="employee-1")
+    context = OfficePageContext(
+        csrf_token="csrf",
+        employee_account_id="employee-1",
+    )
 
     detail = render_richtangebot_detail(value, context=context)
     listing = render_richtangebote_section([value])
@@ -290,15 +310,24 @@ def test_richtangebot_runtime_wraps_local_server_and_leaves_remote_untouched(
         fake_server,
     )
 
-    remote = office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
-        object(), object(), "pw", remote=object()
+    remote = (
+        office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
+            object(),
+            object(),
+            "pw",
+            remote=object(),
+        )
     )
     assert remote.RequestHandlerClass is DummyHandler
 
     connection = sqlite3.connect(":memory:")
     try:
-        local = office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
-            SimpleNamespace(_conn=connection), object(), "pw"
+        local = (
+            office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
+                SimpleNamespace(_conn=connection),
+                object(),
+                "pw",
+            )
         )
         assert local.RequestHandlerClass.__name__ == "RichtangebotEnabledHandler"
     finally:
