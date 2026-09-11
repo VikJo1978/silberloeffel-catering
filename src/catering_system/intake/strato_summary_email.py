@@ -63,7 +63,7 @@ def parse_strato_summary_mail(raw_text: str) -> StratoSummaryMail:
     current: str | None = None
     buffers: dict[str, list[str]] = {field: [] for field in _STRATO_FIELDS}
     field_pattern = re.compile(
-        r"^(Anrufer|Name|Telefonnummer|Betreff|Zusammenfassung|ID)\s*:\s*(.*)$",
+        r"^(Anrufer|Name|Telefonnummer|Betreff|Zusammenfassung|ID)(?:\s*:\s*(.*))?$",
         re.IGNORECASE,
     )
     canonical = {field.lower(): field for field in _STRATO_FIELDS}
@@ -72,7 +72,9 @@ def parse_strato_summary_mail(raw_text: str) -> StratoSummaryMail:
         match = field_pattern.match(line.strip())
         if match:
             current = canonical[match.group(1).lower()]
-            buffers[current].append(match.group(2).strip())
+            inline_value = match.group(2)
+            if inline_value is not None:
+                buffers[current].append(inline_value.strip())
             continue
         if current is not None:
             buffers[current].append(line.rstrip())
