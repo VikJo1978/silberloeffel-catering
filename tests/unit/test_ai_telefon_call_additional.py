@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import replace
 from datetime import UTC, date, datetime, time, timezone, timedelta
 from types import SimpleNamespace
 
@@ -475,9 +474,12 @@ def test_service_task_conversion_and_linking(tmp_path) -> None:
         assert task_result.result_id == _RESULT_ID
         assert fake_tasks.kwargs["title"] == "Telefonanruf: Viktor Schmidt"
         assert "STRATO-ID: strato-task" in str(fake_tasks.kwargs["description"])
-        assert service.convert_to_task(
-            call.call_id, created_by_employee_id=_RESULT_ID
-        ) == task_result
+        assert (
+            service.convert_to_task(
+                call.call_id, created_by_employee_id=_RESULT_ID
+            )
+            == task_result
+        )
 
         second = service.ingest(
             strato_id="strato-link",
