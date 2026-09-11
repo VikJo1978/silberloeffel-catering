@@ -14,7 +14,9 @@ from catering_system.repositories.sqlite_richtangebot_repository import (
 )
 from catering_system.services.ai_telefon_call_service import AiTelefonCallService
 from catering_system.services.richtangebot_service import RichtangebotService
-from catering_system.ui.office_panel_ai_runtime import create_ai_enabled_office_panel_server
+from catering_system.ui.office_panel_ai_runtime import (
+    create_ai_enabled_office_panel_server,
+)
 from catering_system.ui.office_panel_richtangebot import (
     render_richtangebot_detail,
     render_richtangebote_section,
@@ -42,7 +44,9 @@ def create_richtangebot_enabled_office_panel_server(
         **kwargs,
     )
     connection = getattr(inquiry_repo, "_conn", None)
-    if kwargs.get("remote") is not None or not isinstance(connection, sqlite3.Connection):
+    if kwargs.get("remote") is not None or not isinstance(
+        connection, sqlite3.Connection
+    ):
         return server
 
     richt_repo = SQLiteRichtangebotRepository.from_connection(connection)
