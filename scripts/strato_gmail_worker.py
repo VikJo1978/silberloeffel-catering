@@ -4,9 +4,6 @@ The worker reads only STRATO Smart-Telefonassistent summaries, parses the
 stable outer mail format deterministically, asks an LLM only for semantic facts
 from the free-text summary, validates those facts through the Core parser, and
 then inserts one deduplicated AiTelefonCall row into core.db.
-
-Google and OpenAI SDKs intentionally live in the worker venv rather than the
-Core runtime dependency set.
 """
 
 from __future__ import annotations
@@ -28,9 +25,7 @@ from catering_system.intake.strato_summary_email import (
     parse_strato_summary_mail,
     structured_call_facts_from_mapping,
 )
-from catering_system.repositories.sqlite_ai_telefon_call_repository import (
-    SQLiteAiTelefonCallRepository,
-)
+from catering_system.repositories.sqlite_ai_telefon_call_repository import SQLiteAiTelefonCallRepository
 from catering_system.services.ai_telefon_call_service import AiTelefonCallService
 
 STRATO_SENDER = "noreply@ai-voicereceptionist.com"
@@ -44,9 +39,7 @@ def _plain_text(payload: dict[str, Any]) -> str:
     data = body.get("data")
     mime_type = payload.get("mimeType", "")
     if mime_type == "text/plain" and data:
-        return base64.urlsafe_b64decode(str(data) + "===").decode(
-            "utf-8", errors="replace"
-        )
+        return base64.urlsafe_b64decode(str(data) + "===").decode("utf-8", errors="replace")
     for part in payload.get("parts", []) or []:
         text = _plain_text(part)
         if text:
@@ -84,7 +77,9 @@ Regeln:
 - event_start und callback_time: HH:MM oder null.
 - Wenn nur ein Zeitraum wie "im Januar" bekannt ist, bleibt event_date null und event_period enthält den genannten Zeitraum.
 - Relative Angaben wie "morgen" dürfen nur relativ zur Referenzzeit aufgelöst werden.
-- guest_count ist eine ganze Zahl oder null.
+- Bei exakt genannter Gästezahl: guest_count setzen, guest_count_min und guest_count_max null.
+- Bei einem Bereich wie "100 bis 150 Personen": guest_count null, guest_count_min=100 und guest_count_max=150.
+- Keine einzelne Zahl aus einem Gäste-Bereich erfinden oder auswählen.
 - budget_per_person ist der Euro-Betrag pro Person als Zahl oder null.
 - fulfillment_mode ist ausschließlich UNKNOWN, DELIVERY oder PICKUP.
 - customer_request enthält nur geäußerte Wünsche/Besonderheiten, keine Empfehlung.
@@ -119,9 +114,7 @@ def _openai_structured_facts(
     try:
         from openai import OpenAI
     except ImportError as exc:
-        raise RuntimeError(
-            "OpenAI SDK fehlt im Worker-vEnv. Installieren: pip install openai"
-        ) from exc
+        raise RuntimeError("OpenAI SDK fehlt im Worker-vEnv. Installieren: pip install openai") from exc
 
     if not os.environ.get("OPENAI_API_KEY", "").strip():
         raise RuntimeError("OPENAI_API_KEY ist nicht gesetzt")
@@ -158,8 +151,7 @@ def import_once(
     except ImportError as exc:
         raise RuntimeError(
             "Google SDK fehlt im Worker-vEnv. Installieren: "
-            "pip install google-api-python-client google-auth-httplib2 "
-            "google-auth-oauthlib"
+            "pip install google-api-python-client google-auth-httplib2 google-auth-oauthlib"
         ) from exc
 
     credentials = Credentials.from_authorized_user_file(str(token_path), [GMAIL_SCOPE])
@@ -179,18 +171,12 @@ def import_once(
     service = AiTelefonCallService(repository)
     imported = 0
     try:
-        # Gmail returns newest first. Reverse so a batch is inserted in call order.
         for item in reversed(result.get("messages", [])):
             message_id = str(item["id"])
             if repository.find_by_gmail_message_id(message_id) is not None:
                 continue
 
-            message = (
-                gmail.users()
-                .messages()
-                .get(userId="me", id=message_id, format="full")
-                .execute()
-            )
+            message = gmail.users().messages().get(userId="me", id=message_id, format="full").execute()
             payload = message.get("payload", {})
             sender = _header(payload, "From")
             subject = _header(payload, "Subject")
@@ -208,8 +194,6 @@ def import_once(
                 reference_time=received_at,
                 model=model,
             )
-            # This validator is the trust boundary. Even if the model returns a
-            # plausible-looking but malformed value, it never reaches core.db.
             facts = structured_call_facts_from_mapping(structured)
             service.ingest(
                 strato_id=parsed.strato_id,
@@ -225,6 +209,8 @@ def import_once(
                 event_period=facts.event_period,
                 event_start=facts.event_start,
                 guest_count=facts.guest_count,
+                guest_count_min=facts.guest_count_min,
+                guest_count_max=facts.guest_count_max,
                 location=facts.location,
                 budget_per_person_cents=facts.budget_per_person_cents,
                 fulfillment_mode=facts.fulfillment_mode,
@@ -235,21 +221,14 @@ def import_once(
                 received_at=received_at,
             )
             imported += 1
-            print(
-                f"STRATO {parsed.strato_id}: importiert als {parsed.name or parsed.phone}",
-                flush=True,
-            )
+            print(f"STRATO {parsed.strato_id}: importiert als {parsed.name or parsed.phone}", flush=True)
     finally:
         repository.close()
     return imported
 
 
 def run_forever(
-    *,
-    db_path: Path,
-    token_path: Path,
-    model: str,
-    poll_seconds: int,
+    *, db_path: Path, token_path: Path, model: str, poll_seconds: int
 ) -> None:
     while True:
         try:
@@ -259,10 +238,11 @@ def run_forever(
         except KeyboardInterrupt:
             raise
         except Exception as exc:
-            # Do not mark the Gmail message as consumed. A failed LLM/API/database
-            # step is retried on the next poll and therefore cannot silently lose
-            # a customer call.
-            print(f"STRATO Gmail Worker: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+            print(
+                f"STRATO Gmail Worker: {type(exc).__name__}: {exc}",
+                file=sys.stderr,
+                flush=True,
+            )
         time.sleep(poll_seconds)
 
 
@@ -272,10 +252,7 @@ def main() -> None:
     )
     parser.add_argument("--db", required=True, type=Path)
     parser.add_argument("--token", required=True, type=Path)
-    parser.add_argument(
-        "--model",
-        default=os.environ.get("STRATO_LLM_MODEL", "gpt-5.6-luna"),
-    )
+    parser.add_argument("--model", default=os.environ.get("STRATO_LLM_MODEL", "gpt-5.6-luna"))
     parser.add_argument("--poll-seconds", type=int, default=30)
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args()
