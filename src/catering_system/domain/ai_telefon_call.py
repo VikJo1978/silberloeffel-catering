@@ -29,7 +29,10 @@ AI_TELEFON_CALL_RESULT_TYPE_SET = frozenset(AI_TELEFON_CALL_RESULT_TYPES)
 
 AiTelefonCallLinkedType = Literal["ORDER", "INQUIRY", "OFFER", "CONTACT"]
 AI_TELEFON_CALL_LINKED_TYPES: tuple[AiTelefonCallLinkedType, ...] = (
-    "ORDER", "INQUIRY", "OFFER", "CONTACT"
+    "ORDER",
+    "INQUIRY",
+    "OFFER",
+    "CONTACT",
 )
 AI_TELEFON_CALL_LINKED_TYPE_SET = frozenset(AI_TELEFON_CALL_LINKED_TYPES)
 
@@ -78,7 +81,9 @@ class AiTelefonCall:
 
 def validate_ai_telefon_call_status(value: str) -> AiTelefonCallStatus:
     if value not in AI_TELEFON_CALL_STATUS_SET:
-        raise ValueError(f"status must be one of {sorted(AI_TELEFON_CALL_STATUS_SET)}, got {value!r}")
+        raise ValueError(
+            f"status must be one of {sorted(AI_TELEFON_CALL_STATUS_SET)}, got {value!r}"
+        )
     return value
 
 
@@ -103,7 +108,9 @@ def validate_ai_telefon_call_linked_type(value: str) -> AiTelefonCallLinkedType:
 def validate_ai_telefon_call(call: AiTelefonCall) -> AiTelefonCall:
     call_id = _uuid4(call.call_id, "call_id")
     strato_id = _required_text(call.strato_id, "strato_id", _MAX_EXTERNAL_ID)
-    gmail_message_id = _required_text(call.gmail_message_id, "gmail_message_id", _MAX_EXTERNAL_ID)
+    gmail_message_id = _required_text(
+        call.gmail_message_id, "gmail_message_id", _MAX_EXTERNAL_ID
+    )
     caller_phone = _optional_text(call.caller_phone, _MAX_SHORT_TEXT)
     contact_name = _optional_text(call.contact_name, _MAX_SHORT_TEXT)
     email = _optional_text(call.email, _MAX_SHORT_TEXT)
@@ -128,11 +135,15 @@ def validate_ai_telefon_call(call: AiTelefonCall) -> AiTelefonCall:
         raise ValueError("guest_count_min must not exceed guest_count_max")
 
     if call.budget_per_person_cents is not None:
-        if isinstance(call.budget_per_person_cents, bool) or not isinstance(call.budget_per_person_cents, int):
+        if isinstance(call.budget_per_person_cents, bool) or not isinstance(
+            call.budget_per_person_cents, int
+        ):
             raise TypeError("budget_per_person_cents must be int or null")
         if not (0 <= call.budget_per_person_cents <= _MAX_BUDGET_CENTS):
             raise ValueError("budget_per_person_cents is outside the accepted range")
-    if call.callback_requested is not None and not isinstance(call.callback_requested, bool):
+    if call.callback_requested is not None and not isinstance(
+        call.callback_requested, bool
+    ):
         raise TypeError("callback_requested must be bool or null")
 
     _optional_local_time(call.event_start, "event_start")
@@ -165,7 +176,9 @@ def validate_ai_telefon_call(call: AiTelefonCall) -> AiTelefonCall:
     elif linked_id is not None:
         raise ValueError("linked_type is required when linked_id is set")
 
-    if status == "NEW" and (result_type is not None or linked_type is not None or processed_at is not None):
+    if status == "NEW" and (
+        result_type is not None or linked_type is not None or processed_at is not None
+    ):
         raise ValueError("NEW call cannot already contain a processing result")
     if status == "PROCESSED" and processed_at is None:
         raise ValueError("PROCESSED call requires processed_at")
