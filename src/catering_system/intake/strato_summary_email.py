@@ -42,6 +42,7 @@ class StructuredCallFacts:
     event_date: date | None = None
     event_period: str = ""
     event_start: time | None = None
+    event_time_text: str = ""
     guest_count: int | None = None
     guest_count_min: int | None = None
     guest_count_max: int | None = None
@@ -124,6 +125,7 @@ def structured_call_facts_from_mapping(raw: Mapping[str, Any]) -> StructuredCall
         event_date=_optional_date(raw.get("event_date"), "event_date"),
         event_period=_text(raw.get("event_period")),
         event_start=_optional_time(raw.get("event_start"), "event_start"),
+        event_time_text=_text(raw.get("event_time_text")),
         guest_count=guest_count,
         guest_count_min=guest_min,
         guest_count_max=guest_max,
@@ -152,6 +154,7 @@ def llm_extraction_contract() -> dict[str, object]:
         "event_date": None,
         "event_period": None,
         "event_start": None,
+        "event_time_text": None,
         "guest_count": None,
         "guest_count_min": None,
         "guest_count_max": None,
@@ -182,6 +185,7 @@ def llm_extraction_json_schema() -> dict[str, object]:
         "event_date": nullable_string,
         "event_period": nullable_string,
         "event_start": nullable_string,
+        "event_time_text": nullable_string,
         "guest_count": nullable_guest,
         "guest_count_min": nullable_guest,
         "guest_count_max": nullable_guest,

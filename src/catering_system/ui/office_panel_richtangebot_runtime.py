@@ -2,17 +2,25 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from typing import Any, cast
 from urllib.parse import quote, unquote, urlparse
 
+from catering_system.repositories.core_transaction import (
+    CoreBusyError,
+    CoreCommandExecutor,
+)
 from catering_system.repositories.sqlite_ai_telefon_call_repository import (
     SQLiteAiTelefonCallRepository,
 )
 from catering_system.repositories.sqlite_richtangebot_repository import (
     SQLiteRichtangebotRepository,
 )
-from catering_system.services.ai_telefon_call_service import AiTelefonCallService
+from catering_system.services.ai_telefon_call_service import (
+    AiTelefonCallAlreadyProcessed,
+    AiTelefonCallService,
+)
 from catering_system.services.richtangebot_service import RichtangebotService
 from catering_system.ui.office_panel_ai_runtime import (
     create_ai_enabled_office_panel_server,
@@ -22,6 +30,8 @@ from catering_system.ui.office_panel_richtangebot import (
     render_richtangebote_section,
 )
 from catering_system.ui.office_panel_shell import OfficeSection
+
+_LOGGER = logging.getLogger(__name__)
 
 _OFFERS_SECTION: OfficeSection = "offers"
 _AI_SECTION = cast(OfficeSection, "ai_phone")
@@ -53,14 +63,12 @@ def create_richtangebot_enabled_office_panel_server(
     richt_service = RichtangebotService(richt_repo)
     call_repo = SQLiteAiTelefonCallRepository.from_connection(connection)
     call_service = AiTelefonCallService(call_repo, richtangebot_service=richt_service)
-    command_executor = kwargs.get("command_executor")
+    command_executor = kwargs.get("command_executor") or CoreCommandExecutor(connection)
     base_handler: Any = server.RequestHandlerClass
 
     class RichtangebotEnabledHandler(base_handler):
         def _run_richtangebot_write(self, work):
-            if command_executor is not None:
-                return command_executor.run(work)
-            return work()
+            return command_executor.run(work)
 
         def _route_get(self) -> None:
             parsed = urlparse(self.path)
@@ -93,9 +101,38 @@ def create_richtangebot_enabled_office_panel_server(
                 ):
                     return
                 call_id = unquote(parts[1])
-                updated = self._run_richtangebot_write(
-                    lambda: call_service.convert_to_richtangebot(call_id)
-                )
+                try:
+                    updated = self._run_richtangebot_write(
+                        lambda: call_service.convert_to_richtangebot(call_id)
+                    )
+                except KeyError:
+                    self._error_page("Der Anruf wurde nicht gefunden.", status=404)
+                    return
+                except AiTelefonCallAlreadyProcessed:
+                    self._error_page(
+                        "Dieser Anruf wurde bereits verarbeitet. Bitte die Anrufkarte neu öffnen.",
+                        status=409,
+                    )
+                    return
+                except (TypeError, ValueError):
+                    self._error_page(
+                        "Das Richtangebot konnte nicht erstellt werden. Bitte Kontakt- und Veranstaltungsangaben prüfen.",
+                        status=422,
+                    )
+                    return
+                except CoreBusyError:
+                    self._error_page(
+                        "Die Datenbank ist gerade beschäftigt. Bitte erneut versuchen.",
+                        status=503,
+                    )
+                    return
+                except sqlite3.Error:
+                    _LOGGER.exception("Richtangebot could not be saved")
+                    self._error_page(
+                        "Das Richtangebot konnte nicht gespeichert werden. Bitte erneut versuchen.",
+                        status=503,
+                    )
+                    return
                 assert updated.result_id is not None
                 self._redirect(f"/richtangebot/{quote(updated.result_id, safe='')}")
                 return

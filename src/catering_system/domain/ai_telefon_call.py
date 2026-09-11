@@ -59,6 +59,7 @@ class AiTelefonCall:
     event_date: date | None = None
     event_period: str = ""
     event_start: time | None = None
+    event_time_text: str = ""
     guest_count: int | None = None
     guest_count_min: int | None = None
     guest_count_max: int | None = None
@@ -119,6 +120,7 @@ def validate_ai_telefon_call(call: AiTelefonCall) -> AiTelefonCall:
     raw_message = _optional_text(call.raw_message, _MAX_RAW_MESSAGE)
     event_type = _optional_text(call.event_type, _MAX_SHORT_TEXT)
     event_period = _optional_text(call.event_period, _MAX_SHORT_TEXT)
+    event_time_text = _optional_text(call.event_time_text, _MAX_SHORT_TEXT)
     location = _optional_text(call.location, _MAX_SHORT_TEXT)
     customer_request = _optional_text(call.customer_request, _MAX_SUMMARY)
     fulfillment_mode = validate_fulfillment_mode(call.fulfillment_mode)
@@ -196,6 +198,7 @@ def validate_ai_telefon_call(call: AiTelefonCall) -> AiTelefonCall:
         raw_message=raw_message,
         event_type=event_type,
         event_period=event_period,
+        event_time_text=event_time_text,
         guest_count=guest_count,
         guest_count_min=guest_min,
         guest_count_max=guest_max,

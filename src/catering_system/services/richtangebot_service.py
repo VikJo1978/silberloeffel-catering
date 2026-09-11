@@ -44,8 +44,8 @@ class RichtangebotService:
             raise RichtangebotCannotCreate("call_has_insufficient_commercial_context")
 
         now = self._now()
-        event_time_text = ""
-        if call.event_start is None:
+        event_time_text = call.event_time_text
+        if not event_time_text and call.event_start is None:
             event_time_text = "noch offen"
 
         value = validate_richtangebot(
@@ -82,6 +82,7 @@ def can_create_richtangebot(call: AiTelefonCall) -> bool:
         or call.event_date
         or call.event_period
         or call.event_start
+        or call.event_time_text
         or call.guest_count
         or call.guest_count_min
         or call.guest_count_max

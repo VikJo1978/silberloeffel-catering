@@ -117,10 +117,17 @@ def _migration_3_richtangebot_result(connection: sqlite3.Connection) -> None:
         connection.execute(statement)
 
 
+def _migration_4_event_time_text(connection: sqlite3.Connection) -> None:
+    connection.execute(
+        "ALTER TABLE ai_telefon_calls ADD COLUMN event_time_text TEXT NOT NULL DEFAULT ''"
+    )
+
+
 _MIGRATIONS = (
     (1, "create_ai_telefon_calls", _migration_1_create_table),
     (2, "add_guest_count_range", _migration_2_guest_range),
     (3, "allow_richtangebot_result", _migration_3_richtangebot_result),
+    (4, "add_event_time_text", _migration_4_event_time_text),
 )
 
 
@@ -183,8 +190,9 @@ class SQLiteAiTelefonCallRepository:
                         fulfillment_mode, customer_request, callback_requested,
                         callback_date, callback_time, status, result_type,
                         result_id, linked_type, linked_id, received_at,
-                        processed_at, updated_at, guest_count_min, guest_count_max
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        processed_at, updated_at, guest_count_min, guest_count_max,
+                        event_time_text
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     _values(validated),
                 )
@@ -209,7 +217,7 @@ class SQLiteAiTelefonCallRepository:
                         callback_requested = ?, callback_date = ?, callback_time = ?,
                         status = ?, result_type = ?, result_id = ?, linked_type = ?,
                         linked_id = ?, received_at = ?, processed_at = ?, updated_at = ?,
-                        guest_count_min = ?, guest_count_max = ?
+                        guest_count_min = ?, guest_count_max = ?, event_time_text = ?
                     WHERE call_id = ?
                     """,
                     _values(validated)[1:] + (validated.call_id,),
@@ -272,6 +280,7 @@ def _values(call: AiTelefonCall) -> tuple[object, ...]:
         call.updated_at.isoformat() if call.updated_at else None,
         call.guest_count_min,
         call.guest_count_max,
+        call.event_time_text,
     )
 
 
@@ -312,5 +321,6 @@ def _row_to_call(row: tuple[object, ...]) -> AiTelefonCall:
             updated_at=datetime.fromisoformat(cast(str, row[28])),
             guest_count_min=cast(int | None, row[29]) if len(row) > 29 else None,
             guest_count_max=cast(int | None, row[30]) if len(row) > 30 else None,
+            event_time_text=cast(str, row[31]),
         )
     )

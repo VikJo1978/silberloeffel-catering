@@ -65,7 +65,12 @@ def test_richtangebot_accepts_fuzzy_date_time_and_guest_range() -> None:
     assert value.guest_count is None
     assert value.guest_count_min == 100
     assert value.guest_count_max == 150
-    assert "unverbindliche" in value.disclaimer.lower()
+    assert value.disclaimer == (
+        "Dieses Richtangebot dient ausschließlich zur ersten Budget- und Leistungsorientierung. "
+        "Preise, Verfügbarkeit und Leistungsumfang stehen unter dem Vorbehalt der finalen "
+        "Terminabstimmung. Ein verbindliches Angebot erstellen wir nach Mitteilung des "
+        "konkreten Veranstaltungstermins."
+    )
 
 
 def test_richtangebot_accepts_exact_values_and_normalizes_text() -> None:

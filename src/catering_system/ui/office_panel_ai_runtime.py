@@ -315,7 +315,9 @@ def create_ai_enabled_office_panel_server(
             cookie_headers: tuple[str, ...] = (),
         ) -> None:
             super()._html(
-                _inject_ai_nav(page, self, call_service),
+                # A storage failure page must not query the same unavailable DB
+                # again just to render the inbox badge.
+                _inject_ai_nav(page, self, call_service) if status < 500 else page,
                 status,
                 cookie_headers=cookie_headers,
             )

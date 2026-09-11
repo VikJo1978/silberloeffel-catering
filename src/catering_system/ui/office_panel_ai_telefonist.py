@@ -120,6 +120,7 @@ def render_ai_telefon_call_detail(
         ("Datum", _format_date(call.event_date)),
         ("Zeitraum", call.event_period),
         ("Beginn", _format_time(call.event_start)),
+        ("Zeit / Zeitfenster", call.event_time_text),
         ("Gäste", _guest_text(call)),
         ("Ort", call.location),
         ("Budget", _format_budget(call.budget_per_person_cents)),

@@ -116,6 +116,7 @@ def import_once(*, db_path: Path, token_path: Path, structured_json_dir: Path | 
                 event_date=facts.event_date,
                 event_period=facts.event_period,
                 event_start=facts.event_start,
+                event_time_text=facts.event_time_text,
                 guest_count=facts.guest_count,
                 location=facts.location,
                 budget_per_person_cents=facts.budget_per_person_cents,

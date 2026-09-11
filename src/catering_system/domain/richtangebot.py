@@ -16,10 +16,10 @@ RichtangebotStatus = Literal["DRAFT", "SUPERSEDED", "CLOSED"]
 RICHTANGEBOT_STATUSES = frozenset({"DRAFT", "SUPERSEDED", "CLOSED"})
 
 DEFAULT_RICHTANGEBOT_DISCLAIMER = (
-    "Dieses unverbindliche Richtangebot dient ausschließlich zur ersten Budget- "
-    "und Leistungsorientierung. Preise, Verfügbarkeit und Leistungsumfang stehen "
-    "unter dem Vorbehalt der finalen Termin-, Zeit-, Gästezahl- und Leistungsabstimmung. "
-    "Ein verbindliches Angebot erstellen wir nach Klärung der noch offenen Angaben."
+    "Dieses Richtangebot dient ausschließlich zur ersten Budget- und Leistungsorientierung. "
+    "Preise, Verfügbarkeit und Leistungsumfang stehen unter dem Vorbehalt der finalen "
+    "Terminabstimmung. Ein verbindliches Angebot erstellen wir nach Mitteilung des "
+    "konkreten Veranstaltungstermins."
 )
 
 _MAX_TEXT = 20_000

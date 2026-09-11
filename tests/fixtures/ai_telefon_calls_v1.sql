@@ -1,0 +1,40 @@
+-- Historical v1 schema from commit 8a5d43f; keep independent of current DDL.
+CREATE TABLE IF NOT EXISTS ai_telefon_calls (
+    call_id TEXT PRIMARY KEY,
+    strato_id TEXT NOT NULL,
+    gmail_message_id TEXT NOT NULL,
+    caller_phone TEXT NOT NULL,
+    contact_name TEXT NOT NULL,
+    email TEXT NOT NULL,
+    subject TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    raw_message TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    event_date TEXT,
+    event_period TEXT NOT NULL,
+    event_start TEXT,
+    guest_count INTEGER,
+    location TEXT NOT NULL,
+    budget_per_person_cents INTEGER,
+    fulfillment_mode TEXT NOT NULL,
+    customer_request TEXT NOT NULL,
+    callback_requested INTEGER,
+    callback_date TEXT,
+    callback_time TEXT,
+    status TEXT NOT NULL,
+    result_type TEXT,
+    result_id TEXT,
+    linked_type TEXT,
+    linked_id TEXT,
+    received_at TEXT NOT NULL,
+    processed_at TEXT,
+    updated_at TEXT NOT NULL,
+    CHECK (status IN ('NEW', 'PROCESSED', 'DONE')),
+    CHECK (fulfillment_mode IN ('UNKNOWN', 'DELIVERY', 'PICKUP')),
+    CHECK (result_type IS NULL OR result_type IN ('INQUIRY', 'TASK', 'LINKED')),
+    CHECK (linked_type IS NULL OR linked_type IN ('ORDER', 'INQUIRY', 'OFFER', 'CONTACT')),
+    CHECK (callback_requested IS NULL OR callback_requested IN (0, 1))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_telefon_calls_strato_id ON ai_telefon_calls (strato_id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_ai_telefon_calls_gmail_message_id ON ai_telefon_calls (gmail_message_id);
+CREATE INDEX IF NOT EXISTS idx_ai_telefon_calls_status_received ON ai_telefon_calls (status, received_at DESC);

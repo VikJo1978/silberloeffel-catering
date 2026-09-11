@@ -75,6 +75,9 @@ Regeln:
 - Verwende exakt die vorgegebenen Felder.
 - event_date und callback_date: YYYY-MM-DD oder null.
 - event_start und callback_time: HH:MM oder null.
+- event_start nur bei ausdrücklich genannter exakter Beginnzeit setzen.
+- event_time_text bewahrt die genannte Zeitangabe oder das vereinbarte Zeitfenster wörtlich, z.B. "nachmittags", "gegen 16 Uhr" oder "zwischen 16 und 18 Uhr vereinbart". Ohne Zeitangabe: null.
+- Bei ungefähren Zeiten oder Zeitfenstern bleibt event_start null. Keinen exakten Beginn aus einem Zeitfenster auswählen oder erfinden. Eine separat ausdrücklich genannte exakte Beginnzeit darf zusätzlich erhalten bleiben.
 - Wenn nur ein Zeitraum wie "im Januar" bekannt ist, bleibt event_date null und event_period enthält den genannten Zeitraum.
 - Relative Angaben wie "morgen" dürfen nur relativ zur Referenzzeit aufgelöst werden.
 - Bei exakt genannter Gästezahl: guest_count setzen, guest_count_min und guest_count_max null.
@@ -208,6 +211,7 @@ def import_once(
                 event_date=facts.event_date,
                 event_period=facts.event_period,
                 event_start=facts.event_start,
+                event_time_text=facts.event_time_text,
                 guest_count=facts.guest_count,
                 guest_count_min=facts.guest_count_min,
                 guest_count_max=facts.guest_count_max,

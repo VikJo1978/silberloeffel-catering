@@ -20,7 +20,8 @@ def _date_text(value: Richtangebot) -> str:
 
 def _time_text(value: Richtangebot) -> str:
     if value.event_start is not None:
-        return value.event_start.strftime("%H:%M")
+        exact = value.event_start.strftime("%H:%M")
+        return f"{exact} · {value.event_time_text}" if value.event_time_text else exact
     return value.event_time_text or "Noch offen"
 
 
@@ -62,7 +63,7 @@ def render_richtangebot_detail(
         "</dl></section>"
         '<section class="inquiry-card inquiry-content-card"><h2>Wünsche / Besonderheiten</h2>'
         f'<p class="inquiry-message">{_e(value.customer_request or "Nicht angegeben")}</p></section>'
-        '<section class="inquiry-card inquiry-content-card"><h2>Hinweis</h2>'
+        '<section class="inquiry-card inquiry-content-card"><h2>Unverbindliches Richtangebot</h2>'
         f'<p class="inquiry-message">{_e(value.disclaimer)}</p></section>'
         '</div><aside class="inquiry-detail-side">'
         '<section class="inquiry-card inquiry-content-card"><h2>Kontakt</h2>'

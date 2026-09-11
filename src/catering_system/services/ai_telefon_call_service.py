@@ -28,6 +28,10 @@ class AiTelefonCallCannotConvert(ValueError):
     pass
 
 
+class AiTelefonCallAlreadyProcessed(AiTelefonCallCannotConvert):
+    pass
+
+
 class AiTelefonCallService:
     def __init__(
         self,
@@ -63,6 +67,7 @@ class AiTelefonCallService:
         event_date=None,
         event_period: str = "",
         event_start=None,
+        event_time_text: str = "",
         guest_count: int | None = None,
         guest_count_min: int | None = None,
         guest_count_max: int | None = None,
@@ -98,6 +103,7 @@ class AiTelefonCallService:
                 event_date=event_date,
                 event_period=event_period,
                 event_start=event_start,
+                event_time_text=event_time_text,
                 guest_count=guest_count,
                 guest_count_min=guest_count_min,
                 guest_count_max=guest_count_max,
@@ -187,7 +193,8 @@ class AiTelefonCallService:
                 inquiry_source="ai_telefonist",
                 crm_stage="Neue Anfrage",
                 customer_linkage={},
-                time_window_text=(
+                time_window_text=current.event_time_text
+                or (
                     f"ab {current.event_start.strftime('%H:%M')} Uhr"
                     if current.event_start
                     else ""
@@ -228,6 +235,8 @@ class AiTelefonCallService:
         current = self._require_call(call_id)
         if current.result_type == "RICHTANGEBOT" and current.result_id is not None:
             return current
+        if current.status != "NEW":
+            raise AiTelefonCallAlreadyProcessed("call_already_processed")
         if self._richtangebot_service is None:
             raise AiTelefonCallCannotConvert(
                 "richtangebot conversion is not configured"
