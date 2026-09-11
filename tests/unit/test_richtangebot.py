@@ -4,7 +4,10 @@ import sqlite3
 from datetime import UTC, datetime
 from uuid import UUID
 
-from catering_system.domain.ai_telefon_call import AiTelefonCall, validate_ai_telefon_call
+from catering_system.domain.ai_telefon_call import (
+    AiTelefonCall,
+    validate_ai_telefon_call,
+)
 from catering_system.domain.richtangebot import (
     DEFAULT_RICHTANGEBOT_DISCLAIMER,
     Richtangebot,
