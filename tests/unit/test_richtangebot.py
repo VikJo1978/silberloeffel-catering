@@ -328,19 +328,15 @@ def test_richtangebot_runtime_wraps_local_server_and_leaves_remote_untouched(
         fake_server,
     )
 
-    remote = (
-        office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
-            object(), object(), "pw", remote=object()
-        )
+    remote = office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
+        object(), object(), "pw", remote=object()
     )
     assert remote.RequestHandlerClass is DummyHandler
 
     connection = sqlite3.connect(":memory:")
     try:
-        local = (
-            office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
-                SimpleNamespace(_conn=connection), object(), "pw"
-            )
+        local = office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
+            SimpleNamespace(_conn=connection), object(), "pw"
         )
         assert local.RequestHandlerClass.__name__ == "RichtangebotEnabledHandler"
     finally:
