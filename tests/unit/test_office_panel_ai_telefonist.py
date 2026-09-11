@@ -16,6 +16,9 @@ from catering_system.ui.office_panel_ai_telefonist import (
     render_ai_telefon_call_detail,
     render_ai_telefon_calls,
 )
+from catering_system.ui.office_panel_richtangebot_runtime import (
+    create_richtangebot_enabled_office_panel_server,
+)
 from catering_system.ui.office_panel_views import OfficePageContext
 
 _CALL_ID = "8e5d6ac1-1a43-49b0-8803-d76ac86a9666"
@@ -274,5 +277,6 @@ def test_office_panel_with_ai_entrypoint_swaps_server_factory(monkeypatch) -> No
 
     assert called == [True]
     assert (
-        office_panel.create_office_panel_server is create_ai_enabled_office_panel_server
+        office_panel.create_office_panel_server
+        is create_richtangebot_enabled_office_panel_server
     )
