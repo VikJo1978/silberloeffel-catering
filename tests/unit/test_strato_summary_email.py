@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from catering_system.intake.strato_summary_email import (
     llm_extraction_json_schema,
     parse_strato_summary_mail,
@@ -72,8 +74,31 @@ def test_structured_facts_keep_missing_values_missing() -> None:
     assert facts.event_date is None
     assert facts.event_period == "Januar 2027"
     assert facts.guest_count == 60
+    assert facts.guest_count_min is None
+    assert facts.guest_count_max is None
     assert facts.callback_requested is True
     assert facts.location == ""
+
+
+def test_structured_facts_preserve_guest_range_without_inventing_exact_count() -> None:
+    facts = structured_call_facts_from_mapping(
+        {
+            "guest_count": None,
+            "guest_count_min": 100,
+            "guest_count_max": 150,
+        }
+    )
+
+    assert facts.guest_count is None
+    assert facts.guest_count_min == 100
+    assert facts.guest_count_max == 150
+
+
+def test_structured_facts_reject_exact_count_plus_range() -> None:
+    with pytest.raises(ValueError, match="cannot be combined"):
+        structured_call_facts_from_mapping(
+            {"guest_count": 120, "guest_count_min": 100, "guest_count_max": 150}
+        )
 
 
 def test_structured_facts_normalize_budget_and_time() -> None:
@@ -104,6 +129,7 @@ def test_llm_extraction_json_schema_is_strict_and_complete() -> None:
     properties = schema["properties"]
     assert isinstance(properties, dict)
     assert set(schema["required"]) == set(properties)
+    assert {"guest_count", "guest_count_min", "guest_count_max"} <= set(properties)
     assert properties["fulfillment_mode"] == {
         "type": "string",
         "enum": ["UNKNOWN", "DELIVERY", "PICKUP"],
