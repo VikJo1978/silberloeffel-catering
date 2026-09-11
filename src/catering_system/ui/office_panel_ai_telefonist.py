@@ -56,7 +56,9 @@ def render_ai_telefon_calls(
             '<p class="inquiry-section-note">Neue STRATO-Zusammenfassungen erscheinen hier automatisch.</p>'
             "</div>"
         )
-        return _page("KI Telefonassistent", body, active_section=_ACTIVE_SECTION, context=context)
+        return _page(
+            "KI Telefonassistent", body, active_section=_ACTIVE_SECTION, context=context
+        )
 
     new_count = sum(call.status == "NEW" for call in calls)
     rows = []
@@ -96,7 +98,9 @@ def render_ai_telefon_calls(
         '<p class="chat-empty">Gespräch links auswählen.</p>'
         "</div></div>"
     )
-    return _page("KI Telefonassistent", body, active_section=_ACTIVE_SECTION, context=context)
+    return _page(
+        "KI Telefonassistent", body, active_section=_ACTIVE_SECTION, context=context
+    )
 
 
 def render_ai_telefon_call_detail(
@@ -124,7 +128,9 @@ def render_ai_telefon_call_detail(
         ("Rückruf", _callback_label(call)),
     ]
     fact_html = "".join(
-        "<div><dt>{}</dt><dd>{}</dd></div>".format(_e(label), _e(value or "Nicht angegeben"))
+        "<div><dt>{}</dt><dd>{}</dd></div>".format(
+            _e(label), _e(value or "Nicht angegeben")
+        )
         for label, value in facts
     )
 
@@ -172,7 +178,9 @@ def render_ai_telefon_call_detail(
                     _e(call.call_id), _csrf_input(context)
                 )
             )
-        actions.append(_render_link_existing(call, context, link_query, link_candidates))
+        actions.append(
+            _render_link_existing(call, context, link_query, link_candidates)
+        )
         actions.append(
             '<form method="post" action="/ki-telefonassistent/{}/erledigt">{}'
             '<button class="inquiry-button secondary">Erledigt</button></form>'.format(
@@ -196,7 +204,9 @@ def render_ai_telefon_call_detail(
             )
 
     error_html = (
-        f'<div class="inquiry-notice blocked">{_e(error_message)}</div>' if error_message else ""
+        f'<div class="inquiry-notice blocked">{_e(error_message)}</div>'
+        if error_message
+        else ""
     )
     body = (
         '<a class="inquiry-back" href="/ki-telefonassistent">← Alle Gespräche</a>'
@@ -288,7 +298,11 @@ def _render_link_existing(
     else:
         rows = []
         for candidate in candidates:
-            details = f'<div class="chat-meta">{_e(candidate.details)}</div>' if candidate.details else ""
+            details = (
+                f'<div class="chat-meta">{_e(candidate.details)}</div>'
+                if candidate.details
+                else ""
+            )
             rows.append(
                 '<form method="post" action="/ki-telefonassistent/{}/verknuepfen">{}'
                 '<input type="hidden" name="linked_type" value="{}">'
@@ -329,7 +343,9 @@ def _format_budget(cents: int | None) -> str:
 
 
 def _fulfillment_label(value: str) -> str:
-    return {"DELIVERY": "Lieferung", "PICKUP": "Abholung", "UNKNOWN": ""}.get(value, value)
+    return {"DELIVERY": "Lieferung", "PICKUP": "Abholung", "UNKNOWN": ""}.get(
+        value, value
+    )
 
 
 def _callback_label(call: AiTelefonCall) -> str:
