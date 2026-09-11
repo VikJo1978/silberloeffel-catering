@@ -392,6 +392,7 @@ def test_richtangebot_runtime_routes_and_offer_injection(monkeypatch) -> None:
         richt_repo = SQLiteRichtangebotRepository.from_connection(connection)
         richt_value = _value(value_id=60, source_id=61)
         richt_repo.save(richt_value)
+        connection.commit()
 
         call_repo = SQLiteAiTelefonCallRepository.from_connection(connection)
         now = datetime(2026, 9, 11, 14, 0, tzinfo=UTC)
@@ -416,6 +417,7 @@ def test_richtangebot_runtime_routes_and_offer_injection(monkeypatch) -> None:
             )
         )
         call_repo.save(call)
+        connection.commit()
 
         server = office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
             SimpleNamespace(_conn=connection),
