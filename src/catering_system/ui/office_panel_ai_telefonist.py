@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date, datetime, time
 from typing import cast
 
@@ -26,6 +27,19 @@ _RESULT_LABELS = {
     "TASK": "Aufgabe",
     "LINKED": "Verknüpft",
 }
+_LINK_TYPE_LABELS = {
+    "INQUIRY": "Anfrage",
+    "OFFER": "Angebot",
+    "ORDER": "Auftrag",
+}
+
+
+@dataclass(frozen=True)
+class AiTelefonLinkCandidate:
+    linked_type: str
+    linked_id: str
+    title: str
+    details: str = ""
 
 
 def render_ai_telefon_calls(
@@ -93,6 +107,8 @@ def render_ai_telefon_call_detail(
     *,
     context: OfficePageContext = _EMPTY_PAGE_CONTEXT,
     error_message: str = "",
+    link_query: str = "",
+    link_candidates: tuple[AiTelefonLinkCandidate, ...] = (),
 ) -> str:
     customer = call.contact_name or call.caller_phone or "Unbekannter Anrufer"
     status = _STATUS_LABELS.get(call.status, call.status)
@@ -145,6 +161,7 @@ def render_ai_telefon_call_detail(
                     _e(call.call_id), _csrf_input(context)
                 )
             )
+        actions.append(_render_link_existing(call, context, link_query, link_candidates))
         actions.append(
             '<form method="post" action="/ki-telefonassistent/{}/erledigt">{}'
             '<button class="inquiry-button secondary">Erledigt</button></form>'.format(
@@ -157,6 +174,13 @@ def render_ai_telefon_call_detail(
             actions.append(
                 '<a class="inquiry-button" href="{}">{} öffnen</a>'.format(
                     _e(href), _e(result or "Vorgang")
+                )
+            )
+        elif call.result_type == "LINKED" and call.linked_type and call.linked_id:
+            label = _LINK_TYPE_LABELS.get(call.linked_type, call.linked_type)
+            actions.append(
+                '<p class="inquiry-section-note">Verknüpft mit {} · {}</p>'.format(
+                    _e(label), _e(call.linked_id)
                 )
             )
 
@@ -209,6 +233,55 @@ def render_ai_telefon_call_detail(
         active_section=_ACTIVE_SECTION,
         context=context,
     )
+
+
+def _render_link_existing(
+    call: AiTelefonCall,
+    context: OfficePageContext,
+    query: str,
+    candidates: tuple[AiTelefonLinkCandidate, ...],
+) -> str:
+    search = (
+        '<details class="inquiry-edit"><summary>Mit bestehendem Vorgang verknüpfen</summary>'
+        '<div class="inquiry-edit-body">'
+        '<p class="inquiry-section-note">Sucht nur vorhandene Anfragen, Angebote und Aufträge. '
+        "Der gewählte Vorgang wird nicht verändert.</p>"
+        '<form method="get" action="/ki-telefonassistent/{}">'
+        '<label for="ai-link-search">Name, Telefon, Datum, Ort oder Vorgangs-ID</label><br>'
+        '<input id="ai-link-search" name="q" value="{}" autocomplete="off"> '
+        '<button class="inquiry-button secondary" type="submit">Suchen</button>'
+        "</form>"
+    ).format(_e(call.call_id), _e(query))
+
+    if not query:
+        results = '<p class="inquiry-section-note">Noch keine Suche ausgeführt.</p>'
+    elif not candidates:
+        results = '<p class="inquiry-section-note">Kein passender Vorgang gefunden.</p>'
+    else:
+        rows = []
+        for candidate in candidates:
+            details = (
+                f'<div class="chat-meta">{_e(candidate.details)}</div>'
+                if candidate.details
+                else ""
+            )
+            rows.append(
+                '<form method="post" action="/ki-telefonassistent/{}/verknuepfen">{}'
+                '<input type="hidden" name="linked_type" value="{}">'
+                '<input type="hidden" name="linked_id" value="{}">'
+                '<div><strong>{}</strong>{}</div>'
+                '<button class="inquiry-button secondary" type="submit">Verknüpfen</button>'
+                "</form>".format(
+                    _e(call.call_id),
+                    _csrf_input(context),
+                    _e(candidate.linked_type),
+                    _e(candidate.linked_id),
+                    _e(candidate.title),
+                    details,
+                )
+            )
+        results = "".join(rows)
+    return search + results + "</div></details>"
 
 
 def _format_datetime(value: datetime | None) -> str:
