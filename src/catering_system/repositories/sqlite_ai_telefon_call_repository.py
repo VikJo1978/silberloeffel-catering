@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS ai_telefon_calls (
     guest_count_max INTEGER,
     CHECK (status IN ('NEW', 'PROCESSED', 'DONE')),
     CHECK (fulfillment_mode IN ('UNKNOWN', 'DELIVERY', 'PICKUP')),
-    CHECK (result_type IS NULL OR result_type IN ('INQUIRY', 'TASK', 'LINKED')),
+    CHECK (result_type IS NULL OR result_type IN ('INQUIRY', 'RICHTANGEBOT', 'TASK', 'LINKED')),
     CHECK (linked_type IS NULL OR linked_type IN ('ORDER', 'INQUIRY', 'OFFER', 'CONTACT')),
     CHECK (callback_requested IS NULL OR callback_requested IN (0, 1))
 )
@@ -81,9 +81,35 @@ def _migration_2_guest_range(connection: sqlite3.Connection) -> None:
         connection.execute("ALTER TABLE ai_telefon_calls ADD COLUMN guest_count_max INTEGER")
 
 
+def _migration_3_richtangebot_result(connection: sqlite3.Connection) -> None:
+    # SQLite cannot alter a CHECK constraint in place. Rebuild the small inbox
+    # table so RICHTANGEBOT becomes a first-class processing result while all
+    # existing call facts and IDs remain unchanged.
+    for statement in _INDEXES:
+        name = statement.split("INDEX IF NOT EXISTS ", 1)[1].split(" ON ", 1)[0]
+        connection.execute(f"DROP INDEX IF EXISTS {name}")
+    connection.execute("ALTER TABLE ai_telefon_calls RENAME TO ai_telefon_calls_pre_richtangebot")
+    connection.execute(_CREATE_TABLE)
+    columns = (
+        "call_id, strato_id, gmail_message_id, caller_phone, contact_name, email, "
+        "subject, summary, raw_message, event_type, event_date, event_period, "
+        "event_start, guest_count, location, budget_per_person_cents, fulfillment_mode, "
+        "customer_request, callback_requested, callback_date, callback_time, status, "
+        "result_type, result_id, linked_type, linked_id, received_at, processed_at, "
+        "updated_at, guest_count_min, guest_count_max"
+    )
+    connection.execute(
+        f"INSERT INTO ai_telefon_calls ({columns}) SELECT {columns} FROM ai_telefon_calls_pre_richtangebot"
+    )
+    connection.execute("DROP TABLE ai_telefon_calls_pre_richtangebot")
+    for statement in _INDEXES:
+        connection.execute(statement)
+
+
 _MIGRATIONS = (
     (1, "create_ai_telefon_calls", _migration_1_create_table),
     (2, "add_guest_count_range", _migration_2_guest_range),
+    (3, "allow_richtangebot_result", _migration_3_richtangebot_result),
 )
 
 
