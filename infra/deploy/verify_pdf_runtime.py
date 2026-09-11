@@ -96,7 +96,7 @@ EXPECTED_UNIT_ARGV: dict[str, list[str]] = {
     "catering-office-panel": [
         EXPECTED_VENV_INTERPRETER,
         "-m",
-        "catering_system.ui.office_panel",
+        "catering_system.ui.office_panel_with_ai",
         "--db",
         "/home/viktor/catering-runtime/core.db",
         "--port",
