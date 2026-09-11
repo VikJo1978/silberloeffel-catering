@@ -15,7 +15,7 @@ from __future__ import annotations
 import sqlite3
 from http.server import HTTPServer
 from typing import Any, cast
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 from catering_system.repositories.sqlite_ai_telefon_call_repository import (
     SQLiteAiTelefonCallRepository,
@@ -27,11 +27,18 @@ from catering_system.services.ai_telefon_call_service import AiTelefonCallServic
 from catering_system.services.inquiry_service import InquiryService
 from catering_system.services.manual_task_service import ManualTaskService
 from catering_system.ui.office_panel_ai_telefonist import (
+    AiTelefonLinkCandidate,
     render_ai_telefon_call_detail,
     render_ai_telefon_calls,
 )
 from catering_system.ui.office_panel_authz import can_access
 from catering_system.ui.office_panel_shell import OfficeSection
+
+_LINK_VIEW_PERMISSIONS = {
+    "INQUIRY": "inquiries.view",
+    "OFFER": "offers.view",
+    "ORDER": "orders.view",
+}
 
 
 def create_ai_enabled_office_panel_server(
@@ -124,6 +131,34 @@ def create_ai_enabled_office_panel_server(
                 return command_executor.run(work)
             return work()
 
+        def _ai_link_candidates(self, query: str, auth: Any) -> tuple[AiTelefonLinkCandidate, ...]:
+            allowed_types = frozenset(
+                linked_type
+                for linked_type, permission in _LINK_VIEW_PERMISSIONS.items()
+                if can_access(auth, permission)
+                and (linked_type != "OFFER" or offer_repo is not None)
+            )
+            return _link_candidates(
+                query,
+                inquiry_repo,
+                order_repo,
+                offer_repo,
+                allowed_types=allowed_types,
+            )
+
+        def _render_ai_detail(self, call: Any, *, error_message: str = "") -> None:
+            parsed = urlparse(self.path)
+            query = parse_qs(parsed.query, keep_blank_values=True).get("q", [""])[0].strip()
+            self._html(
+                render_ai_telefon_call_detail(
+                    call,
+                    context=self._page_context(),
+                    error_message=error_message,
+                    link_query=query,
+                    link_candidates=self._ai_link_candidates(query, self._request_auth),
+                )
+            )
+
         def _route_get(self) -> None:
             parsed = urlparse(self.path)
             parts = [part for part in parsed.path.split("/") if part]
@@ -149,9 +184,7 @@ def create_ai_enabled_office_panel_server(
                 if call is None:
                     self.send_error(404)
                     return
-                self._html(
-                    render_ai_telefon_call_detail(call, context=self._page_context())
-                )
+                self._render_ai_detail(call)
                 return
             super()._route_get()
 
@@ -202,6 +235,61 @@ def create_ai_enabled_office_panel_server(
                     self._redirect(f"/aufgaben/{quote(updated.result_id, safe='')}")
                     return
 
+                if action == "verknuepfen":
+                    if not self._require_business_permission_post(
+                        auth,
+                        "queue.resolve",
+                        active_section=self._ai_active_section(),
+                    ):
+                        return
+                    call = call_service.get(call_id)
+                    if call is None:
+                        self.send_error(404)
+                        return
+                    form = self._form()
+                    linked_type = form.get("linked_type", "").strip().upper()
+                    linked_id = form.get("linked_id", "").strip()
+                    permission = _LINK_VIEW_PERMISSIONS.get(linked_type)
+                    if permission is None or not can_access(auth, permission):
+                        self._business_forbidden(
+                            active_section=self._ai_active_section()
+                        )
+                        return
+                    if not _linked_target_exists(
+                        linked_type,
+                        linked_id,
+                        inquiry_repo,
+                        order_repo,
+                        offer_repo,
+                    ):
+                        self._render_ai_detail(
+                            call,
+                            error_message=(
+                                "Der ausgewählte Vorgang existiert nicht mehr. "
+                                "Bitte erneut suchen."
+                            ),
+                        )
+                        return
+                    try:
+                        self._run_ai_write(
+                            lambda: call_service.link_existing(
+                                call_id,
+                                linked_type=linked_type,
+                                linked_id=linked_id,
+                            )
+                        )
+                    except (KeyError, TypeError, ValueError):
+                        self._render_ai_detail(
+                            call,
+                            error_message=(
+                                "Die Verknüpfung konnte nicht gespeichert werden. "
+                                "Bitte den Vorgang erneut auswählen."
+                            ),
+                        )
+                        return
+                    self._redirect(f"/ki-telefonassistent/{quote(call_id, safe='')}")
+                    return
+
                 if action == "erledigt":
                     if not self._require_business_permission_post(
                         auth,
@@ -229,6 +317,136 @@ def create_ai_enabled_office_panel_server(
             )
 
     return HTTPServer((host, port), AiEnabledOfficePanelHandler)
+
+
+def _link_candidates(
+    query: str,
+    inquiry_repo: Any,
+    order_repo: Any,
+    offer_repo: Any | None,
+    *,
+    allowed_types: frozenset[str],
+    limit: int = 20,
+) -> tuple[AiTelefonLinkCandidate, ...]:
+    needle = query.strip().casefold()
+    if len(needle) < 2 or not allowed_types or limit < 1:
+        return ()
+
+    inquiries = list(inquiry_repo.list_all())
+    inquiry_by_id = {inquiry.inquiry_id: inquiry for inquiry in inquiries}
+    candidates: list[AiTelefonLinkCandidate] = []
+
+    def append(candidate: AiTelefonLinkCandidate) -> bool:
+        candidates.append(candidate)
+        return len(candidates) >= limit
+
+    if "INQUIRY" in allowed_types:
+        for inquiry in inquiries:
+            if _matches_link_query(needle, inquiry):
+                title, details = _inquiry_candidate_text(inquiry)
+                if append(
+                    AiTelefonLinkCandidate(
+                        linked_type="INQUIRY",
+                        linked_id=inquiry.inquiry_id,
+                        title=title,
+                        details=details,
+                    )
+                ):
+                    return tuple(candidates)
+
+    if "OFFER" in allowed_types and offer_repo is not None:
+        for offer in offer_repo.list_all():
+            inquiry = inquiry_by_id.get(offer.source_inquiry_id)
+            if not _matches_link_query(needle, offer, inquiry):
+                continue
+            latest = max(offer.versions, key=lambda version: version.version_number)
+            source_title, _ = _inquiry_candidate_text(inquiry)
+            details = _candidate_details(
+                latest.event_date,
+                latest.location_text,
+                offer.offer_id,
+            )
+            if append(
+                AiTelefonLinkCandidate(
+                    linked_type="OFFER",
+                    linked_id=offer.offer_id,
+                    title=f"Angebot · {source_title}",
+                    details=details,
+                )
+            ):
+                return tuple(candidates)
+
+    if "ORDER" in allowed_types:
+        for order in order_repo.list_orders():
+            inquiry = inquiry_by_id.get(order.source_inquiry_id)
+            versions = order_repo.list_order_versions(order.order_id)
+            latest = max(versions, key=lambda version: version.version_number) if versions else None
+            if not _matches_link_query(needle, order, inquiry, latest):
+                continue
+            source_title, _ = _inquiry_candidate_text(inquiry)
+            details = _candidate_details(
+                getattr(latest, "event_date", None),
+                getattr(latest, "location_text", ""),
+                order.order_id,
+            )
+            if append(
+                AiTelefonLinkCandidate(
+                    linked_type="ORDER",
+                    linked_id=order.order_id,
+                    title=f"Auftrag · {source_title}",
+                    details=details,
+                )
+            ):
+                return tuple(candidates)
+
+    return tuple(candidates)
+
+
+def _linked_target_exists(
+    linked_type: str,
+    linked_id: str,
+    inquiry_repo: Any,
+    order_repo: Any,
+    offer_repo: Any | None,
+) -> bool:
+    if not linked_id:
+        return False
+    if linked_type == "INQUIRY":
+        return inquiry_repo.get_by_id(linked_id) is not None
+    if linked_type == "OFFER":
+        return offer_repo is not None and offer_repo.get(linked_id) is not None
+    if linked_type == "ORDER":
+        return order_repo.get_order(linked_id) is not None
+    return False
+
+
+def _matches_link_query(needle: str, *objects: Any) -> bool:
+    return any(obj is not None and needle in repr(obj).casefold() for obj in objects)
+
+
+def _inquiry_candidate_text(inquiry: Any | None) -> tuple[str, str]:
+    if inquiry is None:
+        return "Vorgang ohne Anfragekontext", ""
+    snapshot = getattr(inquiry, "customer_snapshot", None)
+    contact_name = getattr(snapshot, "contact_name", "") if snapshot is not None else ""
+    title = contact_name or getattr(inquiry, "intake_subject", None) or "Anfrage"
+    details = _candidate_details(
+        getattr(inquiry, "event_date", None),
+        getattr(inquiry, "location_text", ""),
+        inquiry.inquiry_id,
+    )
+    return str(title), details
+
+
+def _candidate_details(event_date: Any, location: Any, identifier: str) -> str:
+    bits: list[str] = []
+    if event_date is not None:
+        formatter = getattr(event_date, "strftime", None)
+        bits.append(formatter("%d.%m.%Y") if callable(formatter) else str(event_date))
+    if location:
+        bits.append(str(location))
+    bits.append(identifier)
+    return " · ".join(bits)
 
 
 def _manual_task_service(
