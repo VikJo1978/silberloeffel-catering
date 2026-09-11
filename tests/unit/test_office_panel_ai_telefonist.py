@@ -209,9 +209,12 @@ def test_manual_task_service_wiring_branches() -> None:
         assert _manual_task_service(connection, None) is None
         assert _manual_task_service(connection, SimpleNamespace()) is None
 
-        wrong_repo = SimpleNamespace(_conn=other_connection)
-        wrong_auth = SimpleNamespace(repository=wrong_repo)
-        assert _manual_task_service(connection, wrong_auth) is None
+        separate_auth_repo = SimpleNamespace(
+            _conn=other_connection,
+            get_account_by_id=lambda employee_id: SimpleNamespace(is_active=True),
+        )
+        separate_auth = SimpleNamespace(repository=separate_auth_repo)
+        assert _manual_task_service(connection, separate_auth) is not None
 
         auth_repo = SimpleNamespace(
             _conn=connection,
@@ -227,7 +230,8 @@ def test_manual_task_service_wiring_branches() -> None:
 def test_ai_nav_injection_and_guard_branches() -> None:
     page = (
         '<html><nav><a class="office-nav-link" href="/inquiries">Anfragen</a>'
-        '<a class="office-nav-link" href="/offers">Angebote</a></nav></html>'
+        '<a class="office-nav-link" href="/offers">Angebote</a>'
+        '<a class="office-nav-link" href="/aufgaben">Aufgaben</a></nav></html>'
     )
     allowed_auth = SimpleNamespace(
         kind="basic",
@@ -244,7 +248,8 @@ def test_ai_nav_injection_and_guard_branches() -> None:
     assert "KI Telefonassistent" in injected
     assert '<span class="badge">3</span>' in injected
     assert 'aria-current="page"' in injected
-    assert injected.index("KI Telefonassistent") < injected.index("Angebote")
+    assert injected.index("Angebote") < injected.index("KI Telefonassistent")
+    assert injected.index("KI Telefonassistent") < injected.index("Aufgaben")
 
     assert _inject_ai_nav("<html></html>", handler, service) == "<html></html>"
     assert _inject_ai_nav(injected, handler, service) == injected
