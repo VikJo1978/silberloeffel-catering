@@ -93,7 +93,7 @@ def validate_ai_telefon_call_result_type(value: str) -> AiTelefonCallResultType:
             "result_type must be one of "
             f"{sorted(AI_TELEFON_CALL_RESULT_TYPE_SET)}, got {value!r}"
         )
-    return value  # type: ignore[return-value]
+    return value
 
 
 def validate_ai_telefon_call_linked_type(value: str) -> AiTelefonCallLinkedType:
@@ -102,7 +102,7 @@ def validate_ai_telefon_call_linked_type(value: str) -> AiTelefonCallLinkedType:
             "linked_type must be one of "
             f"{sorted(AI_TELEFON_CALL_LINKED_TYPE_SET)}, got {value!r}"
         )
-    return value  # type: ignore[return-value]
+    return value
 
 
 def validate_ai_telefon_call(call: AiTelefonCall) -> AiTelefonCall:
