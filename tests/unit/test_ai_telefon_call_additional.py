@@ -153,9 +153,7 @@ def test_domain_validation_rejects_bad_ids_and_datetimes() -> None:
     with pytest.raises(ValueError):
         validate_ai_telefon_call(_valid_call(received_at=None))
     with pytest.raises(ValueError):
-        validate_ai_telefon_call(
-            _valid_call(received_at=datetime(2026, 9, 10, 18, 0))
-        )
+        validate_ai_telefon_call(_valid_call(received_at=datetime(2026, 9, 10, 18, 0)))
     with pytest.raises(TypeError):
         validate_ai_telefon_call(_valid_call(contact_name=123))
 
@@ -243,9 +241,7 @@ def test_llm_contract_and_typed_values() -> None:
         {"event_type": 1},
     ],
 )
-def test_llm_fact_validation_rejects_invalid_values(
-    mapping: dict[str, object]
-) -> None:
+def test_llm_fact_validation_rejects_invalid_values(mapping: dict[str, object]) -> None:
     with pytest.raises((TypeError, ValueError)):
         structured_call_facts_from_mapping(mapping)
 
@@ -475,9 +471,7 @@ def test_service_task_conversion_and_linking(tmp_path) -> None:
         assert fake_tasks.kwargs["title"] == "Telefonanruf: Viktor Schmidt"
         assert "STRATO-ID: strato-task" in str(fake_tasks.kwargs["description"])
         assert (
-            service.convert_to_task(
-                call.call_id, created_by_employee_id=_RESULT_ID
-            )
+            service.convert_to_task(call.call_id, created_by_employee_id=_RESULT_ID)
             == task_result
         )
 

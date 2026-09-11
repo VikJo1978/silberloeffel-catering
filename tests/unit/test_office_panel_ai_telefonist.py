@@ -58,9 +58,7 @@ def _call(
         result_id=result_id,
         received_at=datetime(2026, 9, 10, 18, 0, tzinfo=UTC),
         processed_at=(
-            datetime(2026, 9, 10, 18, 5, tzinfo=UTC)
-            if status == "PROCESSED"
-            else None
+            datetime(2026, 9, 10, 18, 5, tzinfo=UTC) if status == "PROCESSED" else None
         ),
         updated_at=datetime(2026, 9, 10, 18, 5, tzinfo=UTC),
     )
@@ -126,9 +124,9 @@ def test_render_processed_result_links() -> None:
         _call(status="PROCESSED", result_type="LINKED", result_id=_RESULT_ID)
     )
 
-    assert f'/inquiry/{_RESULT_ID}' in inquiry
+    assert f"/inquiry/{_RESULT_ID}" in inquiry
     assert "Anfrage öffnen" in inquiry
-    assert f'/aufgaben/{_RESULT_ID}' in task
+    assert f"/aufgaben/{_RESULT_ID}" in task
     assert "Aufgabe öffnen" in task
     assert "öffnen" not in linked
 
@@ -196,7 +194,9 @@ def test_runtime_builds_remote_and_local_servers(monkeypatch) -> None:
         port=0,
     )
     try:
-        assert local_server.RequestHandlerClass.__name__ == "AiEnabledOfficePanelHandler"
+        assert (
+            local_server.RequestHandlerClass.__name__ == "AiEnabledOfficePanelHandler"
+        )
     finally:
         local_server.server_close()
         connection.close()
@@ -269,6 +269,5 @@ def test_office_panel_with_ai_entrypoint_swaps_server_factory(monkeypatch) -> No
 
     assert called == [True]
     assert (
-        office_panel.create_office_panel_server
-        is create_ai_enabled_office_panel_server
+        office_panel.create_office_panel_server is create_ai_enabled_office_panel_server
     )
