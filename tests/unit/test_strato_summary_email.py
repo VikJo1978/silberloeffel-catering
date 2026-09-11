@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from catering_system.intake.strato_summary_email import (
+    llm_extraction_json_schema,
     parse_strato_summary_mail,
     structured_call_facts_from_mapping,
 )
@@ -62,3 +63,17 @@ def test_structured_facts_normalize_budget_and_time() -> None:
     assert facts.event_start.strftime("%H:%M") == "16:45"
     assert facts.budget_per_person_cents == 3000
     assert facts.fulfillment_mode == "UNKNOWN"
+
+
+def test_llm_extraction_json_schema_is_strict_and_complete() -> None:
+    schema = llm_extraction_json_schema()
+
+    assert schema["type"] == "object"
+    assert schema["additionalProperties"] is False
+    properties = schema["properties"]
+    assert isinstance(properties, dict)
+    assert set(schema["required"]) == set(properties)
+    assert properties["fulfillment_mode"] == {
+        "type": "string",
+        "enum": ["UNKNOWN", "DELIVERY", "PICKUP"],
+    }
