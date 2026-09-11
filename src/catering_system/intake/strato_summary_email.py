@@ -136,7 +136,9 @@ def structured_call_facts_from_mapping(raw: Mapping[str, Any]) -> StructuredCall
         ),
         fulfillment_mode=_fulfillment(raw.get("fulfillment_mode")),
         customer_request=_text(raw.get("customer_request")),
-        callback_requested=_optional_bool(raw.get("callback_requested"), "callback_requested"),
+        callback_requested=_optional_bool(
+            raw.get("callback_requested"), "callback_requested"
+        ),
         callback_date=_optional_date(raw.get("callback_date"), "callback_date"),
         callback_time=_optional_time(raw.get("callback_time"), "callback_time"),
     )
@@ -165,7 +167,9 @@ def llm_extraction_contract() -> dict[str, object]:
 
 def llm_extraction_json_schema() -> dict[str, object]:
     """Strict JSON Schema used by the OpenAI Responses API Structured Outputs."""
-    nullable_string: dict[str, object] = {"anyOf": [{"type": "string"}, {"type": "null"}]}
+    nullable_string: dict[str, object] = {
+        "anyOf": [{"type": "string"}, {"type": "null"}]
+    }
     nullable_guest: dict[str, object] = {
         "anyOf": [
             {"type": "integer", "minimum": 1, "maximum": _MAX_GUEST_COUNT},
