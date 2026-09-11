@@ -94,24 +94,46 @@ def test_richtangebot_validation_rejects_invalid_business_facts() -> None:
 
     with pytest.raises(ValueError, match="updated_at"):
         validate_richtangebot(
-            Richtangebot(**{**base.__dict__, "updated_at": datetime(2026, 9, 11, 13, 0, tzinfo=UTC)})
+            Richtangebot(
+                **{
+                    **base.__dict__,
+                    "updated_at": datetime(2026, 9, 11, 13, 0, tzinfo=UTC),
+                }
+            )
         )
     with pytest.raises(TypeError, match="event_start"):
-        validate_richtangebot(Richtangebot(**{**base.__dict__, "event_start": "16:00"}))  # type: ignore[arg-type]
+        validate_richtangebot(
+            Richtangebot(**{**base.__dict__, "event_start": "16:00"})
+        )  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="wall-clock"):
         validate_richtangebot(
-            Richtangebot(**{**base.__dict__, "event_start": time(16, 0, tzinfo=timezone.utc)})
+            Richtangebot(
+                **{
+                    **base.__dict__,
+                    "event_start": time(16, 0, tzinfo=timezone.utc),
+                }
+            )
         )
     with pytest.raises(ValueError, match="cannot be combined"):
         validate_richtangebot(Richtangebot(**{**base.__dict__, "guest_count": 120}))
     with pytest.raises(ValueError, match="set together"):
-        validate_richtangebot(Richtangebot(**{**base.__dict__, "guest_count_max": None}))
+        validate_richtangebot(
+            Richtangebot(**{**base.__dict__, "guest_count_max": None})
+        )
     with pytest.raises(ValueError, match="must not exceed"):
         validate_richtangebot(
-            Richtangebot(**{**base.__dict__, "guest_count_min": 160, "guest_count_max": 150})
+            Richtangebot(
+                **{
+                    **base.__dict__,
+                    "guest_count_min": 160,
+                    "guest_count_max": 150,
+                }
+            )
         )
     with pytest.raises(ValueError, match="invalid Richtangebot status"):
-        validate_richtangebot(Richtangebot(**{**base.__dict__, "status": "INVALID"}))  # type: ignore[arg-type]
+        validate_richtangebot(
+            Richtangebot(**{**base.__dict__, "status": "INVALID"})
+        )  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="customer contact"):
         validate_richtangebot(
             Richtangebot(
@@ -137,9 +159,13 @@ def test_richtangebot_validation_rejects_invalid_business_facts() -> None:
 def test_richtangebot_validation_rejects_bad_primitives() -> None:
     base = _value(value_id=40, source_id=41)
     with pytest.raises(ValueError, match="UUID"):
-        validate_richtangebot(Richtangebot(**{**base.__dict__, "richtangebot_id": "nope"}))
+        validate_richtangebot(
+            Richtangebot(**{**base.__dict__, "richtangebot_id": "nope"})
+        )
     with pytest.raises(TypeError, match="text field"):
-        validate_richtangebot(Richtangebot(**{**base.__dict__, "event_type": 123}))  # type: ignore[arg-type]
+        validate_richtangebot(
+            Richtangebot(**{**base.__dict__, "event_type": 123})
+        )  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="disclaimer"):
         validate_richtangebot(Richtangebot(**{**base.__dict__, "disclaimer": ""}))
     with pytest.raises(TypeError, match="guest_count"):
@@ -165,9 +191,13 @@ def test_richtangebot_validation_rejects_bad_primitives() -> None:
             )
         )
     with pytest.raises(TypeError, match="budget_per_person_cents"):
-        validate_richtangebot(Richtangebot(**{**base.__dict__, "budget_per_person_cents": True}))
+        validate_richtangebot(
+            Richtangebot(**{**base.__dict__, "budget_per_person_cents": True})
+        )
     with pytest.raises(ValueError, match="budget_per_person_cents"):
-        validate_richtangebot(Richtangebot(**{**base.__dict__, "budget_per_person_cents": -1}))
+        validate_richtangebot(
+            Richtangebot(**{**base.__dict__, "budget_per_person_cents": -1})
+        )
 
 
 def test_richtangebot_repository_roundtrip_update_and_list() -> None:
@@ -282,7 +312,9 @@ def test_richtangebot_views_cover_exact_range_and_empty_list() -> None:
     assert "Nicht angegeben / Person" in exact_html
 
 
-def test_richtangebot_runtime_wraps_local_server_and_leaves_remote_untouched(monkeypatch) -> None:
+def test_richtangebot_runtime_wraps_local_server_and_leaves_remote_untouched(
+    monkeypatch,
+) -> None:
     class DummyHandler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: object) -> None:
             return
@@ -296,15 +328,19 @@ def test_richtangebot_runtime_wraps_local_server_and_leaves_remote_untouched(mon
         fake_server,
     )
 
-    remote = office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
-        object(), object(), "pw", remote=object()
+    remote = (
+        office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
+            object(), object(), "pw", remote=object()
+        )
     )
     assert remote.RequestHandlerClass is DummyHandler
 
     connection = sqlite3.connect(":memory:")
     try:
-        local = office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
-            SimpleNamespace(_conn=connection), object(), "pw"
+        local = (
+            office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
+                SimpleNamespace(_conn=connection), object(), "pw"
+            )
         )
         assert local.RequestHandlerClass.__name__ == "RichtangebotEnabledHandler"
     finally:
