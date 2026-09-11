@@ -147,6 +147,47 @@ def llm_extraction_contract() -> dict[str, object]:
     }
 
 
+def llm_extraction_json_schema() -> dict[str, object]:
+    """Strict JSON Schema used by the OpenAI Responses API Structured Outputs."""
+
+    nullable_string: dict[str, object] = {
+        "anyOf": [{"type": "string"}, {"type": "null"}]
+    }
+    properties: dict[str, object] = {
+        "email": nullable_string,
+        "event_type": nullable_string,
+        "event_date": nullable_string,
+        "event_period": nullable_string,
+        "event_start": nullable_string,
+        "guest_count": {
+            "anyOf": [
+                {"type": "integer", "minimum": 1, "maximum": _MAX_GUEST_COUNT},
+                {"type": "null"},
+            ]
+        },
+        "location": nullable_string,
+        "budget_per_person": {
+            "anyOf": [{"type": "number", "minimum": 0}, {"type": "null"}]
+        },
+        "fulfillment_mode": {
+            "type": "string",
+            "enum": ["UNKNOWN", "DELIVERY", "PICKUP"],
+        },
+        "customer_request": nullable_string,
+        "callback_requested": {
+            "anyOf": [{"type": "boolean"}, {"type": "null"}]
+        },
+        "callback_date": nullable_string,
+        "callback_time": nullable_string,
+    }
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": list(properties),
+        "additionalProperties": False,
+    }
+
+
 def _normalize_phone(value: str) -> str:
     compact = re.sub(r"[\s,;./()\-]+", "", value.strip())
     return compact if re.fullmatch(r"\+?\d+", compact) else value.strip()
