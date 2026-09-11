@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote, unquote, urlparse
 
 from catering_system.repositories.sqlite_ai_telefon_call_repository import (
@@ -19,6 +19,10 @@ from catering_system.ui.office_panel_richtangebot import (
     render_richtangebot_detail,
     render_richtangebote_section,
 )
+from catering_system.ui.office_panel_shell import OfficeSection
+
+_OFFERS_SECTION = cast(OfficeSection, "offers")
+_AI_SECTION = cast(OfficeSection, "ai_phone")
 
 
 def create_richtangebot_enabled_office_panel_server(
@@ -60,7 +64,7 @@ def create_richtangebot_enabled_office_panel_server(
             if len(parts) == 2 and parts[0] == "richtangebot":
                 auth = self._request_auth
                 if not self._require_business_permission_get(
-                    auth, "offers.view", active_section="offers"
+                    auth, "offers.view", active_section=_OFFERS_SECTION
                 ):
                     return
                 value = richt_service.get(unquote(parts[1]))
@@ -81,7 +85,7 @@ def create_richtangebot_enabled_office_panel_server(
             ):
                 auth = self._request_auth
                 if not self._require_business_permission_post(
-                    auth, "offers.create", active_section="ai_phone"
+                    auth, "offers.prepare", active_section=_AI_SECTION
                 ):
                     return
                 call_id = unquote(parts[1])
@@ -89,9 +93,7 @@ def create_richtangebot_enabled_office_panel_server(
                     lambda: call_service.convert_to_richtangebot(call_id)
                 )
                 assert updated.result_id is not None
-                self._redirect(
-                    f"/richtangebot/{quote(updated.result_id, safe='')}"
-                )
+                self._redirect(f"/richtangebot/{quote(updated.result_id, safe='')}")
                 return
             super()._route_post(parts)
 
