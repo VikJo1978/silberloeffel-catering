@@ -6,7 +6,9 @@ from catering_system.domain.ai_telefon_call import AiTelefonCall
 from catering_system.ui.office_panel_ai_telefonist import render_ai_telefon_calls
 
 
-def _call(call_id: str, *, status: str, result_type: str | None = None) -> AiTelefonCall:
+def _call(
+    call_id: str, *, status: str, result_type: str | None = None
+) -> AiTelefonCall:
     now = datetime(2026, 9, 12, 6, 0, tzinfo=UTC)
     return AiTelefonCall(
         call_id=call_id,
