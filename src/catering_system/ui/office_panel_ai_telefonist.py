@@ -61,6 +61,8 @@ def render_ai_telefon_calls(
         )
 
     new_count = sum(call.status == "NEW" for call in calls)
+    open_count = sum(call.status == "NEW" for call in calls)
+    archive_count = len(calls) - open_count
     rows = []
     for call in calls:
         customer = call.contact_name or call.caller_phone or "Unbekannter Anrufer"
@@ -68,14 +70,18 @@ def render_ai_telefon_calls(
         status = _STATUS_LABELS.get(call.status, call.status)
         result = _RESULT_LABELS.get(call.result_type or "", "")
         result_text = f" · {result}" if result else ""
+        visibility_class = (
+            " ai-call-open" if call.status == "NEW" else " ai-call-archive"
+        )
         rows.append(
-            '<a class="chat-thread-row{}" href="/ki-telefonassistent/{}">'
+            '<a class="chat-thread-row{}{}" href="/ki-telefonassistent/{}">'
             '<div class="chat-thread-head"><span class="chat-thread-title">{}</span>'
             '<span class="chat-meta">{}{}</span></div>'
             '<div class="chat-preview">{}</div>'
             '<div class="chat-meta">{} · {}</div>'
             "</a>".format(
                 " unread" if call.status == "NEW" else "",
+                visibility_class,
                 _e(call.call_id),
                 _e(customer),
                 _e(status),
@@ -86,13 +92,31 @@ def render_ai_telefon_calls(
             )
         )
 
+    filter_css = (
+        "<style>"
+        ".ai-call-filter-target{display:none}"
+        ".ai-call-tabs{margin:0 0 1rem 0;display:flex;gap:.5rem;flex-wrap:wrap}"
+        ".ai-call-archive{display:none}"
+        "#archiv:target~.chat-layout .ai-call-open{display:none}"
+        "#archiv:target~.chat-layout .ai-call-archive{display:block}"
+        "#alle:target~.chat-layout .ai-call-archive{display:block}"
+        "</style>"
+    )
+    tabs = (
+        '<span id="archiv" class="ai-call-filter-target"></span>'
+        '<span id="alle" class="ai-call-filter-target"></span>'
+        '<nav class="ai-call-tabs" aria-label="Telefonassistent Filter">'
+        f'<a class="inquiry-button secondary" href="/ki-telefonassistent">Offen ({open_count})</a>'
+        f'<a class="inquiry-button secondary" href="/ki-telefonassistent#archiv">Archiv ({archive_count})</a>'
+        f'<a class="inquiry-button secondary" href="/ki-telefonassistent#alle">Alle ({len(calls)})</a>'
+        "</nav>"
+    )
     body = (
-        '<div class="dashboard-page-header">'
+        filter_css + '<div class="dashboard-page-header">'
         "<div><h1>KI Telefonassistent</h1>"
         '<p class="subtitle">STRATO-Gespräche prüfen und anschließend gezielt übernehmen.</p></div>'
         f'<span class="dashboard-button">{new_count} neu</span>'
-        "</div>"
-        '<div class="chat-layout">'
+        "</div>" + tabs + '<div class="chat-layout">'
         '<div class="chat-thread-list">' + "".join(rows) + "</div>"
         '<div class="chat-thread-view">'
         '<p class="chat-empty">Gespräch links auswählen.</p>'
