@@ -169,6 +169,22 @@ _ROLE_LABELS = {
     "VIEWER": "Leser",
 }
 
+_ERROR_RETURN_CONTEXTS: dict[str, tuple[str, OfficeSection]] = {
+    "offer": ("Zurück zum Angebot", "offers"),
+    "inquiry": ("Zurück zur Anfrage", "inquiries"),
+    "order": ("Zurück zum Auftrag", "orders"),
+}
+
+
+def _error_return_target(path: str) -> tuple[str, str, OfficeSection]:
+    """Return a safe GET destination for an error raised by a record action."""
+    parts = [part for part in urlparse(path).path.split("/") if part]
+    if len(parts) >= 3 and parts[0] in _ERROR_RETURN_CONTEXTS:
+        label, section = _ERROR_RETURN_CONTEXTS[parts[0]]
+        record_id = quote(unquote(parts[1]), safe="")
+        return label, f"/{parts[0]}/{record_id}", section
+    return "Zur Arbeitszentrale", "/", "home"
+
 
 def _int_value(value: object) -> int:
     return value if isinstance(value, int) else 0
@@ -1053,11 +1069,17 @@ def make_office_panel_handler(
             return items, error
 
         def _error_page(self, message: str, status: int = 400) -> None:
+            return_label, return_href, active_section = _error_return_target(self.path)
+            body = (
+                f'<p class="blocked">{_e(message)}</p>'
+                f'<p><a class="order-button secondary" href="{_e(return_href)}">'
+                f"{_e(return_label)}</a></p>"
+            )
             self._html(
                 _page(
                     "Fehler",
-                    f'<p class="blocked">{_e(message)}</p>',
-                    active_section="home",
+                    body,
+                    active_section=active_section,
                     context=self._page_context(),
                 ),
                 status,
@@ -1091,15 +1113,7 @@ def make_office_panel_handler(
             not "unavailable") fall back to the same generic error rendering
             direct-mode ValueErrors already use."""
             if exc.unavailable:
-                self._html(
-                    _page(
-                        "Fehler",
-                        f'<p class="blocked">{_e(_UNAVAILABLE_MESSAGE)}</p>',
-                        active_section="home",
-                        context=self._page_context(),
-                    ),
-                    503,
-                )
+                self._error_page(_UNAVAILABLE_MESSAGE, status=503)
             else:
                 self._error_page(
                     inquiry_command_error_message(exc.code),
