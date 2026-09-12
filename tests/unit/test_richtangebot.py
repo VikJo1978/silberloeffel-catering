@@ -1,0 +1,462 @@
+from __future__ import annotations
+
+import sqlite3
+from dataclasses import replace
+from datetime import UTC, date, datetime, time, timezone
+from http.server import BaseHTTPRequestHandler
+from types import SimpleNamespace
+from uuid import UUID
+
+import pytest
+
+from catering_system.domain.ai_telefon_call import (
+    AiTelefonCall,
+    validate_ai_telefon_call,
+)
+from catering_system.domain.richtangebot import (
+    DEFAULT_RICHTANGEBOT_DISCLAIMER,
+    Richtangebot,
+    validate_richtangebot,
+)
+from catering_system.repositories.sqlite_ai_telefon_call_repository import (
+    SQLiteAiTelefonCallRepository,
+)
+from catering_system.repositories.sqlite_richtangebot_repository import (
+    SQLiteRichtangebotRepository,
+)
+from catering_system.services.richtangebot_service import RichtangebotService
+from catering_system.ui import office_panel_richtangebot_runtime
+from catering_system.ui.office_panel_richtangebot import (
+    render_richtangebot_detail,
+    render_richtangebote_section,
+)
+from catering_system.ui.office_panel_views import OfficePageContext
+
+
+def _uuid(value: int) -> str:
+    return str(UUID(int=value, version=4))
+
+
+def _value(*, value_id: int = 10, source_id: int = 11) -> Richtangebot:
+    now = datetime(2026, 9, 11, 14, 0, tzinfo=UTC)
+    return Richtangebot(
+        richtangebot_id=_uuid(value_id),
+        source_call_id=_uuid(source_id),
+        created_at=now,
+        updated_at=now,
+        contact_name="Test Kunde",
+        caller_phone="+49123",
+        email="test@example.invalid",
+        event_type="Taufe",
+        event_date_text="im nächsten Jahr",
+        event_time_text="noch offen",
+        guest_count_min=100,
+        guest_count_max=150,
+        location="Hamburg",
+        budget_per_person_cents=4000,
+        customer_request="50 % Fingerfood, 50 % Buffet",
+    )
+
+
+def test_richtangebot_accepts_fuzzy_date_time_and_guest_range() -> None:
+    value = validate_richtangebot(_value(value_id=1, source_id=2))
+
+    assert value.event_date is None
+    assert value.guest_count is None
+    assert value.guest_count_min == 100
+    assert value.guest_count_max == 150
+    assert value.disclaimer == (
+        "Dieses Richtangebot dient ausschließlich zur ersten Budget- und Leistungsorientierung. "
+        "Preise, Verfügbarkeit und Leistungsumfang stehen unter dem Vorbehalt der finalen "
+        "Terminabstimmung. Ein verbindliches Angebot erstellen wir nach Mitteilung des "
+        "konkreten Veranstaltungstermins."
+    )
+
+
+def test_richtangebot_accepts_exact_values_and_normalizes_text() -> None:
+    now = datetime(2026, 9, 11, 14, 0, tzinfo=UTC)
+    value = validate_richtangebot(
+        Richtangebot(
+            richtangebot_id=_uuid(20),
+            source_call_id=_uuid(21),
+            created_at=now,
+            updated_at=now,
+            contact_name="  Test Kunde  ",
+            event_type="Taufe",
+            event_date=date(2027, 5, 1),
+            event_start=time(16, 30),
+            guest_count=120,
+            budget_total_cents=480000,
+        )
+    )
+
+    assert value.contact_name == "Test Kunde"
+    assert value.event_date == date(2027, 5, 1)
+    assert value.event_start == time(16, 30)
+    assert value.guest_count == 120
+    assert value.budget_total_cents == 480000
+
+
+def test_richtangebot_validation_rejects_invalid_business_facts() -> None:
+    base = _value(value_id=30, source_id=31)
+    earlier = datetime(2026, 9, 11, 13, 0, tzinfo=UTC)
+
+    with pytest.raises(ValueError, match="updated_at"):
+        validate_richtangebot(replace(base, updated_at=earlier))
+
+    with pytest.raises(TypeError, match="event_start"):
+        validate_richtangebot(
+            replace(base, event_start="16:00")  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ValueError, match="wall-clock"):
+        validate_richtangebot(
+            replace(base, event_start=time(16, 0, tzinfo=timezone.utc))
+        )
+
+    with pytest.raises(ValueError, match="cannot be combined"):
+        validate_richtangebot(replace(base, guest_count=120))
+
+    with pytest.raises(ValueError, match="set together"):
+        validate_richtangebot(replace(base, guest_count_max=None))
+
+    with pytest.raises(ValueError, match="must not exceed"):
+        validate_richtangebot(replace(base, guest_count_min=160, guest_count_max=150))
+
+    with pytest.raises(ValueError, match="invalid Richtangebot status"):
+        validate_richtangebot(
+            replace(base, status="INVALID")  # type: ignore[arg-type]
+        )
+
+    now = datetime(2026, 9, 11, 14, 0, tzinfo=UTC)
+    with pytest.raises(ValueError, match="customer contact"):
+        validate_richtangebot(
+            Richtangebot(
+                richtangebot_id=_uuid(32),
+                source_call_id=_uuid(33),
+                created_at=now,
+                updated_at=now,
+                event_type="Taufe",
+            )
+        )
+
+    with pytest.raises(ValueError, match="event or commercial fact"):
+        validate_richtangebot(
+            Richtangebot(
+                richtangebot_id=_uuid(34),
+                source_call_id=_uuid(35),
+                created_at=now,
+                updated_at=now,
+                contact_name="Test Kunde",
+            )
+        )
+
+
+def test_richtangebot_validation_rejects_bad_primitives() -> None:
+    base = _value(value_id=40, source_id=41)
+
+    with pytest.raises(ValueError, match="UUID"):
+        validate_richtangebot(replace(base, richtangebot_id="nope"))
+
+    with pytest.raises(TypeError, match="text field"):
+        validate_richtangebot(
+            replace(base, event_type=123)  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ValueError, match="disclaimer"):
+        validate_richtangebot(replace(base, disclaimer=""))
+
+    no_range = replace(base, guest_count_min=None, guest_count_max=None)
+    with pytest.raises(TypeError, match="guest_count"):
+        validate_richtangebot(
+            replace(no_range, guest_count=True)  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ValueError, match="guest_count"):
+        validate_richtangebot(replace(no_range, guest_count=0))
+
+    with pytest.raises(TypeError, match="budget_per_person_cents"):
+        validate_richtangebot(
+            replace(
+                base,
+                budget_per_person_cents=True,  # type: ignore[arg-type]
+            )
+        )
+
+    with pytest.raises(ValueError, match="budget_per_person_cents"):
+        validate_richtangebot(replace(base, budget_per_person_cents=-1))
+
+
+def test_richtangebot_repository_roundtrip_update_and_list() -> None:
+    connection = sqlite3.connect(":memory:")
+    repo = SQLiteRichtangebotRepository.from_connection(connection)
+    value = _value(value_id=3, source_id=4)
+
+    repo.save(value)
+    loaded = repo.get(value.richtangebot_id)
+
+    assert loaded is not None
+    assert loaded.source_call_id == value.source_call_id
+    assert loaded.guest_count_min == 100
+    assert loaded.guest_count_max == 150
+    assert loaded.disclaimer == DEFAULT_RICHTANGEBOT_DISCLAIMER
+    assert repo.find_by_source_call_id(value.source_call_id) == loaded
+    assert repo.list_recent(limit=0) == []
+    assert repo.list_recent(limit=10) == [loaded]
+
+    updated = replace(loaded, customer_request="Geändert")
+    repo.update(updated)
+    reloaded = repo.get(value.richtangebot_id)
+    assert reloaded is not None
+    assert reloaded.customer_request == "Geändert"
+
+    missing = replace(updated, richtangebot_id=_uuid(99))
+    with pytest.raises(KeyError):
+        repo.update(missing)
+
+
+def test_service_creates_richtangebot_from_incomplete_ai_call_idempotently() -> None:
+    connection = sqlite3.connect(":memory:")
+    repo = SQLiteRichtangebotRepository.from_connection(connection)
+    now = datetime(2026, 9, 11, 14, 0, tzinfo=UTC)
+    service = RichtangebotService(
+        repo,
+        now=lambda: now,
+        id_factory=lambda: _uuid(5),
+    )
+    call = validate_ai_telefon_call(
+        AiTelefonCall(
+            call_id=_uuid(6),
+            strato_id="strato-test",
+            gmail_message_id="gmail-test",
+            caller_phone="+49123",
+            contact_name="Test Kunde",
+            email="",
+            subject="Taufe",
+            summary="Taufe für 100 bis 150 Personen, Termin noch offen.",
+            raw_message="raw",
+            event_type="Taufe",
+            event_period="im nächsten Jahr",
+            guest_count_min=100,
+            guest_count_max=150,
+            location="Hamburg",
+            budget_per_person_cents=4000,
+            received_at=now,
+            updated_at=now,
+        )
+    )
+
+    first = service.create_from_call(call)
+    second = service.create_from_call(call)
+
+    assert first == second
+    assert service.get(first.richtangebot_id) == first
+    assert service.list_recent() == [first]
+    assert first.event_date is None
+    assert first.event_date_text == "im nächsten Jahr"
+    assert first.event_time_text == "noch offen"
+    assert first.guest_count_min == 100
+    assert first.guest_count_max == 150
+
+
+def test_richtangebot_views_cover_exact_range_and_empty_list() -> None:
+    value = validate_richtangebot(_value(value_id=50, source_id=51))
+    context = OfficePageContext(
+        csrf_token="csrf",
+        employee_account_id="employee-1",
+    )
+
+    detail = render_richtangebot_detail(value, context=context)
+    listing = render_richtangebote_section([value])
+
+    assert "Richtangebot" in detail
+    assert "im nächsten Jahr" in detail
+    assert "100–150" in detail
+    assert "40,00 € / Person" in detail
+    assert DEFAULT_RICHTANGEBOT_DISCLAIMER in detail
+    assert value.richtangebot_id in listing
+    assert "100–150" in listing
+    assert render_richtangebote_section([]) == ""
+
+    exact = validate_richtangebot(
+        replace(
+            value,
+            richtangebot_id=_uuid(52),
+            source_call_id=_uuid(53),
+            event_date=date(2027, 5, 1),
+            event_date_text="",
+            event_start=time(16, 30),
+            event_time_text="",
+            guest_count=120,
+            guest_count_min=None,
+            guest_count_max=None,
+            budget_per_person_cents=None,
+        )
+    )
+    exact_html = render_richtangebot_detail(exact, context=context)
+    assert "01.05.2027" in exact_html
+    assert "16:30" in exact_html
+    assert ">120<" in exact_html
+    assert "Nicht angegeben / Person" in exact_html
+
+
+def test_richtangebot_runtime_wraps_local_server_and_leaves_remote_untouched(
+    monkeypatch,
+) -> None:
+    class DummyHandler(BaseHTTPRequestHandler):
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    def fake_server(*args, **kwargs):
+        return SimpleNamespace(RequestHandlerClass=DummyHandler)
+
+    monkeypatch.setattr(
+        office_panel_richtangebot_runtime,
+        "create_ai_enabled_office_panel_server",
+        fake_server,
+    )
+
+    remote = office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
+        object(),
+        object(),
+        "pw",
+        remote=object(),
+    )
+    assert remote.RequestHandlerClass is DummyHandler
+
+    connection = sqlite3.connect(":memory:")
+    try:
+        local = office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
+            SimpleNamespace(_conn=connection),
+            object(),
+            "pw",
+        )
+        assert local.RequestHandlerClass.__name__ == "RichtangebotEnabledHandler"
+    finally:
+        connection.close()
+
+
+def test_richtangebot_runtime_routes_and_offer_injection(monkeypatch) -> None:
+    class DummyHandler:
+        _request_auth = object()
+        path = "/"
+
+        def __init__(self) -> None:
+            self.last_html = ""
+            self.last_status = 0
+            self.error_status = 0
+            self.redirect_path = ""
+            self.base_get_called = False
+            self.base_post_parts: list[str] | None = None
+
+        def _require_business_permission_get(self, *args, **kwargs) -> bool:
+            return True
+
+        def _require_business_permission_post(self, *args, **kwargs) -> bool:
+            return True
+
+        def _page_context(self) -> OfficePageContext:
+            return OfficePageContext(
+                csrf_token="csrf",
+                employee_account_id="employee-1",
+            )
+
+        def send_error(self, status: int) -> None:
+            self.error_status = status
+
+        def _redirect(self, path: str) -> None:
+            self.redirect_path = path
+
+        def _route_get(self) -> None:
+            self.base_get_called = True
+
+        def _route_post(self, parts: list[str]) -> None:
+            self.base_post_parts = parts
+
+        def _html(
+            self,
+            page: str,
+            status: int = 200,
+            *,
+            cookie_headers: tuple[str, ...] = (),
+        ) -> None:
+            self.last_html = page
+            self.last_status = status
+
+    def fake_server(*args, **kwargs):
+        return SimpleNamespace(RequestHandlerClass=DummyHandler)
+
+    monkeypatch.setattr(
+        office_panel_richtangebot_runtime,
+        "create_ai_enabled_office_panel_server",
+        fake_server,
+    )
+
+    connection = sqlite3.connect(":memory:")
+    try:
+        richt_repo = SQLiteRichtangebotRepository.from_connection(connection)
+        richt_value = _value(value_id=60, source_id=61)
+        richt_repo.save(richt_value)
+        connection.commit()
+
+        call_repo = SQLiteAiTelefonCallRepository.from_connection(connection)
+        now = datetime(2026, 9, 11, 14, 0, tzinfo=UTC)
+        call = validate_ai_telefon_call(
+            AiTelefonCall(
+                call_id=_uuid(62),
+                strato_id="strato-runtime",
+                gmail_message_id="gmail-runtime",
+                caller_phone="+49123",
+                contact_name="Runtime Kunde",
+                email="",
+                subject="Taufe",
+                summary="Taufe für 100 bis 150 Personen.",
+                raw_message="raw",
+                event_type="Taufe",
+                event_period="im nächsten Jahr",
+                guest_count_min=100,
+                guest_count_max=150,
+                location="Hamburg",
+                received_at=now,
+                updated_at=now,
+            )
+        )
+        call_repo.save(call)
+        connection.commit()
+
+        server = office_panel_richtangebot_runtime.create_richtangebot_enabled_office_panel_server(
+            SimpleNamespace(_conn=connection),
+            object(),
+            "pw",
+        )
+        handler = server.RequestHandlerClass()
+
+        handler.path = f"/richtangebot/{richt_value.richtangebot_id}"
+        handler._route_get()
+        assert "Richtangebot" in handler.last_html
+
+        handler.path = "/richtangebot/does-not-exist"
+        handler._route_get()
+        assert handler.error_status == 404
+
+        handler.path = "/anderer-pfad"
+        handler._route_get()
+        assert handler.base_get_called is True
+
+        handler._route_post(["ki-telefonassistent", call.call_id, "richtangebot"])
+        assert handler.redirect_path.startswith("/richtangebot/")
+        updated = call_repo.get(call.call_id)
+        assert updated is not None
+        assert updated.result_type == "RICHTANGEBOT"
+
+        handler.path = "/angebote"
+        handler._html(
+            '<main><p><a href="/">← Zurück zur Arbeitszentrale</a></p></main>'
+        )
+        assert richt_value.richtangebot_id in handler.last_html
+        assert handler.last_status == 200
+
+        handler._route_post(["anderer-pfad"])
+        assert handler.base_post_parts == ["anderer-pfad"]
+    finally:
+        connection.close()
