@@ -70,7 +70,9 @@ def render_ai_telefon_calls(
         status = _STATUS_LABELS.get(call.status, call.status)
         result = _RESULT_LABELS.get(call.result_type or "", "")
         result_text = f" · {result}" if result else ""
-        visibility_class = " ai-call-open" if call.status == "NEW" else " ai-call-archive"
+        visibility_class = (
+            " ai-call-open" if call.status == "NEW" else " ai-call-archive"
+        )
         rows.append(
             '<a class="chat-thread-row{}{}" href="/ki-telefonassistent/{}">'
             '<div class="chat-thread-head"><span class="chat-thread-title">{}</span>'
@@ -110,14 +112,11 @@ def render_ai_telefon_calls(
         "</nav>"
     )
     body = (
-        filter_css
-        + '<div class="dashboard-page-header">'
+        filter_css + '<div class="dashboard-page-header">'
         "<div><h1>KI Telefonassistent</h1>"
         '<p class="subtitle">STRATO-Gespräche prüfen und anschließend gezielt übernehmen.</p></div>'
         f'<span class="dashboard-button">{new_count} neu</span>'
-        "</div>"
-        + tabs
-        + '<div class="chat-layout">'
+        "</div>" + tabs + '<div class="chat-layout">'
         '<div class="chat-thread-list">' + "".join(rows) + "</div>"
         '<div class="chat-thread-view">'
         '<p class="chat-empty">Gespräch links auswählen.</p>'
